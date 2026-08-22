@@ -35,6 +35,8 @@ use incan_semantics_core::{
     IncanPrimitiveType, IncanType,
 };
 
+use incan_core::lang::types::collections::{self, CollectionTypeId};
+
 use crate::frontend::ast;
 use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::{TypeCheckInfo, semantic_type_from_resolved};
@@ -1359,9 +1361,19 @@ impl<'a> BodyBuilder<'a> {
     /// collections (`List`/`Dict`/`String`) and user-defined iterables implementing the RFC 068 `__iter__`/
     /// `__next__` protocol, including the fallible `for item in iterable?:` form (RFC 115) -- lowers through
     /// [`Self::lower_general_iteration`], sharing its per-clause iteration primitive with comprehensions and
-    /// generator expressions (see [`Self::lower_comprehension_clauses`]). A non-binding loop pattern lowers to
-    /// `Unsupported` either way, since destructuring loop patterns need `match`-shaped pattern compilation (#1101
-    /// bucket B6), out of scope here.
+    /// generator expressions (see [`Self::lower_comprehension_clauses`]).
+    ///
+    /// Both paths accept the same loop-pattern subset the typechecker accepts -- a plain binding, `_`, and
+    /// (recursively) a tuple of those, per `TypeChecker::define_for_pattern_bindings` in
+    /// `src/frontend/typechecker/check_stmt.rs` (#1125). A plain `for x in ...` binds the produced item directly;
+    /// every other shape writes it into a per-iteration temporary that [`Self::bind_for_pattern`] then projects one
+    /// real named binding out of per bound name. Any shape outside that subset -- which the typechecker already
+    /// rejects with its own diagnostic before lowering ever runs -- lowers to `Unsupported` naming the offending
+    /// shape, checked up front so a refusal never leaves half-emitted bindings behind (the same
+    /// "check before partially lowering" precedent as [`Self::lower_binary`] and [`Self::lower_match`]). The same
+    /// up-front check also refuses a tuple pattern whose produced item is not a tuple of matching arity, so
+    /// lowering can never invent `.0`/`.1` projections into a value that has no such fields -- see
+    /// [`unsupported_for_pattern`].
     fn lower_for(
         &mut self,
         for_stmt: &ast::ForStmt,
@@ -1369,28 +1381,34 @@ impl<'a> BodyBuilder<'a> {
         span: HirSourceSpan,
         out: &mut Vec<bir::Statement>,
     ) {
-        let ast::Pattern::Binding(var_name) = &for_stmt.pattern.node else {
-            self.push_unsupported_stmt("for-loop pattern is not a simple binding".to_string(), span, out);
+        let item_ty = self.resolve_ty(for_stmt.pattern.span);
+        if let Some(reason) = unsupported_for_pattern(&for_stmt.pattern.node, &item_ty) {
+            self.push_unsupported_stmt(reason, span, out);
             return;
-        };
-        // The typechecker enters a lexical block scope for the loop header/body, so a binding introduced by the
+        }
+        // The typechecker enters a lexical block scope for the loop header/body, so every binding introduced by the
         // pattern must disappear after the statement. Keep the active lookup map for restoration while leaving the
-        // loop local itself in Body IR for the loop's statements to reference.
+        // loop locals themselves in Body IR for the loop's statements to reference.
         let enclosing_bindings = self.bindings.clone();
         let ast::Expr::Range { start, end, inclusive } = &for_stmt.iter.node else {
-            let var_ty = self.resolve_ty(for_stmt.pattern.span);
             let loop_scope = self.new_scope(Some(scope), span);
-            let total_reads = count_reads_in_stmts(var_name, &for_stmt.body);
-            let pattern_local =
-                self.declare_new_local_with_reads(var_name.clone(), var_ty, loop_scope, span, total_reads);
+            let item_local = self.declare_for_item_local(&for_stmt.pattern, &item_ty, loop_scope, span, &for_stmt.body);
             self.lower_general_iteration(
                 &for_stmt.iter,
-                pattern_local,
+                item_local,
                 scope,
                 loop_scope,
                 span,
                 out,
                 |builder, loop_scope, body_stmts| {
+                    builder.bind_for_pattern(
+                        &for_stmt.pattern,
+                        &item_ty,
+                        item_local,
+                        loop_scope,
+                        &for_stmt.body,
+                        body_stmts,
+                    );
                     builder.lower_block_into(&for_stmt.body, loop_scope, body_stmts);
                     builder.insert_scope_drops(body_stmts, loop_scope);
                 },
@@ -1441,19 +1459,31 @@ impl<'a> BodyBuilder<'a> {
             span,
         });
 
-        let var_ty = self.resolve_ty(for_stmt.pattern.span);
-        let iter_local = self.declare_new_local(var_name.clone(), var_ty, loop_scope, span, &for_stmt.body);
-        body_stmts.push(bir::Statement {
-            kind: bir::StatementKind::Assign {
-                place: bir::Place::from_local(iter_local),
-                rvalue: bir::Rvalue::Use(bir::Operand::place(
-                    bir::Place::from_local(idx_local),
-                    bir::OwnershipFact::Copy,
-                    false,
-                )),
-            },
-            span,
-        });
+        // `for _ in start..end` binds nothing and the range's own index already drives the loop, so it needs no
+        // per-iteration item local at all -- unlike the general path, where `IterNext` must still write the polled
+        // item somewhere for the poll itself to happen.
+        if !matches!(for_stmt.pattern.node, ast::Pattern::Wildcard) {
+            let item_local = self.declare_for_item_local(&for_stmt.pattern, &item_ty, loop_scope, span, &for_stmt.body);
+            body_stmts.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place: bir::Place::from_local(item_local),
+                    rvalue: bir::Rvalue::Use(bir::Operand::place(
+                        bir::Place::from_local(idx_local),
+                        bir::OwnershipFact::Copy,
+                        false,
+                    )),
+                },
+                span,
+            });
+            self.bind_for_pattern(
+                &for_stmt.pattern,
+                &item_ty,
+                item_local,
+                loop_scope,
+                &for_stmt.body,
+                &mut body_stmts,
+            );
+        }
 
         self.lower_block_into(&for_stmt.body, loop_scope, &mut body_stmts);
         self.insert_scope_drops(&mut body_stmts, loop_scope);
@@ -1486,6 +1516,114 @@ impl<'a> BodyBuilder<'a> {
             span,
         });
         self.bindings = enclosing_bindings;
+    }
+
+    /// Declare the local each produced item of a `for` loop is written into.
+    ///
+    /// A plain `for x in ...` binds the item directly: the item local *is* `x`'s local, so the produced value is
+    /// never copied and the loop shape #1103/#1101 established is preserved byte-for-byte. Every other supported
+    /// pattern shape has no single name to write into, so the item goes into a temporary that
+    /// [`Self::bind_for_pattern`] projects the real bindings out of -- the same "materialize once, then bind each
+    /// element off a projection" shape [`Self::lower_tuple_unpack`] already uses for `a, b = value`.
+    fn declare_for_item_local(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        item_ty: &IncanType,
+        loop_scope: bir::ScopeId,
+        span: HirSourceSpan,
+        body: &[ast::Spanned<ast::Statement>],
+    ) -> bir::LocalId {
+        match &pattern.node {
+            ast::Pattern::Binding(name) => {
+                let total_reads = count_reads_in_stmts(name, body);
+                self.declare_new_local_with_reads(name.clone(), item_ty.clone(), loop_scope, span, total_reads)
+            }
+            _ => self.new_temp(item_ty.clone(), loop_scope, span),
+        }
+    }
+
+    /// Emit the binding statements a `for` loop's pattern needs against the item local, immediately after the
+    /// per-iteration `IterNext` (or, on the range path, after the index copy) has written it.
+    ///
+    /// A bare [`ast::Pattern::Binding`] emits nothing: [`Self::declare_for_item_local`] already declared the item
+    /// local *as* that binding, so there is nothing left to project. Every other shape delegates to
+    /// [`Self::bind_for_pattern_fields`], which means every binding that walk reaches is nested under at least one
+    /// tuple field and therefore always reads through a projection.
+    fn bind_for_pattern(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        item_ty: &IncanType,
+        item_local: bir::LocalId,
+        loop_scope: bir::ScopeId,
+        body: &[ast::Spanned<ast::Statement>],
+        out: &mut Vec<bir::Statement>,
+    ) {
+        if matches!(pattern.node, ast::Pattern::Binding(_)) {
+            return;
+        }
+        let item_place = bir::Place::from_local(item_local);
+        self.bind_for_pattern_fields(pattern, item_ty, &item_place, loop_scope, body, out);
+    }
+
+    /// Recursively bind one `for`-pattern node against `place`, the (already projected) part of the produced item
+    /// it corresponds to, emitting one `Assign` per bound name in source order.
+    ///
+    /// Iteration binding is *irrefutable*: unlike [`Self::lower_match_pattern`], which builds a [`bir::Pattern`]
+    /// for match-arm dispatch, there is nothing here to test or branch on, so this walk emits plain assignments and
+    /// deliberately does not reuse that machinery (#1125 names conflating the two as a non-goal). What it does
+    /// share is that walk's projection convention -- the zero-based tuple-element index spelled as a
+    /// [`bir::PlaceElem::Field`], matching [`Self::lower_tuple_unpack`]'s `.0`/`.1` spelling -- and its
+    /// [`tuple_element_types`] source for per-element types, so a nested tuple keeps resolved element types all the
+    /// way down and falls back to [`IncanType::Unknown`] per slot only where the resolved type is not a tuple of
+    /// the right arity.
+    ///
+    /// Each element is read through [`Self::ownership_fact_for_place`], exactly as
+    /// [`Self::lower_tuple_unpack`] reads its own elements, so a non-Copy element borrows rather than moving out of
+    /// a place v0 does not track partial-move state for. Each bound name becomes a real
+    /// [`bir::LocalOrigin::UserBinding`] local in `loop_scope`, seeded with its own last-use countdown over the
+    /// loop body, so [`Self::insert_scope_drops`] gives every non-Copy binding an explicit per-iteration drop.
+    ///
+    /// [`unsupported_for_pattern`] has already rejected every shape outside the accepted subset -- and every item
+    /// type that is not a tuple of matching arity -- before [`Self::lower_for`] reaches this walk, so the remaining
+    /// arms are unreachable in practice; they emit nothing rather than panicking if that invariant is ever violated
+    /// by a hand-built AST.
+    fn bind_for_pattern_fields(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        expected_ty: &IncanType,
+        place: &bir::Place,
+        loop_scope: bir::ScopeId,
+        body: &[ast::Spanned<ast::Statement>],
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let span = hir_span(pattern.span);
+        match &pattern.node {
+            ast::Pattern::Wildcard => {}
+            ast::Pattern::Binding(name) => {
+                let (fact, last_use) = self.ownership_fact_for_place(place, expected_ty);
+                let element = bir::Operand::place(place.clone(), fact, last_use);
+                let total_reads = count_reads_in_stmts(name, body);
+                let local =
+                    self.declare_new_local_with_reads(name.clone(), expected_ty.clone(), loop_scope, span, total_reads);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Assign {
+                        place: bir::Place::from_local(local),
+                        rvalue: bir::Rvalue::Use(element),
+                    },
+                    span,
+                });
+            }
+            ast::Pattern::Tuple(items) => {
+                let element_types = tuple_element_types(expected_ty, items.len());
+                for (index, (item, element_ty)) in items.iter().zip(&element_types).enumerate() {
+                    let mut field_place = place.clone();
+                    field_place.projection.push(bir::PlaceElem::Field(index.to_string()));
+                    self.bind_for_pattern_fields(item, element_ty, &field_place, loop_scope, body, out);
+                }
+            }
+            ast::Pattern::Literal(_) | ast::Pattern::Constructor(..) | ast::Pattern::Group(_) | ast::Pattern::Or(_) => {
+            }
+        }
     }
 
     /// Lower one general (non-range) iteration: materialize an iterator from `iter_expr` before the loop, then push
@@ -3187,11 +3325,31 @@ fn unsupported_expr_label(expr: &ast::Expr) -> String {
 /// [`IncanType::Unknown`] per element when the resolved type is not (or not yet) known to be a tuple of the right
 /// arity -- mirrors how the existing Rust-emission backend falls back to `IrType::Unknown` per slot in the same
 /// situation (`src/backend/ir/lower/stmt.rs`'s `TupleUnpack` lowering). Used by
-/// [`BodyBuilder::lower_tuple_unpack`] and [`BodyBuilder::lower_tuple_assign`].
+/// [`BodyBuilder::lower_tuple_unpack`], [`BodyBuilder::lower_tuple_assign`], and
+/// [`BodyBuilder::bind_for_pattern_fields`].
+///
+/// A tuple type reaches lowering in two spellings and both must be understood here. A tuple *literal* resolves to
+/// [`IncanType::Tuple`], while a written `tuple[A, B]` *annotation* resolves through the collection-type registry
+/// and therefore arrives as an [`IncanType::Generic`] whose base is that registry's canonical name. Matching only
+/// the first spelling silently degraded every element of an annotated tuple to `Unknown`, which in turn made each
+/// element read `Borrow` rather than its real Copy/non-Copy fact. The generic base is classified through
+/// [`collections::from_str`] rather than compared against a literal name, so the registry stays the single source
+/// of truth for that vocabulary.
 fn tuple_element_types(ty: &IncanType, count: usize) -> Vec<IncanType> {
-    match ty {
-        IncanType::Tuple(items) if items.len() == count => items.clone(),
+    match tuple_type_elements(ty) {
+        Some(items) if items.len() == count => items.to_vec(),
         _ => vec![IncanType::Unknown; count],
+    }
+}
+
+/// The element types of a tuple-shaped [`IncanType`], in either spelling, or `None` when `ty` is not a tuple at
+/// all. Backs both [`tuple_element_types`] and [`unsupported_for_pattern`], so the "is this a tuple, and of what
+/// arity" question is answered in exactly one place rather than once per caller.
+fn tuple_type_elements(ty: &IncanType) -> Option<&[IncanType]> {
+    match ty {
+        IncanType::Tuple(items) => Some(items),
+        IncanType::Generic { base, args } if collections::from_str(base) == Some(CollectionTypeId::Tuple) => Some(args),
+        _ => None,
     }
 }
 
@@ -3455,6 +3613,62 @@ fn match_pattern_is_supported(pattern: &ast::Pattern) -> bool {
     }
 }
 
+/// Name the reason Body IR cannot bind `pattern` against a produced item of type `item_ty`, or `None` when it
+/// can. Consulted once, up front, so a refusal never leaves half-emitted bindings behind -- the same precedent as
+/// [`match_pattern_is_supported`].
+///
+/// Two independent things can make a loop pattern unbindable, and both are checked here.
+///
+/// **Shape.** The accepted subset is deliberately the same one `TypeChecker::define_for_pattern_bindings`
+/// (`src/frontend/typechecker/check_stmt.rs`) accepts -- a plain binding, `_`, and recursively a tuple of those
+/// (#1125). Naming the offending shape keeps a hand-built AST that bypassed the typechecker diagnosable.
+///
+/// **Type agreement.** A tuple pattern can only take elements from a tuple. Without this check, `for a, b in
+/// items` over a `list[int]` would lower `.0`/`.1` projections out of an `int` -- structurally valid Body IR
+/// describing something that does not exist. The typechecker rejects that program first, so this is defence in
+/// depth for hand-built ASTs and for lowering that runs despite type errors, not the primary diagnostic.
+///
+/// Two item types are exempt from the tuple requirement, mirroring `TypeChecker::define_for_pattern_bindings`
+/// exactly so the two stages cannot disagree about which programs are bindable.
+/// [`IncanType::Unknown`] is recovery-only: it means the type is unresolved, not proven non-tuple, so each element
+/// binds as `Unknown` just as [`tuple_element_types`] already falls back to. [`IncanType::Never`] is the bottom
+/// type, which the typechecker's own `types_compatible` treats as compatible with every type including a tuple.
+///
+/// A bare [`IncanType::TypeVar`] is deliberately **not** exempt. An unconstrained `T` is known to be
+/// underdetermined rather than merely unknown, and can be instantiated as `int`; Incan has no tuple-shaped bound
+/// that could promise otherwise. This does not affect the common `list[Tuple[K, V]]` shape, whose item type is a
+/// tuple whose *elements* are type variables.
+fn unsupported_for_pattern(pattern: &ast::Pattern, item_ty: &IncanType) -> Option<String> {
+    match pattern {
+        ast::Pattern::Binding(_) | ast::Pattern::Wildcard => None,
+        ast::Pattern::Tuple(items) => {
+            if matches!(item_ty, IncanType::Unknown | IncanType::Never) {
+                return items
+                    .iter()
+                    .find_map(|item| unsupported_for_pattern(&item.node, &IncanType::Unknown));
+            }
+            let Some(element_types) = tuple_type_elements(item_ty) else {
+                return Some(format!("for-loop tuple pattern over non-tuple item type `{item_ty}`"));
+            };
+            if element_types.len() != items.len() {
+                return Some(format!(
+                    "for-loop tuple pattern binds {} names but item type `{item_ty}` has {} elements",
+                    items.len(),
+                    element_types.len()
+                ));
+            }
+            items
+                .iter()
+                .zip(element_types)
+                .find_map(|(item, element_ty)| unsupported_for_pattern(&item.node, element_ty))
+        }
+        ast::Pattern::Literal(_) => Some("for-loop pattern shape: literal".to_string()),
+        ast::Pattern::Constructor(..) => Some("for-loop pattern shape: constructor".to_string()),
+        ast::Pattern::Group(_) => Some("for-loop pattern shape: parenthesized group".to_string()),
+        ast::Pattern::Or(_) => Some("for-loop pattern shape: alternation".to_string()),
+    }
+}
+
 /// Determine every free variable a closure literal's body reads from its enclosing scope, in first-occurrence
 /// source order, given the closure's own declared parameters as the initial bound set. A "free variable" is any
 /// `Ident` read the closure body itself does not bind -- exactly the set [`BodyBuilder::lower_closure`] must
@@ -3475,22 +3689,18 @@ fn push_free(name: &str, bound: &HashSet<String>, free: &mut Vec<String>) {
     }
 }
 
-/// Bind `pattern`'s introduced name into `bound`, if it is a plain [`ast::Pattern::Binding`]. Any other pattern
-/// shape introduces no bound name at this level, matching how the rest of this module's lowering only ever binds a
-/// plain [`ast::Pattern::Binding`] for `for`/comprehension clauses (a destructuring pattern lowers to
-/// `Unsupported` -- see [`BodyBuilder::lower_for`]).
-fn bind_pattern(pattern: &ast::Pattern, bound: &mut HashSet<String>) {
-    if let ast::Pattern::Binding(name) = pattern {
-        bound.insert(name.clone());
-    }
-}
-
-/// Collect every name a `match` pattern binds, recursing into every sub-pattern shape -- unlike [`bind_pattern`]
-/// above, which only handles the plain [`ast::Pattern::Binding`] shape `for`/comprehension patterns are restricted
-/// to. Used by [`collect_free_vars_in_expr`]'s `Match` arm to exclude an arm's own pattern-bound names from being
-/// treated as free variables of an enclosing closure, mirroring [`BodyBuilder::lower_match_pattern`]'s own binding
-/// walk in spirit (though this one only needs names, not the full binding/ownership machinery that walk builds).
-fn bind_match_pattern_names(pattern: &ast::Pattern, bound: &mut HashSet<String>) {
+/// Collect every name `pattern` binds into `bound`, recursing into every sub-pattern shape.
+///
+/// Used by [`collect_free_vars_in_expr`] to exclude a pattern's own bound names from the free variables an
+/// enclosing closure must capture, for every construct that binds through a pattern: `match` arms, `for` loops,
+/// comprehension/generator `for` clauses, and `if let`/`while let` conditions. A single recursive walk serves all
+/// of them because a `for` pattern can now bind more than one name too (#1125) -- a flat "only a plain
+/// [`ast::Pattern::Binding`] binds here" walk would leave a destructured loop binding looking free, and an
+/// enclosing closure would wrongly capture it.
+///
+/// This mirrors [`BodyBuilder::lower_match_pattern`]'s and [`BodyBuilder::bind_for_pattern_fields`]' binding walks
+/// in spirit, though it only needs the names, not the locals/ownership facts those walks build.
+fn bind_pattern_names(pattern: &ast::Pattern, bound: &mut HashSet<String>) {
     match pattern {
         ast::Pattern::Wildcard | ast::Pattern::Literal(_) => {}
         ast::Pattern::Binding(name) => {
@@ -3498,22 +3708,22 @@ fn bind_match_pattern_names(pattern: &ast::Pattern, bound: &mut HashSet<String>)
         }
         ast::Pattern::Tuple(items) => {
             for item in items {
-                bind_match_pattern_names(&item.node, bound);
+                bind_pattern_names(&item.node, bound);
             }
         }
         ast::Pattern::Constructor(_, args) => {
             for arg in args {
                 match arg {
                     ast::PatternArg::Positional(pat) | ast::PatternArg::Named(_, pat) => {
-                        bind_match_pattern_names(&pat.node, bound);
+                        bind_pattern_names(&pat.node, bound);
                     }
                 }
             }
         }
-        ast::Pattern::Group(inner) => bind_match_pattern_names(&inner.node, bound),
+        ast::Pattern::Group(inner) => bind_pattern_names(&inner.node, bound),
         ast::Pattern::Or(items) => {
             for item in items {
-                bind_match_pattern_names(&item.node, bound);
+                bind_pattern_names(&item.node, bound);
             }
         }
     }
@@ -3615,7 +3825,7 @@ fn collect_free_vars_in_expr(expr: &ast::Expr, bound: &mut HashSet<String>, free
         ast::Expr::ListComp(comp) => {
             collect_free_vars_in_expr(&comp.iter.node, bound, free);
             let mut inner_bound = bound.clone();
-            bind_pattern(&comp.pattern.node, &mut inner_bound);
+            bind_pattern_names(&comp.pattern.node, &mut inner_bound);
             if let Some(filter) = &comp.filter {
                 collect_free_vars_in_expr(&filter.node, &mut inner_bound, free);
             }
@@ -3624,7 +3834,7 @@ fn collect_free_vars_in_expr(expr: &ast::Expr, bound: &mut HashSet<String>, free
         ast::Expr::DictComp(comp) => {
             collect_free_vars_in_expr(&comp.iter.node, bound, free);
             let mut inner_bound = bound.clone();
-            bind_pattern(&comp.pattern.node, &mut inner_bound);
+            bind_pattern_names(&comp.pattern.node, &mut inner_bound);
             if let Some(filter) = &comp.filter {
                 collect_free_vars_in_expr(&filter.node, &mut inner_bound, free);
             }
@@ -3637,7 +3847,7 @@ fn collect_free_vars_in_expr(expr: &ast::Expr, bound: &mut HashSet<String>, free
                 match clause {
                     ast::ComprehensionClause::For { pattern, iter } => {
                         collect_free_vars_in_expr(&iter.node, &mut inner_bound, free);
-                        bind_pattern(&pattern.node, &mut inner_bound);
+                        bind_pattern_names(&pattern.node, &mut inner_bound);
                     }
                     ast::ComprehensionClause::If(cond) => collect_free_vars_in_expr(&cond.node, &mut inner_bound, free),
                 }
@@ -3662,14 +3872,13 @@ fn collect_free_vars_in_expr(expr: &ast::Expr, bound: &mut HashSet<String>, free
         ast::Expr::Yield(Some(value)) => collect_free_vars_in_expr(&value.node, bound, free),
         // The scrutinee is read in the enclosing scope like any other sub-expression. Each arm gets its own
         // *cloned* `bound` set (matching the `If`/`Loop` arms above) extended with that arm's own pattern-bound
-        // names (via `bind_match_pattern_names`, unlike `for`/comprehension patterns' plain `bind_pattern`, since a
-        // match pattern can destructure and bind more than one name) before walking its guard and body, so one
-        // arm's bindings never leak into a sibling arm or shadow an outer free variable of the same name.
+        // names before walking its guard and body, so one arm's bindings never leak into a sibling arm or shadow an
+        // outer free variable of the same name.
         ast::Expr::Match(subject, arms) => {
             collect_free_vars_in_expr(&subject.node, bound, free);
             for arm in arms {
                 let mut arm_bound = bound.clone();
-                bind_match_pattern_names(&arm.node.pattern.node, &mut arm_bound);
+                bind_pattern_names(&arm.node.pattern.node, &mut arm_bound);
                 if let Some(guard) = &arm.node.guard {
                     collect_free_vars_in_expr(&guard.node, &mut arm_bound, free);
                 }
@@ -3705,7 +3914,7 @@ fn collect_free_vars_in_condition(cond: &ast::Condition, bound: &mut HashSet<Str
         ast::Condition::Expr(e) => collect_free_vars_in_expr(&e.node, bound, free),
         ast::Condition::Let { pattern, value } => {
             collect_free_vars_in_expr(&value.node, bound, free);
-            bind_pattern(&pattern.node, bound);
+            bind_pattern_names(&pattern.node, bound);
         }
     }
 }
@@ -3794,7 +4003,7 @@ fn collect_free_vars_in_stmt(stmt: &ast::Statement, bound: &mut HashSet<String>,
         ast::Statement::For(f) => {
             collect_free_vars_in_expr(&f.iter.node, bound, free);
             let mut loop_bound = bound.clone();
-            bind_pattern(&f.pattern.node, &mut loop_bound);
+            bind_pattern_names(&f.pattern.node, &mut loop_bound);
             collect_free_vars_in_stmts(&f.body, &mut loop_bound, free);
         }
         ast::Statement::Expr(e) => collect_free_vars_in_expr(&e.node, bound, free),
@@ -3838,6 +4047,90 @@ mod tests {
         checker
             .check_program(&program)
             .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
+    }
+
+    /// Build a Body IR module from `source` after rewriting its first `for a, b in ...:` header into the nested
+    /// `for a, (b, c) in ...:` shape the parser has no spelling for (see
+    /// `nested_tuple_for_patterns_have_no_source_spelling_yet`). The rewrite happens *before* typechecking, so the
+    /// nested pattern flows through `TypeChecker::define_for_pattern_bindings`' own recursion and reaches lowering
+    /// with real resolved element types, exactly as a future parser-supported nesting would.
+    fn build_with_nested_for_pattern(
+        source: &str,
+        module_path: &[&str],
+    ) -> Result<bir::BodyIrModule, Box<dyn std::error::Error>> {
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let mut program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+
+        let for_stmt = program
+            .declarations
+            .iter_mut()
+            .find_map(|decl| match &mut decl.node {
+                ast::Declaration::Function(function) => {
+                    function.body.iter_mut().find_map(|stmt| match &mut stmt.node {
+                        ast::Statement::For(for_stmt) => Some(for_stmt),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .ok_or("expected a top-level function containing a `for` statement")?;
+        let ast::Pattern::Tuple(items) = &mut for_stmt.pattern.node else {
+            return Err("expected a flat tuple loop pattern to nest".into());
+        };
+        let second = items.pop().ok_or("expected a two-item tuple loop pattern")?;
+        let span = second.span;
+        let third = ast::Spanned::new(ast::Pattern::Binding("c".to_string()), span);
+        items.push(ast::Spanned::new(ast::Pattern::Tuple(vec![second, third]), span));
+
+        let module_path: Vec<String> = module_path.iter().map(|s| s.to_string()).collect();
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
+    }
+
+    /// Build a Body IR module from `source` after rewriting its first `for x in ...:` header into a two-name tuple
+    /// pattern **after** typechecking, leaving the recorded item type as the original non-tuple element type.
+    ///
+    /// This reaches lowering's defence-in-depth path directly: the typechecker rejects such a program
+    /// (`for_pattern_expects_tuple_item`), so no ordinary `build` could ever produce this state, yet lowering must
+    /// still refuse rather than project `.0`/`.1` out of a value with no such fields.
+    fn build_with_for_pattern_widened_after_typecheck(
+        source: &str,
+        module_path: &[&str],
+    ) -> Result<bir::BodyIrModule, Box<dyn std::error::Error>> {
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let mut program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let module_path: Vec<String> = module_path.iter().map(|s| s.to_string()).collect();
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+
+        let for_stmt = program
+            .declarations
+            .iter_mut()
+            .find_map(|decl| match &mut decl.node {
+                ast::Declaration::Function(function) => {
+                    function.body.iter_mut().find_map(|stmt| match &mut stmt.node {
+                        ast::Statement::For(for_stmt) => Some(for_stmt),
+                        _ => None,
+                    })
+                }
+                _ => None,
+            })
+            .ok_or("expected a top-level function containing a `for` statement")?;
+        let span = for_stmt.pattern.span;
+        let first = std::mem::replace(&mut for_stmt.pattern.node, ast::Pattern::Wildcard);
+        for_stmt.pattern.node = ast::Pattern::Tuple(vec![
+            ast::Spanned::new(first, span),
+            ast::Spanned::new(ast::Pattern::Binding("second".to_string()), span),
+        ]);
+
         Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
     }
 
@@ -3945,11 +4238,10 @@ mod tests {
     #[test]
     fn unsupported_constructs_lower_to_an_explicit_placeholder_instead_of_panicking()
     -> Result<(), Box<dyn std::error::Error>> {
-        // v0 does not lower destructuring for-loop patterns (that needs `match`-shaped pattern compilation, out of
-        // scope for #1101's iterator-protocol bucket); a tuple-unpack `for` binding is valid Incan but hits the
-        // explicit `Unsupported` placeholder rather than being silently dropped or panicking.
-        let source =
-            "def pick(x: int) -> int:\n  for idx, name in enumerate([\"a\", \"b\"]):\n    return idx\n  return x\n";
+        // v0 does not lower generator expressions (see this module's docs); a generator expression is valid Incan
+        // but hits the explicit `Unsupported` placeholder rather than being silently dropped or panicking. This
+        // used to use a destructuring `for` pattern as its example, which #1125 made a lowered construct.
+        let source = "def pick(x: int) -> int:\n  gen = (v for v in [1, 2])\n  return x\n";
         let module = build(source, &["m", "unsupported"])?;
         let snapshot = module.render_snapshot();
 
@@ -4926,6 +5218,385 @@ mod tests {
         assert!(
             snapshot.contains("Circle(bind(_1, borrow)) | Square(bind(_1, borrow))"),
             "both alternatives should bind the same shared local `_1`: {snapshot}"
+        );
+        Ok(())
+    }
+
+    /// Extract the `_N` place a loop's `IterNext` writes each produced item into, so a destructuring test can assert
+    /// on projections off that exact local without hard-coding a local number unrelated lowering changes would churn.
+    fn iter_next_destination(snapshot: &str) -> Option<String> {
+        snapshot.lines().find_map(|line| {
+            let (destination, _) = line.trim().split_once(" = iter_next(")?;
+            Some(destination.to_string())
+        })
+    }
+
+    /// Find the `_N` spelling of the local declared for source binding `name`, so a test can assert on reads of that
+    /// binding without pinning a local number.
+    fn local_for_binding(snapshot: &str, name: &str) -> Option<String> {
+        snapshot.lines().find_map(|line| {
+            let (id, tail) = line.trim().strip_prefix("local ")?.split_once(' ')?;
+            tail.starts_with(&format!("{name} : ")).then(|| format!("_{id}"))
+        })
+    }
+
+    #[test]
+    fn lowers_a_wildcard_for_pattern_without_declaring_a_binding() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def count(items: list[int]) -> int:\n  mut n = 0\n  for _ in items:\n    n = n + 1\n  return n\n";
+        let module = build(source, &["m", "wildcard_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a wildcard loop pattern must lower, not fall back to a placeholder: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(", builtin)"),
+            "wildcard iteration still polls the builtin protocol: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(" _ : "),
+            "`_` binds nothing, so it must not become a named local: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_wildcard_for_pattern_over_a_range() -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            "def count(n: int) -> int:\n  mut total = 0\n  for _ in 0..n:\n    total = total + 1\n  return total\n";
+        let module = build(source, &["m", "wildcard_range_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a wildcard range loop must keep the normalized counting-loop shape: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("loop:") && snapshot.contains("break"),
+            "the range path still desugars to a normalized loop: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(" _ : "),
+            "`_` binds nothing over a range either: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_tuple_for_pattern_into_one_binding_per_element() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def total(pairs: list[tuple[int, int]]) -> int:\n  mut acc = 0\n  for a, b in pairs:\n    acc = acc + a + b\n  return acc\n";
+        let module = build(source, &["m", "tuple_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a tuple loop pattern must lower to real bindings: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(" a : int [binding]"),
+            "`a` must be a real source binding carrying its resolved element type: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(" b : int [binding]"),
+            "`b` must be a real source binding carrying its resolved element type: {snapshot}"
+        );
+
+        let destination = iter_next_destination(&snapshot).ok_or("expected an IterNext statement")?;
+        assert!(
+            snapshot.contains(&format!("copy({destination}.0)")),
+            "`a` must bind the produced item's first tuple field: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(&format!("copy({destination}.1)")),
+            "`b` must bind the produced item's second tuple field: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn tuple_for_pattern_bindings_are_readable_inside_the_loop_body() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def total(pairs: list[tuple[int, int]]) -> int:\n  mut acc = 0\n  for a, b in pairs:\n    acc = acc + a + b\n  return acc\n";
+        let module = build(source, &["m", "tuple_for_reads"])?;
+        let snapshot = module.render_snapshot();
+
+        for name in ["a", "b"] {
+            let local = local_for_binding(&snapshot, name)
+                .ok_or_else(|| format!("expected a local for `{name}`: {snapshot}"))?;
+            assert!(
+                snapshot.contains(&format!("copy({local})")),
+                "the loop body must read `{name}` through its own binding {local}: {snapshot}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_tuple_for_pattern_over_a_user_defined_iteration_protocol() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model PairIter:\n  value: int\n\n  def __next__(self) -> Option[tuple[int, int]]:\n    return Some((self.value, self.value))\n\nmodel Pairs:\n  def __iter__(self) -> PairIter:\n    return PairIter(value=0)\n\ndef total() -> int:\n  mut acc = 0\n  for a, b in Pairs():\n    acc = acc + a + b\n  return acc\n";
+        let module = build(source, &["m", "protocol_tuple_for"])?;
+        let snapshot = module.render_snapshot();
+
+        // Scoped to the loop-pattern refusal specifically: this source's `PairIter(value=0)` constructor also
+        // trips Body IR's separate, pre-existing "call with named or unpack arguments" gap, which #1125 does not own.
+        assert!(
+            !snapshot.contains("unsupported(for-loop pattern"),
+            "protocol-driven tuple iteration must lower to real bindings: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("user_defined(__next__)"),
+            "the resolved protocol must still drive the poll: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(" a : int [binding]") && snapshot.contains(" b : int [binding]"),
+            "both tuple elements must bind with their resolved types: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_nested_tuple_for_pattern_through_projected_subfields() -> Result<(), Box<dyn std::error::Error>> {
+        // `for_binding_pattern_item` (`crates/incan_syntax/src/parser/stmts.rs`) admits only `_` or a bare
+        // identifier, so a nested loop pattern has no source spelling yet -- see
+        // `nested_tuple_for_patterns_have_no_source_spelling_yet`. The typechecker's own
+        // `define_for_pattern_bindings` already recurses through nested `Pattern::Tuple` specifically so a
+        // hand-built AST cannot reach lowering with a shape lowering does not understand, so this test builds that
+        // AST directly and drives the real typecheck-then-lower pipeline over it.
+        let source = "def total(pairs: list[tuple[int, tuple[int, int]]]) -> int:\n  mut acc = 0\n  for a, b in pairs:\n    acc = acc + a + b + c\n  return acc\n";
+        let module = build_with_nested_for_pattern(source, &["m", "nested_tuple_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a nested tuple loop pattern must lower to real bindings: {snapshot}"
+        );
+        for name in ["a", "b", "c"] {
+            assert!(
+                snapshot.contains(&format!(" {name} : int [binding]")),
+                "`{name}` must be a real source binding carrying its resolved element type: {snapshot}"
+            );
+        }
+
+        let destination = iter_next_destination(&snapshot).ok_or("expected an IterNext statement")?;
+        assert!(
+            snapshot.contains(&format!("copy({destination}.0)")),
+            "`a` must bind the outer tuple's first field: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(&format!("copy({destination}.1.0)")),
+            "`b` must bind through the nested tuple's first field: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(&format!("copy({destination}.1.1)")),
+            "`c` must bind through the nested tuple's second field: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_tuple_for_patterns_have_no_source_spelling_yet() -> Result<(), Box<dyn std::error::Error>> {
+        // Pins the boundary `lowers_a_nested_tuple_for_pattern_through_projected_subfields` works around: Body IR
+        // lowers nested loop patterns structurally, but no source syntax produces one today, in a `for` statement or
+        // in a comprehension `for` clause (both parse their header through `for_binding_pattern`). #1125 explicitly
+        // does not add new source syntax, so this stays a parser-surface gap rather than a lowering gap. When the
+        // parser does learn this spelling, this test fails and the nested case can move onto the ordinary `build`
+        // path.
+        let source = "def total(pairs: list[tuple[int, tuple[int, int]]]) -> int:\n  for a, (b, c) in pairs:\n    pass\n  return 0\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        assert!(
+            parser::parse(&tokens).is_err(),
+            "a parenthesized nested loop pattern is not part of the source surface yet"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn destructured_for_pattern_bindings_do_not_escape_the_loop_scope() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def keep_outer(a: int, pairs: list[tuple[int, int]]) -> int:\n  for a, b in pairs:\n    pass\n  return a\n";
+        let module = build(source, &["m", "tuple_for_scope"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("return copy(_0)"),
+            "the trailing read must resolve the enclosing parameter, not the destructured loop local: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn destructured_for_pattern_bindings_carry_ownership_and_drop_facts() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def widths(pairs: list[tuple[str, str]]) -> int:\n  mut n = 0\n  for head, tail in pairs:\n    n = n + len(head)\n  return n\n";
+        let module = build(source, &["m", "tuple_for_drops"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains(" head : str [binding]") && snapshot.contains(" tail : str [binding]"),
+            "non-Copy tuple elements must still bind carrying their resolved element type: {snapshot}"
+        );
+
+        let destination = iter_next_destination(&snapshot).ok_or("expected an IterNext statement")?;
+        assert!(
+            snapshot.contains(&format!("borrow({destination}.0)")),
+            "a non-Copy element read through a projection borrows rather than moving: {snapshot}"
+        );
+
+        // Neither binding is ever moved out -- `tail` is never read at all and `head` is only read as a call
+        // argument -- so both owe an explicit scope-exit drop on every iteration.
+        assert_eq!(
+            snapshot.matches("drop _").count(),
+            2,
+            "each non-Copy loop binding owes exactly one scope-exit drop: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_closure_does_not_capture_names_a_nested_destructuring_pattern_binds() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // `a` and `b` are bound by the comprehension's own `for` clause, so they are *not* free variables of the
+        // enclosing closure and must never be captured from the enclosing scope -- where they do not exist at all.
+        // Before #1125 the free-variable walk only treated a plain `Pattern::Binding` as binding a name, so a
+        // destructuring clause pattern left both names looking free.
+        let source = "def outer(pairs: list[tuple[int, int]]) -> int:\n  sums: () -> list[int] = () => [a + b for a, b in pairs]\n  return 0\n";
+        let module = build(source, &["m", "closure_pattern_capture"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains(" a : ") && !snapshot.contains(" b : "),
+            "clause-bound names must not become captured locals of the enclosing closure: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("[captured]"),
+            "the closure should still capture the one name it really reads from the enclosing scope: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_tuple_for_pattern_over_a_non_tuple_item_type_is_a_type_error() -> Result<(), Box<dyn std::error::Error>> {
+        // Regression for the P1 on #1125: this used to typecheck silently, binding both names as `Unknown`, and
+        // Body IR then projected `.0`/`.1` out of an `int`.
+        let source = "def total(items: list[int]) -> int:\n  for left, right in items:\n    pass\n  return 0\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(vec!["m".to_string(), "non_tuple_for".to_string()]));
+
+        let errors = checker
+            .check_program(&program)
+            .err()
+            .ok_or("destructuring a non-tuple iteration item must be rejected, not silently bound as Unknown")?;
+        let rendered = format!("{errors:?}");
+        assert!(
+            rendered.contains("Cannot destructure 2 values from iteration item of type 'int'"),
+            "the diagnostic should name the offending item type: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_tuple_for_pattern_over_a_mismatched_arity_item_type_is_a_type_error() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "def total(pairs: list[tuple[int, int]]) -> int:\n  for a, b, c in pairs:\n    pass\n  return 0\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(vec!["m".to_string(), "arity_for".to_string()]));
+
+        let errors = checker
+            .check_program(&program)
+            .err()
+            .ok_or("a wrong-arity tuple loop pattern must be rejected")?;
+        let rendered = format!("{errors:?}");
+        assert!(
+            rendered.contains("Cannot unpack 3 values from tuple with 2 elements"),
+            "the arity mismatch should be reported: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowering_fails_closed_on_a_tuple_pattern_whose_item_type_is_not_a_tuple()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Defence in depth for the same P1: the typechecker rejects this program, so lowering should only ever see
+        // it from a hand-built AST -- and must refuse rather than project `.0`/`.1` out of an `int`.
+        let source = "def total(items: list[int]) -> int:\n  for value in items:\n    pass\n  return 0\n";
+        let module = build_with_for_pattern_widened_after_typecheck(source, &["m", "fail_closed_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("unsupported(for-loop tuple pattern over non-tuple item type `int`)"),
+            "lowering must refuse, naming the item type it cannot destructure: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(".0)") && !snapshot.contains(".1)"),
+            "lowering must not emit tuple-field projections into a non-tuple value: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(" second : "),
+            "no binding may be declared for a refused pattern: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_tuple_for_pattern_over_an_unconstrained_type_variable_is_a_type_error()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // An unconstrained `T` can be instantiated as `int`, and Incan has no tuple-shaped bound that could
+        // promise otherwise, so this can never be proven safe.
+        let source = "def total[T](items: list[T]) -> int:\n  for left, right in items:\n    pass\n  return 0\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(vec!["m".to_string(), "typevar_for".to_string()]));
+
+        let errors = checker
+            .check_program(&program)
+            .err()
+            .ok_or("destructuring an unconstrained type variable must be rejected")?;
+        let rendered = format!("{errors:?}");
+        assert!(
+            rendered.contains("Cannot destructure 2 values from iteration item of type"),
+            "the diagnostic should name the underdetermined item type: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_tuple_for_pattern_over_type_variable_elements_still_binds() -> Result<(), Box<dyn std::error::Error>> {
+        // The shape `crates/incan_stdlib/stdlib/collections.incn` actually uses: the *item* is a tuple, and only
+        // its elements are type variables. Rejecting bare type variables must not catch this too.
+        let source = "def keys[K, V](items: list[Tuple[K, V]]) -> int:\n  mut n = 0\n  for key, value in items:\n    n = n + 1\n  return n\n";
+        let module = build(source, &["m", "typevar_elements_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported(for-loop"),
+            "a tuple item whose elements are type variables must still bind: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(" key : ") && snapshot.contains(" value : "),
+            "both names must bind as real locals: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowering_fails_closed_on_a_tuple_pattern_over_an_unconstrained_type_variable()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Lowering must apply the same rule the typechecker does, so the two stages cannot disagree about which
+        // programs are bindable.
+        let source = "def total[T](items: list[T]) -> int:\n  for value in items:\n    pass\n  return 0\n";
+        let module = build_with_for_pattern_widened_after_typecheck(source, &["m", "fail_closed_typevar"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("unsupported(for-loop tuple pattern over non-tuple item type"),
+            "lowering must refuse an unconstrained type variable, matching the typechecker: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(".0)") && !snapshot.contains(".1)"),
+            "lowering must not emit tuple-field projections into a type variable: {snapshot}"
         );
         Ok(())
     }

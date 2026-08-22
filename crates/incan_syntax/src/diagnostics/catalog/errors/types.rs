@@ -1961,6 +1961,18 @@ pub fn tuple_field_assignment(span: Span) -> CompileError {
         .with_hint("Create a new tuple instead of modifying an existing one")
 }
 
+/// Report a `for` loop whose tuple pattern destructures an iteration item that is not a tuple at all.
+///
+/// Distinct from [`tuple_unpack_count_mismatch`], which reports a tuple of the wrong arity: here there is no
+/// tuple to take elements from, so naming the actual item type is the useful part of the message.
+pub fn for_pattern_expects_tuple_item(names: usize, item_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot destructure {names} values from iteration item of type '{item_ty}'"),
+        span,
+    )
+    .with_hint("Iterate a sequence of tuples, or bind each item to a single name")
+}
+
 pub fn tuple_unpack_count_mismatch(expected: usize, found: usize, span: Span) -> CompileError {
     CompileError::type_error(
         format!("Cannot unpack {} values from tuple with {} elements", expected, found),

@@ -1246,6 +1246,11 @@ impl TypeChecker {
         };
 
         self.symbols.enter_scope(ScopeKind::Block);
+        // Record the resolved element type at the pattern's own span. Body IR's `lower_for` already reads the loop
+        // pattern's type back through `TypeCheckInfo::expr_type`, and every binding the pattern introduces -- one
+        // for a plain binding, or one per tuple element -- takes its type from it (#1125). Without this the loop
+        // bindings would carry `Unknown` even though the element type is fully resolved right here.
+        self.record_expr_type(for_stmt.pattern.span, elem_ty.clone());
         self.define_for_pattern_bindings(&for_stmt.pattern, &elem_ty);
         self.push_loop_context(LoopContextKind::Statement, None);
 
@@ -1331,8 +1336,22 @@ impl TypeChecker {
             }
             Pattern::Wildcard => {}
             Pattern::Tuple(items) => {
-                let element_types = match ty {
-                    ResolvedType::Tuple(types) => {
+                // A tuple element type reaches here in two spellings: a tuple *literal* infers
+                // `ResolvedType::Tuple`, while a written `tuple[A, B]` annotation resolves through the
+                // collection-type registry and arrives as a `ResolvedType::Generic` named `Tuple`. Reading only the
+                // first spelling left every binding of an annotated tuple iteration typed `Unknown` for the whole
+                // loop body, and suppressed the arity-mismatch diagnostic there too (#1125).
+                let declared = match ty {
+                    ResolvedType::Tuple(types) => Some(types.clone()),
+                    ResolvedType::Generic(name, args)
+                        if matches!(collection_type_id(name.as_str()), Some(CollectionTypeId::Tuple)) =>
+                    {
+                        Some(args.clone())
+                    }
+                    _ => None,
+                };
+                let element_types = match declared {
+                    Some(types) => {
                         if types.len() != items.len() {
                             self.errors.push(errors::tuple_unpack_count_mismatch(
                                 items.len(),
@@ -1340,9 +1359,36 @@ impl TypeChecker {
                                 pattern.span,
                             ));
                         }
-                        types.clone()
+                        types
                     }
-                    _ => vec![ResolvedType::Unknown; items.len()],
+                    None => {
+                        // A tuple pattern can only destructure a tuple. Binding `Unknown` per name and staying
+                        // silent used to hide `for a, b in items` over a `list[int]` completely, and Body IR would
+                        // then project `.0`/`.1` out of an `int` (#1125).
+                        //
+                        // Exactly two item types are exempt, and a bare type variable is not one of them:
+                        //
+                        // - `Unknown` is recovery-only. It means checking already failed somewhere upstream, so a
+                        //   second diagnostic here would just be noise on top of the real one.
+                        // - `Never` is the bottom type, and `Self::types_compatible` already answers `(Never, _) =>
+                        //   true` for every type including a tuple. Accepting it here is that same established policy,
+                        //   not a carve-out; the loop body is unreachable either way.
+                        //
+                        // An unconstrained type variable is *not* "not yet known" -- it is known to be
+                        // underdetermined, and `T` can be instantiated as `int`. Incan has no tuple-shaped bound a
+                        // caller could write to promise otherwise (bounds are trait-based), so `for a, b in
+                        // list[T]` can never be proven safe and is rejected. Note this does not affect the common
+                        // `list[Tuple[K, V]]` shape, whose item type is a tuple whose *elements* are type
+                        // variables -- that takes the `Some(types)` branch above.
+                        if !matches!(ty, ResolvedType::Unknown | ResolvedType::Never) {
+                            self.errors.push(errors::for_pattern_expects_tuple_item(
+                                items.len(),
+                                &ty.to_string(),
+                                pattern.span,
+                            ));
+                        }
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
                 };
 
                 for (i, item) in items.iter().enumerate() {
