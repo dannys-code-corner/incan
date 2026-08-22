@@ -92,6 +92,22 @@ model Reading:
 
 For the exact alias syntax, supported target kinds, public export rules, and diagnostics, see [Symbol aliases](../reference/symbol_aliases.md).
 
+### Core builtin function names
+
+Core builtin functions such as `len`, `sum`, and `zip` are ambient fallback bindings. A real lexical binding at module scope takes precedence over that fallback, whether it comes from a direct declaration or an explicit import. This is ordinary name resolution, not an error or a special builtin rule.
+
+```incan
+def len(value: int) -> int:
+    return value + 1
+
+def report() -> int:
+    local_result = len(4)                     # calls this module's `len`: 5
+    builtin_result = std.builtins.len([1, 2]) # calls the core builtin: 2
+    return local_result + builtin_result
+```
+
+Use `std.builtins.<name>` when a module has intentionally reused a builtin-function spelling but a particular call needs the core builtin. The qualified form always selects the core builtin; it is not affected by the local binding.
+
 ### Function / method scope
 
 Each `def ...:` body is a **function scope**.

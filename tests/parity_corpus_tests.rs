@@ -185,14 +185,13 @@ fn case_generated_artifact_valid_rust_shape() -> ComparisonOutcome {
 }
 
 // ============================================================================
-// Case 5 — Accidental accepted behavior: shadowing a builtin name is accepted silently
+// Case 5 — Supported language contract: lexical bindings shadow ambient builtins
 // ============================================================================
 
-// Verified by direct probe: a user-defined top-level `def len(...)` shadows the `len` builtin with no diagnostic,
-// and the shadowed definition wins at the call site. There is no documented contract for builtin shadowing in the
-// language reference. Per the #646 inventory's own migration guidance for this category ("either document and test
-// it as supported or reject it with a clear diagnostic"), this is exactly the kind of gap #987 exists to surface,
-// not resolve — the disposition below tracks that decision under #1116.
+// #1116 adopts this as a language contract: a direct module declaration or explicit import is a real lexical
+// binding and wins over an ambient core builtin function for unqualified calls. `std.builtins.<name>` remains the
+// explicit route to the builtin when the local spelling is shadowed. The corresponding typechecker, codegen, and
+// runtime coverage lives alongside this corpus row; #653 must reproduce the same precedence deliberately.
 const CASE_5_SRC: &str = r#"
 def len(x: int) -> int:
     return x + 1
@@ -202,11 +201,11 @@ def main() -> None:
     println(y)
 "#;
 
-fn case_accidental_shadowing_builtin_len() -> ComparisonOutcome {
+fn case_supported_builtin_len_shadowing() -> ComparisonOutcome {
     outcome_from_typecheck(
         CASE_5_SRC,
         |errs| errs.is_empty(),
-        "shadowing the `len` builtin to keep typechecking silently (today's accidental-acceptance baseline)",
+        "a module `len` binding to shadow the ambient builtin without a diagnostic",
     )
 }
 
@@ -284,21 +283,13 @@ fn seed_corpus() -> Vec<ParityCase> {
         },
         ParityCase {
             id: "parity-987-0005",
-            title: "Shadowing a builtin name (`len`) typechecks with no diagnostic",
-            category: BehaviorCategory::AccidentalAcceptedBehavior,
+            title: "A lexical builtin-name collision (`len`) preserves the module binding",
+            category: BehaviorCategory::SupportedLanguageContract,
             lane: EvidenceLane::DirectParserTypechecker,
-            evidence: "tests/parity_corpus_tests.rs::case_accidental_shadowing_builtin_len",
-            disposition: Disposition::Unsupported {
-                owning_issue: 1116,
-                migration_note: "No documented contract for builtin shadowing exists today. Tracked in #1116: \
-                                  before 0.6 cutover, decide (a) document and test builtin shadowing as \
-                                  supported, matching Python's own scoping rules, or (b) add a typechecker \
-                                  diagnostic rejecting redefinition of builtin names. Do not let the replacement \
-                                  backend silently inherit whichever behavior falls out of its symbol resolution \
-                                  order.",
-            },
+            evidence: "tests/parity_corpus_tests.rs::case_supported_builtin_len_shadowing",
+            disposition: Disposition::Preserved,
             source: CASE_5_SRC,
-            evaluate: case_accidental_shadowing_builtin_len,
+            evaluate: case_supported_builtin_len_shadowing,
         },
         ParityCase {
             id: "parity-987-0006",
