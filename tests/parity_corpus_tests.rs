@@ -8,7 +8,7 @@
 //!
 //! Run with: `cargo test --test parity_corpus_tests`
 //!
-//! ## Why these eleven cases
+//! ## Why these twelve cases
 //!
 //! Per #987's own plan step 3 ("add a narrow source-only seed corpus before public package or Rust-interop
 //! rows"), every seed case here uses a direct-parser/typechecker, generated-project-run, or codegen-snapshot
@@ -307,6 +307,15 @@ def guarded_floor_div(a: int, b: int) -> int:
     return a // b
 "#;
 
+const REPLACEMENT_BODY_V0_006_SRC: &str = r#"
+def select_second_pair() -> int:
+    pairs = [(1, 2), (4, 5)]
+    for a, b in pairs:
+        if a == 4:
+            return a * 10 + b
+    return 0
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -345,6 +354,14 @@ fn replacement_body_v0_005_arguments() -> Vec<ReplacementValue> {
 
 fn replacement_body_v0_005_expected() -> ReplacementValue {
     ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_006_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_006_expected() -> ReplacementValue {
+    ReplacementValue::Int(45)
 }
 
 // ============================================================================
@@ -505,6 +522,21 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "guarded_floor_div",
                 arguments: replacement_body_v0_005_arguments,
                 expected: replacement_body_v0_005_expected,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-006",
+            title: "Scalar tuple collection loops destructure through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-006; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_006_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "select_second_pair",
+                arguments: replacement_body_v0_006_arguments,
+                expected: replacement_body_v0_006_expected,
             }),
         },
     ]
@@ -693,8 +725,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        5,
-        "the five agreed #988 cases must stay stable in #987"
+        6,
+        "the six agreed #988 cases must stay stable in #987"
     );
 
     for row in replacement_rows {

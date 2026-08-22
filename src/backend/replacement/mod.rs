@@ -1,23 +1,26 @@
 //! Direct execution of the deliberately narrow #988 Body-IR replacement profile.
 //!
-//! This module consumes [`incan_semantics_core::BodyIrModule`] directly. It never reads generated Rust, never
+//! This module consumes [`BodyIrModule`] directly. It never reads generated Rust, never
 //! delegates a requested replacement execution to [`crate::backend::ir`], and rejects every operation outside the
 //! first free-function profile with the original Body-IR source span. The profile is intentionally limited to
-//! scalar local values, arithmetic, compiler-owned string concatenation, branches, normalized loops, returns, and
-//! assertions; packages, Rust interop, callable values, generators, destructuring, and projections remain visible
-//! refusals for later #988 extensions.
+//! scalar local values, scalar tuple collections, arithmetic, compiler-owned string concatenation, branches,
+//! normalized loops, returns, and assertions. It admits only the one-level `.0`/`.1` tuple projections Body IR
+//! emits for `for a, b in pairs`, where `pairs` is `list[tuple[scalar, scalar]]`; packages, Rust interop, callable
+//! values, generators, general destructuring, and other projections remain visible refusals for later #988
+//! extensions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use incan_core::{
     lang::surface::constructors::{ConstructorId, as_str as constructor_name},
+    lang::types::collections::{self, CollectionTypeId},
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
-    BinOp, Body, BodyIrModule, Callee, Constant, HelperOp, IterProtocol, LocalId, LocalOrigin, Operand, OwnershipFact,
-    Place, Rvalue, Statement, StatementKind, UnOp,
+    AggregateKind, BinOp, Body, BodyIrModule, Callee, Constant, HelperOp, IterProtocol, LocalId, LocalOrigin, Operand,
+    OwnershipFact, Place, PlaceElem, Rvalue, Statement, StatementKind, UnOp,
 };
-use incan_semantics_core::{AbiV0RuntimeRequirement, HirSourceSpan};
+use incan_semantics_core::{AbiV0RuntimeRequirement, HirSourceSpan, IncanPrimitiveType, IncanType};
 
 use crate::backend::selection::digest_output;
 
@@ -41,8 +44,15 @@ pub enum ReplacementValue {
     Float(String),
     /// An Incan `None`/unit value.
     Unit,
-    /// A normalized builtin range iterator for the selected range-`for` control-flow case.
+    /// A normalized runtime range iterator for the selected `range` source-spelling control-flow case.
     Range { next: i64, end: i64, step: i64 },
+    /// A `list[tuple[scalar, scalar]]` value with the cursor owned by its materialized builtin iterator local.
+    List {
+        elements: Vec<ReplacementValue>,
+        next: usize,
+    },
+    /// A two-element scalar tuple, retained only as one element of an admitted replacement list value.
+    Tuple(Vec<ReplacementValue>),
 }
 
 impl ReplacementValue {
@@ -55,6 +65,22 @@ impl ReplacementValue {
             Self::Float(value) => value.clone(),
             Self::Unit => constructor_name(ConstructorId::None).to_string(),
             Self::Range { next, end, step } => format!("range({next}, {end}, {step})"),
+            Self::List { elements, .. } => format!(
+                "[{}]",
+                elements
+                    .iter()
+                    .map(Self::observable_text)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::Tuple(elements) => format!(
+                "({})",
+                elements
+                    .iter()
+                    .map(Self::observable_text)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
         }
     }
 }
@@ -230,7 +256,11 @@ pub fn prepare_free_function_execution<'module, 'args>(
     }
     validate_scalar_arguments(args, body.span)?;
     validate_binding_identity(body)?;
-    validate_block_profile(&body.block)?;
+    let range_iterator_locals = range_iterator_locals(&body.block);
+    validate_collection_local_types(body, &body.block, &range_iterator_locals)?;
+    let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
+    let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
+    validate_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
@@ -352,20 +382,387 @@ fn validate_binding_identity(body: &Body) -> Result<(), ReplacementExecutionErro
     Ok(())
 }
 
-/// Validate every statement in one normalized Body-IR block before the direct executor starts.
-fn validate_block_profile(block: &incan_semantics_core::body_ir::Block) -> Result<(), ReplacementExecutionError> {
+/// Validate every list, tuple, and builtin-iteration local against the typed Body IR profile.
+///
+/// Runtime operands alone cannot classify an empty list. This pass uses each authoritative local declaration, so an
+/// empty `list[int]` refuses before it can be mistaken for the vacuously valid empty form of the selected profile.
+fn validate_collection_local_types(
+    body: &Body,
+    block: &incan_semantics_core::body_ir::Block,
+    range_iterator_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
     for statement in &block.stmts {
-        validate_statement_profile(statement)?;
+        match &statement.kind {
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Aggregate(AggregateKind::Tuple, _),
+            } => validate_scalar_pair_tuple_local_type(
+                body,
+                bare_local(place, statement.span)?,
+                statement.span,
+                "tuple aggregate destination",
+            )?,
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Aggregate(AggregateKind::List, operands),
+            } => {
+                validate_scalar_pair_list_local_type(
+                    body,
+                    bare_local(place, statement.span)?,
+                    statement.span,
+                    "list aggregate destination",
+                )?;
+                for operand in operands {
+                    let Operand::Place(place_operand) = operand else {
+                        continue;
+                    };
+                    validate_scalar_pair_tuple_local_type(
+                        body,
+                        bare_local(&place_operand.place, statement.span)?,
+                        statement.span,
+                        "list aggregate element",
+                    )?;
+                }
+            }
+            StatementKind::IterNext {
+                destination,
+                iterator: Operand::Place(iterator),
+                protocol: IterProtocol::Builtin,
+            } => {
+                let iterator_local = bare_local(&iterator.place, statement.span)?;
+                if range_iterator_locals.contains(&iterator_local) {
+                    validate_range_iteration_local_types(body, destination, iterator_local, statement.span)?;
+                } else {
+                    validate_scalar_pair_tuple_local_type(
+                        body,
+                        bare_local(destination, statement.span)?,
+                        statement.span,
+                        "builtin collection iteration destination",
+                    )?;
+                    validate_scalar_pair_list_local_type(
+                        body,
+                        iterator_local,
+                        statement.span,
+                        "builtin collection iterator",
+                    )?;
+                }
+            }
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                validate_collection_local_types(body, then_block, range_iterator_locals)?;
+                if let Some(else_block) = else_block {
+                    validate_collection_local_types(body, else_block, range_iterator_locals)?;
+                }
+            }
+            StatementKind::Loop { body: loop_body } => {
+                validate_collection_local_types(body, loop_body, range_iterator_locals)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Collect builtin iterator locals admitted by the current `range` source-spelling rule.
+///
+/// Body IR v0 records [`Callee::Function`] by source spelling, not resolved builtin identity. The current replacement
+/// CLI profile rejects imports and sibling free functions before it reaches this executor, so its one source-local
+/// `main` cannot supply an alternate `range` binding. Within that boundary, `range(...)` enters normalized general
+/// iteration as a `Call`, then passes through plain temporary aliases before `IterNext` polls it. The executor
+/// materializes that admitted spelling as [`ReplacementValue::Range`] without treating an arbitrary `list[int]` as
+/// a collection the new profile admits. Canonical call-target identity is deferred to #1042.
+fn range_iterator_locals(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
+    let mut locals = BTreeSet::new();
+    while collect_range_iterator_locals(block, &mut locals) {}
+    locals
+}
+
+/// Extend the admitted `range` source-spelling aliases until the enclosing body reaches a fixed point.
+fn collect_range_iterator_locals(
+    block: &incan_semantics_core::body_ir::Block,
+    range_locals: &mut BTreeSet<LocalId>,
+) -> bool {
+    let mut changed = false;
+    for statement in &block.stmts {
+        match &statement.kind {
+            StatementKind::Call {
+                destination: Some(destination),
+                callee: Callee::Function(name),
+                ..
+            } if name == "range" && destination.projection.is_empty() => {
+                changed |= range_locals.insert(destination.local);
+            }
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Use(Operand::Place(source)),
+            } if place.projection.is_empty()
+                && source.place.projection.is_empty()
+                && range_locals.contains(&source.place.local) =>
+            {
+                changed |= range_locals.insert(place.local);
+            }
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                changed |= collect_range_iterator_locals(then_block, range_locals);
+                if let Some(else_block) = else_block {
+                    changed |= collect_range_iterator_locals(else_block, range_locals);
+                }
+            }
+            StatementKind::Loop { body } => {
+                changed |= collect_range_iterator_locals(body, range_locals);
+            }
+            _ => {}
+        }
+    }
+    changed
+}
+
+/// Validate the compiler-owned local types of a preserved scalar `range` source-spelling iteration.
+fn validate_range_iteration_local_types(
+    body: &Body,
+    destination: &Place,
+    iterator: LocalId,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    let destination = bare_local(destination, span)?;
+    let destination_ty = declared_local_type(body, destination, span)?;
+    if !is_int_type(destination_ty) {
+        return Err(unsupported(
+            format!("range iteration destination has Body-IR type `{destination_ty}`, not int"),
+            span,
+        ));
+    }
+    let iterator_ty = declared_local_type(body, iterator, span)?;
+    if is_range_iterator_type(iterator_ty) {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("range iteration iterator has Body-IR type `{iterator_ty}`, not list[int]"),
+            span,
+        ))
+    }
+}
+
+/// Validate that a Body-IR local has the only tuple type admitted as a replacement collection element.
+fn validate_scalar_pair_tuple_local_type(
+    body: &Body,
+    local: LocalId,
+    span: HirSourceSpan,
+    role: &str,
+) -> Result<(), ReplacementExecutionError> {
+    let ty = declared_local_type(body, local, span)?;
+    if is_scalar_pair_tuple_type(ty) {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("{role} has Body-IR type `{ty}`, not tuple[scalar, scalar]"),
+            span,
+        ))
+    }
+}
+
+/// Validate that a Body-IR local has the only list type admitted by the replacement collection profile.
+fn validate_scalar_pair_list_local_type(
+    body: &Body,
+    local: LocalId,
+    span: HirSourceSpan,
+    role: &str,
+) -> Result<(), ReplacementExecutionError> {
+    let ty = declared_local_type(body, local, span)?;
+    if is_scalar_pair_list_type(ty) {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("{role} has Body-IR type `{ty}`, not list[tuple[scalar, scalar]]"),
+            span,
+        ))
+    }
+}
+
+/// Return a local's compiler-owned type or refuse malformed Body IR at the owning source span.
+fn declared_local_type(
+    body: &Body,
+    local: LocalId,
+    span: HirSourceSpan,
+) -> Result<&IncanType, ReplacementExecutionError> {
+    body.locals
+        .iter()
+        .find(|declaration| declaration.id == local)
+        .map(|declaration| &declaration.ty)
+        .ok_or_else(|| unsupported("Body-IR local without a declared type", span))
+}
+
+/// Return whether a type is a two-element tuple of scalar shapes the replacement runtime already supports.
+fn is_scalar_pair_tuple_type(ty: &IncanType) -> bool {
+    match ty {
+        IncanType::Tuple(elements) => {
+            matches!(elements.as_slice(), [left, right] if is_collection_scalar_type(left) && is_collection_scalar_type(right))
+        }
+        IncanType::Generic { base, args } if collections::from_str(base) == Some(CollectionTypeId::Tuple) => {
+            matches!(args.as_slice(), [left, right] if is_collection_scalar_type(left) && is_collection_scalar_type(right))
+        }
+        _ => false,
+    }
+}
+
+/// Return whether a type is `list[tuple[scalar, scalar]]` according to the canonical collection registry.
+fn is_scalar_pair_list_type(ty: &IncanType) -> bool {
+    matches!(
+        ty,
+        IncanType::Generic { base, args }
+            if collections::from_str(base) == Some(CollectionTypeId::List)
+                && matches!(args.as_slice(), [element] if is_scalar_pair_tuple_type(element))
+    )
+}
+
+/// Return whether a type is the compiler's list representation for the profile's `range` iterator.
+fn is_range_iterator_type(ty: &IncanType) -> bool {
+    matches!(
+        ty,
+        IncanType::Generic { base, args }
+            if collections::from_str(base) == Some(CollectionTypeId::List)
+                && matches!(args.as_slice(), [element] if is_int_type(element))
+    )
+}
+
+/// Return whether a type is the integer scalar used by the selected `range` loop lowering.
+const fn is_int_type(ty: &IncanType) -> bool {
+    matches!(ty, IncanType::Primitive(IncanPrimitiveType::Int))
+}
+
+/// Return whether a type is a scalar shape the selected collection runtime can materialize and project.
+fn is_collection_scalar_type(ty: &IncanType) -> bool {
+    matches!(
+        ty,
+        IncanType::Primitive(
+            IncanPrimitiveType::Int | IncanPrimitiveType::Bool | IncanPrimitiveType::Str | IncanPrimitiveType::Unit
+        )
+    )
+}
+
+/// Collect the local identities written by builtin collection polling across one normalized body.
+///
+/// Only these compiler-created item locals may later be projected as a selected scalar tuple element. This keeps a
+/// standalone tuple field access outside the profile even though it uses the same `PlaceElem::Field` representation.
+fn builtin_iteration_destinations(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
+    let mut destinations = BTreeSet::new();
+    collect_builtin_iteration_destinations(block, &mut destinations);
+    destinations
+}
+
+/// Recurse through normalized control flow to collect every builtin iteration destination local.
+fn collect_builtin_iteration_destinations(
+    block: &incan_semantics_core::body_ir::Block,
+    destinations: &mut BTreeSet<LocalId>,
+) {
+    for statement in &block.stmts {
+        match &statement.kind {
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                collect_builtin_iteration_destinations(then_block, destinations);
+                if let Some(else_block) = else_block {
+                    collect_builtin_iteration_destinations(else_block, destinations);
+                }
+            }
+            StatementKind::Loop { body } => collect_builtin_iteration_destinations(body, destinations),
+            StatementKind::IterNext {
+                destination,
+                protocol: IterProtocol::Builtin,
+                ..
+            } => {
+                destinations.insert(destination.local);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Collect the tuple locals that are direct elements of a source-local list aggregate.
+///
+/// Body IR lowers each tuple literal before the surrounding list aggregate, so a replacement profile cannot infer
+/// this relationship from a single rvalue. Intersecting tuple-assignment destinations with direct list operands
+/// makes that lowering relationship explicit and prevents standalone tuples or scalar lists from slipping through
+/// as unobserved runtime values.
+fn scalar_tuple_collection_elements(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
+    let mut tuple_destinations = BTreeSet::new();
+    let mut list_operands = BTreeSet::new();
+    collect_scalar_tuple_collection_locals(block, &mut tuple_destinations, &mut list_operands);
+    tuple_destinations.intersection(&list_operands).copied().collect()
+}
+
+/// Recurse through control flow to collect tuple assignments and direct list-aggregate operands.
+fn collect_scalar_tuple_collection_locals(
+    block: &incan_semantics_core::body_ir::Block,
+    tuple_destinations: &mut BTreeSet<LocalId>,
+    list_operands: &mut BTreeSet<LocalId>,
+) {
+    for statement in &block.stmts {
+        match &statement.kind {
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Aggregate(AggregateKind::Tuple, _),
+            } if place.projection.is_empty() => {
+                tuple_destinations.insert(place.local);
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Aggregate(AggregateKind::List, operands),
+                ..
+            } => {
+                for operand in operands {
+                    if let Operand::Place(place_operand) = operand
+                        && place_operand.place.projection.is_empty()
+                    {
+                        list_operands.insert(place_operand.place.local);
+                    }
+                }
+            }
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                collect_scalar_tuple_collection_locals(then_block, tuple_destinations, list_operands);
+                if let Some(else_block) = else_block {
+                    collect_scalar_tuple_collection_locals(else_block, tuple_destinations, list_operands);
+                }
+            }
+            StatementKind::Loop { body } => {
+                collect_scalar_tuple_collection_locals(body, tuple_destinations, list_operands);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Validate every statement in one normalized Body-IR block before the direct executor starts.
+fn validate_block_profile(
+    block: &incan_semantics_core::body_ir::Block,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    for statement in &block.stmts {
+        validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?;
     }
     Ok(())
 }
 
 /// Validate one statement against the deliberately narrow #988 direct-execution profile.
-fn validate_statement_profile(statement: &Statement) -> Result<(), ReplacementExecutionError> {
+fn validate_statement_profile(
+    statement: &Statement,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
     match &statement.kind {
         StatementKind::Assign { place, rvalue } => {
             validate_bare_local(place, statement.span)?;
-            validate_rvalue_profile(rvalue, statement.span)
+            validate_rvalue_profile(
+                rvalue,
+                statement.span,
+                tuple_iteration_locals,
+                scalar_tuple_collection_locals,
+                Some(place.local),
+            )
         }
         StatementKind::Call {
             destination,
@@ -377,7 +774,7 @@ fn validate_statement_profile(statement: &Statement) -> Result<(), ReplacementEx
                 .as_ref()
                 .ok_or_else(|| unsupported("discarded call result", statement.span))?;
             validate_bare_local(destination, statement.span)?;
-            validate_call_profile(callee, args, statement.span)
+            validate_call_profile(callee, args, statement.span, tuple_iteration_locals)
         }
         StatementKind::Drop { .. } => Ok(()),
         StatementKind::If {
@@ -385,37 +782,39 @@ fn validate_statement_profile(statement: &Statement) -> Result<(), ReplacementEx
             then_block,
             else_block,
         } => {
-            validate_operand_profile(cond, statement.span)?;
-            validate_block_profile(then_block)?;
+            validate_operand_profile(cond, statement.span, tuple_iteration_locals)?;
+            validate_block_profile(then_block, tuple_iteration_locals, scalar_tuple_collection_locals)?;
             if let Some(else_block) = else_block {
-                validate_block_profile(else_block)?;
+                validate_block_profile(else_block, tuple_iteration_locals, scalar_tuple_collection_locals)?;
             }
             Ok(())
         }
-        StatementKind::Loop { body } => validate_block_profile(body),
+        StatementKind::Loop { body } => {
+            validate_block_profile(body, tuple_iteration_locals, scalar_tuple_collection_locals)
+        }
         StatementKind::Break { value: Some(_) } => Err(unsupported("value-carrying loop break", statement.span)),
         StatementKind::Break { value: None } | StatementKind::Continue => Ok(()),
-        StatementKind::Return { value } => value
-            .as_ref()
-            .map_or(Ok(()), |value| validate_operand_profile(value, statement.span)),
+        StatementKind::Return { value } => value.as_ref().map_or(Ok(()), |value| {
+            validate_operand_profile(value, statement.span, tuple_iteration_locals)
+        }),
         StatementKind::Assert {
             cond,
             message,
             may_panic: _,
         } => {
-            validate_operand_profile(cond, statement.span)?;
-            message
-                .as_ref()
-                .map_or(Ok(()), |message| validate_operand_profile(message, statement.span))
+            validate_operand_profile(cond, statement.span, tuple_iteration_locals)?;
+            message.as_ref().map_or(Ok(()), |message| {
+                validate_operand_profile(message, statement.span, tuple_iteration_locals)
+            })
         }
-        StatementKind::Expr { value } => validate_operand_profile(value, statement.span),
+        StatementKind::Expr { value } => validate_operand_profile(value, statement.span, tuple_iteration_locals),
         StatementKind::IterNext {
             destination,
             iterator,
             protocol: IterProtocol::Builtin,
         } => {
             validate_bare_local(destination, statement.span)?;
-            validate_operand_profile(iterator, statement.span)
+            validate_operand_profile(iterator, statement.span, tuple_iteration_locals)
         }
         StatementKind::Yield { .. } => Err(unsupported("generator yield", statement.span)),
         StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
@@ -429,9 +828,12 @@ fn validate_call_profile(
     callee: &Callee,
     args: &[Operand],
     span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
     let supported = match callee {
         Callee::Helper(HelperOp::StrConcat) => true,
+        // Body IR v0 has only this source spelling. The one-function, import-free CLI profile makes it unambiguous
+        // for #988; canonical call-target identity belongs to #1042.
         Callee::Function(name) => name == "range",
         Callee::Helper(_) | Callee::Method(_) => false,
     };
@@ -439,32 +841,98 @@ fn validate_call_profile(
         return Err(unsupported(format!("call to {}", callee_label(callee)), span));
     }
     for arg in args {
-        validate_operand_profile(arg, span)?;
+        validate_operand_profile(arg, span, tuple_iteration_locals)?;
     }
     Ok(())
 }
 
 /// Validate one rvalue before it can be evaluated by the bounded executor.
-fn validate_rvalue_profile(rvalue: &Rvalue, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+fn validate_rvalue_profile(
+    rvalue: &Rvalue,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+    destination: Option<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
     match rvalue {
-        Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) => validate_operand_profile(operand, span),
-        Rvalue::BinaryOp(_, left, right) => {
-            validate_operand_profile(left, span)?;
-            validate_operand_profile(right, span)
+        Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) => {
+            validate_operand_profile(operand, span, tuple_iteration_locals)
         }
-        Rvalue::Aggregate(kind, _) => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+        Rvalue::BinaryOp(_, left, right) => {
+            validate_operand_profile(left, span, tuple_iteration_locals)?;
+            validate_operand_profile(right, span, tuple_iteration_locals)
+        }
+        Rvalue::Aggregate(kind, operands) => validate_aggregate_profile(
+            kind,
+            operands,
+            span,
+            tuple_iteration_locals,
+            scalar_tuple_collection_locals,
+            destination,
+        ),
         Rvalue::Format(_) => Err(unsupported("f-string", span)),
         Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
         Rvalue::Match { .. } => Err(unsupported("match expression", span)),
     }
 }
 
+/// Validate the narrow aggregate vocabulary needed to materialize scalar tuple collections.
+fn validate_aggregate_profile(
+    kind: &AggregateKind,
+    operands: &[Operand],
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+    destination: Option<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    match kind {
+        AggregateKind::Tuple
+            if operands.len() == 2
+                && destination.is_some_and(|local| scalar_tuple_collection_locals.contains(&local)) =>
+        {
+            for operand in operands {
+                validate_operand_profile(operand, span, tuple_iteration_locals)?;
+            }
+            Ok(())
+        }
+        AggregateKind::Tuple => Err(unsupported(
+            "tuple aggregate outside the two-scalar collection-element profile",
+            span,
+        )),
+        AggregateKind::List => {
+            for operand in operands {
+                let Operand::Place(place_operand) = operand else {
+                    return Err(unsupported(
+                        "list aggregate outside the list[tuple[scalar, scalar]] profile",
+                        span,
+                    ));
+                };
+                if !place_operand.place.projection.is_empty()
+                    || !scalar_tuple_collection_locals.contains(&place_operand.place.local)
+                {
+                    return Err(unsupported(
+                        "list aggregate outside the list[tuple[scalar, scalar]] profile",
+                        span,
+                    ));
+                }
+                validate_operand_profile(operand, span, tuple_iteration_locals)?;
+            }
+            Ok(())
+        }
+        _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+    }
+}
+
 /// Validate a single operand's place shape and compiler-owned ownership decision.
-fn validate_operand_profile(operand: &Operand, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+fn validate_operand_profile(
+    operand: &Operand,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
     let Operand::Place(place_operand) = operand else {
         return Ok(());
     };
-    validate_bare_local(&place_operand.place, span)?;
+    validate_read_place(&place_operand.place, span, tuple_iteration_locals)?;
     if matches!(place_operand.fact, OwnershipFact::Unknown) {
         return Err(unsupported("unknown ownership fact", span));
     }
@@ -474,6 +942,42 @@ fn validate_operand_profile(operand: &Operand, span: HirSourceSpan) -> Result<()
 /// Reject projections at the profile boundary while preserving the statement's original source authority.
 fn validate_bare_local(place: &Place, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
     bare_local(place, span).map(|_| ())
+}
+
+/// Admit only the one-level numeric tuple fields lowering uses for `for a, b in pairs`.
+fn validate_read_place(
+    place: &Place,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    match place.projection.as_slice() {
+        [] => Ok(()),
+        [PlaceElem::Field(field)]
+            if matches!(field.as_str(), "0" | "1") && tuple_iteration_locals.contains(&place.local) =>
+        {
+            Ok(())
+        }
+        [PlaceElem::Field(field)] if matches!(field.as_str(), "0" | "1") => Err(unsupported(
+            "tuple field projection outside a scalar tuple collection iteration",
+            span,
+        )),
+        [PlaceElem::Field(_)] => Err(unsupported(
+            "non-numeric tuple field projection outside the scalar tuple collection profile",
+            span,
+        )),
+        [PlaceElem::Index(_)] => Err(unsupported(
+            "index projection outside the scalar tuple collection profile",
+            span,
+        )),
+        [PlaceElem::Slice { .. }] => Err(unsupported(
+            "slice projection outside the scalar tuple collection profile",
+            span,
+        )),
+        _ => Err(unsupported(
+            "nested place projection outside the scalar tuple collection profile",
+            span,
+        )),
+    }
 }
 
 /// Mutable interpreter state for one Body-IR execution.
@@ -577,7 +1081,7 @@ impl BodyExecutor {
                 destination,
                 iterator,
                 protocol: IterProtocol::Builtin,
-            } => self.execute_range_next(destination, iterator, statement.span),
+            } => self.execute_builtin_next(destination, iterator, statement.span),
             StatementKind::Yield { .. } => Err(unsupported("generator yield", statement.span)),
             StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
             StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
@@ -585,7 +1089,7 @@ impl BodyExecutor {
         }
     }
 
-    /// Evaluate a compiler-owned helper call in the first execution profile.
+    /// Evaluate a supported helper or the profile's admitted `range` source-spelling call.
     fn execute_call(
         &mut self,
         destination: Option<&Place>,
@@ -611,7 +1115,7 @@ impl BodyExecutor {
         Ok(Flow::Next)
     }
 
-    /// Materialize the builtin `range` call that Body IR retains before its normalized loop.
+    /// Materialize the admitted `range` source-spelling call before its normalized loop.
     fn evaluate_range(
         &mut self,
         args: &[Operand],
@@ -638,15 +1142,16 @@ impl BodyExecutor {
         Ok(ReplacementValue::Range { next, end, step })
     }
 
-    /// Poll one builtin range iterator and express exhaustion as the Body-IR loop break it represents.
-    fn execute_range_next(
+    /// Poll one admitted range or scalar-tuple-list iterator and express exhaustion as the Body-IR loop break it
+    /// represents.
+    fn execute_builtin_next(
         &mut self,
         destination: &Place,
         iterator: &Operand,
         span: HirSourceSpan,
     ) -> Result<Flow, ReplacementExecutionError> {
         let Operand::Place(iterator) = iterator else {
-            return Err(unsupported("non-place range iterator", span));
+            return Err(unsupported("non-place builtin iterator", span));
         };
         let iterator_local = bare_local(&iterator.place, span)?;
         self.ownership_reads.push(OwnershipRead {
@@ -660,18 +1165,24 @@ impl BodyExecutor {
             {
                 let value = *next;
                 *next += *step;
-                value
+                ReplacementValue::Int(value)
             }
             Some(ReplacementValue::Range { .. }) => return Ok(Flow::Break),
+            Some(ReplacementValue::List { elements, next }) if *next < elements.len() => {
+                let value = elements[*next].clone();
+                *next += 1;
+                value
+            }
+            Some(ReplacementValue::List { .. }) => return Ok(Flow::Break),
             Some(value) => return Err(unsupported(format!("iteration over {}", value_kind(value)), span)),
             None => {
                 return Err(runtime_failure(
-                    "read of an unavailable range iterator".to_string(),
+                    "read of an unavailable builtin iterator".to_string(),
                     span,
                 ));
             }
         };
-        self.assign_local(bare_local(destination, span)?, ReplacementValue::Int(value));
+        self.assign_local(bare_local(destination, span)?, value);
         Ok(Flow::Next)
     }
 
@@ -715,10 +1226,43 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
-            Rvalue::Aggregate(kind, _) => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+            Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
             Rvalue::Match { .. } => Err(unsupported("match expression", span)),
+        }
+    }
+
+    /// Materialize only scalar two-tuples and lists composed of those tuples for the selected loop profile.
+    fn evaluate_aggregate(
+        &mut self,
+        kind: &AggregateKind,
+        operands: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let values = operands
+            .iter()
+            .map(|operand| self.evaluate_operand(operand, span))
+            .collect::<Result<Vec<_>, _>>()?;
+        match kind {
+            AggregateKind::Tuple if values.len() == 2 && values.iter().all(ReplacementValue::is_collection_scalar) => {
+                Ok(ReplacementValue::Tuple(values))
+            }
+            AggregateKind::Tuple => Err(unsupported(
+                "tuple aggregate outside the two-scalar collection-element profile",
+                span,
+            )),
+            AggregateKind::List if values.iter().all(ReplacementValue::is_scalar_pair_tuple) => {
+                Ok(ReplacementValue::List {
+                    elements: values,
+                    next: 0,
+                })
+            }
+            AggregateKind::List => Err(unsupported(
+                "list aggregate outside the list[tuple[scalar, scalar]] profile",
+                span,
+            )),
+            _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
         }
     }
 
@@ -772,8 +1316,12 @@ impl BodyExecutor {
             (BinOp::Mod, ReplacementValue::Int(left), ReplacementValue::Int(right)) => {
                 Ok(ReplacementValue::Int(python_mod_i64(left, right)))
             }
-            (BinOp::Eq, left, right) => Ok(ReplacementValue::Bool(left == right)),
-            (BinOp::Ne, left, right) => Ok(ReplacementValue::Bool(left != right)),
+            (BinOp::Eq, left, right) if left.is_collection_scalar() && right.is_collection_scalar() => {
+                Ok(ReplacementValue::Bool(left == right))
+            }
+            (BinOp::Ne, left, right) if left.is_collection_scalar() && right.is_collection_scalar() => {
+                Ok(ReplacementValue::Bool(left != right))
+            }
             (BinOp::Lt, ReplacementValue::Int(left), ReplacementValue::Int(right)) => {
                 Ok(ReplacementValue::Bool(left < right))
             }
@@ -813,32 +1361,50 @@ impl BodyExecutor {
         match operand {
             Operand::Constant(constant) => Ok(constant_value(constant)),
             Operand::Place(place_operand) => {
-                let local = bare_local(&place_operand.place, span)?;
+                let local = place_operand.place.local;
                 self.ownership_reads.push(OwnershipRead {
                     span,
                     fact: place_operand.fact,
                     last_use: place_operand.last_use,
                 });
-                match place_operand.fact {
+                let value = match place_operand.fact {
                     OwnershipFact::Copy => self
                         .locals
                         .get(&local)
                         .cloned()
-                        .filter(ReplacementValue::is_copy_shaped)
-                        .ok_or_else(|| unsupported("copy of a non-copy or unavailable local", span)),
-                    OwnershipFact::Move => self
-                        .locals
-                        .remove(&local)
-                        .ok_or_else(|| runtime_failure("read of a moved or dropped local".to_string(), span)),
+                        .ok_or_else(|| runtime_failure("read of an unavailable local".to_string(), span))?,
+                    OwnershipFact::Move => self.read_moved_place(&place_operand.place, span)?,
                     OwnershipFact::Clone | OwnershipFact::Borrow | OwnershipFact::MutBorrow => self
                         .locals
                         .get(&local)
                         .cloned()
-                        .ok_or_else(|| runtime_failure("read of an unavailable local".to_string(), span)),
-                    OwnershipFact::Unknown => Err(unsupported("unknown ownership fact", span)),
+                        .ok_or_else(|| runtime_failure("read of an unavailable local".to_string(), span))?,
+                    OwnershipFact::Unknown => return Err(unsupported("unknown ownership fact", span)),
+                };
+                let value = project_tuple_field(value, &place_operand.place, span)?;
+                if matches!(place_operand.fact, OwnershipFact::Copy) && !value.is_copy_shaped() {
+                    return Err(unsupported("copy of a non-copy or unavailable local", span));
                 }
+                Ok(value)
             }
         }
+    }
+
+    /// Move a complete local while refusing the partial moves Body IR v0 does not model for collection tuples.
+    fn read_moved_place(
+        &mut self,
+        place: &Place,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if !place.projection.is_empty() {
+            return Err(unsupported(
+                "move through a tuple field projection outside the scalar tuple collection profile",
+                span,
+            ));
+        }
+        self.locals
+            .remove(&place.local)
+            .ok_or_else(|| runtime_failure("read of a moved or dropped local".to_string(), span))
     }
 
     /// Record one executed statement and enforce the bounded-profile step limit.
@@ -858,6 +1424,16 @@ impl ReplacementValue {
     /// Return whether a value can honor a Body-IR `Copy` read without duplicating owned state.
     const fn is_copy_shaped(&self) -> bool {
         matches!(self, Self::Int(_) | Self::Bool(_) | Self::Unit)
+    }
+
+    /// Return whether this value is one of the selected, source-observable scalar tuple element shapes.
+    const fn is_collection_scalar(&self) -> bool {
+        matches!(self, Self::Int(_) | Self::Bool(_) | Self::Str(_) | Self::Unit)
+    }
+
+    /// Return whether this value is an admitted two-scalar tuple stored in a replacement collection.
+    fn is_scalar_pair_tuple(&self) -> bool {
+        matches!(self, Self::Tuple(elements) if elements.len() == 2 && elements.iter().all(Self::is_collection_scalar))
     }
 
     /// Return this value as a boolean, refusing a type-shape mismatch at the original source location.
@@ -901,6 +1477,54 @@ fn bare_local(place: &Place, span: HirSourceSpan) -> Result<LocalId, Replacement
         Ok(place.local)
     } else {
         Err(unsupported("place projection", span))
+    }
+}
+
+/// Project one admitted scalar tuple field while retaining the statement's original source authority on refusal.
+fn project_tuple_field(
+    value: ReplacementValue,
+    place: &Place,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    let [PlaceElem::Field(field)] = place.projection.as_slice() else {
+        return if place.projection.is_empty() {
+            Ok(value)
+        } else {
+            Err(unsupported(
+                "place projection outside the scalar tuple collection profile",
+                span,
+            ))
+        };
+    };
+    let index = match field.as_str() {
+        "0" => 0,
+        "1" => 1,
+        _ => {
+            return Err(unsupported(
+                "non-numeric tuple field projection outside the scalar tuple collection profile",
+                span,
+            ));
+        }
+    };
+    match value {
+        ReplacementValue::Tuple(elements)
+            if elements.len() == 2 && elements.iter().all(ReplacementValue::is_collection_scalar) =>
+        {
+            elements.into_iter().nth(index).ok_or_else(|| {
+                unsupported(
+                    "tuple field projection outside the scalar tuple collection profile",
+                    span,
+                )
+            })
+        }
+        value => Err(unsupported(
+            format!(
+                "tuple field projection `.{}` using {} outside the scalar tuple collection profile",
+                field,
+                value_kind(&value)
+            ),
+            span,
+        )),
     }
 }
 
@@ -1089,6 +1713,8 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Float(_) => "float",
         ReplacementValue::Unit => "unit",
         ReplacementValue::Range { .. } => "range",
+        ReplacementValue::List { .. } => "list",
+        ReplacementValue::Tuple(_) => "tuple",
     }
 }
 

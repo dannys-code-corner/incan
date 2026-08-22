@@ -107,7 +107,7 @@ fn replacement_refuses_unsupported_body_ir_with_the_original_source_span() -> Re
     let source = r#"
 def main() -> int:
   values = [1, 2]
-  return values[0]
+  return 0
 "#;
     let module = lower_typed_body_ir(source)?;
     let error = match execute_free_function(&module, "main", &[]) {
@@ -131,7 +131,7 @@ def main() -> int:
     let expected_end = expected_start + "[1, 2]".len();
     let span = error
         .primary_span()
-        .ok_or("projection refusal must retain its original source span")?;
+        .ok_or("aggregate refusal must retain its original source span")?;
     assert_eq!(span.start, expected_start);
     assert_eq!(span.end, expected_end);
     assert!(
@@ -167,6 +167,119 @@ def main() -> list[int]:
     assert!(
         error.to_string().contains("list aggregate"),
         "list aggregate must be named visibly: {error}"
+    );
+    Ok(())
+}
+
+/// Execute the selected plain builtin-collection loop over scalar tuple values.
+#[test]
+fn replacement_executes_plain_scalar_tuple_collection_loop() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pairs = [(1, 2), (3, 4)]
+  for pair in pairs:
+    if false:
+      return 0
+  return 7
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(7));
+    assert!(execution.body_snapshot.contains("iter_next("));
+    Ok(())
+}
+
+/// Execute `for a, b in pairs` directly and bind the actual result to a replacement receipt.
+#[test]
+fn replacement_executes_scalar_tuple_collection_destructuring_with_a_replacement_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pairs = [(1, 2), (4, 5)]
+  for a, b in pairs:
+    if a == 4:
+      return a * 10 + b
+  return 0
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(45));
+    assert!(execution.body_snapshot.contains(".0"));
+    assert!(execution.body_snapshot.contains(".1"));
+
+    let selection = select_backend(
+        BackendKind::Replacement,
+        true,
+        false,
+        digest_output(&[source]),
+        FallbackPolicy::Refuse,
+    );
+    let receipt = finalize_receipt(
+        &selection,
+        BackendKind::Replacement,
+        execution.output_identity,
+        ShadowComparisonState::NotRequested,
+        incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+    )?;
+    receipt.verify_identity()?;
+    assert_eq!(receipt.executed_backend, BackendKind::Replacement);
+    assert_eq!(receipt.fallback_outcome, FallbackOutcome::NotNeeded);
+    Ok(())
+}
+
+/// Refuse an index projection outside the selected tuple-field loop profile at its original source span.
+#[test]
+fn replacement_refuses_collection_index_projection_with_the_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pairs = [(1, 2)]
+  return pairs[0][0]
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => return Err(format!("index projection executed as {:?}", execution.value).into()),
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("return pairs[0][0]")
+        .ok_or("index-projection fixture must contain its source statement")?;
+    let span = error
+        .primary_span()
+        .ok_or("collection index-projection refusal must retain its source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error.to_string().contains("nested place projection"),
+        "collection index projection must remain visible: {error}"
+    );
+    Ok(())
+}
+
+/// Refuse a standalone tuple before it can be used outside the selected collection profile.
+#[test]
+fn replacement_refuses_standalone_tuple_with_the_original_source_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pair = (1, 2)
+  return pair.0
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => return Err(format!("standalone tuple executed as {:?}", execution.value).into()),
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("(1, 2)")
+        .ok_or("standalone-tuple fixture must contain its source tuple")?;
+    let span = error
+        .primary_span()
+        .ok_or("standalone tuple refusal must retain its source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error
+            .to_string()
+            .contains("tuple aggregate outside the two-scalar collection-element profile"),
+        "standalone tuple must remain visibly outside the selected collection profile: {error}"
     );
     Ok(())
 }
@@ -411,6 +524,55 @@ fn replacement_cli_executes_typed_body_ir_and_persists_a_replacement_receipt() -
     Ok(())
 }
 
+/// Execute a typed empty scalar-pair list directly and publish only replacement receipt evidence.
+#[test]
+fn replacement_cli_executes_typed_empty_scalar_tuple_list_with_a_replacement_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    fs::write(
+        &entrypoint,
+        r#"def main() -> int:
+  values: list[tuple[int, int]] = []
+  for a, b in values:
+    return a + b
+  return 42
+"#,
+    )?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "typed empty scalar-pair list must execute directly. stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains("replacement backend executed `main`: 42"),
+        "unexpected typed empty pair-list output: {stdout}"
+    );
+    assert!(
+        !temporary.path().join("target/incan").exists(),
+        "direct replacement execution must not create a legacy generated-project directory"
+    );
+
+    let receipt_path = temporary.path().join(".incan/backend/receipt.json");
+    let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(receipt_path)?)?;
+    assert_eq!(receipt["executed_backend"], "replacement");
+    assert_eq!(receipt["fallback_outcome"], serde_json::json!("not_needed"));
+    Ok(())
+}
+
 /// Emit stable direct-execution evidence in the distinct, non-Oven replacement JSON report.
 #[test]
 fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result<(), Box<dyn std::error::Error>> {
@@ -507,7 +669,7 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
         &entrypoint,
         r#"def main() -> int:
   values = [1, 2]
-  return values[0]
+  return 0
 "#,
     )?;
 
@@ -540,7 +702,7 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
     );
     let expected_start = r#"def main() -> int:
   values = [1, 2]
-  return values[0]
+  return 0
 "#
     .find("[1, 2]")
     .ok_or("aggregate fixture must contain its list literal")?;
@@ -559,6 +721,56 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
     assert!(
         !temporary.path().join("target/incan").exists(),
         "unsupported replacement input must not create a legacy generated-project directory"
+    );
+    Ok(())
+}
+
+/// Refuse a typed empty scalar list before replacement can publish a success receipt.
+#[test]
+fn replacement_cli_refuses_typed_empty_scalar_list_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    fs::write(
+        &entrypoint,
+        r#"def main() -> int:
+  values: list[int] = []
+  for value in values:
+    return value
+  return 42
+"#,
+    )?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "typed empty scalar list must refuse instead of executing directly"
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("list[tuple[scalar, scalar]]"),
+        "refusal must name the selected list profile: {combined}"
+    );
+    assert!(
+        combined.contains("original Incan source span"),
+        "refusal must retain source authority: {combined}"
+    );
+    assert!(
+        !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "typed empty scalar-list refusal must not create legacy output or a replacement receipt"
     );
     Ok(())
 }
