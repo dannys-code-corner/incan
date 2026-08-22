@@ -7881,8 +7881,8 @@ async def main() -> None:
             r#"{
   "schema_version": 2,
   "sdk_id": "incan",
-  "sdk_version": "0.5.0",
-  "compiler_requirement": ">=0.5.0-dev.6,<0.6.0",
+  "sdk_version": "0.6.0",
+  "compiler_requirement": ">=0.6.0-dev.0,<0.7.0",
   "provider_codegen_revision": 4,
   "components": {},
   "profiles": {"default": []}
