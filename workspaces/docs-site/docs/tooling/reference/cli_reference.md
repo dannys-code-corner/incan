@@ -137,6 +137,7 @@ Seeded catalog codes:
 
 - `INCAN-P0001`: Syntax error.
 - `INCAN-T0001`: Type checking error.
+- `INCAN-T0101`: Unreachable code — statements that follow a `return` in the same block. Reported as a warning, so the program still compiles.
 - `INCAN-I0001`: Import or module resolution error.
 - `INCAN-I0101`: A known SDK provider module belongs to a component disabled by the project.
 - `INCAN-I0102`: The project enabled an SDK component that is unavailable in the active installation.

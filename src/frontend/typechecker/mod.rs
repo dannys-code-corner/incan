@@ -48,6 +48,7 @@ mod check_stmt;
 mod collect;
 mod const_eval;
 mod helpers;
+mod reachability;
 pub(crate) mod stdlib_loader;
 mod trait_bound_relations;
 mod type_info;

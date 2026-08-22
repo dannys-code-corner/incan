@@ -21,6 +21,7 @@
 
 use incan::backend::IrCodegen;
 use incan::backend::replacement::ReplacementValue;
+use incan::frontend::diagnostics::CompileError;
 use incan::frontend::{lexer, parser, typechecker};
 use std::path::PathBuf;
 
@@ -49,6 +50,26 @@ fn typecheck_err_messages(src: &str) -> Result<Vec<String>, Vec<String>> {
         Ok(()) => Ok(vec![]),
         Err(errs) => Ok(errs.into_iter().map(|e| e.message).collect()),
     }
+}
+
+/// Lex, parse, and typecheck `src`, returning the typechecker's non-fatal warnings, or a reason the probe could
+/// not run at all.
+///
+/// Kept separate from [`typecheck_err_messages`] because warnings ride their own channel: `check_program` reports
+/// only hard errors, so a case asserting a *warning* that read the error channel would pass for the wrong reason —
+/// a silently accepted program and a correctly warned one look identical from there.
+fn typecheck_warnings(src: &str) -> Result<Vec<CompileError>, String> {
+    let tokens = lexer::lex(src).map_err(|errs| format!("lex failed: {:?}", messages(errs)))?;
+    let ast = parser::parse(&tokens).map_err(|errs| format!("parse failed: {:?}", messages(errs)))?;
+    let mut tc = typechecker::TypeChecker::new();
+    tc.check_program(&ast)
+        .map_err(|errs| format!("typecheck failed: {:?}", messages(errs)))?;
+    Ok(tc.take_warnings())
+}
+
+/// Reduce diagnostics to their message text for probe-failure reporting.
+fn messages(errors: Vec<CompileError>) -> Vec<String> {
+    errors.into_iter().map(|error| error.message).collect()
 }
 
 /// Fold a `typecheck_err_messages` result (lex/parse failure or typecheck errors) into a `ComparisonOutcome`,
@@ -212,13 +233,16 @@ fn case_supported_builtin_len_shadowing() -> ComparisonOutcome {
 }
 
 // ============================================================================
-// Case 6 — Bug-compatible behavior: dead code after `return` is not flagged
+// Case 6 — Diagnostic behavior: dead code after `return` warns (migrated from a silent accept)
 // ============================================================================
 
-// Verified by direct probe: statements after an unconditional `return` typecheck with no diagnostic (Rust itself
-// would warn `unreachable_code` in the generated function body). Tracked as bug-compatible rather than supported:
-// current users may have dead code today, and this is not a behavior we want to freeze as an intentional language
-// contract.
+// This row entered the corpus as bug-compatible behavior: statements after an unconditional `return` typechecked
+// with zero diagnostics, so the gap was invisible unless a user read the generated Rust. #1117 migrated it
+// deliberately — the typechecker now emits `INCAN-T0101` — so the case asserts the diagnostic contract instead of
+// the old silence, and its disposition records the migration rather than freezing either behavior.
+//
+// The assertion reads the *stable code*, not message prose, so rewording the diagnostic does not silently break
+// the corpus while a real change of contract still does.
 const CASE_6_SRC: &str = r#"
 def f() -> int:
     return 1
@@ -226,12 +250,25 @@ def f() -> int:
     return 2
 "#;
 
-fn case_bug_compatible_dead_code_after_return() -> ComparisonOutcome {
-    outcome_from_typecheck(
-        CASE_6_SRC,
-        |errs| errs.is_empty(),
-        "unreachable code after `return` to keep typechecking silently (today's bug-compatible baseline)",
-    )
+fn case_diagnostic_unreachable_code_after_return() -> ComparisonOutcome {
+    match typecheck_warnings(CASE_6_SRC) {
+        Err(reason) => ComparisonOutcome::Incompatible { reason },
+        Ok(warnings) => {
+            if warnings
+                .iter()
+                .any(|warning| warning.stable_code() == Some("INCAN-T0101"))
+            {
+                ComparisonOutcome::Match
+            } else {
+                ComparisonOutcome::Mismatch {
+                    detail: format!(
+                        "expected an INCAN-T0101 unreachable-code warning, got warnings: {:?}",
+                        warnings.iter().map(|warning| &warning.message).collect::<Vec<_>>()
+                    ),
+                }
+            }
+        }
+    }
 }
 
 // ============================================================================
@@ -376,20 +413,23 @@ fn seed_corpus() -> Vec<ParityCase> {
         },
         ParityCase {
             id: "parity-987-0006",
-            title: "Dead code after `return` typechecks with no diagnostic",
-            category: BehaviorCategory::BugCompatibleBehavior,
+            title: "Dead code after `return` reports an unreachable-code warning (INCAN-T0101)",
+            category: BehaviorCategory::DiagnosticBehavior,
             lane: EvidenceLane::DirectParserTypechecker,
-            evidence: "tests/parity_corpus_tests.rs::case_bug_compatible_dead_code_after_return",
-            disposition: Disposition::Unsupported {
+            evidence: "tests/parity_corpus_tests.rs::case_diagnostic_unreachable_code_after_return",
+            disposition: Disposition::IntentionalMigration {
                 owning_issue: 1117,
-                migration_note: "Current users may have unreachable code today, so this must not be frozen as \
-                                  supported. Tracked in #1117: before 0.6 cutover, add an unreachable-code \
-                                  diagnostic (mirroring Rust's own `unreachable_code` lint on the generated \
-                                  function body) rather than carrying the silent gap into the replacement \
-                                  backend.",
+                migration_note: "Migrated by #1117 before 0.6 cutover: statements after a `return` in the same \
+                                  block now raise the non-fatal `INCAN-T0101` warning instead of typechecking \
+                                  silently. Migration guidance for the replacement backend: the contract is the \
+                                  frontend diagnostic, not generated Rust's own `unreachable_code` lint, so a \
+                                  replacement backend must not be relied on to reproduce it. The rule is \
+                                  deliberately block-local — it does not model divergence through `if`/`else`, \
+                                  `match`, or loops — and existing user code with dead code still compiles, \
+                                  because the diagnostic is a warning and never an error.",
             },
             source: CASE_6_SRC,
-            evaluate: Some(case_bug_compatible_dead_code_after_return),
+            evaluate: Some(case_diagnostic_unreachable_code_after_return),
             replacement_execution: None,
         },
         ParityCase {

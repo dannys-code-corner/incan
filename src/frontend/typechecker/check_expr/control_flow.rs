@@ -281,6 +281,7 @@ impl TypeChecker {
             return ResolvedType::Unit;
         };
 
+        self.report_unreachable_after_return(stmts);
         for stmt in prefix {
             self.check_statement(stmt);
         }
@@ -359,16 +360,12 @@ impl TypeChecker {
         self.validate_truthiness_condition(&cond_ty, if_expr.condition.span);
 
         self.symbols.enter_scope(ScopeKind::Block);
-        for stmt in &if_expr.then_body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&if_expr.then_body);
         self.symbols.exit_scope();
 
         if let Some(else_body) = &if_expr.else_body {
             self.symbols.enter_scope(ScopeKind::Block);
-            for stmt in else_body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(else_body);
             self.symbols.exit_scope();
         }
 
@@ -388,9 +385,7 @@ impl TypeChecker {
     ) -> ResolvedType {
         self.symbols.enter_scope(ScopeKind::Block);
         self.push_loop_context(LoopContextKind::Expression, expected.cloned());
-        for stmt in &loop_expr.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&loop_expr.body);
         let loop_ctx = self.pop_loop_context();
         self.symbols.exit_scope();
         let Some(loop_ctx) = loop_ctx else {
