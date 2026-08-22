@@ -516,7 +516,7 @@ impl ProjectGenerator {
     }
 
     /// Release a managed target lease once compiler-owned Cargo work and local publication are complete.
-    #[cfg(all(feature = "cli", test))]
+    #[cfg(feature = "cli")]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         let lease = self
             .generated_cache_lease
@@ -530,7 +530,7 @@ impl ProjectGenerator {
     }
 
     /// Keep non-CLI library builds independent from cache-management implementation details.
-    #[cfg(all(not(feature = "cli"), test))]
+    #[cfg(not(feature = "cli"))]
     pub(super) fn finish_generated_cache_lease(&self) -> io::Result<()> {
         Ok(())
     }
@@ -1408,7 +1408,7 @@ impl ProjectGenerator {
         // Write Cargo.toml
         let cargo_toml = self.generate_cargo_toml()?;
         changed |= Self::write_file_if_changed(&self.output_dir.join("Cargo.toml"), &cargo_toml)?;
-        changed |= self.write_cargo_lock_if_needed()?;
+        changed |= self.write_cargo_lock_if_needed(&cargo_toml)?;
 
         // Single-file consumers need the same artifact-backed compatibility namespace as nested projects. Compiler
         // bridges still use `crate::__incan_std` while they are migrated to canonical artifact paths; re-exporting
@@ -1471,7 +1471,7 @@ impl ProjectGenerator {
         // Write Cargo.toml
         let cargo_toml = self.generate_cargo_toml()?;
         changed |= Self::write_file_if_changed(&self.output_dir.join("Cargo.toml"), &cargo_toml)?;
-        changed |= self.write_cargo_lock_if_needed()?;
+        changed |= self.write_cargo_lock_if_needed(&cargo_toml)?;
 
         // Write each module file
         for (module_name, module_code) in modules {
@@ -1555,7 +1555,7 @@ impl ProjectGenerator {
         // Write Cargo.toml
         let cargo_toml = self.generate_cargo_toml()?;
         changed |= Self::write_file_if_changed(&self.output_dir.join("Cargo.toml"), &cargo_toml)?;
-        changed |= self.write_cargo_lock_if_needed()?;
+        changed |= self.write_cargo_lock_if_needed(&cargo_toml)?;
 
         // ---- RFC 023: Transform stdlib paths to __incan_std ----
         let mut transformed_modules: HashMap<Vec<String>, String> = HashMap::new();
@@ -1804,13 +1804,48 @@ impl ProjectGenerator {
         Ok(changed)
     }
 
+    /// Name of the sidecar recording which generated manifest a Cargo-owned lock was resolved against.
+    const LOCK_MANIFEST_WITNESS: &'static str = ".incan-cargo-lock-manifest";
+
+    /// Discard a Cargo-owned lock that no longer belongs to the generated manifest beside it.
+    ///
+    /// When nothing supplies a lock payload, Cargo owns resolution for this generated root and writes the lock
+    /// itself. A lock left by an earlier generation then describes a manifest that no longer exists — most visibly
+    /// after a compiler upgrade, which rewrites the generated dependency set. The publisher runs Cargo with
+    /// `--locked`, so that stale file fails the build with advice only the compiler can act on.
+    ///
+    /// The witness records the manifest digest the lock corresponds to, so staleness is decided from what is on disk
+    /// rather than from whether this particular run rewrote the manifest. That matters because a run that already
+    /// rewrote the manifest and then failed leaves the two in disagreement permanently: keying on "the manifest
+    /// changed just now" would never fire again and the project would stay broken. A missing witness is treated as
+    /// stale for the same reason, which lets an already-broken generated root heal itself on the next build.
+    fn discard_lock_superseded_by_its_manifest(&self, lock_path: &Path, manifest: &str) -> io::Result<bool> {
+        let witness_path = self.output_dir.join(Self::LOCK_MANIFEST_WITNESS);
+        let expected = crate::oven::digest_bytes(manifest.as_bytes());
+        let witness_matches = fs::read_to_string(&witness_path).is_ok_and(|recorded| recorded.trim() == expected);
+        if witness_matches && lock_path.is_file() {
+            return Ok(false);
+        }
+        let removed = match fs::remove_file(lock_path) {
+            Ok(()) => true,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        Self::write_file_if_changed(&witness_path, &expected)?;
+        Ok(removed)
+    }
+
     /// Apply the closed Cargo-lock authority state at the generated-project boundary.
     ///
-    /// Explicit stale authority removes a previous generated lock. No authority leaves the generated lock untouched.
-    /// Exact authority writes its payload directly. Projection authority preserves a valid caller-local projection or
-    /// writes the canonical seed when projection is due. Only that final seed is subsequently aligned by the runner,
-    /// which asks Cargo to select the caller root without inferring or rewriting dependency edges itself.
-    fn write_cargo_lock_if_needed(&self) -> io::Result<bool> {
+    /// Explicit stale authority removes a previous generated lock. Exact authority writes its payload directly.
+    /// Projection authority preserves a valid caller-local projection or writes the canonical seed when projection is
+    /// due. Only that final seed is subsequently aligned by the runner, which asks Cargo to select the caller root
+    /// without inferring or rewriting dependency edges itself.
+    ///
+    /// No authority means Cargo owns the lock, which is not the same as leaving it untouched: the lock must still
+    /// belong to the manifest beside it, so that case is delegated to
+    /// [`Self::discard_lock_superseded_by_its_manifest`].
+    fn write_cargo_lock_if_needed(&self, manifest: &str) -> io::Result<bool> {
         let lock_path = self.output_dir.join("Cargo.lock");
         if self.clear_cargo_lock {
             return match fs::remove_file(&lock_path) {
@@ -1820,7 +1855,7 @@ impl ProjectGenerator {
             };
         }
         let Some(payload) = &self.cargo_lock_payload else {
-            return Ok(false);
+            return self.discard_lock_superseded_by_its_manifest(&lock_path, manifest);
         };
         if self.cargo_lock_projection_root.is_some() {
             let projection = self
@@ -1848,6 +1883,39 @@ mod tests {
     use crate::provider::{SdkArtifactProjection, SdkDependencyRebinding};
     use std::collections::HashMap;
     use std::process::Command;
+
+    /// A Cargo-owned lock must not survive the manifest it was resolved against.
+    ///
+    /// The publisher runs Cargo with `--locked`, so a lock describing a manifest that no longer exists fails the
+    /// build outright. The stale state is decided from the on-disk witness rather than from whether this run happened
+    /// to rewrite the manifest: a run that rewrote it and then failed leaves manifest and lock permanently
+    /// disagreeing, and a change-keyed check would never fire again for that project.
+    #[test]
+    fn generated_lock_is_discarded_when_its_manifest_no_longer_matches() -> Result<(), Box<dyn std::error::Error>> {
+        let output = tempfile::tempdir()?;
+        let generator = ProjectGenerator::new(output.path(), "witness_probe", false);
+        let lock_path = output.path().join("Cargo.lock");
+        let witness_path = output.path().join(ProjectGenerator::LOCK_MANIFEST_WITNESS);
+
+        // An already-broken root: a lock with no witness at all is unattributable and must be discarded.
+        fs::write(&lock_path, "stale lock\n")?;
+        assert!(generator.write_cargo_lock_if_needed("[package]\nname = \"a\"\n")?);
+        assert!(!lock_path.exists(), "an unattributable lock must be discarded");
+        assert!(
+            witness_path.is_file(),
+            "discarding must record the manifest it healed to"
+        );
+
+        // Cargo then resolves and writes its lock; an unchanged manifest must leave it alone.
+        fs::write(&lock_path, "cargo resolved lock\n")?;
+        assert!(!generator.write_cargo_lock_if_needed("[package]\nname = \"a\"\n")?);
+        assert!(lock_path.is_file(), "a lock matching its witness must survive");
+
+        // A rewritten manifest supersedes that lock, even though this run did not create it.
+        assert!(generator.write_cargo_lock_if_needed("[package]\nname = \"a\"\nedition = \"2024\"\n")?);
+        assert!(!lock_path.exists(), "a superseded lock must be discarded");
+        Ok(())
+    }
 
     /// Compile one small rebinding fixture with direct Rustc rather than making the generated Cargo graph the test
     /// executor. The frozen Oven suite has no Cargo consumer, and the relevant invariant is that the rebound source

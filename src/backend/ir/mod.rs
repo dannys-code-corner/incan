@@ -107,6 +107,10 @@ impl FunctionSignature {
                 if param.default.is_none() {
                     param.default = default_param.default.clone();
                 }
+                // Typechecker callable metadata captures Rust callable shape, but source declarations own the
+                // mutable-parameter ABI selected by the emitter. Retain that source fact so a borrowed Rust
+                // callback value is forwarded instead of cloned at a source-owned call boundary.
+                param.mutability = default_param.mutability;
             }
         }
         Some(merged)
@@ -474,7 +478,9 @@ impl From<Span> for IrSpan {
 
 #[cfg(test)]
 mod tests {
-    use super::{IrCheckedCFunction, IrCheckedCType, ScalarTypeId};
+    use super::{
+        FunctionParam, FunctionSignature, IrCheckedCFunction, IrCheckedCType, IrType, Mutability, ScalarTypeId,
+    };
     use incan_core::lang::c_abi::LinkCapabilityId;
 
     fn checked_c_function(binding: &str, symbol: &str) -> IrCheckedCFunction {
@@ -498,5 +504,36 @@ mod tests {
 
         assert_ne!(left.rust_name(), right.rust_name());
         assert_ne!(left.ffi_rust_name(), right.ffi_rust_name());
+    }
+
+    #[test]
+    fn merged_source_signature_keeps_mutable_parameter_abi() -> Result<(), Box<dyn std::error::Error>> {
+        let checked = FunctionSignature {
+            params: vec![FunctionParam {
+                name: "ui".to_string(),
+                ty: IrType::Struct("Ui".to_string()),
+                mutability: Mutability::Immutable,
+                is_self: false,
+                kind: crate::frontend::ast::ParamKind::Normal,
+                default: None,
+            }],
+            return_type: IrType::Unknown,
+        };
+        let source = FunctionSignature {
+            params: vec![FunctionParam {
+                name: "ui".to_string(),
+                ty: IrType::Struct("Ui".to_string()),
+                mutability: Mutability::Mutable,
+                is_self: false,
+                kind: crate::frontend::ast::ParamKind::Normal,
+                default: None,
+            }],
+            return_type: IrType::Unit,
+        };
+
+        let merged = FunctionSignature::merge_default_source(Some(&checked), Some(&source))
+            .ok_or("both signatures should merge")?;
+        assert_eq!(merged.params[0].mutability, Mutability::Mutable);
+        Ok(())
     }
 }

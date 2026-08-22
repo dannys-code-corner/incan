@@ -100,9 +100,12 @@ pub const OVEN_COMPILER_TEST_JOBS_ENV: &str = "INCAN_OVEN_COMPILER_TEST_JOBS";
 /// the complete worker pool indefinitely on one host-specific child process.
 ///
 /// Constrained hosted MSRV runners can require more than fifteen minutes for the two largest integration roots even
-/// though prepared reference-machine replay remains inside the five-minute suite budget. Keep a deterministic
-/// per-root ceiling, but calibrate it with enough headroom that slow hardware is not misreported as a test failure.
-const OVEN_COMPILER_TEST_ROOT_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// though prepared reference-machine replay remains inside the five-minute suite budget. The unsharded release
+/// evidence workflow (`oven_evidence.yml`) runs every root in one job rather than the four-way split the ordinary
+/// CI workflow uses, so its two largest roots (`cli_integration`, `integration_tests`) have repeatedly needed more
+/// than thirty minutes under real hosted-runner contention. Keep a deterministic per-root ceiling, but calibrate it
+/// with enough headroom that slow hardware is not misreported as a test failure.
+const OVEN_COMPILER_TEST_ROOT_TIMEOUT: Duration = Duration::from_secs(60 * 60);
 
 /// Inputs for `incan oven import`.
 #[derive(Debug, Clone)]
@@ -972,7 +975,7 @@ fn loaf_envelope_evidence(
 /// recording named content digests rather than checkout paths.
 fn loaf_runtime_source_digest(compiler_root: &Path) -> CliResult<String> {
     let mut records = BTreeMap::new();
-    let manifest = compiler_root.join("Cargo.toml");
+    let manifest = loaf_compiler_manifest_path(compiler_root)?;
     let manifest_bytes = fs::read(&manifest).map_err(|error| {
         CliError::failure(format!(
             "could not read Loaf runtime manifest {}: {error}",
@@ -992,6 +995,21 @@ fn loaf_runtime_source_digest(compiler_root: &Path) -> CliResult<String> {
     let bytes = serde_json::to_vec(&records)
         .map_err(|error| CliError::failure(format!("could not encode Loaf runtime source evidence: {error}")))?;
     Ok(digest_bytes(&bytes))
+}
+
+/// Return the checked Cargo workspace manifest for a compiler checkout or packaged toolchain.
+///
+/// Source checkouts own the complete workspace at the compiler root. Release archives intentionally ship only the
+/// runtime support workspace under `crates/`; the Loaf baker must bind to that staged workspace instead of assuming
+/// the archive contains the compiler's development-only root manifest.
+fn loaf_compiler_manifest_path(compiler_root: &Path) -> CliResult<PathBuf> {
+    [
+        compiler_root.join("Cargo.toml"),
+        compiler_root.join("crates/Cargo.toml"),
+    ]
+    .into_iter()
+    .find(|path| path.is_file())
+    .ok_or_else(|| CliError::failure("Loaf compiler root has no canonical Cargo.toml input".to_string()))
 }
 
 /// Return the one checked compiler lock used by both envelope identity and cold fixture publication.
@@ -1142,14 +1160,17 @@ fn isolate_loaf_fixture_toolchain_data(command: &mut Command, toolchain_data_roo
 }
 
 /// Recognize only the two fail-closed native-plan misses a baker-owned fixture may legitimately produce.
+///
+/// Both clauses come from the shared constants the messages themselves are built from, so reworded user-facing
+/// text stays recognizable here instead of silently turning an intended miss into an unrecognized failure.
 fn loaf_fixture_probe_is_expected_miss(stderr: &str) -> bool {
     [
-        "Oven Alpha has no compatible native",
-        "Oven Alpha has no compatible compiler-suite native",
+        crate::oven::loaf::OVEN_DEPENDENCY_MISS_SUMMARY,
+        crate::oven::loaf::OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
     ]
     .iter()
-    .any(|prefix| stderr.contains(prefix))
-        && stderr.contains("invoke Cargo")
+    .any(|summary| stderr.contains(summary))
+        && stderr.contains(crate::oven::loaf::OVEN_NO_IMPLICIT_DEPENDENCY_BUILD)
 }
 
 /// Bake or exactly reuse one complete compiler-owned Alpha Loaf envelope.
@@ -1291,16 +1312,17 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
             "could not create explicit baker Rust inspection authority directory: {error}"
         ))
     })?;
+    let compiler_manifest = loaf_compiler_manifest_path(&options.compiler_root)?;
     let envelope_inspection_sources = match envelope {
         OvenLoafEnvelope::CompilerSuite => legacy_cargo_resolved_registry_sources(
             &options.cargo,
-            &options.compiler_root.join("Cargo.toml"),
+            &compiler_manifest,
             &["lsp".to_string()],
             &authority_dir,
         ),
         OvenLoafEnvelope::Release => legacy_cargo_inspection_sources(
             &options.cargo,
-            &options.compiler_root.join("Cargo.toml"),
+            &compiler_manifest,
             &[],
             &envelope_inspection_packages,
             &authority_dir,
@@ -1436,6 +1458,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         let result = prepare_loaf_from_generated_project(
             &staged_root,
             &OvenLoafBakerContext {
+                compiler_root: &options.compiler_root,
                 compiler_support_target: &compiler_support_target,
                 capacity_roots: [&options.output, scratch.path()],
                 transient_limit: max_physical_bytes,
@@ -5897,18 +5920,37 @@ mod tests {
 
     #[test]
     fn loaf_fixture_probe_accepts_only_fail_closed_native_misses() {
-        for stderr in [
-            "Oven Alpha has no compatible native provider/dependency unit; normal build will not invoke Cargo",
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit; nested build will not invoke Cargo",
-        ] {
-            assert!(super::loaf_fixture_probe_is_expected_miss(stderr));
+        use crate::oven::loaf::{
+            OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY, OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+        };
+
+        for summary in [OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY] {
+            assert!(super::loaf_fixture_probe_is_expected_miss(&format!(
+                "{summary}, and `incan build` {OVEN_NO_IMPLICIT_DEPENDENCY_BUILD}."
+            )));
         }
+        // A miss summary without the no-implicit-build contract describes a different failure.
         assert!(!super::loaf_fixture_probe_is_expected_miss(
-            "Oven Alpha has no compatible compiler-suite native provider/dependency unit"
+            OVEN_NESTED_DEPENDENCY_MISS_SUMMARY
         ));
         assert!(!super::loaf_fixture_probe_is_expected_miss(
             "Cargo failed while preparing a native provider/dependency unit"
         ));
+    }
+
+    #[test]
+    fn loaf_compiler_manifest_accepts_packaged_support_workspace() -> Result<(), Box<dyn std::error::Error>> {
+        let compiler_root = tempfile::tempdir()?;
+        let packaged_manifest = compiler_root.path().join("crates/Cargo.toml");
+        fs::create_dir_all(packaged_manifest.parent().ok_or("packaged manifest has no parent")?)?;
+        fs::write(&packaged_manifest, "[workspace]\nresolver = \"2\"\n")?;
+
+        assert_eq!(
+            super::loaf_compiler_manifest_path(compiler_root.path())?,
+            packaged_manifest,
+            "release packaging must bind Loaf evidence to the shipped support workspace"
+        );
+        Ok(())
     }
 
     #[cfg(unix)]

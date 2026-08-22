@@ -17,7 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          # Pinned deliberately: the packaged binary is dynamically linked against the build machine's glibc, so
+          # the runner chooses the oldest Linux this release can run on. `ubuntu-latest` (24.04) produced a
+          # binary requiring GLIBC_2.39, which cannot start on Ubuntu 22.04 LTS (2.35), Debian 12 (2.36), RHEL 9
+          # or Amazon Linux 2023 -- most production Linux. Raise this only with a matching support decision.
+          - runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
           - runner: macos-14
             target: x86_64-apple-darwin
@@ -36,6 +40,12 @@ jobs:
         run: cargo build --locked --release --bin incan
       - name: Build toolchain commands
         run: cargo build --locked --release --features lsp --target "${{ matrix.target }}" --bin incan --bin incan-lsp
+      # package_archive.sh derives the release support workspace lock with `cargo metadata --offline`,
+      # which requires every crate named by the support workspace and release_stdlib fixture to already
+      # be in the registry cache. Ordinary workspace builds do not guarantee that, and runner caches
+      # evict between releases, so warm the cache explicitly while network access is still expected.
+      - name: Prewarm release support workspace registry cache
+        run: workspaces/release/toolchain/fetch_release_support_workspace_sources.sh
       - name: Package archive
         shell: bash
         env:
@@ -52,6 +62,7 @@ jobs:
             incan-*.tar.gz.sha256
             toolchain-version.txt
             toolchain-release.txt
+            rust-channel-*.txt
           if-no-files-found: error
 
   publish-toolchain:
@@ -146,6 +157,7 @@ jobs:
           path: |
             dist/toolchain/manifest.json
             dist/toolchain/toolchain-manifest.schema.v1.json
+            dist/toolchain/toolchain-version.txt
             dist/toolchain/install.sh
             dist/toolchain/incan.rb
             dist/toolchain/incan-toolchain-*.tgz
@@ -179,9 +191,8 @@ jobs:
             npm_tag="rc"
           fi
           version="$(sed -n '1p' dist/toolchain/toolchain-version.txt | tr -d '\r\n')"
-          for platform in linux-x64 darwin-x64 darwin-arm64; do
-            npm publish "dist/toolchain/incan-toolchain-${platform}-${version}.tgz" --access public --provenance --tag "$npm_tag"
-          done
+          # The npm package is a reference shim that provisions the verified release archive on first invocation;
+          # no per-platform payload packages exist (a ~200MB toolchain payload exceeds npm's upload limits).
           npm publish "dist/toolchain/incan-toolchain-${version}.tgz" --access public --provenance --tag "$npm_tag"
 
   publish-pypi:

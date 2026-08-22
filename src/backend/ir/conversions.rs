@@ -872,7 +872,7 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                 (IrExprKind::StaticRead { .. }, _) if matches!(expr.ty, IrType::StaticStr) => Conversion::Into,
                 (IrExprKind::Var { .. }, _) if matches!(expr.ty, IrType::StaticStr) => Conversion::Into,
                 (IrExprKind::Var { access, .. }, Some(target_ty))
-                    if is_owned_string_target(target_ty) && matches!(expr.ty, IrType::String) =>
+                    if is_owned_string_target(target_ty) && is_owned_string_type(&expr.ty) =>
                 {
                     match access {
                         VarAccess::Move => Conversion::None,
@@ -880,30 +880,39 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                     }
                 }
                 (IrExprKind::Field { .. }, Some(target_ty))
-                    if is_owned_string_target(target_ty) && matches!(expr.ty, IrType::String) =>
+                    if is_owned_string_target(target_ty) && is_owned_string_type(&expr.ty) =>
                 {
                     Conversion::Clone
                 }
-                (_, Some(IrType::StrRef))
-                    if matches!(expr.ty, IrType::String) && !expr_has_rust_reference_shape(expr) =>
-                {
+                (_, Some(IrType::StrRef)) if is_owned_string_type(&expr.ty) && !expr_has_rust_reference_shape(expr) => {
                     Conversion::Borrow
                 }
-                (IrExprKind::Var { .. }, _) if matches!(expr.ty, IrType::String) => {
+                (IrExprKind::Var { .. }, _) if is_owned_string_type(&expr.ty) => {
                     if expr_has_rust_reference_shape(expr) {
                         Conversion::None
                     } else {
                         Conversion::Borrow
                     }
                 }
-                (IrExprKind::Field { .. }, None) if matches!(expr.ty, IrType::String) => {
+                (IrExprKind::Field { .. }, None) if is_owned_string_type(&expr.ty) => {
                     if expr_has_rust_reference_shape(expr) {
                         Conversion::None
                     } else {
                         Conversion::Borrow
                     }
                 }
-                (_, None) if matches!(expr.ty, IrType::String) && !expr_has_rust_reference_shape(expr) => {
+                // Borrowing when the target is unknown is a place-expression heuristic: it preserves a
+                // variable/field the caller still owns for a common `&str` external parameter shape. A
+                // `Call`/`MethodCall` result is a fresh temporary with nothing to preserve, and borrowing
+                // it can force a generic parameter elsewhere (e.g. a `HashMap::insert` key) into a
+                // reference type it was never meant to have. Exclude those kinds so the value passes
+                // through unmodified, matching how they were emitted before this call reached the general
+                // ownership plan at all.
+                (_, None)
+                    if is_owned_string_type(&expr.ty)
+                        && !expr_has_rust_reference_shape(expr)
+                        && !matches!(expr.kind, IrExprKind::Call { .. } | IrExprKind::MethodCall { .. }) =>
+                {
                     Conversion::Borrow
                 }
                 (_, Some(IrType::Ref(_))) if !expr_has_rust_reference_shape(expr) => Conversion::Borrow,
@@ -1585,6 +1594,36 @@ mod tests {
     }
 
     #[test]
+    fn test_external_function_string_method_call_result_unknown_target_stays_owned_issue1066() {
+        let receiver = IrExpr::new(
+            IrExprKind::Var {
+                name: "word".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::StrRef,
+        );
+        let expr = IrExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(receiver),
+                method: "to_string".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            IrType::String,
+        );
+
+        // The place-expression borrow heuristic above must not reach a `MethodCall` result: it is a fresh
+        // temporary with nothing to preserve, and borrowing it can force an unrelated generic parameter
+        // (e.g. a `HashMap::insert` key) into a reference type it was never meant to have.
+        let conv = determine_conversion(&expr, None, ConversionContext::ExternalFunctionArg);
+        assert_eq!(conv, Conversion::None);
+    }
+
+    #[test]
     fn test_external_function_string_expression_to_str_ref_borrows_issue716() {
         let expr = IrExpr::new(IrExprKind::Format { parts: Vec::new() }, IrType::String);
 
@@ -1630,6 +1669,40 @@ mod tests {
             conv,
             Conversion::None,
             "an explicit as_slice() argument must not become &&[u8] for ref targets"
+        );
+    }
+
+    #[test]
+    fn test_external_function_as_ref_arg_does_not_double_borrow() {
+        // Regression for a real downstream build failure: `array.as_ref()` on an `Arc<dyn Array>`-shaped receiver
+        // already yields `&dyn Array`, so passing it to an external function expecting `&dyn Array` must not wrap it
+        // in a second `&`, which would produce the uninstantiable `&&dyn Array`.
+        let expr = IrExpr::new(
+            IrExprKind::MethodCall {
+                receiver: Box::new(IrExpr::new(
+                    IrExprKind::Var {
+                        name: "array".to_string(),
+                        access: VarAccess::Read,
+                        ref_kind: VarRefKind::Value,
+                    },
+                    IrType::NamedGeneric("Arc".to_string(), vec![IrType::Struct("dyn Array".to_string())]),
+                )),
+                method: "as_ref".to_string(),
+                dispatch: None,
+                type_args: Vec::new(),
+                args: Vec::new(),
+                callable_signature: None,
+                arg_policy: MethodCallArgPolicy::Default,
+            },
+            IrType::Struct("dyn Array".to_string()),
+        );
+
+        let target = IrType::Ref(Box::new(IrType::Struct("dyn Array".to_string())));
+        let conv = determine_conversion(&expr, Some(&target), ConversionContext::ExternalFunctionArg);
+        assert_eq!(
+            conv,
+            Conversion::None,
+            "an explicit as_ref() argument must not become &&dyn Array for ref targets"
         );
     }
 

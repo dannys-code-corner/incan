@@ -16,7 +16,7 @@ use crate::frontend::typechecker::helpers::{
 use crate::frontend::typechecker::type_info::{CBindingEnumAccess, RustMethodTraitImportUse, RustTraitImportInfo};
 use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
 use incan_core::interop::{
-    RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata,
+    RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustVisibility,
     metadata_free_method_signature,
 };
 use incan_core::lang::magic_methods;
@@ -39,6 +39,12 @@ use syn::{GenericArgument, PathArguments, ReturnType, Type as SynType, TypeParam
 use super::calls::PublicModuleConstructorContext;
 
 use super::TypeChecker;
+
+/// Rust's prelude-provided associated constructor name.
+///
+/// rust-inspect records inherent methods only, so this is the one associated call whose result type must be preserved
+/// before a following inspected inherent call can be resolved.
+const RUST_DEFAULT_ASSOCIATED_METHOD: &str = "default";
 
 #[derive(Debug, Clone)]
 struct MethodCandidate {
@@ -174,6 +180,7 @@ impl TypeChecker {
             && let Some(target) = type_info.alias_target.as_ref()
         {
             let display = self.rust_display_for_owner_path(target, canonical_path.as_str());
+            let display = self.canonicalize_reexported_callable_alias_paths(display, &metadata);
             if Self::rust_display_has_callable_fn_bound(display.as_str()) {
                 return Some(display);
             }
@@ -187,6 +194,74 @@ impl TypeChecker {
         }
         Some(self.rust_display_for_owner_path(path, path))
             .filter(|display| Self::rust_display_has_callable_fn_bound(display.as_str()))
+    }
+
+    /// Replace definition-module paths inside a public callable alias with verified public re-exports.
+    ///
+    /// Rust aliases can be publicly re-exported from a crate root while their source RHS still names the private
+    /// defining module. Inferred closure parameters retain that RHS spelling for ABI accuracy, but generated consumer
+    /// Rust must use a path visible from the consumer crate. Each replacement is checked against rust-inspect metadata
+    /// before it is made, so a neighboring private type is never guessed to be public merely because the alias itself
+    /// was re-exported.
+    fn canonicalize_reexported_callable_alias_paths(&self, display: String, alias: &RustItemMetadata) -> String {
+        let Some(definition_path) = alias.definition_path.as_deref() else {
+            return display;
+        };
+        let Some((canonical_module, _)) = alias.canonical_path.rsplit_once("::") else {
+            return display;
+        };
+        let Some((definition_module, _)) = definition_path.rsplit_once("::") else {
+            return display;
+        };
+        if canonical_module == definition_module {
+            return display;
+        }
+
+        let definition_prefix = format!("{definition_module}::");
+        let canonical_prefix = format!("{canonical_module}::");
+        let mut rendered = String::with_capacity(display.len());
+        let mut remaining = display.as_str();
+        while let Some(index) = remaining.find(definition_prefix.as_str()) {
+            let (before, candidate) = remaining.split_at(index);
+            rendered.push_str(before);
+            let previous = rendered.chars().next_back();
+            if previous.is_some_and(|ch| ch == '_' || ch.is_ascii_alphanumeric() || ch == ':') {
+                rendered.push_str(definition_prefix.as_str());
+                remaining = &candidate[definition_prefix.len()..];
+                continue;
+            }
+
+            let after_prefix = &candidate[definition_prefix.len()..];
+            let item_len = after_prefix
+                .char_indices()
+                .take_while(|(_, ch)| *ch == '_' || *ch == '#' || ch.is_ascii_alphanumeric())
+                .map(|(index, ch)| index + ch.len_utf8())
+                .last()
+                .unwrap_or(0);
+            if item_len == 0 {
+                rendered.push_str(definition_prefix.as_str());
+                remaining = after_prefix;
+                continue;
+            }
+
+            let item = &after_prefix[..item_len];
+            let definition_item_path = format!("{definition_prefix}{item}");
+            let canonical_item_path = format!("{canonical_prefix}{item}");
+            let has_public_reexport = self
+                .rust_item_metadata_for_path_blocking(canonical_item_path.as_str())
+                .is_some_and(|metadata| {
+                    metadata.visibility == RustVisibility::Public
+                        && metadata.definition_path.as_deref() == Some(definition_item_path.as_str())
+                });
+            if has_public_reexport {
+                rendered.push_str(canonical_item_path.as_str());
+            } else {
+                rendered.push_str(definition_item_path.as_str());
+            }
+            remaining = &after_prefix[item_len..];
+        }
+        rendered.push_str(remaining);
+        rendered
     }
 
     /// Parse a Rust callable alias target such as `Arc<dyn Fn(&[T]) -> Result<U, E> + Send + Sync>`.
@@ -1942,6 +2017,15 @@ impl TypeChecker {
                         .find(|candidate| candidate.name == method)
                         .map(|candidate| candidate.signature.clone())
                 }) else {
+                    // `T.default()` is Rust's prelude-provided associated constructor. rust-inspect records
+                    // inherent methods on `T`, not the `Default` trait member, but the call's result still has the
+                    // concrete receiver type needed to resolve a following inherent call such as
+                    // `CentralPanel.default().show(...)`. Keep validation permissive; the native compiler remains
+                    // authoritative for whether this Rust type implements `Default`.
+                    if method == RUST_DEFAULT_ASSOCIATED_METHOD && type_args.is_empty() && args.is_empty() {
+                        self.type_info.record_call_site_callable_params_exact(span, &[]);
+                        return Some(ResolvedType::RustPath(rust_path.to_string()));
+                    }
                     if let Some(import_use) = self.record_rust_extension_trait_import_for_call(&metadata, method, span)
                         && let Some(sig) = import_use.signature.as_ref()
                     {

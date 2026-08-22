@@ -11,5 +11,7 @@ fn main() {
         )
         .try_init();
 
-    incan::cli::run();
+    // Compilation recurses over the AST, so run it on a stack sized for deeply nested expressions rather than
+    // the default main-thread stack, which a long operator chain can exhaust outright.
+    incan::compiler_stack::run_on_compiler_stack(incan::cli::run);
 }

@@ -336,11 +336,13 @@ impl<'a> Parser<'a> {
                     }
                     self.activate_imported_keywords_for_import_path(&module.segments);
                 }
-                ImportKind::PubLibrary { library, .. } => {
-                    self.activate_imported_keywords_for_import_path(std::slice::from_ref(library));
+                ImportKind::PubLibrary { library, path } => {
+                    let segments: Vec<String> = std::iter::once(library.clone()).chain(path.iter().cloned()).collect();
+                    self.activate_imported_keywords_for_import_path(&segments);
                 }
-                ImportKind::PubFrom { library, .. } => {
-                    self.activate_imported_keywords_for_import_path(std::slice::from_ref(library));
+                ImportKind::PubFrom { library, path, .. } => {
+                    let segments: Vec<String> = std::iter::once(library.clone()).chain(path.iter().cloned()).collect();
+                    self.activate_imported_keywords_for_import_path(&segments);
                 }
                 _ => {}
             }

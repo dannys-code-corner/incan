@@ -180,7 +180,7 @@ pub(super) fn emit_collection_method(
                         let a = emitter.emit_expr_for_use(arg, ValueUseSite::MembershipProbe)?;
                         return Ok(quote! {{
                             let __incan_probe = #a;
-                            let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
+                            let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
                             #r.iter().any(|__incan_item| <_ as AsRef<str>>::as_ref(__incan_item) == __incan_probe)
                         }});
                     }
@@ -188,7 +188,7 @@ pub(super) fn emit_collection_method(
                         let a = emitter.emit_expr_for_use(arg, ValueUseSite::MembershipProbe)?;
                         return Ok(quote! {{
                             let __incan_probe = #a;
-                            let __incan_probe = <_ as AsRef<str>>::as_ref(__incan_probe);
+                            let __incan_probe = <_ as AsRef<str>>::as_ref(&__incan_probe);
                             #r.contains(__incan_probe)
                         }});
                     }

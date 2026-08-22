@@ -75,6 +75,9 @@ help: build-quiet  ## Display this help message
 	@echo "\033[1mTesting:\033[0m"
 	@grep -E '^.PHONY: .*?## test - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## test - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
+	@echo "\033[1mRelease gates (local only):\033[0m"
+	@grep -E '^.PHONY: .*?## gate - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## gate - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
+	@echo ""
 	@echo "\033[1mDocs:\033[0m"
 	@grep -E '^.PHONY: .*?## docs - .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ".PHONY: |## docs - "}; {printf "  \033[36m%-18s\033[0m %s\n", $$2, $$3}'
 	@echo ""
@@ -185,6 +188,10 @@ rustdoc-gate:
 rustdoc-gate-ci:
 	@python3 scripts/check_changed_rustdocs.py
 
+.PHONY: version-gate  ## quality - Require hand-written version literals to match the workspace version
+version-gate:
+	@python3 scripts/check_release_version_consistency.py
+
 .PHONY: agents-doc-sync  ## quality - Check AGENTS.md's skill table matches .agents/skills/ (local only, not CI)
 agents-doc-sync:
 	@echo "\033[1mChecking AGENTS.md skill table against .agents/skills/...\033[0m"
@@ -228,6 +235,10 @@ pre-commit-fast:
 	$(MAKE) -s rustdoc-gate-ci; \
 	echo "\033[32mDONE\033[0m"; \
 	t2=$$(date +%s); \
+	printf "\033[1mChecking version consistency...\033[0m "; \
+	$(MAKE) -s version-gate; \
+	echo "\033[32mDONE\033[0m"; \
+	t2a=$$(date +%s); \
 	printf "\033[1mChecking AGENTS.md skill table...\033[0m "; \
 	$(MAKE) -s agents-doc-sync-ci; \
 	echo "\033[32mDONE\033[0m"; \
@@ -237,7 +248,7 @@ pre-commit-fast:
 	echo "\033[32mDONE\033[0m"; \
 	t3=$$(date +%s); \
 	echo "\033[32m✓ Pre-commit checks passed (fast)\033[0m"; \
-	echo "\033[36mPhase timing:\033[0m fmt-check=$$((t1-start))s, rustdoc=$$((t2-t1))s, agents-doc-sync=$$((t2b-t2))s, check=$$((t3-t2b))s, total=$$((t3-start))s"
+	echo "\033[36mPhase timing:\033[0m fmt-check=$$((t1-start))s, rustdoc=$$((t2-t1))s, version-gate=$$((t2a-t2))s, agents-doc-sync=$$((t2b-t2a))s, check=$$((t3-t2b))s, total=$$((t3-start))s"
 
 .PHONY: pre-commit-full-gate  ## quality - Full local gate core: fmt-check + tests + clippy + cargo-deny with phase timing
 pre-commit-full-gate:
@@ -297,6 +308,10 @@ fetch-locked-cargo-sources:
 .PHONY: fetch-oven-loaf-sources
 fetch-oven-loaf-sources:
 	@cargo fetch --manifest-path tests/fixtures/oven_loaf_dependencies/Cargo.toml --locked
+
+.PHONY: fetch-release-support-workspace-sources
+fetch-release-support-workspace-sources:
+	@bash workspaces/release/toolchain/fetch_release_support_workspace_sources.sh
 
 .PHONY: test-oven
 test-oven: test-prewarm-oven-loafs
@@ -582,8 +597,12 @@ smoke-test-benchmarks-incan:
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		bash workspaces/benchmarks/check_incan.sh
 
+# `smoke-test-examples` bakes `examples/pro/vocab_*` and `examples/advanced/library_package`
+# producer/consumer pairs with the release binary. Baking their compiler-owned vocabulary helper
+# needs a release-cohort Loaf, which only `test-prewarm-oven-release-loafs` bakes; without it, the
+# producer bake fails with "no compatible release-cohort Loaf" before the consumer ever runs.
 .PHONY: smoke-test-core
-smoke-test-core: test-prewarm-oven-loafs
+smoke-test-core: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
 	@$(MAKE) smoke-test-release
 	@$(MAKE) smoke-test-canary
 	@$(MAKE) smoke-test-web-example
@@ -737,6 +756,34 @@ toolchain-release-smoke-homebrew:
 .PHONY: toolchain-release-smoke  ## tool - Full local toolchain release smoke (direct + npm + pip + Homebrew syntax)
 toolchain-release-smoke: toolchain-release-build
 	@TOOLCHAIN_DIST="$${TOOLCHAIN_DIST:-/private/tmp/incan-local-test}" bash workspaces/release/toolchain/local_smoke.sh all
+
+# =============================================================================
+# Release gates (local only)
+#
+# These prove a release the compiler suite cannot: that the flagship external consumer still builds, and that a
+# first-time user on a real machine can install and build. Both are deliberately kept out of CI -- IncQL pulls
+# DataFusion, and the clean rooms provision Rust twice -- so they run in front of a release, not every PR.
+# =============================================================================
+
+.PHONY: gate-incql  ## gate - Build the real IncQL consumer end to end (INCQL_CHECKOUT=..., INCAN=...)
+gate-incql:
+	@bash scripts/gate_incql.sh --incan "$${INCAN:-$(CURDIR)/target/release/incan}"
+
+.PHONY: gate-cleanroom  ## gate - Install into containers with and without a mismatched Rust (DIST=...)
+gate-cleanroom:
+	@bash scripts/gate_cleanroom.sh $(if $(DIST),--dist "$(DIST)",) $(if $(MANIFEST),--manifest "$(MANIFEST)",)
+
+.PHONY: bench-build-times  ## gate - Record build times across toolchains (TOOLCHAINS="0.4.0=/path/incan 0.5.0=/path/incan")
+bench-build-times:
+	@test -n "$(TOOLCHAINS)" \
+		|| { echo 'usage: make bench-build-times TOOLCHAINS="0.4.0=/path/to/incan 0.5.0=/path/to/incan"' >&2; exit 2; }
+	@bash scripts/bench_build_times.sh $(foreach toolchain,$(TOOLCHAINS),--toolchain "$(toolchain)")
+
+.PHONY: gate-release  ## gate - Every local release gate: IncQL consumer + clean-room installs
+gate-release:
+	@$(MAKE) gate-incql
+	@$(MAKE) gate-cleanroom
+	@echo "\033[32m✓ Release gates passed\033[0m"
 
 .PHONY: watch  ## tool - Watch for changes and rebuild (requires cargo-watch)
 watch:

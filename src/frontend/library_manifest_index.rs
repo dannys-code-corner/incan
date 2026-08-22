@@ -595,6 +595,28 @@ fn dependency_crate_root(dependency_root: &Path) -> PathBuf {
     dependency_root.join(LIBRARY_ARTIFACT_DIR)
 }
 
+/// Return the project root that owns a generated library artifact root, inverting [`dependency_crate_root`].
+///
+/// A caller-owned `pub::` provider's own project root (where its `incan.toml` and `.incan/oven/` receipts live) is
+/// not carried anywhere on [`LibraryArtifactMetadata`] -- only its generated `crate_root` is. Re-materializing that
+/// provider's compiled libraries into a different consumer needs the provider's own project root to locate its
+/// receipts and resolve its own registry-leaf authority, so this strips the fixed `target/lib` suffix
+/// [`dependency_crate_root`] appends rather than duplicating that path shape as a second, driftable constant.
+/// Returns `None` when `crate_root` does not end with the expected suffix, which should not happen for a
+/// crate root this module produced itself.
+pub(crate) fn dependency_project_root(crate_root: &Path) -> Option<PathBuf> {
+    let suffix = Path::new(LIBRARY_ARTIFACT_DIR);
+    let suffix_component_count = suffix.components().count();
+    let mut root = crate_root.to_path_buf();
+    let mut trailing = PathBuf::new();
+    for _ in 0..suffix_component_count {
+        let popped = root.file_name()?.to_owned();
+        root.pop();
+        trailing = Path::new(&popped).join(trailing);
+    }
+    (trailing == suffix).then_some(root)
+}
+
 fn resolve_manifest_path(crate_root: &Path, dependency_key: &str) -> Result<PathBuf, LibraryManifestLoadFailure> {
     if !crate_root.is_dir() {
         return Err(LibraryManifestLoadFailure {
@@ -939,6 +961,24 @@ mylib = { path = "deps/mylib" }
         assert_eq!(specs[0].package, None);
 
         Ok(())
+    }
+
+    #[test]
+    fn dependency_project_root_inverts_dependency_crate_root() {
+        let root = Path::new("/workspace/providers/mylib");
+        let crate_root = dependency_crate_root(root);
+        assert_eq!(crate_root, Path::new("/workspace/providers/mylib/target/lib"));
+        assert_eq!(dependency_project_root(&crate_root).as_deref(), Some(root));
+    }
+
+    #[test]
+    fn dependency_project_root_rejects_a_path_without_the_expected_suffix() {
+        assert_eq!(dependency_project_root(Path::new("/workspace/providers/mylib")), None);
+        assert_eq!(
+            dependency_project_root(Path::new("/workspace/providers/mylib/lib")),
+            None
+        );
+        assert_eq!(dependency_project_root(Path::new("target/lib")), Some(PathBuf::new()));
     }
 
     #[test]

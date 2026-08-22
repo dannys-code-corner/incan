@@ -65,6 +65,79 @@ pub(crate) fn dependency_manifest_dir_from_manifest(root: &Path, crate_name: &st
         })
 }
 
+/// Compiler-injected support crates share this package-name prefix in every generated Cargo manifest (`incan_derive`,
+/// `incan_stdlib`, and each `incan_stdlib_<component>` SDK component). They are never a project author's own
+/// interop dependency, so [`path_dependency_dirs_from_manifest`] excludes them; see that function's docs for why.
+const COMPILER_OWNED_CRATE_NAME_PREFIX: &str = "incan_";
+
+/// Return every local path-dependency directory declared directly in the workspace root manifest, excluding the
+/// compiler's own injected support crates.
+///
+/// `Cargo.lock` records a locked version for a `path = "..."` dependency but no content checksum, so it cannot
+/// detect an edit to the dependency's own source. Callers use this to fold path-dependency contents into a cache
+/// fingerprint that would otherwise treat an edited local crate as unchanged.
+///
+/// Every generated project's manifest also carries `path = "..."` dependencies the compiler injects for its own
+/// runtime support (`incan_derive`, `incan_stdlib`, and the `incan_stdlib_<component>` SDK components) rather than
+/// anything the project author wrote. Those are excluded by package-name prefix: they are not editable through
+/// ordinary project use, their own staleness is already covered by the toolchain/SDK identity that selects their
+/// path in the first place, and walking them (the stdlib alone spans well over a hundred files) on every cache load
+/// for every generated project turns an occasional-edit staleness check into the dominant cost of the whole test
+/// suite. The prefix is a deliberate, environment-agnostic proxy for "compiler-owned": unlike an env-var-based
+/// check, it holds the same in a development checkout, a CI test harness, and an installed toolchain alike.
+///
+/// Mirrors [`dependency_manifest_dir_from_manifest`]'s table coverage (ordinary, target-specific, and
+/// `{ workspace = true }`-inherited dependency tables) so a path dependency declared through any of those shapes
+/// still invalidates the fingerprint.
+pub(crate) fn path_dependency_dirs_from_manifest(root: &Path) -> Vec<PathBuf> {
+    let Some(manifest_text) = fs::read_to_string(root.join("Cargo.toml")).ok() else {
+        return Vec::new();
+    };
+    let Ok(manifest) = toml::from_str::<toml::Value>(&manifest_text) else {
+        return Vec::new();
+    };
+
+    let workspace_dependencies = manifest
+        .get("workspace")
+        .and_then(|workspace| workspace.get("dependencies"))
+        .and_then(toml::Value::as_table);
+
+    let mut tables = Vec::new();
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(table) = manifest.get(section).and_then(toml::Value::as_table) {
+            tables.push(table);
+        }
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(table) = target.get(section).and_then(toml::Value::as_table) {
+                    tables.push(table);
+                }
+            }
+        }
+    }
+
+    tables
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .filter_map(|(key, declaration)| {
+            let declaration = declaration.as_table()?;
+            let resolved = if declaration.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
+                workspace_dependencies?.get(key)?.as_table()?
+            } else {
+                declaration
+            };
+            let package_name = resolved.get("package").and_then(toml::Value::as_str).unwrap_or(key);
+            if package_name.starts_with(COMPILER_OWNED_CRATE_NAME_PREFIX) {
+                return None;
+            }
+            let path = resolved.get("path")?.as_str()?;
+            root.join(path).canonicalize().ok()
+        })
+        .collect()
+}
+
 /// Resolve one path dependency from a Cargo dependency table without invoking Cargo.
 fn dependency_path_in_table(table: Option<&toml::Value>, normalized_crate_name: &str, root: &Path) -> Option<PathBuf> {
     let dependencies = table?.as_table()?;

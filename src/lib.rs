@@ -17,6 +17,7 @@ pub mod backend;
 #[cfg(feature = "cli")]
 pub mod cli;
 pub(crate) mod compiled_sdk;
+pub mod compiler_stack;
 pub mod dependency_resolver;
 pub mod format;
 pub mod frontend;

@@ -47,7 +47,19 @@ pub const OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION: u32 = 3;
 /// trusted standard-provider identity as the SDK publisher, but it never authorizes Cargo for a caller command.
 pub(crate) const OVEN_LOAF_ENV: &str = "INCAN_OVEN_LOAF";
 /// Actionable user guidance for a normal-command miss without turning it into a compatibility-baker fallback.
-pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: run `incan oven bake --project <project-root>`. That explicit command records generated-project receipts for every conventional project target, reuses a compatible closure when present, or performs one bounded compatibility bake. Normal build, run, and test remain Cargo-free and will not invoke the baker automatically.";
+pub const OVEN_LOAF_MISS_GUIDANCE: &str = "Action: run `incan oven bake --project <project-root>` once. That command compiles this project's dependencies and caches the result, reusing anything already compatible. It is a deliberate, separate step: `incan build`, `incan run`, and `incan test` never compile dependencies on their own.";
+/// Opening clause every fail-closed dependency miss in a normal project command reports.
+///
+/// The baker's cold probe recognizes an intended miss by matching this clause together with
+/// [`OVEN_NO_IMPLICIT_DEPENDENCY_BUILD`]. Both sides share these constants rather than repeating the sentence, so
+/// rewording user-facing text cannot silently stop the probe from recognizing the miss it is looking for.
+pub const OVEN_DEPENDENCY_MISS_SUMMARY: &str = "This project's dependencies have not been compiled yet";
+/// Opening clause a nested compiler-suite build reports for the same fail-closed miss.
+pub const OVEN_NESTED_DEPENDENCY_MISS_SUMMARY: &str = "This nested build's dependencies have not been compiled yet";
+/// Clause stating the no-implicit-build contract, required before a miss counts as fail-closed.
+///
+/// A miss message without it describes some other failure, so the probe must not treat it as the expected one.
+pub const OVEN_NO_IMPLICIT_DEPENDENCY_BUILD: &str = "will not compile them for you";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
@@ -789,6 +801,8 @@ pub struct OvenLoafPreparation {
 
 /// Explicit resources and bounded policy available to one hidden legacy-Cargo Loaf bake.
 pub struct OvenLoafBakerContext<'a> {
+    /// Compiler source root whose checked support crates and lock authority are being packaged.
+    pub compiler_root: &'a Path,
     pub compiler_support_target: &'a Path,
     /// Every baker-owned persistent or transient root charged to the replacement high-water mark.
     pub capacity_roots: [&'a Path; 2],
@@ -1124,15 +1138,7 @@ fn export_loaf(
     }
     merge_loaf_inspection_sources(&mut plan, staging.path(), context.inspection_sources)?;
     seal_registry_lock_from_temporary_store(&mut plan, &artifact_root, staging.path())?;
-    let vocab_transient_peak = bake_compiler_vocab_support(
-        &mut plan,
-        staging.path(),
-        context.cargo,
-        context.rustc,
-        context.compiler_support_target,
-        &context.capacity_roots,
-        context.transient_limit,
-    )?;
+    let vocab_transient_peak = bake_compiler_vocab_support(&mut plan, staging.path(), context)?;
     plan.materialized_artifacts(staging.path(), &receipt.intent)?;
     let (payload_logical_bytes, payload_physical_bytes) = loaf_directory_byte_counts(staging.path())?;
     // Export rewrites publisher-store paths and adds compiler-owned runtime/vocabulary inputs. Report the identity
@@ -1512,12 +1518,14 @@ fn run_bounded_loaf_cargo(
 fn bake_compiler_vocab_support(
     plan: &mut OvenRustcArtifactManifest,
     loaf_staging: &Path,
-    cargo: &Path,
-    rustc: &Path,
-    cargo_target: &Path,
-    capacity_roots: &[&Path],
-    transient_limit: u64,
+    context: &OvenLoafBakerContext<'_>,
 ) -> Result<u64, OvenLoafError> {
+    let compiler_root = context.compiler_root;
+    let cargo = context.cargo;
+    let rustc = context.rustc;
+    let cargo_target = context.compiler_support_target;
+    let capacity_roots: &[&Path] = &context.capacity_roots;
+    let transient_limit = context.transient_limit;
     const INCAN_VOCAB: &str = "incan_vocab";
     const VOCAB_DESUGARER_TARGET: &str = "wasm32-wasip1";
     if plan.externs.iter().any(|artifact| artifact.crate_name == INCAN_VOCAB) {
@@ -1538,8 +1546,7 @@ fn bake_compiler_vocab_support(
             ),
         });
     }
-    let source_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let crate_root = source_root.join("crates/incan_vocab");
+    let crate_root = compiler_root.join("crates/incan_vocab");
     let manifest = crate_root.join("Cargo.toml");
     if !manifest.is_file() {
         return Err(OvenLoafError::Preparation {

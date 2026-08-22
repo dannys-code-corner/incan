@@ -1,6 +1,6 @@
 {
   "name": "@incan/toolchain",
-  "version": "0.5.0-dev.47",
+  "version": "0.5.0",
   "description": "Command shims for the Incan toolchain",
   "license": "Apache-2.0",
   "homepage": "https://incan.io",
@@ -12,11 +12,6 @@
     "incan": "bin/incan.js",
     "incan-lsp": "bin/incan-lsp.js",
     "install-incan": "bin/install-incan.js"
-  },
-  "optionalDependencies": {
-    "@incan/toolchain-linux-x64": "0.5.0-dev.47",
-    "@incan/toolchain-darwin-x64": "0.5.0-dev.47",
-    "@incan/toolchain-darwin-arm64": "0.5.0-dev.47"
   },
   "files": [
     "README.md",

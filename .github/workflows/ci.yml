@@ -161,13 +161,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-${{ matrix.toolchain }}-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
           make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
       - name: Build the compiler
         run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
       - uses: ./.github/actions/restore-sdk-provider-store
@@ -202,13 +203,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-stable-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
           make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
       - name: Build Linux compiler and reference generators
         run: |
           CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
@@ -250,13 +252,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-stable-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
           make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
       - name: Download compiler and reference generators
         uses: actions/download-artifact@v7
         with:
@@ -320,7 +323,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-stable-Linux-X64-
       - name: Fetch locked compiler sources
@@ -329,7 +332,7 @@ jobs:
         run: make test-oven-pr-regressions
 
   oven-linux-replay:
-    name: Oven Linux replay (${{ matrix.partition }}/4)
+    name: Oven Linux replay (${{ matrix.display }}/4)
     runs-on: ubuntu-latest
     needs:
       - changes
@@ -337,8 +340,14 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
+      # `partition` is the 0-based index the Makefile and artifact names consume; `display` exists only because
+      # GitHub expressions cannot compute `partition + 1` for a human-facing 1-based job name.
       matrix:
-        partition: [0, 1, 2, 3]
+        include:
+          - { partition: 0, display: 1 }
+          - { partition: 1, display: 2 }
+          - { partition: 2, display: 3 }
+          - { partition: 3, display: 4 }
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -353,13 +362,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-stable-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
           make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
       - name: Download prewarmed compiler and reference generators
         uses: actions/download-artifact@v7
         with:
@@ -431,13 +441,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock') }}
+          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
             incan-oven-pr-sources-v1-stable-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
           make fetch-oven-loaf-sources
+          make fetch-release-support-workspace-sources
       - name: Download prewarmed compiler and reference generators
         uses: actions/download-artifact@v7
         with:

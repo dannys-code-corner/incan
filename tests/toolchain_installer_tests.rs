@@ -441,10 +441,6 @@ const NPM_PLATFORM_TARGETS: [(&str, &str, &str, &str); 3] = [
     ),
 ];
 
-fn npm_platform_package_dir(dist: &Path, target: &str) -> PathBuf {
-    dist.join("_npm-platform-packages").join(target)
-}
-
 fn current_npm_host_target() -> Option<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("linux", "x86_64") => Some("x86_64-unknown-linux-gnu"),
@@ -452,21 +448,6 @@ fn current_npm_host_target() -> Option<&'static str> {
         ("macos", "aarch64") => Some("aarch64-apple-darwin"),
         _ => None,
     }
-}
-
-fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    fs::create_dir_all(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let destination_path = destination.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&source_path, &destination_path)?;
-        } else {
-            fs::copy(&source_path, &destination_path)?;
-        }
-    }
-    Ok(())
 }
 
 /// Sum each regular file exactly once for release-profile accounting assertions.
@@ -504,7 +485,16 @@ fn package_fixture_archive_with_profile(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let seed = write_fixture_sdk_provider_seed(root, profile)?;
     let loafs = write_fixture_loafs(root)?;
-    let output = Command::new("bash")
+    // Compiler-suite roots run with `cargo` deliberately poisoned on `PATH` (and `CARGO`/`CARGO_*`
+    // stripped from the environment) so an Oven test that should never touch Cargo fails loudly if
+    // it does. This test is the one legitimate exception: it packages a real release archive and
+    // needs real Cargo. When this binary is built by a normal `cargo test` invocation, Cargo sets
+    // `CARGO` in the environment of the rustc/build process, and -- because that's an ordinary
+    // runtime env var here, not a build-time constant -- it is only actually visible in this
+    // process if the guard hasn't already stripped it; pass it through when present, but
+    // package_archive.sh does not depend on it (see its own `${CARGO_HOME}/bin/cargo` fallback).
+    let mut command = Command::new("bash");
+    command
         .arg(toolchain_package_archive_script())
         .arg(target)
         .args(["--out-dir", root.to_str().ok_or("output path is not UTF-8")?])
@@ -514,8 +504,11 @@ fn package_fixture_archive_with_profile(
         .env("INCAN_OVEN_LOAF_DIR", loafs)
         .env("INCAN_OVEN_LOAF_OVERRIDE_TEST_ONLY", "1")
         .env("INCAN_SDK_DISTRIBUTION_PROFILE", profile)
-        .current_dir(repo_root())
-        .output()?;
+        .current_dir(repo_root());
+    if let Ok(cargo) = std::env::var("CARGO") {
+        command.env("CARGO_BIN", cargo);
+    }
+    let output = command.output()?;
 
     assert!(
         output.status.success(),
@@ -634,7 +627,7 @@ fn write_manifest(root: &Path, archive: &Path, checksum: &str) -> Result<PathBuf
   "release": "v0.4.0-test",
   "channel": "dev",
   "rust_toolchain": {{
-    "channel": "stable",
+    "channel": "1.93.0",
     "min_rust": "1.93",
     "targets": ["wasm32-wasip1"],
     "policy": "fixture"
@@ -827,9 +820,16 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
         assert_packaged_support_workspace_without_cargo(&extracted)?;
     } else {
         let metadata = Command::new("cargo")
-            .args(["metadata", "--no-deps", "--format-version", "1", "--manifest-path"])
+            .args([
+                "metadata",
+                "--locked",
+                "--offline",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
             .arg(extracted.join("crates/Cargo.toml"))
-            .env("CARGO_NET_OFFLINE", "true")
             .output()?;
         assert!(
             metadata.status.success(),
@@ -1152,7 +1152,10 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("oven-linux-replay")
             && workflow.contains("actions/cache/save@v5")
             && workflow.contains("fail-on-cache-miss: true")
-            && workflow.contains("partition: [0, 1, 2, 3]")
+            && workflow.contains("{ partition: 0, display: 1 }")
+            && workflow.contains("{ partition: 1, display: 2 }")
+            && workflow.contains("{ partition: 2, display: 3 }")
+            && workflow.contains("{ partition: 3, display: 4 }")
             && workflow.matches("timeout-minutes: 20").count() >= 4
             && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
@@ -1344,8 +1347,17 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
         manifest["rust_toolchain"]["policy"]
             .as_str()
             .unwrap_or_default()
-            .contains("provisions stable Rust through rustup"),
-        "manifest should document installer-managed Rust provisioning"
+            .contains("Incan-owned rustup home"),
+        "manifest should document that provisioning is isolated from the user's own toolchain"
+    );
+    // The published channel has to name one concrete Rust release. A floating channel would drift away from the
+    // compiler that sealed this archive's Loafs, which is the whole reason installs broke.
+    let channel = manifest["rust_toolchain"]["channel"].as_str().unwrap_or_default();
+    let mut parts = channel.split('.');
+    assert!(
+        parts.clone().count() == 3
+            && parts.all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())),
+        "manifest must pin a concrete Rust release, got {channel:?}"
     );
     assert!(
         manifest["hosts"]["x86_64-unknown-linux-gnu"]["archive_url"]
@@ -1364,8 +1376,19 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
         .and_then(|name| name.to_str())
         .ok_or("toolchain archive name was not valid UTF-8")?;
     let checksum = fs::read_to_string(sha256_sidecar_path(&archive))?.trim().to_string();
-    assert!(formula.contains(&format!(r#"version "{version}""#)));
-    assert!(formula.contains("npm and Homebrew install prebuilt Incan commands"));
+    // Brew audit rejects an explicit `version` line (it is inferred from the URL) and the `on_macos`/`on_linux`
+    // block shape; the generator emits the audit-clean class-level platform chain instead.
+    assert!(!formula.contains(&format!(r#"version "{version}""#)));
+    assert!(!formula.contains("on_macos"));
+    assert!(formula.contains("if OS.mac? && Hardware::CPU.arm?"));
+    assert!(formula.contains("elsif OS.linux? && Hardware::CPU.intel?"));
+    // Homebrew installs prebuilt commands without running install-incan.sh, so it is the one channel that does
+    // not get an Incan-owned toolchain. Its caveats must therefore name the exact Rust release to select.
+    assert!(formula.contains("Homebrew installs only the prebuilt Incan commands"));
+    assert!(
+        formula.contains(&format!("rustup toolchain install {channel}")),
+        "formula caveats must name the exact Rust release this archive's Loafs were sealed against"
+    );
     assert!(formula.contains(&format!(
         r#"url "https://github.com/encero-systems/incan/releases/download/{release}/{archive_name}""#
     )));
@@ -1383,14 +1406,20 @@ fn toolchain_release_assets_are_prepared_by_central_manifest_program() -> Result
     assert!(formula.contains(
         r#"odie "could not find incan binary in archive; staged files: #{staged_file_sample}" if incan_bin.nil?"#
     ));
-    assert!(formula.contains(
-        r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}" unless sdk_inventory.exist?"#
-    ));
+    // The SDK-inventory guard is emitted in the wrapped `unless ... end` form: its one-line trailing-`unless`
+    // spelling exceeded brew audit's line-length limit (the same v0.4 tap-only hand-fix this generator now owns).
+    assert!(formula.contains("unless sdk_inventory.exist?"));
+    assert!(
+        formula.contains(
+            r#"odie "could not find SDK provider inventory in archive; staged files: #{staged_file_sample}""#
+        )
+    );
+    assert!(!formula.contains(r#"" unless sdk_inventory.exist?"#));
     assert!(formula.contains("could not find SDK provider inventory in archive"));
     assert!(formula.contains("libexec.install Dir[\"*\"]"));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan\""));
     assert!(formula.contains("bin.write_exec_script libexec/\"bin/incan-lsp\""));
-    assert!(formula.contains("Incan builds supported projects with verified Oven direct-rustc plans"));
+    assert!(formula.contains("load only under the exact Rust compiler that built them"));
     assert!(!formula.contains("Incan builds projects through Cargo"));
     Ok(())
 }
@@ -1461,34 +1490,17 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
             .is_none(),
         "default npm package must not declare postinstall"
     );
-    let optional_dependencies = npm_package["optionalDependencies"]
-        .as_object()
-        .ok_or("npm optionalDependencies must be an object")?;
-    for (target, package_name, os, cpu) in NPM_PLATFORM_TARGETS {
-        assert_eq!(
-            optional_dependencies
-                .get(package_name)
-                .and_then(serde_json::Value::as_str),
-            Some(npm_version.as_str()),
-            "top-level npm package must depend on {package_name}"
-        );
-
-        let platform_dir = npm_platform_package_dir(&dist, target);
-        let platform_package: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(platform_dir.join("package.json"))?)?;
-        assert_eq!(platform_package["name"], package_name);
-        assert_eq!(platform_package["version"], npm_version);
-        assert_eq!(platform_package["os"], serde_json::json!([os]));
-        assert_eq!(platform_package["cpu"], serde_json::json!([cpu]));
-        assert!(platform_dir.join("toolchain/bin/incan").exists());
-        assert!(platform_dir.join("toolchain/bin/incan-lsp").exists());
-        assert!(
-            platform_dir
-                .join("toolchain/share/incan/sdk/sdk-inventory.json")
-                .exists()
-        );
-        assert!(platform_dir.join("toolchain/crates/Cargo.toml").exists());
-    }
+    // The npm package is a reference shim: no toolchain payload travels through npm (a ~200MB payload exceeds the
+    // registry's upload limits), so no optionalDependencies and no per-platform payload packages exist. The shim
+    // provisions the verified release archive through its bundled installer on first invocation, like pip.
+    assert!(
+        npm_package.get("optionalDependencies").is_none(),
+        "reference npm shim must not declare platform payload optionalDependencies"
+    );
+    assert!(
+        !dist.join("_npm-platform-packages").exists(),
+        "reference npm packaging must not stage platform payload packages"
+    );
     assert!(fs::read_to_string(dist.join("_npm-package/README.md"))?.contains("https://incan.io"));
     assert!(dist.join("_npm-package/vendor/install-incan.sh").exists());
 
@@ -1538,7 +1550,7 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
 }
 
 #[test]
-fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_command_wrappers_run_provisioned_toolchain_without_installer() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
     let dist = tmp.path().join("toolchain");
     let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
@@ -1556,17 +1568,17 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
         String::from_utf8_lossy(&npm_output.stderr)
     );
 
+    // Once a toolchain is provisioned, command invocations must not need the bundled installer again.
     let package_root = dist.join("_npm-package");
-    let node_modules_scope = package_root.join("node_modules/@incan");
-    copy_dir_recursive(
-        &npm_platform_package_dir(&dist, "x86_64-unknown-linux-gnu"),
-        &node_modules_scope.join("toolchain-linux-x64"),
-    )?;
     fs::remove_file(package_root.join("vendor/install-incan.sh"))?;
+    let toolchain_dir = tmp.path().join("provisioned-toolchain");
+    fs::create_dir_all(toolchain_dir.join("bin"))?;
+    fs::copy(&incan, toolchain_dir.join("bin/incan"))?;
+    fs::copy(&incan_lsp, toolchain_dir.join("bin/incan-lsp"))?;
 
     let incan_output = Command::new("node")
         .arg(package_root.join("bin/incan.js"))
-        .env("INCAN_NPM_HOST_TARGET", "x86_64-unknown-linux-gnu")
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &toolchain_dir)
         .output()?;
     assert!(
         incan_output.status.success(),
@@ -1579,7 +1591,7 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
     let incan_lsp_output = Command::new("node")
         .arg(package_root.join("bin/incan-lsp.js"))
         .arg("--help")
-        .env("INCAN_NPM_HOST_TARGET", "x86_64-unknown-linux-gnu")
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &toolchain_dir)
         .output()?;
     assert!(
         incan_lsp_output.status.success(),
@@ -1592,7 +1604,7 @@ fn npm_command_wrappers_run_platform_package_without_installer() -> Result<(), B
 }
 
 #[test]
-fn npm_command_wrappers_report_unsupported_platforms() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_command_wrappers_fail_closed_without_provisioned_toolchain() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = ToolchainTestStaging::new()?;
     let dist = tmp.path().join("toolchain");
     let (incan, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
@@ -1610,24 +1622,33 @@ fn npm_command_wrappers_report_unsupported_platforms() -> Result<(), Box<dyn std
         String::from_utf8_lossy(&npm_output.stderr)
     );
 
+    // With first-run provisioning suppressed and no toolchain installed, the shim must fail with actionable
+    // guidance rather than silently succeeding or invoking the network.
     let package_root = dist.join("_npm-package");
-    fs::remove_file(package_root.join("vendor/install-incan.sh"))?;
-
     let output = Command::new("node")
         .arg(package_root.join("bin/incan.js"))
-        .env("INCAN_NPM_HOST_TARGET", "sparc64-sun-solaris")
+        .env("INCAN_SKIP_NPM_INSTALL", "1")
         .output()?;
     assert!(
         !output.status.success(),
-        "unsupported npm platform should fail\nstdout:\n{}\nstderr:\n{}",
+        "an unprovisioned npm shim with provisioning suppressed should fail\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("unsupported npm toolchain target: sparc64-sun-solaris"));
-    assert!(stderr.contains("x86_64-unknown-linux-gnu"));
-    assert!(stderr.contains("x86_64-apple-darwin"));
-    assert!(stderr.contains("aarch64-apple-darwin"));
+    assert!(stderr.contains("incan is missing"));
+    assert!(stderr.contains("install-incan"));
+
+    // An explicit toolchain-directory override that lacks the binary must also fail with the override named.
+    let missing_dir = tmp.path().join("missing-toolchain");
+    let override_output = Command::new("node")
+        .arg(package_root.join("bin/incan.js"))
+        .env("INCAN_NPM_TOOLCHAIN_DIR", &missing_dir)
+        .output()?;
+    assert!(!override_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&override_output.stderr).contains("missing incan binary in INCAN_NPM_TOOLCHAIN_DIR")
+    );
     Ok(())
 }
 
@@ -1702,9 +1723,11 @@ fn toolchain_installer_provisions_rust_backend_targets() -> Result<(), Box<dyn s
     fs::create_dir_all(&fake_bin)?;
     let rustup_log = tmp.path().join("rustup.log");
 
+    // Record the Rustup home and toolchain selection each call ran under, so the test can assert that
+    // provisioning went into Incan's own home and did not inherit an ambient toolchain choice.
     write_executable(
         &fake_bin.join("rustup"),
-        "#!/usr/bin/env sh\nprintf '%s\\n' \"$*\" >> \"$RUSTUP_LOG\"\n",
+        "#!/usr/bin/env sh\nprintf '%s\\t%s\\t%s\\n' \"$*\" \"${RUSTUP_HOME:-<unset>}\" \"${RUSTUP_TOOLCHAIN:-<unset>}\" >> \"$RUSTUP_LOG\"\n",
     )?;
     write_executable(
         &fake_bin.join("cargo"),
@@ -1734,12 +1757,43 @@ fn toolchain_installer_provisions_rust_backend_targets() -> Result<(), Box<dyn s
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Rust backend:"));
+    assert!(stdout.contains("Rust backend"));
     assert!(stdout.contains("target: wasm32-wasip1"));
+
+    // Every Rustup call must run inside Incan's own home with no inherited toolchain selection, and must name
+    // the manifest's channel explicitly. That combination is what keeps the user's own default untouched and
+    // keeps ambient configuration from redirecting provisioning.
+    let incan_rustup_home = incan_home.join("rust");
     let rustup_log = fs::read_to_string(rustup_log)?;
     assert!(
-        rustup_log.lines().any(|line| line == "target add wasm32-wasip1"),
-        "expected installer to add manifest Rust target, got:\n{rustup_log}"
+        !rustup_log.trim().is_empty(),
+        "expected the installer to invoke rustup at all"
+    );
+    for line in rustup_log.lines() {
+        let mut fields = line.split('\t');
+        let arguments = fields.next().unwrap_or_default();
+        let home = fields.next().unwrap_or_default();
+        let toolchain = fields.next().unwrap_or_default();
+        assert_eq!(
+            home,
+            incan_rustup_home.to_str().ok_or("incan rustup home is not UTF-8")?,
+            "rustup call `{arguments}` did not run against Incan's own rustup home"
+        );
+        assert_eq!(
+            toolchain, "<unset>",
+            "rustup call `{arguments}` inherited an ambient RUSTUP_TOOLCHAIN selection"
+        );
+    }
+    assert!(
+        rustup_log
+            .lines()
+            .any(|line| line.starts_with("target add --toolchain 1.93.0 wasm32-wasip1\t")),
+        "expected installer to add the manifest Rust target to the pinned toolchain, got:\n{rustup_log}"
+    );
+    assert_eq!(
+        fs::read_to_string(incan_rustup_home.join("incan-channel.txt"))?.trim(),
+        "1.93.0",
+        "installer must record which channel it provisioned so the compiler can resolve it exactly"
     );
     assert_toolchain_install(&incan_home, &bin_dir);
     Ok(())
@@ -1764,7 +1818,7 @@ set -eu
 mkdir -p "$HOME/.cargo/bin"
 cat > "$HOME/.cargo/bin/rustup" <<'RUSTUP'
 #!/usr/bin/env sh
-printf '%s\n' "$*" >> "$RUSTUP_LOG"
+printf '%s\t%s\t%s\n' "$*" "${RUSTUP_HOME:-<unset>}" "${RUSTUP_TOOLCHAIN:-<unset>}" >> "$RUSTUP_LOG"
 RUSTUP
 cat > "$HOME/.cargo/bin/cargo" <<'CARGO'
 #!/usr/bin/env sh
@@ -1799,12 +1853,22 @@ chmod +x "$HOME/.cargo/bin/rustup" "$HOME/.cargo/bin/cargo" "$HOME/.cargo/bin/ru
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Installing Rust backend with rustup (stable)"));
-    assert!(stdout.contains("Rust backend:"));
+    // rustup is bootstrapped without a default toolchain so the channel is downloaded once, into Incan's home,
+    // rather than twice on a machine that had no Rust.
+    assert!(stdout.contains("Installing rustup"));
+    assert!(stdout.contains("rustup is installed with no default toolchain"));
+    assert!(stdout.contains("Rust backend"));
     let rustup_log = fs::read_to_string(rustup_log)?;
     assert!(
-        rustup_log.lines().any(|line| line == "target add wasm32-wasip1"),
-        "expected bootstrapped rustup to add manifest Rust target, got:\n{rustup_log}"
+        rustup_log
+            .lines()
+            .any(|line| line.starts_with("target add --toolchain 1.93.0 wasm32-wasip1\t")),
+        "expected bootstrapped rustup to add the manifest Rust target to the pinned toolchain, got:\n{rustup_log}"
+    );
+    assert_eq!(
+        fs::read_to_string(incan_home.join("rust").join("incan-channel.txt"))?.trim(),
+        "1.93.0",
+        "installer must record which channel it provisioned even when it bootstrapped rustup itself"
     );
     assert_toolchain_install(&incan_home, &bin_dir);
     Ok(())
@@ -1884,7 +1948,7 @@ fn homebrew_smoke_preserves_existing_platform_archives() -> Result<(), Box<dyn s
 }
 
 #[test]
-fn npm_smoke_installs_platform_package_without_lifecycle_scripts() -> Result<(), Box<dyn std::error::Error>> {
+fn npm_smoke_installs_reference_shim_without_lifecycle_scripts() -> Result<(), Box<dyn std::error::Error>> {
     let Some(host_target) = current_npm_host_target() else {
         return Ok(());
     };
@@ -1943,7 +2007,9 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("node")
         .arg(npm_installer_wrapper())
@@ -1960,7 +2026,7 @@ fn npm_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 
@@ -1998,7 +2064,9 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
     let tmp = ToolchainTestStaging::new()?;
     let fake_bin = write_fake_bash_arg_printer(tmp.path())?;
     let current_path = std::env::var("PATH")?;
-    let expected_manifest = "https://github.com/encero-systems/incan/releases/download/v0.5.0-dev.47/manifest.json";
+    let version = env!("CARGO_PKG_VERSION");
+    let expected_manifest =
+        format!("https://github.com/encero-systems/incan/releases/download/v{version}/manifest.json");
 
     let output = Command::new("python3")
         .arg(pip_installer_wrapper())
@@ -2014,7 +2082,7 @@ fn pip_installer_wrapper_defaults_to_its_own_release_manifest() -> Result<(), Bo
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_printed_arg_pair(&output.stdout, "--manifest", expected_manifest);
+    assert_printed_arg_pair(&output.stdout, "--manifest", &expected_manifest);
     Ok(())
 }
 

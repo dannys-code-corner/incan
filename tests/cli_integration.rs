@@ -441,7 +441,8 @@ fn scheduler_nested_build_and_run_fail_closed_when_the_immutable_native_plan_is_
             String::from_utf8_lossy(&output.stderr)
         );
         assert!(
-            diagnostics.contains("no compatible compiler-suite native provider/dependency unit"),
+            diagnostics.contains("dependencies have not been compiled yet")
+                && diagnostics.contains("will not compile them for you"),
             "scheduler nested {command} did not fail closed:\n{diagnostics}"
         );
     }
@@ -10647,6 +10648,83 @@ def main() -> None:
     assert_success(
         &consumer_bake,
         "explicit Oven bake for a consumer of the public direct-Rust UUID provider",
+    );
+    Ok(())
+}
+
+/// An explicit consumer bake owns its direct registry closure even when it imports a separately baked provider.
+///
+/// The provider's package Loaf remains a receipt-checked input, but it cannot become the registry authority for the
+/// consumer's independently declared `itoa` root. A later locked run proves the selected consumer Loaf remains
+/// sufficient after the explicit publisher has completed. `itoa` is deliberately the same zero-dependency registry
+/// root already used by the other direct-dependency tests in this file (see e.g.
+/// `workspace_lock_is_published_once_at_the_root_from_any_member`): any external crate proves the registry-authority
+/// behavior under test, so picking one already covered by the Oven Loaf dependency prefetch manifest keeps this
+/// test's own registry closure from growing independently.
+#[test]
+fn oven_baked_provider_and_direct_registry_consumer_bake_issue1054() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let provider_root = tmp.path().join("provider");
+    fs::create_dir_all(provider_root.join("src"))?;
+    fs::write(
+        provider_root.join("incan.toml"),
+        "[project]\nname = \"provider\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        provider_root.join("src/lib.incn"),
+        "pub def provided() -> int:\n  return 7\n",
+    )?;
+    let provider_bake = run_explicit_oven_bake(&provider_root)?;
+    assert_success(&provider_bake, "explicit Oven bake for #1054 provider");
+
+    let consumer_root = tmp.path().join("consumer");
+    let consumer_main = write_minimal_project(
+        &consumer_root,
+        "consumer",
+        r#"
+[dependencies]
+provider = { path = "../provider" }
+
+[rust-dependencies]
+itoa = "1"
+"#,
+    )?;
+    fs::write(
+        &consumer_main,
+        r#"from pub::provider import provided
+from rust::itoa import Buffer
+
+
+def main() -> None:
+  assert provided() == 7
+  println("provider and direct registry closure")
+"#,
+    )?;
+    fs::write(
+        consumer_root.join("src/lib.incn"),
+        r#"from pub::provider import provided
+from rust::itoa import Buffer
+
+
+pub def provider_value() -> int:
+  return provided()
+"#,
+    )?;
+
+    let consumer_bake = run_explicit_oven_bake(&consumer_root)?;
+    assert_success(
+        &consumer_bake,
+        "explicit Oven bake for #1054 provider plus direct itoa consumer",
+    );
+
+    let consumer_run = run_incan(&consumer_root, &["run", "--locked"])?;
+    assert_success(
+        &consumer_run,
+        "locked Oven run for #1054 provider plus direct itoa consumer",
+    );
+    assert_eq!(
+        String::from_utf8(consumer_run.stdout)?,
+        "provider and direct registry closure\n"
     );
     Ok(())
 }

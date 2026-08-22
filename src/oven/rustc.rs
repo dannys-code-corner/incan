@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::ffi::OsString;
 use std::fmt;
 use std::fs;
 use std::io::{self, Read};
@@ -453,13 +454,19 @@ impl OvenRegistryLeafAuthority {
         })
     }
 
-    #[cfg(test)]
     #[must_use]
-    /// Join catalogs from fragments already proven to form one receipt-bound composed direct-Rustc closure.
+    /// Join registry-leaf catalogs from independently sealed sources into one lookup surface.
     ///
-    /// Callers must not use this as a general registry resolver.  Each authority retains the root and verified
-    /// metadata search paths that published its leaves; composition is safe only after the outer artifact manifest
-    /// has required every fragment and rejected duplicate/substituted artifacts.
+    /// This does not itself decide compatibility: [`select_sealed_registry_leaf`]'s existing candidate resolution
+    /// already tolerates a joined catalog naming the same package at different versions (it picks the
+    /// requirement-matching highest one), and separately fails closed if a *specific requested* package/version
+    /// resolves to more than one distinct compiled artifact. That per-lookup check is what actually protects against
+    /// admitting two incompatible compiled instances of a shared package (most dangerously an async runtime such as
+    /// `tokio`, where a runtime object built through one compiled instance becomes invisible to code compiled
+    /// against another) -- it is precise about only the package actually being resolved, unlike a blanket
+    /// pre-validation of every entry a joined catalog happens to carry, most of which are never looked up together.
+    /// Joining catalogs here is therefore safe for any sources whose own artifacts are independently receipt-bound;
+    /// it does not require the caller to have already reconciled a shared compiled closure.
     pub(crate) fn aggregate(authorities: impl IntoIterator<Item = Self>) -> Self {
         Self {
             entries: authorities
@@ -467,6 +474,79 @@ impl OvenRegistryLeafAuthority {
                 .flat_map(|authority| authority.entries)
                 .collect(),
         }
+    }
+
+    /// Return the first package name this authority's own registry leaves would silently link as a second,
+    /// incompatible compiled instance of a crate `plan` already links explicitly.
+    ///
+    /// A caller-owned provider's own registry closure (for example a query-engine library's own third-party
+    /// dependency graph) is baked through an independent Cargo resolve from the consumer/SDK's own closure. Both can
+    /// legitimately depend on "the same" package at the same version -- most dangerously an async runtime such as
+    /// `tokio` -- yet resolve to two byte-distinct compiled artifacts, because a compiled crate's identity depends on
+    /// its full compilation context, not only its declared version. Neither [`select_sealed_registry_leaf`] (which
+    /// only sees one closure's own catalog) nor [`Self::aggregate`] (which only decides what is *discoverable*, not
+    /// what is safe to *use*) can catch this: the danger appears only once a provider's own extern for the shared
+    /// package and the consumer's own extern for it are compared directly. This does that comparison, checked
+    /// against real evidence: linking a provider's own DataFusion/Tokio closure into the same binary as the SDK's
+    /// own Tokio-based `block_on` support (RFC 048/114) is exactly what produced a real "no reactor running" panic
+    /// at runtime, discovered as two distinct `tokio` symbol-mangled crate instances in the same linked executable.
+    /// A build-time refusal here is far cheaper than that panic. This is deliberately conservative: it compares by
+    /// digest, so a package the provider and consumer resolved to the exact same compiled bytes (a legitimate,
+    /// harmless case) is never rejected -- only a genuine, byte-distinct duplicate is.
+    pub(crate) fn first_conflicting_package_with(
+        &self,
+        plan: &OvenRustcArtifactPlan,
+    ) -> Result<Option<String>, OvenRustcError> {
+        for entry in &self.entries {
+            let Some((_, existing_path)) = plan
+                .externs
+                .iter()
+                .find(|(crate_name, _)| *crate_name == entry.leaf.crate_name)
+            else {
+                continue;
+            };
+            let candidate_path = safe_artifact_path(
+                &entry.artifact_root,
+                &entry.leaf.artifact.relative_path,
+                "registry leaf",
+            )?;
+            if fs::canonicalize(&candidate_path).ok().as_deref() == fs::canonicalize(existing_path).ok().as_deref() {
+                continue;
+            }
+            let existing_bytes = fs::read(existing_path).map_err(|source| OvenRustcError::Io {
+                path: existing_path.clone(),
+                source,
+            })?;
+            if digest_bytes(&existing_bytes) != entry.leaf.artifact.digest {
+                return Ok(Some(entry.leaf.package.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Return the first package both authorities carry at the same version but as byte-distinct compiled artifacts.
+    ///
+    /// [`Self::first_conflicting_package_with`] only sees packages a plan links as a *named* `--extern`, but a
+    /// shared package can just as easily enter both sides transitively -- the real `tokio` duplication that
+    /// motivated these checks was never a named extern of either compile; both copies loaded purely through
+    /// `-L dependency=...` metadata search from their respective dependents. Whenever the consumer's dependents and
+    /// a provider's dependents both end up in one link (which is always true for a caller-owned provider: the SDK
+    /// runtime and the provider library are both linked), a same-version/different-bytes package in the two catalogs
+    /// means two compiled instances of one crate in one binary. Two *different versions* of a package are deliberate,
+    /// ordinary Cargo semver coexistence and are not flagged; only a same-version byte divergence -- two independent
+    /// compiles of identical source -- is the anomaly this reports.
+    pub(crate) fn first_diverging_shared_package(&self, other: &Self) -> Option<String> {
+        for entry in &self.entries {
+            for candidate in &other.entries {
+                if entry.leaf.package == candidate.leaf.package
+                    && entry.leaf.version == candidate.leaf.version
+                    && entry.leaf.artifact.digest != candidate.leaf.artifact.digest
+                {
+                    return Some(entry.leaf.package.clone());
+                }
+            }
+        }
+        None
     }
 }
 
@@ -1938,6 +2018,25 @@ pub struct OvenDirectRustcBake {
     lease: Option<OvenStoreLease>,
 }
 
+impl OvenDirectRustcBake {
+    /// Wrap a binary produced by the unified-Cargo fallback compile as a completed bake result.
+    ///
+    /// Downstream run/report consumers only need the output path and its digest; there is no store lease because a
+    /// Cargo-produced binary is published project-locally rather than admitted to the bounded Oven store.
+    /// `cargo_process_started` is `true` here by definition -- this constructor exists precisely because a Cargo
+    /// process performed the compile.
+    pub(crate) fn from_external_cargo_build(source_digest: String, output: PathBuf, output_digest: String) -> Self {
+        Self {
+            source_digest,
+            output,
+            output_digest,
+            cargo_process_started: true,
+            reused: false,
+            lease: None,
+        }
+    }
+}
+
 /// The concrete caller-owned output Rustc must produce for one Oven materialization step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(not(test), allow(dead_code))]
@@ -2026,8 +2125,15 @@ pub enum OvenRustcError {
         expected: String,
         actual: String,
     },
-    /// The explicit compiler did not report the exact identity frozen in the receipt.
-    #[error("Oven direct-rustc compiler identity mismatch: receipt requires `{expected}`, --rustc reports `{actual}`")]
+    /// The selected compiler did not report the exact identity the prebuilt libraries were sealed against.
+    ///
+    /// Users reach this by building with a different Rust compiler than the one that produced the libraries their
+    /// installation ships, so the message names both compilers and the way out rather than the internal reason.
+    #[error(
+        "Rust compiler mismatch: these prebuilt libraries were built with `{expected}`, but the Rust compiler in \
+         use is `{actual}`. Compiled Rust libraries only load under the exact compiler that built them. Reinstall \
+         Incan so it provisions its own matching Rust toolchain, or set RUSTC to a `{expected}` compiler."
+    )]
     ToolchainMismatch { expected: String, actual: String },
     /// Reading or writing a direct-rustc input/output path failed.
     #[error("Oven direct-rustc I/O failed at {path}: {source}")]
@@ -2222,6 +2328,31 @@ fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcR
         && left.crate_name == right.crate_name
         && left.source == right.source
         && left.features == right.features
+}
+
+/// Return whether a project registry leaf may be replaced by its matching release-base counterpart.
+///
+/// Matching package, version, source checksum, and declared features proves two registry leaves compiled from
+/// identical source. That is sufficient for an ordinary crate: identical source under the same toolchain, target,
+/// and profile compiles to byte-identical output, so substituting the release's already-published copy is a safe
+/// deduplication. It is not sufficient for a crate with a build script: `build.rs` can probe the ambient build
+/// environment (target-detection `cfg`s, feature unification pulled in from an unrelated part of each closure's own
+/// dependency graph) and legitimately compile differently despite identical declared inputs, in which case the two
+/// artifacts are not link-compatible even though every recorded coordinate matches. A build-script artifact is
+/// staged under `build/<package>/<identity>/out/`, unlike an ordinary crate's `deps/` output, so restrict
+/// substitution to leaves on both sides that are not build-script-shaped.
+fn registry_leaf_substitution_is_safe(
+    project_leaf: &OvenRustcRegistryLeaf,
+    release_leaf: &OvenRustcRegistryLeaf,
+) -> bool {
+    let is_build_script_shaped = |relative_path: &str| {
+        Path::new(relative_path)
+            .parent()
+            .and_then(Path::file_name)
+            .is_some_and(|name| name == "out")
+    };
+    !is_build_script_shaped(&project_leaf.artifact.relative_path)
+        && !is_build_script_shaped(&release_leaf.artifact.relative_path)
 }
 
 /// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
@@ -2791,6 +2922,7 @@ impl OvenRustcArtifactManifest {
             }
             let Some(release_leaf) = candidates.into_iter().find(|candidate| {
                 same_registry_leaf_semantics(candidate, project_leaf)
+                    && registry_leaf_substitution_is_safe(project_leaf, candidate)
                     && composed.registry_sources.iter().any(|project_source| {
                         base.registry_sources.iter().any(|release_source| {
                             project_source == release_source
@@ -5117,7 +5249,7 @@ pub(crate) fn clear_inherited_cargo_environment(command: &mut Command) {
     {
         command.env_remove(name);
     }
-    for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"] {
+    for name in ["RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUSTFLAGS"] {
         command.env_remove(name);
     }
 }
@@ -5139,7 +5271,19 @@ fn apply_oven_profile(command: &mut Command, profile: &str) {
             "-C",
             "overflow-checks=on",
         ]);
+        return;
     }
+
+    // Optimization is part of what a profile *means*, and rustc optimizes nothing unless told to. Cargo used to
+    // supply this implicitly from `[profile.release]`; once Oven replaced Cargo on the normal build path, nothing
+    // did, so `incan build --release` emitted `opt-level=0` binaries and ran roughly six times slower than the
+    // same sources at `-C opt-level=3`. These flags mirror Cargo's own release and dev profiles so a release
+    // binary performs like the Rust it compiles to, and both profiles state their level explicitly rather than
+    // inheriting a compiler default that has already gone wrong once.
+    match profile {
+        "release" => command.args(["-C", "opt-level=3"]),
+        _ => command.args(["-C", "opt-level=0"]),
+    };
 }
 
 /// Derive the selected compiler's stable version identity and require an exact receipt match before compilation.
@@ -5154,40 +5298,205 @@ fn verify_rustc_identity(rustc: &Path, expected: &str) -> Result<(), OvenRustcEr
     })
 }
 
+/// Ask the user's own Rustup which tool its active toolchain resolves to.
+///
+/// This answers for the ambient configuration, honoring `RUSTUP_TOOLCHAIN` and any directory override exactly as a
+/// hand-typed `rustup which` would. It is the fallback for development checkouts and installations without an
+/// Incan-owned toolchain; installations that have one resolve through [`incan_owned_tool`] instead.
+fn rustup_reported_tool(tool: &str) -> Option<String> {
+    let mut command = Command::new("rustup");
+    command.args(["which", tool]);
+    clear_inherited_cargo_environment(&mut command);
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let reported = String::from_utf8(output.stdout).ok()?;
+    let reported = reported.trim().to_string();
+    (!reported.is_empty()).then_some(reported)
+}
+
+/// Return the Rustup home Incan provisions for itself, when an installed toolchain has one.
+///
+/// Incan's Loafs are sealed against the exact compiler that baked them, so building with whatever compiler the user
+/// happens to have made their global default fails closed with a Loaf-incompatibility error. The installer therefore
+/// provisions the release's own required channel into `$INCAN_HOME/rust` (defaulting below the user home) and makes
+/// it the default *within that home only*, leaving the user's own Rustup configuration untouched. This returns that
+/// home when it exists, so ordinary builds resolve the compiler Incan was built against.
+///
+/// Returns `None` for development checkouts and for installations that predate this layout, both of which keep the
+/// previous behavior of consulting the ambient Rustup default.
+fn incan_owned_rustup_home() -> Option<PathBuf> {
+    // The installer links commands into a bin directory, and `current_exe` is documented to be allowed to report
+    // the symlink rather than its target. Resolving it first is what lets the ancestor walk see the installation
+    // the command actually belongs to when that installation lives outside the user home.
+    let executable = env::current_exe()
+        .ok()
+        .map(|executable| fs::canonicalize(&executable).unwrap_or(executable));
+    incan_owned_rustup_home_in(
+        env::var_os("INCAN_HOME"),
+        executable,
+        env::var_os("HOME").or_else(|| env::var_os("USERPROFILE")),
+    )
+}
+
+/// Resolve the Incan-owned Rustup home from explicit inputs, without reading process-global state.
+///
+/// Selection order: an explicitly named Incan home, then this executable's own installed layout, then the user
+/// home default. The executable-relative step matters because the npm and pip shims install below their own
+/// package directory rather than the user home and do not set `INCAN_HOME` when they spawn the compiler, so only
+/// the executable's location identifies the provisioning that belongs to *this* installation.
+///
+/// Every candidate must actually contain `rust/toolchains`; a root without one yields `None` so development
+/// checkouts and pre-isolation installations keep resolving through the ambient Rustup default.
+fn incan_owned_rustup_home_in(
+    incan_home: Option<OsString>,
+    executable: Option<PathBuf>,
+    user_home: Option<OsString>,
+) -> Option<PathBuf> {
+    /// Accept a candidate Incan home only when it actually carries a provisioned Rustup layout.
+    fn provisioned(root: &Path) -> Option<PathBuf> {
+        let rust_root = root.join("rust");
+        rust_root.join("toolchains").is_dir().then_some(rust_root)
+    }
+
+    if let Some(root) = incan_home.filter(|path| !path.is_empty()).map(PathBuf::from)
+        && let Some(rust_root) = provisioned(&root)
+    {
+        return Some(rust_root);
+    }
+    if let Some(executable) = executable {
+        for ancestor in executable.ancestors().skip(1) {
+            if let Some(rust_root) = provisioned(ancestor) {
+                return Some(rust_root);
+            }
+        }
+    }
+    user_home
+        .filter(|path| !path.is_empty())
+        .and_then(|path| provisioned(&PathBuf::from(path).join(".incan")))
+}
+
+/// Name of the pointer file the installer writes to record which channel it provisioned.
+const INCAN_OWNED_CHANNEL_POINTER: &str = "incan-channel.txt";
+
+/// Resolve one tool from Incan's own provisioned toolchain by reading the Rustup layout directly.
+///
+/// This deliberately does not shell out to `rustup`. Rustup resolves a toolchain name from ambient state --
+/// `RUSTUP_TOOLCHAIN` and any directory `rust-toolchain.toml` override both win over a home's default -- so asking
+/// it would let the user's environment select a toolchain that does not exist inside Incan's home, reintroducing
+/// the very coupling this isolation removes. The installed layout is deterministic, so reading it is both exact
+/// and cheaper than a subprocess.
+///
+/// The installer records the channel it provisioned in [`INCAN_OWNED_CHANNEL_POINTER`]; that pointer disambiguates
+/// the toolchain directory when an earlier channel is still present after an upgrade. Without a pointer the home
+/// must hold exactly one toolchain, otherwise the choice would be arbitrary and this returns `None` so resolution
+/// falls back to the ambient default rather than guessing.
+fn incan_owned_tool(rust_root: &Path, tool: &str) -> Option<PathBuf> {
+    let toolchains = rust_root.join("toolchains");
+    let executable = |directory: &Path| -> Option<PathBuf> {
+        let candidate = directory.join("bin").join(tool);
+        candidate.is_file().then_some(candidate)
+    };
+
+    // ---- Preferred: the channel the installer recorded for this home ----
+    if let Ok(channel) = fs::read_to_string(rust_root.join(INCAN_OWNED_CHANNEL_POINTER)) {
+        let channel = channel.trim();
+        if !channel.is_empty()
+            && let Ok(entries) = fs::read_dir(&toolchains)
+        {
+            let mut matches: Vec<PathBuf> = entries
+                .flatten()
+                .map(|entry| entry.path())
+                .filter(|path| {
+                    path.file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name == channel || name.starts_with(&format!("{channel}-")))
+                })
+                .collect();
+            matches.sort();
+            if let Some(directory) = matches.first()
+                && let Some(found) = executable(directory)
+            {
+                return Some(found);
+            }
+        }
+    }
+
+    // ---- Fallback: an unambiguous single-toolchain home ----
+    let mut directories: Vec<PathBuf> = fs::read_dir(&toolchains)
+        .ok()?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect();
+    directories.sort();
+    match directories.as_slice() {
+        [only] => executable(only),
+        _ => None,
+    }
+}
+
+/// Report whether Incan's own provisioned toolchain carries a Rust target, when such a toolchain exists.
+///
+/// `None` means there is no Incan-owned toolchain to ask, so callers must fall back to the ambient Rustup. This
+/// matters because the installer adds required targets to Incan's home and deliberately leaves the user's own
+/// Rustup untouched: asking ambient Rustup about a target Incan provisioned for itself reports a false absence.
+///
+/// Membership is read from the toolchain layout (`lib/rustlib/<target>`) for the same reason [`incan_owned_tool`]
+/// reads it: ambient toolchain selection cannot redirect a directory check.
+pub(crate) fn incan_owned_target_installed(target: &str) -> Option<bool> {
+    let rust_root = incan_owned_rustup_home()?;
+    let rustc = incan_owned_tool(&rust_root, "rustc")?;
+    let toolchain_root = rustc.parent()?.parent()?;
+    Some(toolchain_root.join("lib").join("rustlib").join(target).is_dir())
+}
+
+/// Return the Cargo belonging to Incan's own provisioned toolchain, when one exists.
+///
+/// The compatibility baker's Cargo must match the compiler [`resolve_active_rustc`] selects; resolving one from the
+/// isolated installation and the other from the user's ambient default would reintroduce the toolchain mismatch this
+/// isolation exists to prevent.
+pub(crate) fn incan_owned_cargo() -> Option<PathBuf> {
+    incan_owned_tool(&incan_owned_rustup_home()?, "cargo")
+}
+
+/// Resolve the Rust compiler belonging to Incan's own provisioned toolchain.
+///
+/// Pairs with [`incan_owned_cargo`]. A toolchain-direct Cargo does not imply a matching compiler: Cargo resolves
+/// `rustc` from `RUSTC` or `PATH`, and on a machine with Rustup installed `PATH` reaches the Rustup shim, which
+/// selects the user's default toolchain. Selecting Incan's Cargo without also selecting its compiler therefore
+/// builds one dependency graph with two rustc versions, which Cargo only reports much later as
+/// "found crate `x` compiled by an incompatible version of rustc".
+pub(crate) fn incan_owned_rustc() -> Option<PathBuf> {
+    incan_owned_tool(&incan_owned_rustup_home()?, "rustc")
+}
+
 /// Resolve the active Rust compiler without involving Cargo or a Cargo target directory.
 ///
 /// An explicit `RUSTC` must be a regular executable file, not a shell fragment. When it is absent, the Rustup
 /// toolchain resolver supplies the compiler path; that remains separate from the explicit `legacy_cargo` publisher.
+///
+/// When `rustup` is not reachable the error names the most common cause: provisioning Rust from within an Incan
+/// command wires Rustup into shell profiles for future shells, so the shell that triggered it keeps its original
+/// `PATH` and needs to be refreshed before the compiler is visible.
 pub fn resolve_active_rustc() -> Result<PathBuf, OvenRustcError> {
     if let Some(path) = env::var_os("RUSTC").filter(|path| !path.is_empty()) {
         return verified_regular_file(Path::new(&path), "RUSTC");
     }
-    let mut command = Command::new("rustup");
-    command.args(["which", "rustc"]);
-    clear_inherited_cargo_environment(&mut command);
-    let output = command.output().map_err(|source| OvenRustcError::Io {
-        path: PathBuf::from("rustup"),
-        source,
-    })?;
-    if !output.status.success() {
+    if let Some(isolated) = incan_owned_rustup_home().and_then(|home| incan_owned_tool(&home, "rustc")) {
+        return verified_regular_file(&isolated, "rustc");
+    }
+    let Some(reported) = rustup_reported_tool("rustc") else {
         return Err(OvenRustcError::InvalidInput {
             field: "rustc",
-            message: "rustup could not locate the active Rust compiler; set RUSTC to an explicit compiler path"
+            message: "could not locate the active Rust compiler. If Rust was just installed, open a new shell (or \
+                      run `. \"$HOME/.cargo/env\"`) so `rustup` is on PATH; otherwise install Rust through rustup, \
+                      or set RUSTC to an explicit compiler path"
                 .to_string(),
         });
-    }
-    let reported = String::from_utf8(output.stdout).map_err(|error| OvenRustcError::InvalidInput {
-        field: "rustc",
-        message: format!("rustup reported a non-UTF-8 compiler path: {error}"),
-    })?;
-    let reported = reported.trim();
-    if reported.is_empty() {
-        return Err(OvenRustcError::InvalidInput {
-            field: "rustc",
-            message: "rustup reported an empty compiler path".to_string(),
-        });
-    }
-    verified_regular_file(Path::new(reported), "rustc")
+    };
+    verified_regular_file(Path::new(&reported), "rustc")
 }
 
 /// Read one regular Rust compiler's stable `--version` identity without invoking Cargo.
@@ -5894,7 +6203,11 @@ fn parse_rustc_diagnostics(stdout: &[u8], stderr: &[u8]) -> OvenRustcDiagnosticR
 impl OvenRustcDiagnosticReport {
     /// Attach bounded process evidence to a report after Rustc has exited unsuccessfully.
     fn with_invocation(mut self, command: &Command) -> Self {
-        const MAX_INVOCATION_CHARS: usize = 12_000;
+        // A legacy-Cargo-published dependency closure with many build-script crates can produce a single-line
+        // invocation with hundreds of `-L dependency=...` entries before the first `--extern`. The previous 12,000
+        // char bound routinely truncated evidence before any `--extern` flag appeared at all, making failure
+        // reports misleading for exactly the invocations most worth diagnosing.
+        const MAX_INVOCATION_CHARS: usize = 100_000;
 
         // Do not render `Command` itself: its debug format may include explicit compile-time environment values.
         // Rustc program and argument evidence is enough to replay the artifact closure without exposing that state.
@@ -6661,6 +6974,532 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_admits_a_provider_package_the_consumer_never_declared() -> Result<(), Box<dyn std::error::Error>> {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let provider_artifact = provider_root.path().join("libdatafusion.rlib");
+        let provider_bytes = b"sealed datafusion 53.1.0";
+        fs::write(&provider_artifact, provider_bytes)?;
+        let consumer_authority = OvenRegistryLeafAuthority::new(consumer_root.path().to_path_buf(), Vec::new());
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "datafusion".to_string(),
+                version: "53.1.0".to_string(),
+                crate_name: "datafusion".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "datafusion".to_string(),
+                    relative_path: "libdatafusion.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let dependency = DependencySpec {
+            crate_name: "datafusion".to_string(),
+            version: Some("53".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        assert_eq!(
+            resolve_sealed_registry_leaf(&dependency, Some(&joined), "debug")?,
+            fs::canonicalize(provider_artifact)?
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_does_not_block_an_unrelated_lookup_when_a_never_requested_package_conflicts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression coverage for a real false positive: a provider and consumer can each carry their own build of
+        // some common transitive crate (for example `memchr`, pulled in independently by unrelated dependencies on
+        // each side) that nobody ever actually resolves through this authority. Joining the two catalogs must not
+        // block resolution of a package that IS actually requested and IS only on one side.
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed memchr 2.8.0 consumer build";
+        let provider_memchr_bytes = b"sealed memchr 2.8.0 provider build";
+        let provider_datafusion_bytes = b"sealed datafusion 53.1.0";
+        fs::write(consumer_root.path().join("libmemchr.rlib"), consumer_bytes)?;
+        fs::write(provider_root.path().join("libmemchr.rlib"), provider_memchr_bytes)?;
+        let provider_datafusion = provider_root.path().join("libdatafusion.rlib");
+        fs::write(&provider_datafusion, provider_datafusion_bytes)?;
+        let memchr_leaf = |bytes: &[u8]| OvenRustcRegistryLeaf {
+            package: "memchr".to_string(),
+            version: "2.8.0".to_string(),
+            crate_name: "memchr".to_string(),
+            features: Vec::new(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "memchr".to_string(),
+                relative_path: "libmemchr.rlib".to_string(),
+                digest: digest_bytes(bytes),
+            },
+        };
+        let consumer_authority =
+            OvenRegistryLeafAuthority::new(consumer_root.path().to_path_buf(), vec![memchr_leaf(consumer_bytes)]);
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![
+                memchr_leaf(provider_memchr_bytes),
+                OvenRustcRegistryLeaf {
+                    package: "datafusion".to_string(),
+                    version: "53.1.0".to_string(),
+                    crate_name: "datafusion".to_string(),
+                    features: Vec::new(),
+                    source: fixture_registry_source(),
+                    artifact: OvenRustcArtifactExtern {
+                        crate_name: "datafusion".to_string(),
+                        relative_path: "libdatafusion.rlib".to_string(),
+                        digest: digest_bytes(provider_datafusion_bytes),
+                    },
+                },
+            ],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let datafusion_dependency = DependencySpec {
+            crate_name: "datafusion".to_string(),
+            version: Some("53".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        assert_eq!(
+            resolve_sealed_registry_leaf(&datafusion_dependency, Some(&joined), "debug")?,
+            fs::canonicalize(&provider_datafusion)?,
+            "an unrelated conflicting memchr entry must not block resolving datafusion"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_fails_closed_when_the_actually_requested_package_conflicts() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio 1.52.3 rt-multi-thread,macros,time,sync,net";
+        let provider_bytes = b"sealed tokio 1.52.3 full";
+        // Real rustc output embeds a metadata hash in the filename that differs whenever the compiled configuration
+        // differs, which is what `same_compilation` actually keys off; give the two conflicting artifacts distinct
+        // names here so this fixture matches that shape instead of coincidentally looking like the same compilation.
+        fs::write(consumer_root.path().join("libtokio-consumer1234.rlib"), consumer_bytes)?;
+        fs::write(provider_root.path().join("libtokio-provider5678.rlib"), provider_bytes)?;
+        let leaf = |features: &[&str], bytes: &[u8], relative_path: &str| OvenRustcRegistryLeaf {
+            package: "tokio".to_string(),
+            version: "1.52.3".to_string(),
+            crate_name: "tokio".to_string(),
+            features: features.iter().map(|feature| feature.to_string()).collect(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "tokio".to_string(),
+                relative_path: relative_path.to_string(),
+                digest: digest_bytes(bytes),
+            },
+        };
+        let consumer_authority = OvenRegistryLeafAuthority::new(
+            consumer_root.path().to_path_buf(),
+            vec![leaf(
+                &["rt-multi-thread", "macros", "time", "sync", "net"],
+                consumer_bytes,
+                "libtokio-consumer1234.rlib",
+            )],
+        );
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![leaf(&["full"], provider_bytes, "libtokio-provider5678.rlib")],
+        );
+        let joined = OvenRegistryLeafAuthority::aggregate([consumer_authority, provider_authority]);
+        let dependency = DependencySpec {
+            crate_name: "tokio".to_string(),
+            version: Some("1".to_string()),
+            features: Vec::new(),
+            default_features: true,
+            source: DependencySource::Registry,
+            optional: false,
+            package: None,
+        };
+        let error = resolve_sealed_registry_leaf(&dependency, Some(&joined), "debug")
+            .expect_err("resolving a package that genuinely disagrees between two joined authorities must fail closed");
+        assert!(matches!(error, OvenRustcError::InvalidInput { .. }));
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_reports_a_provider_leaf_that_disagrees_with_an_existing_extern()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Reproduces the exact real-world defect this check exists for: a caller-owned provider's own registry
+        // closure (a query-engine library's own DataFusion/Tokio dependency graph) resolves a package the consumer
+        // already links explicitly (the SDK's own `block_on` support) to a different compiled artifact. Left
+        // unchecked, both get linked into one binary as two distinct compiled `tokio` instances -- confirmed by
+        // inspecting a real built executable's symbol table -- and the async runtime state silently splits across
+        // them, producing a "no reactor running" panic at runtime instead of a build failure.
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio compiled for the SDK's own block_on closure";
+        let provider_bytes = b"sealed tokio compiled for the provider's own DataFusion closure";
+        let consumer_artifact = consumer_root.path().join("libtokio-sdk1234.rlib");
+        let provider_artifact = provider_root.path().join("libtokio-provider5678.rlib");
+        fs::write(&consumer_artifact, consumer_bytes)?;
+        fs::write(&provider_artifact, provider_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "tokio".to_string(),
+                version: "1.52.3".to_string(),
+                crate_name: "tokio".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "tokio".to_string(),
+                    relative_path: "libtokio-provider5678.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        assert_eq!(
+            provider_authority.first_conflicting_package_with(&plan)?,
+            Some("tokio".to_string())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_allows_a_byte_identical_provider_leaf() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let shared_bytes = b"sealed tokio, compiled identically for both closures";
+        let consumer_artifact = consumer_root.path().join("libtokio-shared.rlib");
+        let provider_artifact = provider_root.path().join("libtokio-shared.rlib");
+        fs::write(&consumer_artifact, shared_bytes)?;
+        fs::write(&provider_artifact, shared_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "tokio".to_string(),
+                version: "1.52.3".to_string(),
+                crate_name: "tokio".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "tokio".to_string(),
+                    relative_path: "libtokio-shared.rlib".to_string(),
+                    digest: digest_bytes(shared_bytes),
+                },
+            }],
+        );
+        assert_eq!(
+            provider_authority.first_conflicting_package_with(&plan)?,
+            None,
+            "a provider leaf compiled to the exact same bytes as the existing extern must not be rejected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_conflicting_package_with_ignores_an_unrelated_package() -> Result<(), Box<dyn std::error::Error>> {
+        let consumer_root = tempfile::tempdir()?;
+        let provider_root = tempfile::tempdir()?;
+        let consumer_bytes = b"sealed tokio for the consumer";
+        let provider_bytes = b"sealed datafusion for the provider";
+        let consumer_artifact = consumer_root.path().join("libtokio.rlib");
+        let provider_artifact = provider_root.path().join("libdatafusion.rlib");
+        fs::write(&consumer_artifact, consumer_bytes)?;
+        fs::write(&provider_artifact, provider_bytes)?;
+        let plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![("tokio".to_string(), consumer_artifact)],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+        let provider_authority = OvenRegistryLeafAuthority::new(
+            provider_root.path().to_path_buf(),
+            vec![OvenRustcRegistryLeaf {
+                package: "datafusion".to_string(),
+                version: "53.1.0".to_string(),
+                crate_name: "datafusion".to_string(),
+                features: Vec::new(),
+                source: fixture_registry_source(),
+                artifact: OvenRustcArtifactExtern {
+                    crate_name: "datafusion".to_string(),
+                    relative_path: "libdatafusion.rlib".to_string(),
+                    digest: digest_bytes(provider_bytes),
+                },
+            }],
+        );
+        assert_eq!(provider_authority.first_conflicting_package_with(&plan)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_is_absent_for_a_development_checkout() -> Result<(), Box<dyn std::error::Error>> {
+        // A checkout has no `<root>/rust/toolchains`, so the compiler must keep resolving through the ambient
+        // Rustup default. Regressing this would break every contributor's `make test`.
+        let checkout = tempfile::tempdir()?;
+        let executable = checkout.path().join("target").join("debug").join("incan");
+        fs::create_dir_all(executable.parent().ok_or("executable has no parent")?)?;
+        fs::write(&executable, b"")?;
+        let home = tempfile::tempdir()?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(
+                Some(checkout.path().as_os_str().to_os_string()),
+                Some(executable),
+                Some(home.path().as_os_str().to_os_string()),
+            ),
+            None
+        );
+        Ok(())
+    }
+
+    /// Build a Rustup-shaped home holding the named channels, each carrying a `rustc` and `cargo`.
+    fn provisioned_rust_root(root: &Path, channels: &[&str]) -> Result<PathBuf, Box<dyn std::error::Error>> {
+        let rust_root = root.join("rust");
+        for channel in channels {
+            let bin = rust_root.join("toolchains").join(channel).join("bin");
+            fs::create_dir_all(&bin)?;
+            fs::write(bin.join("rustc"), b"")?;
+            fs::write(bin.join("cargo"), b"")?;
+        }
+        Ok(rust_root)
+    }
+
+    #[test]
+    fn incan_owned_tool_resolves_the_only_toolchain_without_a_pointer() -> Result<(), Box<dyn std::error::Error>> {
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-aarch64-apple-darwin"])?;
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.98.0-aarch64-apple-darwin")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_uses_the_pointer_when_an_upgrade_left_an_older_channel()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // An upgrade can leave the previous channel installed. Choosing between them by sort order would silently
+        // pick the wrong compiler, so the installer's recorded channel decides.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(
+            root.path(),
+            &["1.97.0-aarch64-apple-darwin", "1.98.0-aarch64-apple-darwin"],
+        )?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.98.0-aarch64-apple-darwin")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_declines_an_ambiguous_home_without_a_pointer() -> Result<(), Box<dyn std::error::Error>> {
+        // Guessing here would bind the build to an arbitrary compiler; falling back to the ambient default is the
+        // honest outcome.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(
+            root.path(),
+            &["1.97.0-aarch64-apple-darwin", "1.98.0-aarch64-apple-darwin"],
+        )?;
+        assert_eq!(super::incan_owned_tool(&rust_root, "rustc"), None);
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_resolves_cargo_from_the_same_toolchain_as_rustc() -> Result<(), Box<dyn std::error::Error>> {
+        // The baker's Cargo and the compiler's rustc must come from one toolchain, or the isolation is pointless.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-host"])?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        let rustc = super::incan_owned_tool(&rust_root, "rustc").ok_or("rustc did not resolve")?;
+        let cargo = super::incan_owned_tool(&rust_root, "cargo").ok_or("cargo did not resolve")?;
+        assert_eq!(rustc.parent(), cargo.parent());
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_tool_declines_a_home_whose_pointer_names_a_missing_channel() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.97.0-host"])?;
+        fs::write(rust_root.join(super::INCAN_OWNED_CHANNEL_POINTER), "1.98.0\n")?;
+        // The single-toolchain fallback still answers, because that home is unambiguous.
+        assert_eq!(
+            super::incan_owned_tool(&rust_root, "rustc"),
+            Some(
+                rust_root
+                    .join("toolchains")
+                    .join("1.97.0-host")
+                    .join("bin")
+                    .join("rustc")
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_target_membership_reads_the_toolchain_layout() -> Result<(), Box<dyn std::error::Error>> {
+        // The installer adds targets to Incan's own toolchain and leaves the user's Rustup alone, so membership
+        // has to be read where the target actually lands.
+        let root = tempfile::tempdir()?;
+        let rust_root = provisioned_rust_root(root.path(), &["1.98.0-host"])?;
+        let toolchain = rust_root.join("toolchains").join("1.98.0-host");
+        fs::create_dir_all(toolchain.join("lib").join("rustlib").join("wasm32-wasip1"))?;
+        let rustc = super::incan_owned_tool(&rust_root, "rustc").ok_or("rustc did not resolve")?;
+        let toolchain_root = rustc.parent().and_then(Path::parent).ok_or("no toolchain root")?;
+        assert!(
+            toolchain_root
+                .join("lib")
+                .join("rustlib")
+                .join("wasm32-wasip1")
+                .is_dir()
+        );
+        assert!(
+            !toolchain_root
+                .join("lib")
+                .join("rustlib")
+                .join("aarch64-unknown-none")
+                .is_dir()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_prefers_an_explicitly_named_incan_home() -> Result<(), Box<dyn std::error::Error>> {
+        let named = tempfile::tempdir()?;
+        fs::create_dir_all(named.path().join("rust").join("toolchains").join("1.98.0-host"))?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(Some(named.path().as_os_str().to_os_string()), None, None),
+            Some(named.path().join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_follows_the_executable_for_shim_installations() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The npm and pip shims install below their own package directory and do not set `INCAN_HOME` when they
+        // spawn the compiler, so the executable's own layout is the only thing that identifies its provisioning.
+        let package = tempfile::tempdir()?;
+        let incan_home = package.path().join(".incan").join("home");
+        fs::create_dir_all(incan_home.join("rust").join("toolchains").join("1.98.0-host"))?;
+        let executable = incan_home.join("toolchains").join("0.5.0").join("bin").join("incan");
+        fs::create_dir_all(executable.parent().ok_or("executable has no parent")?)?;
+        fs::write(&executable, b"")?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(None, Some(executable), None),
+            Some(incan_home.join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn incan_owned_rustup_home_falls_back_to_the_user_home_default() -> Result<(), Box<dyn std::error::Error>> {
+        let home = tempfile::tempdir()?;
+        fs::create_dir_all(
+            home.path()
+                .join(".incan")
+                .join("rust")
+                .join("toolchains")
+                .join("1.98.0-host"),
+        )?;
+        assert_eq!(
+            super::incan_owned_rustup_home_in(None, None, Some(home.path().as_os_str().to_os_string())),
+            Some(home.path().join(".incan").join("rust"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn first_diverging_shared_package_reports_a_same_version_byte_distinct_overlap() {
+        let leaf = |package: &str, version: &str, digest: &str| OvenRustcRegistryLeaf {
+            package: package.to_string(),
+            version: version.to_string(),
+            crate_name: package.replace('-', "_"),
+            features: Vec::new(),
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: package.replace('-', "_"),
+                relative_path: format!("lib{package}.rlib"),
+                digest: digest.to_string(),
+            },
+        };
+        let consumer = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/consumer"),
+            vec![leaf("tokio", "1.52.3", "sha256:consumer-tokio")],
+        );
+        let provider = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.52.3", "sha256:provider-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&provider),
+            Some("tokio".to_string()),
+            "one package at one version with two byte-distinct compiled artifacts is the exact dangerous shape"
+        );
+
+        let identical = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.52.3", "sha256:consumer-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&identical),
+            None,
+            "the same compiled bytes on both sides is the harmless shared case"
+        );
+
+        let different_version = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("tokio", "1.51.0", "sha256:provider-tokio")],
+        );
+        assert_eq!(
+            consumer.first_diverging_shared_package(&different_version),
+            None,
+            "distinct versions are ordinary Cargo semver coexistence, not a divergence"
+        );
+
+        let unrelated = OvenRegistryLeafAuthority::new(
+            PathBuf::from("/provider"),
+            vec![leaf("datafusion", "53.1.0", "sha256:provider-datafusion")],
+        );
+        assert_eq!(consumer.first_diverging_shared_package(&unrelated), None);
+    }
+
+    #[test]
     fn selects_one_profile_matched_copy_of_an_equivalent_sealed_registry_leaf() -> Result<(), Box<dyn std::error::Error>>
     {
         let first = tempfile::tempdir()?;
@@ -6733,7 +7572,25 @@ mod tests {
 
         let mut developer_profile = Command::new("rustc");
         apply_oven_profile(&mut developer_profile, "debug");
-        assert!(developer_profile.get_args().next().is_none());
+        let developer_arguments = developer_profile
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(developer_arguments, vec!["-C", "opt-level=0"]);
+    }
+
+    #[test]
+    fn release_profile_optimizes_because_rustc_optimizes_nothing_by_default() {
+        // Cargo used to supply this from `[profile.release]`. When Oven replaced Cargo on the normal build path
+        // nothing did, and `incan build --release` shipped `opt-level=0` binaries that ran about six times slower
+        // than the identical sources at `-C opt-level=3`. Assert the flag rather than trusting a default.
+        let mut command = Command::new("rustc");
+        apply_oven_profile(&mut command, "release");
+        let arguments = command
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(arguments, vec!["-C", "opt-level=3"]);
     }
 
     #[test]
@@ -7208,6 +8065,103 @@ mod tests {
         project.registry_sources[0].source.checksum = "mismatched-checksum".to_string();
         let mismatch = project.with_release_cohort_from_base(&base);
         assert!(matches!(mismatch, Err(OvenRustcError::InvalidInput { .. })));
+        Ok(())
+    }
+
+    #[test]
+    fn project_extension_keeps_its_own_build_script_leaf_despite_matching_release_semantics()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression: two independent builds of a build-script crate (like `libc`) can compile to link-incompatible
+        // artifacts even when package, version, source checksum, and declared features all match, because a build
+        // script can read ambient build-environment state that isn't captured by any of those coordinates. Matching
+        // "leaf semantics" alone must not be trusted as proof of link compatibility for such a crate.
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let source = OvenRustcRegistrySource {
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "libc-checksum".to_string(),
+            relative_root: "registry-sources/libc".to_string(),
+            digest: "sha256:libc-source".to_string(),
+        };
+        let registry_source = OvenRustcRegistrySourcePackage {
+            package: "libc".to_string(),
+            version: "0.2.155".to_string(),
+            features: vec!["default".to_string()],
+            source: source.clone(),
+        };
+        // Build-script output is staged under `build/<package>/<identity>/out/`, unlike an ordinary crate's flat
+        // `deps/` output; this is the structural signal that distinguishes it from a crate like `serde`.
+        let release_libc = OvenRustcArtifactExtern {
+            crate_name: "libc".to_string(),
+            relative_path: "build/libc/release-identity/out/liblibc-release-identity.rlib".to_string(),
+            digest: "sha256:release-libc".to_string(),
+        };
+        let project_libc = OvenRustcArtifactExtern {
+            relative_path: "build/libc/project-identity/out/liblibc-project-identity.rlib".to_string(),
+            digest: "sha256:project-libc".to_string(),
+            ..release_libc.clone()
+        };
+        let leaf = |artifact| OvenRustcRegistryLeaf {
+            package: "libc".to_string(),
+            version: "0.2.155".to_string(),
+            crate_name: "libc".to_string(),
+            features: vec!["default".to_string()],
+            source: source.clone(),
+            artifact,
+        };
+        let project = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["build/libc/project-identity/out".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-project.rlib".to_string(),
+                    digest: "sha256:project-stdlib".to_string(),
+                },
+                project_libc.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(project_libc.clone())],
+            registry_sources: vec![registry_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![OvenRustcSupportingArtifact {
+                relative_path: "registry-sources/libc/Cargo.toml".to_string(),
+                digest: "sha256:libc-manifest".to_string(),
+            }],
+        };
+        let base = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent,
+            dependency_search_paths: vec!["build/libc/release-identity/out".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
+                    digest: "sha256:release-stdlib".to_string(),
+                },
+                release_libc.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf(release_libc)],
+            registry_sources: vec![registry_source],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![OvenRustcSupportingArtifact {
+                relative_path: "registry-sources/libc/Cargo.toml".to_string(),
+                digest: "sha256:libc-manifest".to_string(),
+            }],
+        };
+
+        let composed = project.with_release_cohort_from_base(&base)?;
+        assert_eq!(
+            composed.registry_leaves[0].artifact, project_libc,
+            "a build-script leaf must keep the project's own compiled artifact, not the base's independently built one"
+        );
+        assert_eq!(composed.externs[1], project_libc);
         Ok(())
     }
 
@@ -8597,7 +9551,7 @@ mod tests {
             schema_version: OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
             project_identity: "sha256:project".to_string(),
             source_authority_digest: "sha256:source".to_string(),
-            compiler_version: "0.5.0-dev.47".to_string(),
+            compiler_version: "0.5.0-rc0".to_string(),
             registry_lock_digest: digest_bytes(b"lock"),
             registry_source_dependencies: vec![root.clone()],
             dev_registry_source_dependencies: Vec::new(),

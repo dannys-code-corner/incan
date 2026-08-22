@@ -2076,12 +2076,17 @@ impl AstLowering {
                 self.count_expr_ident_reads(&body.node, &mut closure_read_counts);
                 self.remaining_ident_reads.push(closure_read_counts);
                 self.non_linear_context_depth += 1;
+                self.push_scope();
+                for (name, ty) in &param_pairs {
+                    self.define_local_binding(name.clone(), ty.clone(), false);
+                }
                 self.closure_param_scopes.push((
                     self.non_linear_context_depth,
                     param_pairs.iter().map(|(name, _)| name.clone()).collect(),
                 ));
                 let body_ir_result = self.lower_expr_spanned(body);
                 let _ = self.closure_param_scopes.pop();
+                self.pop_scope();
                 self.non_linear_context_depth -= 1;
                 let _ = self.remaining_ident_reads.pop();
                 let body_ir = body_ir_result?;

@@ -25,6 +25,19 @@ const LOAF_MANIFEST_FILE: &str = "loaf.json";
 const PAYLOAD_FILE: &str = "payload";
 const MATERIALIZED_DIRECTORY: &str = "artifacts";
 const ACCESS_FILE: &str = "last-used";
+/// Sidecar cache for one immutable entry's recursively measured physical allocation.
+///
+/// Entries under [`ENTRIES_DIRECTORY`] never change after publication, so a physical-byte measurement taken once
+/// stays valid for the entry's lifetime. Missing or unreadable cache files fall back to a fresh recursive walk, so
+/// this is purely an optimization: it never becomes a second source of truth for admission decisions.
+const PHYSICAL_BYTES_CACHE_FILE: &str = ".physical-bytes-cache";
+/// Sidecar cache for one immutable entry's `(device, inode, size)` regular-file identities.
+///
+/// Cross-entry hard-link deduplication (see [`assign_unique_entry_physical_bytes`]) needs each file's inode
+/// identity, not just an aggregate byte count, so it cannot reuse [`PHYSICAL_BYTES_CACHE_FILE`] directly. Entries
+/// are immutable once published, so this listing is as safe to cache as the plain byte total; a missing or
+/// unparsable cache file falls back to a fresh recursive walk exactly like its sibling.
+const UNIQUE_FILE_RECORDS_CACHE_FILE: &str = ".physical-bytes-unique-cache";
 const ACTIVE_LOCK_FILE: &str = ".active.lock";
 const MANAGER_LOCK_FILE: &str = ".manager.lock";
 const LEGACY_CARGO_STAGING_DIRECTORY: &str = "legacy-cargo-staging";
@@ -1161,7 +1174,7 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
-        self.prune_to_limits(None, 0, 0, true)
+        self.prune_with_superseded_release_reclamation(true)
     }
 
     /// Preview the inactive entries policy would reclaim without removing any entry or staging data.
@@ -1175,7 +1188,7 @@ impl OvenStore {
             path: self.root.join(MANAGER_LOCK_FILE),
             source,
         })?;
-        self.prune_to_limits(None, 0, 0, false)
+        self.prune_with_superseded_release_reclamation(false)
     }
 
     /// Reserve the remaining aggregate and compatibility-domain allowance for the explicit compatibility baker.
@@ -1202,6 +1215,12 @@ impl OvenStore {
             source,
         })?;
         self.reclaim_stale_staging()?;
+        // Entries sealed by a superseded compiler release can never be reused, so they are removed before the
+        // remaining allowance is measured. Without this a store that merely fits its retention policy can still
+        // starve a large build of transient staging space with bytes nothing will ever read again.
+        if self.holds_superseded_release_entry(domain)? {
+            self.reclaim_superseded_release_entries(domain, true)?;
+        }
         // A reservation is not itself evidence that an existing immutable entry is obsolete. Keep every entry that
         // already fits policy so a debug/release sibling or a second project can reuse it; the measured hand-off
         // below is where the actual pending closure is admitted and any necessary inactive reclamation occurs.
@@ -1494,6 +1513,107 @@ impl OvenStore {
                 false
             };
             if domain_is_over && pending_domain != Some(entry.manifest.domain.as_str()) {
+                continue;
+            }
+            match try_lock_entry(&entry.path)? {
+                Some(_lock) => {
+                    if apply {
+                        fs::remove_dir_all(&entry.path).map_err(|source| OvenStoreError::Io {
+                            path: entry.path.clone(),
+                            source,
+                        })?;
+                    }
+                    removed_logical_bytes = removed_logical_bytes.saturating_add(entry.logical_bytes);
+                    removed_entries.push(entry.manifest.identity);
+                    entries.retain(|candidate| candidate.path != entry.path);
+                    assign_unique_entry_physical_bytes(&mut entries)?;
+                }
+                None => skipped_active_entries.push(entry.manifest.identity),
+            }
+        }
+        let after_physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum();
+        Ok(OvenStorePruneReport {
+            schema_version: OVEN_STORE_SCHEMA_VERSION,
+            dry_run: !apply,
+            before_physical_bytes,
+            after_physical_bytes,
+            removed_logical_bytes,
+            removed_entries,
+            skipped_active_entries,
+        })
+    }
+
+    /// Reclaim superseded releases, then prune what retention policy still requires.
+    ///
+    /// Both passes run under one manager lock and are reported as a single reclamation. The superseded pass is skipped
+    /// entirely when nothing qualifies, so an ordinary store pays for one measurement pass rather than two.
+    fn prune_with_superseded_release_reclamation(&self, apply: bool) -> Result<OvenStorePruneReport, OvenStoreError> {
+        let active = active_release_domain();
+        if !self.holds_superseded_release_entry(&active)? {
+            return self.prune_to_limits(None, 0, 0, apply);
+        }
+        let superseded = self.reclaim_superseded_release_entries(&active, apply)?;
+        let retained = self.prune_to_limits(None, 0, 0, apply)?;
+        Ok(merge_prune_reports(superseded, retained))
+    }
+
+    /// Return whether any immutable entry belongs to a compiler release other than the active one.
+    ///
+    /// Reading manifests is far cheaper than admission measurement, which walks every file in every entry to compute
+    /// physical allocation. A store holding only the active release — the common case on every bake — would otherwise
+    /// pay for a second full measurement pass just to discover there is nothing to reclaim.
+    fn holds_superseded_release_entry(&self, active_domain: &str) -> Result<bool, OvenStoreError> {
+        let root = self.entries_root();
+        if !root.exists() {
+            return Ok(false);
+        }
+        for candidate in fs::read_dir(&root).map_err(|source| OvenStoreError::Io {
+            path: root.clone(),
+            source,
+        })? {
+            let path = candidate
+                .map_err(|source| OvenStoreError::Io {
+                    path: root.clone(),
+                    source,
+                })?
+                .path();
+            if !path.is_dir() {
+                continue;
+            }
+            // A malformed or half-written entry is not this probe's problem to report: the reclamation and admission
+            // paths below own that judgement, and failing here would turn an optimization into a new failure mode.
+            let Ok(manifest) = verify_entry_manifest(&path) else {
+                continue;
+            };
+            if is_superseded_release_domain(&manifest.domain, active_domain) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Remove immutable entries sealed for a compiler release other than the active one.
+    ///
+    /// Store domains carry the compiler release that produced them (`incan-release-<version>`), and a Loaf sealed by
+    /// one release is never reusable by another. Retention alone cannot shed them: [`Self::prune_to_limits`] stops as
+    /// soon as the store fits its policy, so a store below its limit keeps superseded releases forever while their
+    /// bytes still count against the transient allowance a large build needs. Reclaiming them is therefore always
+    /// safe and is the only reclamation that does not compete with reuse.
+    ///
+    /// Entries an active lease holds are left in place and reported as skipped, exactly as ordinary pruning does.
+    pub(crate) fn reclaim_superseded_release_entries(
+        &self,
+        active_domain: &str,
+        apply: bool,
+    ) -> Result<OvenStorePruneReport, OvenStoreError> {
+        let mut entries = self.collect_entries_for_admission()?;
+        let before_physical_bytes = entries.iter().map(|entry| entry.physical_bytes).sum();
+        let mut removed_entries = Vec::new();
+        let mut skipped_active_entries = Vec::new();
+        let mut removed_logical_bytes = 0_u64;
+
+        for entry in entries.clone() {
+            if !is_superseded_release_domain(&entry.manifest.domain, active_domain) {
                 continue;
             }
             match try_lock_entry(&entry.path)? {
@@ -2152,7 +2272,9 @@ fn verify_entry(root: &Path) -> Result<OvenStoreEntry, OvenStoreError> {
             .payload
             .logical_bytes
             .saturating_add(materialized_logical_bytes),
-        physical_bytes: directory_physical_bytes(root)?,
+        // Every `verify_entry` caller resolves `root` through `entry_root`/`entry_root_for_kind`: always a real,
+        // immutable entry, never staging, so the same physical-bytes cache used by the admission path applies here.
+        physical_bytes: cached_directory_physical_bytes(root)?,
         last_used_unix_seconds,
         manifest,
         path: root.to_path_buf(),
@@ -2378,9 +2500,16 @@ fn measure_entry_for_admission_with_directory_identity(
             .iter()
             .fold(0_u64, |total, file| total.saturating_add(file.logical_bytes)),
     );
+    // Staging directories are private, not-yet-finalized publisher work: their content can still change before an
+    // atomic rename admits them as an immutable entry, so their physical bytes must never be cached.
+    let physical_bytes = if require_identity_directory_name {
+        cached_directory_physical_bytes(root)?
+    } else {
+        directory_physical_bytes(root)?
+    };
     Ok(OvenStoreEntry {
         logical_bytes,
-        physical_bytes: directory_physical_bytes(root)?,
+        physical_bytes,
         last_used_unix_seconds,
         manifest,
         path: root.to_path_buf(),
@@ -2512,6 +2641,49 @@ fn related_policy_offending_domains(
 }
 
 /// Sum logical and physical accounting for one compatibility domain.
+/// Return the store domain owned by the running compiler release.
+fn active_release_domain() -> String {
+    format!("{RELEASE_DOMAIN_PREFIX}{}", crate::version::INCAN_VERSION)
+}
+
+/// Fold a superseded-release reclamation report into the retention-prune report that followed it.
+///
+/// The two passes run back to back under one manager lock, so the user-visible result must read as a single
+/// reclamation: the earliest `before`, the latest `after`, and the union of what each pass touched.
+fn merge_prune_reports(first: OvenStorePruneReport, second: OvenStorePruneReport) -> OvenStorePruneReport {
+    let mut removed_entries = first.removed_entries;
+    removed_entries.extend(second.removed_entries);
+    let mut skipped_active_entries = first.skipped_active_entries;
+    for identity in second.skipped_active_entries {
+        if !skipped_active_entries.contains(&identity) {
+            skipped_active_entries.push(identity);
+        }
+    }
+    OvenStorePruneReport {
+        schema_version: second.schema_version,
+        dry_run: second.dry_run,
+        before_physical_bytes: first.before_physical_bytes,
+        // A preview leaves both passes' entries on disk, so the retention pass re-measures the full store and its
+        // `after` ignores what the superseded pass projected removing. Take the smaller reading so a dry run reports
+        // the allocation the user would actually be left with, and an applied run keeps reporting the measured one.
+        after_physical_bytes: first.after_physical_bytes.min(second.after_physical_bytes),
+        removed_logical_bytes: first.removed_logical_bytes.saturating_add(second.removed_logical_bytes),
+        removed_entries,
+        skipped_active_entries,
+    }
+}
+
+/// Compiler-release store domains are spelled `incan-release-<version>`.
+const RELEASE_DOMAIN_PREFIX: &str = "incan-release-";
+
+/// Return whether `candidate` names a compiler release superseded by `active`.
+///
+/// Only release domains are comparable this way. Any other domain (compiler-suite, fixtures, interop) is left alone,
+/// because its reuse rules are not keyed to the compiler version.
+fn is_superseded_release_domain(candidate: &str, active: &str) -> bool {
+    candidate.starts_with(RELEASE_DOMAIN_PREFIX) && active.starts_with(RELEASE_DOMAIN_PREFIX) && candidate != active
+}
+
 fn domain_totals(entries: &[OvenStoreEntry], domain: &str) -> (u64, u64) {
     entries
         .iter()
@@ -2522,6 +2694,34 @@ fn domain_totals(entries: &[OvenStoreEntry], domain: &str) -> (u64, u64) {
                 physical.saturating_add(entry.physical_bytes),
             )
         })
+}
+
+/// Return one immutable store entry's physical byte allocation, backed by [`PHYSICAL_BYTES_CACHE_FILE`] when present.
+///
+/// Admission recomputed every retained entry's allocation via a fresh recursive [`directory_physical_bytes`] walk on
+/// every publish, so admitting one new artifact cost time proportional to the store's entire accumulated content
+/// rather than to that one artifact. Entries under [`ENTRIES_DIRECTORY`] are immutable once published, so caching
+/// the one-time measurement is always safe: a missing or corrupt cache file simply falls back to the recursive
+/// walk, so a cold or damaged cache degrades to the previous behavior rather than serving a stale value. Callers
+/// must not use this for staging directories, whose content can still change before they are finalized.
+fn cached_directory_physical_bytes(root: &Path) -> Result<u64, OvenStoreError> {
+    let cache_path = root.join(PHYSICAL_BYTES_CACHE_FILE);
+    if let Ok(cached) = fs::read_to_string(&cache_path)
+        && let Ok(bytes) = cached.trim().parse::<u64>()
+    {
+        return Ok(bytes);
+    }
+    let bytes = directory_physical_bytes(root)?;
+    // Best-effort: a read-only store or a lost race with a concurrent measurement must not fail the measurement
+    // itself, since the recomputed value above is already correct without the cache.
+    let _ = fs::write(&cache_path, bytes.to_string());
+    Ok(bytes)
+}
+
+/// Return true when `name` is an OvenStore-internal sidecar bookkeeping file that must never count toward an
+/// entry's measured content, since none of the raw recursive walkers below know how to exclude it structurally.
+fn is_store_sidecar_file(name: &std::ffi::OsStr) -> bool {
+    name == PHYSICAL_BYTES_CACHE_FILE || name == UNIQUE_FILE_RECORDS_CACHE_FILE
 }
 
 /// Recursively measure allocated file blocks, excluding directories from the physical file-byte definition.
@@ -2536,6 +2736,9 @@ fn directory_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> {
                 path: path.to_path_buf(),
                 source,
             })?;
+            if is_store_sidecar_file(&child.file_name()) {
+                return Ok(total);
+            }
             let child_path = child.path();
             let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
                 path: child_path.clone(),
@@ -2660,11 +2863,23 @@ fn publisher_staging_physical_bytes(path: &Path) -> Result<u64, OvenStoreError> 
 /// this stable attribution pass and report physical bytes once while retaining each entry's independent logical
 /// bytes. Re-running it after a simulated or real prune is essential: deleting one link cannot reclaim a block that
 /// another selected entry still references.
+///
+/// `entries` are always already-published, immutable store entries (never staging), so each entry's file identities
+/// are read through [`cached_directory_file_records`] instead of a fresh walk. This runs on every admission scan
+/// (see `collect_entries_with`), so an uncached walk here previously re-read every retained entry's entire directory
+/// tree on every single publish, independent of whether anything was actually pruned.
 #[cfg(unix)]
 fn assign_unique_entry_physical_bytes(entries: &mut [OvenStoreEntry]) -> Result<(), OvenStoreError> {
     let mut seen_files = BTreeSet::new();
     for entry in entries {
-        entry.physical_bytes = directory_unique_physical_bytes(&entry.path, &mut seen_files)?;
+        let records = cached_directory_file_records(&entry.path)?;
+        entry.physical_bytes = records.into_iter().fold(0_u64, |total, (device, inode, bytes)| {
+            if seen_files.insert((device, inode)) {
+                total.saturating_add(bytes)
+            } else {
+                total
+            }
+        });
     }
     Ok(())
 }
@@ -2743,6 +2958,101 @@ fn directory_unique_physical_bytes(path: &Path, seen_files: &mut BTreeSet<(u64, 
         })
 }
 
+/// Return one immutable store entry's regular-file `(device, inode, physical_bytes)` identities, backed by
+/// [`UNIQUE_FILE_RECORDS_CACHE_FILE`] when present.
+///
+/// See [`cached_directory_physical_bytes`] for the immutability argument that makes caching safe here: entries under
+/// [`ENTRIES_DIRECTORY`] never change after publication, so a listing taken once stays valid for the entry's
+/// lifetime, and a missing or unparsable cache file simply falls back to a fresh walk. Callers must not use this for
+/// staging directories, whose content can still change before they are finalized.
+#[cfg(unix)]
+fn cached_directory_file_records(root: &Path) -> Result<Vec<(u64, u64, u64)>, OvenStoreError> {
+    let cache_path = root.join(UNIQUE_FILE_RECORDS_CACHE_FILE);
+    if let Ok(cached) = fs::read_to_string(&cache_path)
+        && let Some(records) = parse_directory_file_records(&cached)
+    {
+        return Ok(records);
+    }
+    let records = directory_file_records(root)?;
+    // Best-effort: a read-only store or a lost race with a concurrent measurement must not fail the measurement
+    // itself, since the recomputed value above is already correct without the cache.
+    let _ = fs::write(&cache_path, serialize_directory_file_records(&records));
+    Ok(records)
+}
+
+/// Parse a [`UNIQUE_FILE_RECORDS_CACHE_FILE`] payload, returning `None` on any malformed line so the caller falls
+/// back to a fresh walk instead of trusting a partially corrupt cache.
+#[cfg(unix)]
+fn parse_directory_file_records(cached: &str) -> Option<Vec<(u64, u64, u64)>> {
+    cached
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            let mut fields = line.split(':');
+            let device = fields.next()?.parse::<u64>().ok()?;
+            let inode = fields.next()?.parse::<u64>().ok()?;
+            let bytes = fields.next()?.parse::<u64>().ok()?;
+            if fields.next().is_some() {
+                return None;
+            }
+            Some((device, inode, bytes))
+        })
+        .collect()
+}
+
+/// Encode `(device, inode, physical_bytes)` records for [`UNIQUE_FILE_RECORDS_CACHE_FILE`].
+#[cfg(unix)]
+fn serialize_directory_file_records(records: &[(u64, u64, u64)]) -> String {
+    records
+        .iter()
+        .map(|(device, inode, bytes)| format!("{device}:{inode}:{bytes}\n"))
+        .collect()
+}
+
+/// Recursively list regular files below one root as `(device, inode, physical_bytes)`, enforcing the same
+/// symlink/type integrity rules as [`directory_unique_physical_bytes`] without performing cross-entry deduplication.
+#[cfg(unix)]
+fn directory_file_records(path: &Path) -> Result<Vec<(u64, u64, u64)>, OvenStoreError> {
+    use std::os::unix::fs::MetadataExt;
+
+    fs::read_dir(path)
+        .map_err(|source| OvenStoreError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+        .try_fold(Vec::new(), |mut records, child| {
+            let child = child.map_err(|source| OvenStoreError::Io {
+                path: path.to_path_buf(),
+                source,
+            })?;
+            if is_store_sidecar_file(&child.file_name()) {
+                return Ok(records);
+            }
+            let child_path = child.path();
+            let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
+                path: child_path.clone(),
+                source,
+            })?;
+            if metadata.file_type().is_symlink() {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "store entries may not contain symlinks".to_string(),
+                });
+            }
+            if metadata.is_dir() {
+                records.extend(directory_file_records(&child_path)?);
+            } else if metadata.is_file() {
+                records.push((metadata.dev(), metadata.ino(), physical_file_bytes(&metadata)));
+            } else {
+                return Err(OvenStoreError::Integrity {
+                    identity: child_path.display().to_string(),
+                    message: "store entries may contain only regular files and directories".to_string(),
+                });
+            }
+            Ok(records)
+        })
+}
+
 /// Split measured physical allocation into bytes that an inactive-only prune could reclaim and bytes retained by at
 /// least one active lease. A shared immutable inode is lease-protected if any entry that links it is active.
 #[cfg(unix)]
@@ -2798,6 +3108,9 @@ fn record_physical_file_leases(
             path: path.to_path_buf(),
             source,
         })?;
+        if is_store_sidecar_file(&child.file_name()) {
+            continue;
+        }
         let child_path = child.path();
         let metadata = fs::symlink_metadata(&child_path).map_err(|source| OvenStoreError::Io {
             path: child_path.clone(),
@@ -2995,6 +3308,83 @@ mod tests {
         assert_eq!(inspection.entries[0].manifest.identity, manifest.identity);
         assert_eq!(inspection.logical_bytes, 14);
         assert!(inspection.physical_bytes >= inspection.logical_bytes);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn admission_reuses_the_cached_physical_byte_measurement_for_retained_entries()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir()?;
+        let first_project = tempfile::tempdir()?;
+        let second_project = tempfile::tempdir()?;
+        let third_project = tempfile::tempdir()?;
+        write_project(first_project.path())?;
+        write_project(second_project.path())?;
+        write_project(third_project.path())?;
+        // Generous limits keep every publish well under capacity, so admission only ever measures retained entries
+        // to confirm there is room; it never has to prune one.
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(10_000_000, 10_000_000, 10_000_000));
+
+        // Publishing the first entry does not yet measure it: admission only re-measures *retained* entries while
+        // making room for a new one. Publishing a second, unrelated entry re-measures the first as part of that
+        // aggregate capacity scan, which is what leaves both sidecar cache files behind (the plain physical-byte
+        // total and the per-file identity listing that cross-entry hard-link deduplication consumes).
+        let first_manifest = store.publish(&request(first_project.path(), "engine-arm64", b"engine payload")?)?;
+        let first_entry_root = store.entry_root(&first_manifest.identity);
+        store.publish(&request(second_project.path(), "engine-x64", b"second engine payload")?)?;
+        assert!(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE).is_file());
+        assert!(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE).is_file());
+
+        // A fresh recursive walk of the first entry would now fail outright: `directory_physical_bytes` rejects any
+        // symlink it encounters. Admitting a third, unrelated entry re-measures every retained entry (including
+        // this one) as part of aggregate capacity accounting via the same `collect_entries_for_admission` path
+        // exercised by every ordinary build; if that publish still succeeds, it can only have done so by trusting
+        // the cache files instead of re-walking the first entry.
+        symlink(
+            first_entry_root.join(super::PAYLOAD_FILE),
+            first_entry_root.join("untracked-symlink"),
+        )?;
+        store.publish(&request(third_project.path(), "engine-riscv", b"third engine payload")?)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sidecar_cache_files_are_never_counted_toward_measured_physical_bytes() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp = tempfile::tempdir()?;
+        let first_project = tempfile::tempdir()?;
+        let second_project = tempfile::tempdir()?;
+        write_project(first_project.path())?;
+        write_project(second_project.path())?;
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(10_000_000, 10_000_000, 10_000_000));
+
+        let first_manifest = store.publish(&request(first_project.path(), "engine-arm64", b"first payload")?)?;
+        // Publishing a second, unrelated entry forces admission to re-measure the first as a retained entry, which
+        // is what writes both sidecar cache files into its directory.
+        store.publish(&request(second_project.path(), "engine-x64", b"second payload")?)?;
+        let first_entry_root = store.entry_root(&first_manifest.identity);
+        assert!(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE).is_file());
+        assert!(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE).is_file());
+
+        // The cached admission measurement must equal a fresh sidecar-excluding walk of the same directory: if
+        // admission had counted the sidecar files it was writing, the cached value would exceed the fresh one.
+        // (Deliberately not compared against active-lease inspection totals: that path deduplicates by inode and
+        // measures at a different moment, so its equality with per-entry cached sums is filesystem-dependent
+        // rather than an invariant -- an exact-equality form of this test failed on ext4 while passing on APFS.)
+        let cached = super::cached_directory_physical_bytes(&first_entry_root)?;
+        let fresh_with_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(cached, fresh_with_sidecars);
+
+        // And the walker's exclusion itself: physically deleting the sidecar files must not change the measured
+        // total, proving they were never part of it.
+        fs::remove_file(first_entry_root.join(super::PHYSICAL_BYTES_CACHE_FILE))?;
+        fs::remove_file(first_entry_root.join(super::UNIQUE_FILE_RECORDS_CACHE_FILE))?;
+        let fresh_without_sidecars = super::directory_physical_bytes(&first_entry_root)?;
+        assert_eq!(fresh_with_sidecars, fresh_without_sidecars);
         Ok(())
     }
 
@@ -3490,6 +3880,50 @@ mod tests {
                 ..
             })
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn prune_reclaims_superseded_release_entries_while_the_store_fits_its_policy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        // Limits far above what these fixtures occupy: retention alone has no reason to evict anything, which is the
+        // condition under which superseded releases used to accumulate forever.
+        let store = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let active = super::active_release_domain();
+        let superseded = format!("{}0.0.1-superseded", super::RELEASE_DOMAIN_PREFIX);
+
+        store.publish(&request(project.path(), &superseded, b"stale release artifact")?)?;
+        store.publish(&request(project.path(), &active, b"current release artifact")?)?;
+        store.publish(&request(project.path(), "compiler-suite", b"unrelated domain")?)?;
+        assert_eq!(store.inspect()?.entries.len(), 3);
+
+        let preview = store.preview_prune()?;
+        assert_eq!(
+            preview.removed_entries.len(),
+            1,
+            "a dry run must report exactly the superseded release entry",
+        );
+        assert_eq!(store.inspect()?.entries.len(), 3, "a dry run must not remove anything",);
+
+        let report = store.prune()?;
+        assert_eq!(report.removed_entries.len(), 1);
+        let remaining: Vec<String> = store
+            .inspect()?
+            .entries
+            .into_iter()
+            .map(|entry| entry.manifest.domain)
+            .collect();
+        assert!(
+            remaining.contains(&active) && remaining.iter().any(|domain| domain == "compiler-suite"),
+            "the active release and non-release domains must survive, got {remaining:?}",
+        );
+        assert!(
+            !remaining.contains(&superseded),
+            "the superseded release must be reclaimed, got {remaining:?}",
+        );
         Ok(())
     }
 

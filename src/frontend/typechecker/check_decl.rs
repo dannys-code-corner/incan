@@ -1306,6 +1306,18 @@ impl TypeChecker {
             entries.push((supertrait_name, substitute_method_info(info, &subst)));
         }
         let filtered = self.filter_supertrait_dominated_entries(entries);
+        // A compiler-owned trait can resolve to an empty symbol-table stub, which shadows the real contract and leaves
+        // every derive-provided method unresolvable. Recover the signature from cached provider metadata first: that
+        // metadata is seeded from the shipped library manifests and is therefore present in an installed toolchain,
+        // whereas the stdlib source fallback below only exists in a source checkout.
+        if filtered.is_empty()
+            && let Some(info) = self
+                .transitive_stdlib_stub_traits
+                .get(adopted_trait)
+                .and_then(|full_trait| full_trait.methods.get(method))
+        {
+            return Some(info.clone());
+        }
         if filtered.is_empty()
             && let Some(segments) = stdlib::trait_method_module_segments(adopted_trait)
             && let Some(full_trait) = self.stdlib_cache.lookup_trait(&segments, adopted_trait)
@@ -2733,6 +2745,13 @@ impl TypeChecker {
     ///
     /// Local aliases remain relevant to runtime lowering, but duplicate validation must compare the source owner so
     /// importing the same registry under two names cannot create two checked descriptions for one registry key.
+    ///
+    /// `explicit_entries` only ever records module-local `registry_name` bindings (`.entry()` requires a local
+    /// `Registry.define(...)`), and `RegistryArtifacts::definitions` is a single binding-name-keyed map with no
+    /// module qualification. Comparing an `Imported` registry's remote-module binding name against that flat local
+    /// namespace by bare string equality would risk a false "duplicate key" match against an unrelated,
+    /// coincidentally same-named local registry in a different module, so this cross-check is intentionally
+    /// restricted to `Local` until registry identity carries a canonical module path.
     fn registry_description_has_key(
         &self,
         registry: &RegistryDescriptionRegistry,

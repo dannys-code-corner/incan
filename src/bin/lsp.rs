@@ -13,22 +13,34 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use tower_lsp::{LspService, Server};
 
-#[tokio::main]
-async fn main() -> ExitCode {
+fn main() -> ExitCode {
     let args = std::env::args_os().skip(1).collect::<Vec<_>>();
     if let Some(exit_code) = handle_cli_args(&args) {
         return exit_code;
     }
 
-    // Create LSP service
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
+    // The server typechecks on Tokio's worker threads, and typechecking recurses over the AST, so those threads
+    // need the same deep stack the CLI runs compilation on. A default worker stack turns a deeply nested
+    // expression in an open file into a hard abort of the language server rather than a diagnostic.
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .thread_stack_size(incan::compiler_stack::compiler_stack_bytes())
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("incan-lsp: could not start the async runtime: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
 
-    let (service, socket) = LspService::new(IncanLanguageServer::new);
-
-    // Run server
-    Server::new(stdin, stdout, socket).serve(service).await;
-    ExitCode::SUCCESS
+    runtime.block_on(async {
+        let stdin = tokio::io::stdin();
+        let stdout = tokio::io::stdout();
+        let (service, socket) = LspService::new(IncanLanguageServer::new);
+        Server::new(stdin, stdout, socket).serve(service).await;
+        ExitCode::SUCCESS
+    })
 }
 
 /// Handle standalone CLI flags before falling back to the stdio LSP server.

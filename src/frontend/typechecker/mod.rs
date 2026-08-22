@@ -798,7 +798,12 @@ impl TypeChecker {
         canonical_path: &str,
         method: &str,
     ) -> Option<RustItemMetadata> {
-        let metadata = self.rust_item_metadata_for_path(canonical_path)?;
+        // A method call is an explicit source-level request for the receiver's ABI.
+        // Fast metadata can know the type without its inherent methods, so complete
+        // the lookup before falling back to generic call inference.
+        let metadata = self
+            .rust_item_metadata_for_path(canonical_path)
+            .or_else(|| self.rust_item_metadata_for_path_blocking(canonical_path))?;
         let RustItemKind::Type(type_info) = &metadata.kind else {
             return Some(metadata);
         };

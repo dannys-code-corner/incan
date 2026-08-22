@@ -8,7 +8,8 @@ case "$dist_dir" in
   /*) ;;
   *) dist_dir="${root}/${dist_dir}" ;;
 esac
-incan_run_bin="${TOOLCHAIN_INCAN_BIN:-${root}/target/release/incan}"
+incan_run_bin_override="${TOOLCHAIN_INCAN_BIN:-}"
+incan_run_bin=""
 # A caller that is already isolating generated-project state (notably the parallel Oven compiler suite) remains
 # authoritative.  Ordinary local release smoke keeps the historic task-local fallback.
 generated_cargo_target_dir="${INCAN_GENERATED_CARGO_TARGET_DIR:-${root}/target/incan_generated_shared_target}"
@@ -68,17 +69,6 @@ archive_path() {
   printf '%s/incan-%s-%s.tar.gz\n' "$dist_dir" "$(toolchain_release)" "$host_target"
 }
 
-npm_platform_package_path() {
-  local platform
-  case "$host_target" in
-    x86_64-unknown-linux-gnu) platform="linux-x64" ;;
-    x86_64-apple-darwin) platform="darwin-x64" ;;
-    aarch64-apple-darwin) platform="darwin-arm64" ;;
-    *) fail "unsupported npm platform smoke target: ${host_target}" ;;
-  esac
-  printf '%s/incan-toolchain-%s-%s.tgz\n' "$dist_dir" "$platform" "$(toolchain_version)"
-}
-
 require_archive() {
   local archive
   archive="$(archive_path)"
@@ -86,7 +76,23 @@ require_archive() {
   [ -f "${archive}.sha256" ] || fail "missing archive checksum: ${archive}.sha256"
 }
 
+resolve_incan_run_bin() {
+  if [ -n "$incan_run_bin_override" ]; then
+    printf '%s\n' "$incan_run_bin_override"
+    return
+  fi
+  if [ -f "${dist_dir}/toolchain-release.txt" ]; then
+    local packaged_bin="${dist_dir}/dist/incan-$(toolchain_release)-${host_target}/bin/incan"
+    if [ -x "$packaged_bin" ]; then
+      printf '%s\n' "$packaged_bin"
+      return
+    fi
+  fi
+  printf '%s\n' "${root}/target/release/incan"
+}
+
 require_incan_run_bin() {
+  incan_run_bin="$(resolve_incan_run_bin)"
   [ -x "$incan_run_bin" ] || fail "missing Incan runner: ${incan_run_bin}; run make toolchain-release-build first or set TOOLCHAIN_INCAN_BIN"
 }
 
@@ -96,6 +102,16 @@ package_toolchain() {
   rm -rf "$dist_dir"
   mkdir -p "$dist_dir"
   printf 'Packaging toolchain for %s into %s\n' "$host_target" "$dist_dir"
+  # Packaging records the compiler that sealed this archive's Loafs, and manifest preparation refuses anything
+  # that is not a concrete Rust release. A developer whose default toolchain is nightly would otherwise package an
+  # archive that cannot be described by a publishable manifest, so prefer a stable toolchain here the way CI does.
+  if [ -z "${RUSTC:-}" ] && command -v rustup >/dev/null 2>&1; then
+    local stable_rustc
+    if stable_rustc="$(rustup which --toolchain stable rustc 2>/dev/null)" && [ -x "$stable_rustc" ]; then
+      export RUSTC="$stable_rustc"
+      printf 'Using stable rustc for packaging: %s\n' "$("$stable_rustc" --version)"
+    fi
+  fi
   "${root}/workspaces/release/toolchain/package_archive.sh" "$host_target" --out-dir "$dist_dir"
 }
 
@@ -107,6 +123,7 @@ write_assets() {
     INCAN_TOOLCHAIN_DIST_DIR="$dist_dir" \
     INCAN_TOOLCHAIN_SKIP_HOMEBREW=1 \
     INCAN_TOOLCHAIN_GENERATED_AT="$generated_at" \
+    INCAN_HOME="$dist_dir/asset-home" \
     INCAN_NO_BANNER=1 \
     CARGO_NET_OFFLINE=true \
     INCAN_SOURCE_ROOT="$root" \
@@ -120,12 +137,16 @@ smoke_direct() {
   require_archive
   [ -f "${dist_dir}/manifest.json" ] || fail "missing manifest: ${dist_dir}/manifest.json; run make toolchain-release-assets first"
   rm -rf "${dist_dir}/install-home" "${dist_dir}/install-bin"
+  # `--skip-rust` keeps the smoke about archive, link and shim mechanics. Provisioning a full Rust toolchain per
+  # smoke stage would add hundreds of megabytes of download to every local run and to the CI publish job; that
+  # behavior is proven instead by `make gate-cleanroom`, which installs into containers for real.
   bash "${dist_dir}/install.sh" \
     --manifest "${dist_dir}/manifest.json" \
     --target "$host_target" \
     --archive "$(archive_path)" \
     --incan-home "${dist_dir}/install-home" \
-    --bin-dir "${dist_dir}/install-bin"
+    --bin-dir "${dist_dir}/install-bin" \
+    --skip-rust
   "${dist_dir}/install-bin/incan" --version
   local installed_sdk_store
   installed_sdk_store="${dist_dir}/install-home/toolchains/$(toolchain_version)/share/incan/sdk"
@@ -148,6 +169,7 @@ smoke_direct() {
   rm -rf "${dist_dir}/starter-smoke"
   mkdir -p "${dist_dir}/starter-smoke"
   (
+    export INCAN_HOME="${dist_dir}/install-home"
     cd "${dist_dir}/starter-smoke"
     "${dist_dir}/install-bin/incan" new hello --yes
     cd hello
@@ -191,14 +213,11 @@ ensure_platform_archive_fixtures() {
 smoke_npm() {
   require_command node
   require_command npm
-  ensure_platform_archive_fixtures
+  require_archive
   npm_config_cache="${dist_dir}/npm-cache" \
     npm_config_logs_dir="${dist_dir}/npm-logs" \
     node "${root}/workspaces/release/npm/prepare_package.js" "$dist_dir"
   local npm_home="${dist_dir}/npm-home"
-  local platform_package
-  platform_package="$(npm_platform_package_path)"
-  [ -f "$platform_package" ] || fail "missing npm platform package: ${platform_package}"
   rm -rf "$npm_home"
   mkdir -p "$npm_home"
   npm_config_cache="${dist_dir}/npm-cache" \
@@ -206,9 +225,17 @@ smoke_npm() {
     npm_config_ignore_scripts=true \
     npm_config_audit=false \
     npm_config_fund=false \
-    npm install -g --offline --omit=optional --ignore-scripts "$platform_package" "${dist_dir}/incan-toolchain-$(toolchain_version).tgz" --prefix "$npm_home"
-  "${npm_home}/bin/incan" --version
-  "${npm_home}/bin/incan-lsp" --help >/dev/null
+    npm install -g --offline --ignore-scripts "${dist_dir}/incan-toolchain-$(toolchain_version).tgz" --prefix "$npm_home"
+  # The reference shim provisions the toolchain from the release manifest on first invocation. An offline smoke
+  # cannot exercise that download, so it validates the installed shim against the locally packaged host archive
+  # through the shim's explicit toolchain-directory override; installer-driven provisioning is covered by the
+  # direct and pip smokes, which share the same install-incan.sh contract the shim bundles.
+  local npm_toolchain_dir="${dist_dir}/npm-toolchain"
+  rm -rf "$npm_toolchain_dir"
+  mkdir -p "$npm_toolchain_dir"
+  tar -xzf "$(archive_path)" -C "$npm_toolchain_dir"
+  INCAN_NPM_TOOLCHAIN_DIR="$npm_toolchain_dir" "${npm_home}/bin/incan" --version
+  INCAN_NPM_TOOLCHAIN_DIR="$npm_toolchain_dir" "${npm_home}/bin/incan-lsp" --help >/dev/null
 }
 
 python_build_runner() {
@@ -248,7 +275,7 @@ smoke_pip() {
   INCAN_TOOLCHAIN_MANIFEST="${dist_dir}/manifest.json" \
     INCAN_PIP_TOOLCHAIN_HOME="${dist_dir}/pip-toolchain-home" \
     INCAN_PIP_BIN_DIR="${dist_dir}/pip-bin" \
-    "${venv}/bin/install-incan" --archive "$(archive_path)" --target "$host_target"
+    "${venv}/bin/install-incan" --archive "$(archive_path)" --target "$host_target" --skip-rust
   INCAN_TOOLCHAIN_MANIFEST="${dist_dir}/manifest.json" \
     INCAN_PIP_TOOLCHAIN_HOME="${dist_dir}/pip-toolchain-home" \
     INCAN_PIP_BIN_DIR="${dist_dir}/pip-bin" \
@@ -262,6 +289,7 @@ smoke_homebrew() {
   INCAN_REPO_ROOT="$root" \
     INCAN_TOOLCHAIN_DIST_DIR="$dist_dir" \
     INCAN_TOOLCHAIN_GENERATED_AT="$generated_at" \
+    INCAN_HOME="$dist_dir/asset-home" \
     INCAN_NO_BANNER=1 \
     CARGO_NET_OFFLINE=true \
     INCAN_SOURCE_ROOT="$root" \
