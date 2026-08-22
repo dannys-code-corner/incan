@@ -1621,7 +1621,7 @@ fn lifecycle_new_version_and_env_commands_work() -> Result<(), Box<dyn std::erro
     assert!(initial_manifest.contains(r#"description = "A generated greeting app""#));
     assert!(initial_manifest.contains(r#"authors = ["Danny <danny@example.com>"]"#));
     assert!(initial_manifest.contains(r#"license = "MIT""#));
-    assert!(initial_manifest.contains(r#"requires-incan = ">=0.5.0-0,<0.6.0""#));
+    assert!(initial_manifest.contains(r#"requires-incan = ">=0.6.0-0,<0.7.0""#));
     assert!(project_dir.join("src/main.incn").exists());
     assert!(project_dir.join("tests/test_main.incn").exists());
 
@@ -7866,8 +7866,8 @@ async def main() -> None:
             r#"{
   "schema_version": 2,
   "sdk_id": "incan",
-  "sdk_version": "0.5.0",
-  "compiler_requirement": ">=0.5.0-dev.6,<0.6.0",
+  "sdk_version": "0.6.0",
+  "compiler_requirement": ">=0.6.0-dev.0,<0.7.0",
   "provider_codegen_revision": 4,
   "components": {},
   "profiles": {"default": []}
