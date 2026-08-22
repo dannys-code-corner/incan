@@ -12,15 +12,18 @@
 //! compute and verify deterministically, while leaving full CFG flattening, precise per-path drop dataflow, and a
 //! committed panic strategy to later, more optimizer-shaped work (explicitly out of scope for #653).
 //!
-//! Unsupported source constructs (comprehensions, match, closures, generators, f-strings, tuple unpacking, and so
-//! on) lower to an explicit [`StatementKind::Unsupported`] node rather than panicking or being silently dropped, so
-//! the model stays total over real programs while being honest about v0's coverage.
+//! Unsupported source constructs lower to an explicit [`StatementKind::Unsupported`] node rather than panicking or
+//! being silently dropped, so the model stays total over real programs while being honest about v0's coverage.
+//! Generator expressions remain explicitly unsupported pending #1123: an eager list cannot stand in for their lazy
+//! `Generator[T]` behavior. Expression-position `yield` remains a stub in the existing Rust-emission backend too.
 //!
-//! "Method body" includes `class`/`model`/`trait` methods, not just top-level `def` functions (#1102): a method's
-//! `self`/`mut self` receiver is modeled as an ordinary [`LocalOrigin::Receiver`] local rather than a distinct
-//! kind of place, so it flows through the same copy/move/clone/borrow/last-use machinery every other local does —
-//! with one carve-out enforced at read sites (see `src/frontend/body_ir.rs`): a receiver is always a Rust-level
-//! reference, so a bare read of it can never select [`OwnershipFact::Move`].
+//! #1101 adds dict/set aggregates, slices, assignment variants, expression-position `if`/`loop`/`try`, f-strings,
+//! general iteration, list/dict comprehensions, closures/partial construction, statement `yield`, and `match`.
+//! Captures are explicit [`Operand`] reads on [`Rvalue::Closure`], not an implicit target-backend decision.
+//!
+//! "Method body" includes `class`/`model`/`trait` methods (#1102). A `self`/`mut self` receiver is an ordinary
+//! [`LocalOrigin::Receiver`] local and is always reference-shaped at the emission boundary, so a bare receiver
+//! read can never select [`OwnershipFact::Move`].
 
 use std::fmt::Write as _;
 
@@ -101,6 +104,28 @@ impl Body {
             .collect()
     }
 
+    /// Whether this body is a generator body: it contains at least one statement-position `yield value`
+    /// ([`StatementKind::Yield`]) reachable from its top-level block.
+    ///
+    /// This is a **derived** fact, walked from the already-lowered statement tree, rather than a flag stored
+    /// redundantly on `Body` -- mirroring how the existing Rust-emission backend computes its own `is_generator`
+    /// boolean at lowering time (`return_type_is_generator(&return_type) && body_contains_yield(&f.body)` in
+    /// `src/backend/ir/lower/decl/functions.rs`) rather than threading a separate stored flag through its own IR.
+    /// Unlike that backend function, this does not also fold in a return-type check: `Generator[T]` is
+    /// declaration-level information a `Body` alone does not carry, so a caller that has the owning declaration in
+    /// hand should combine the two the same way the existing backend does. In practice a well-typed program's
+    /// `yield` only ever appears inside a function whose declared return type is `Generator[T]` (the typechecker
+    /// enforces this), so this alone is already a reliable generator signal for a `Body` in isolation.
+    ///
+    /// The walk recurses into nested [`StatementKind::If`]/[`StatementKind::Loop`] blocks (the only statement kinds
+    /// that themselves carry a nested [`Block`]) but does not recurse into a [`Rvalue::Closure`]'s own
+    /// [`ClosureBody`] -- a `yield` nested inside a closure literal does not make the *enclosing* function body a
+    /// generator, matching how the existing backend's own `body_contains_yield` walker also never descends into
+    /// nested closure/function literals.
+    pub fn is_generator(&self) -> bool {
+        block_contains_yield(&self.block)
+    }
+
     /// Render a deterministic maintainer-facing snapshot of this body.
     pub fn render_snapshot(&self) -> String {
         let mut out = String::new();
@@ -126,6 +151,26 @@ impl Body {
             }
         }
         out
+    }
+}
+
+/// Whether any statement in `block`, or in a block nested under one of its `If`/`Loop` statements, is a
+/// [`StatementKind::Yield`]. Backs [`Body::is_generator`]; see that method's docs for why this does not recurse
+/// into nested closure bodies.
+fn block_contains_yield(block: &Block) -> bool {
+    block.stmts.iter().any(statement_contains_yield)
+}
+
+/// Whether `stmt` is itself a [`StatementKind::Yield`], or contains one in a nested `If`/`Loop` block. See
+/// [`block_contains_yield`].
+fn statement_contains_yield(stmt: &Statement) -> bool {
+    match &stmt.kind {
+        StatementKind::Yield { .. } => true,
+        StatementKind::If {
+            then_block, else_block, ..
+        } => block_contains_yield(then_block) || else_block.as_ref().is_some_and(block_contains_yield),
+        StatementKind::Loop { body } => block_contains_yield(body),
+        _ => false,
     }
 }
 
@@ -214,6 +259,13 @@ pub enum LocalOrigin {
         /// Whether the receiver was declared `mut self` (`true`) rather than plain `self` (`false`).
         mutable: bool,
     },
+    /// Bound to a free variable a [`Rvalue::Closure`] captured from its enclosing scope, or to a preset value a
+    /// partial callable's synthesized closure captured from its own preset expression. The initial value comes from
+    /// a single [`Operand`] read recorded on [`Rvalue::Closure::captured_operands`] at the point the closure was
+    /// constructed, not from a caller-supplied argument the way [`Self::Parameter`] locals are -- kept as its own
+    /// origin rather than folded into [`Self::Parameter`] so a later consumer can tell "the caller supplied this"
+    /// apart from "the closure's environment supplied this."
+    Captured,
 }
 
 impl LocalOrigin {
@@ -226,6 +278,7 @@ impl LocalOrigin {
             Self::External => "external",
             Self::Receiver { mutable: false } => "receiver",
             Self::Receiver { mutable: true } => "receiver_mut",
+            Self::Captured => "captured",
         }
     }
 }
@@ -270,6 +323,18 @@ impl Place {
                 PlaceElem::Index(operand) => {
                     let _ = write!(&mut out, "[{}]", operand.render_snapshot());
                 }
+                PlaceElem::Slice { start, end, step } => {
+                    let start = start.as_ref().map(|o| o.render_snapshot()).unwrap_or_default();
+                    let end = end.as_ref().map(|o| o.render_snapshot()).unwrap_or_default();
+                    match step {
+                        Some(step) => {
+                            let _ = write!(&mut out, "[{start}:{end}:{}]", step.render_snapshot());
+                        }
+                        None => {
+                            let _ = write!(&mut out, "[{start}:{end}]");
+                        }
+                    }
+                }
             }
         }
         out
@@ -283,6 +348,14 @@ pub enum PlaceElem {
     Field(String),
     /// `[index]` access. Boxed because the index itself is an arbitrary operand.
     Index(Box<Operand>),
+    /// `[start:end:step]` slice access, mirroring `ast::SliceExpr`'s shape: each component is independently
+    /// optional (`x[:5]`, `x[2:]`, `x[::2]`, `x[:]`, ...). Boxed for the same reason as [`PlaceElem::Index`] --
+    /// each component is an arbitrary operand, not a compile-time constant.
+    Slice {
+        start: Option<Box<Operand>>,
+        end: Option<Box<Operand>>,
+        step: Option<Box<Operand>>,
+    },
 }
 
 // ============================================================================
@@ -409,6 +482,67 @@ pub enum Rvalue {
     BinaryOp(BinOp, Operand, Operand),
     /// Build a tuple, list, or nominal-constructor value from its element/field operands.
     Aggregate(AggregateKind, Vec<Operand>),
+    /// An f-string interpolation, built from a sequence of literal text chunks and already-lowered embedded
+    /// expressions. Mirrors the existing Rust-emission backend's dedicated `IrExprKind::Format { parts }` node
+    /// (`src/backend/ir/expr.rs`) rather than a helper-call desugar: an f-string is a compiler-owned structured
+    /// value, not something inferred later from a generated Rust call shape (#653 criterion 3), so it gets its own
+    /// `Rvalue` shape just like the existing backend gives it its own `IrExprKind` shape.
+    Format(Vec<FormatPart>),
+    /// A closure literal (`(params) => expr`), or a partial callable's synthesized forwarding closure (`partial
+    /// Target(presets)`) -- see `src/frontend/body_ir.rs`'s `BodyBuilder::lower_partial`.
+    ///
+    /// Unlike the existing Rust-emission backend's `IrExprKind::Closure` (whose `captures: Vec<String>` field is
+    /// always populated empty at both of that backend's own lowering call sites -- it relies entirely on Rust's own
+    /// closure syntax plus rustc's borrow checker to work out by-value/by-reference capture), Body IR represents
+    /// every capture explicitly: representing Duckborrower ownership facts rather than deferring to
+    /// generated-Rust semantics is this IR's entire reason to exist (#653), so a closure capturing an outer
+    /// variable is exactly the kind of copy/move/borrow decision this model must carry, not omit.
+    Closure {
+        /// The closure's own declared parameters, in order.
+        params: Vec<ClosureParam>,
+        /// Every free variable the closure reads from its enclosing scope (or, for a partial callable's
+        /// synthesized closure, every preset value), each lowered exactly once at the point this closure literal is
+        /// constructed -- in first-occurrence source order, each carrying its own [`OwnershipFact`]/last-use marker
+        /// via the same machinery any other read in this body uses.
+        captured_operands: Vec<Operand>,
+        /// The closure's own body.
+        body: Box<ClosureBody>,
+    },
+    /// A `match` expression, evaluated by testing the scrutinee against each arm's [`Pattern`] in order and running
+    /// the first arm whose pattern matches (and whose optional [`MatchArm::guard`], if present, evaluates truthy).
+    ///
+    /// Mirrors the existing Rust-emission backend's own `IrExprKind::Match { scrutinee, arms }` node
+    /// (`src/backend/ir/expr.rs`): that backend has already reduced Incan's match-pattern surface to the small,
+    /// closed vocabulary [`Pattern`] mirrors (see its own docs), and compiles each arm's pattern directly into a
+    /// native Rust `match` arm, letting rustc perform exhaustiveness checking and the actual destructuring/dispatch
+    /// itself. Matching the same #653-criterion-3 "compiler-owned semantic gets its own explicit node" treatment as
+    /// [`Self::Format`]/[`StatementKind::TryPropagate`]/[`StatementKind::IterNext`], `match` stays a single
+    /// structured `Rvalue` here too rather than being decomposed into a chain of `If` statements: decomposing it
+    /// would mean re-deriving the same destructuring/dispatch logic a target backend's native `match` already
+    /// gives for free, and would lose the direct correspondence with the existing backend's own `Pattern`
+    /// vocabulary this model is built to mirror.
+    Match {
+        /// The value being matched. Always read as [`OwnershipFact::Borrow`]: more than one arm's pattern bindings
+        /// may read from the scrutinee across the arm list (only one arm actually runs at a time, but see
+        /// `BodyBuilder::lower_match` in `src/frontend/body_ir.rs` for why this model's last-use approximation does
+        /// not attempt per-arm-exclusive dataflow), so treating this top-level read as an unconditional move would
+        /// risk being unsound for whichever arm ends up executing. Each pattern binding computes its own, more
+        /// precise ownership fact separately (see [`Pattern::Var`]/[`PatternBinding`]) -- a *nested*
+        /// (`Tuple`/`Struct`/`Enum`-projected) binding can never disagree with this field, since a projected read
+        /// is never a move (see [`PatternBinding::fact`]'s own docs), but a *root-level* `Pattern::Var`/wildcard
+        /// binding that captures the scrutinee's whole value can legitimately select
+        /// [`OwnershipFact::Move`]/[`OwnershipFact::Clone`] for that one arm. This field's own `Borrow` and such a
+        /// root binding's `Move` are not reconciled against each other here -- a target backend that sees a
+        /// root-level `Move`/`Clone` binding in some arm must match the scrutinee by value (or clone it) rather
+        /// than by the reference this field's `Borrow` would otherwise suggest, the same kind of cross-fact
+        /// reconciliation v0 already leaves to later work elsewhere (see the module-level docs).
+        scrutinee: Operand,
+        /// Every arm, in source order. The first arm whose pattern matches and whose guard (if any) is truthy runs.
+        /// Incan's typechecker enforces match exhaustiveness ahead of lowering (`check_match_exhaustiveness` in
+        /// `src/frontend/typechecker/check_expr/match_.rs`), so Body IR itself does not need to model a fallthrough
+        /// "no arm matched" case.
+        arms: Vec<MatchArm>,
+    },
 }
 
 impl Rvalue {
@@ -420,10 +554,351 @@ impl Rvalue {
             Self::BinaryOp(op, lhs, rhs) => {
                 format!("{} {} {}", lhs.render_snapshot(), op.as_str(), rhs.render_snapshot())
             }
+            Self::Aggregate(AggregateKind::Dict, operands) => {
+                // `AggregateKind::Dict`'s operands alternate key, value, key, value, ...; render as `k: v` pairs
+                // rather than a flat list so the snapshot stays readable for dict literals specifically.
+                let pairs: Vec<String> = operands
+                    .chunks(2)
+                    .map(|pair| match pair {
+                        [key, value] => format!("{}: {}", key.render_snapshot(), value.render_snapshot()),
+                        [key] => key.render_snapshot(),
+                        _ => String::new(),
+                    })
+                    .collect();
+                format!("dict[{}]", pairs.join(", "))
+            }
             Self::Aggregate(kind, operands) => {
                 let items: Vec<String> = operands.iter().map(Operand::render_snapshot).collect();
                 format!("{}[{}]", kind.as_str(), items.join(", "))
             }
+            Self::Format(parts) => {
+                let items: Vec<String> = parts.iter().map(FormatPart::render_snapshot).collect();
+                format!("fstring({})", items.join(", "))
+            }
+            Self::Closure {
+                params,
+                captured_operands,
+                body,
+            } => {
+                let params_str: Vec<String> = params.iter().map(ClosureParam::render_snapshot).collect();
+                let captures_str: Vec<String> = captured_operands.iter().map(Operand::render_snapshot).collect();
+                format!(
+                    "closure(params=[{}], captures=[{}]) {{ {} }}",
+                    params_str.join(", "),
+                    captures_str.join(", "),
+                    body.render_snapshot()
+                )
+            }
+            Self::Match { scrutinee, arms } => {
+                let arms_str: Vec<String> = arms.iter().map(MatchArm::render_snapshot).collect();
+                format!("match {} {{ {} }}", scrutinee.render_snapshot(), arms_str.join(", "))
+            }
+        }
+    }
+}
+
+/// One parameter of a [`Rvalue::Closure`] (or a partial callable's synthesized forwarding closure).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureParam {
+    pub name: String,
+    pub ty: IncanType,
+}
+
+impl ClosureParam {
+    /// Render a deterministic maintainer-facing spelling for this parameter.
+    fn render_snapshot(&self) -> String {
+        format!("{}: {}", self.name, self.ty)
+    }
+}
+
+/// A closure literal's or synthesized partial-callable closure's own self-contained body computation.
+///
+/// Deliberately lighter than [`Body`]: it carries no `decl_id`/`name`/`scopes`/`runtime_requirements`/`panic_facts`
+/// of its own -- a closure is not a top-level declaration, and any runtime/panic facts its body introduces are
+/// folded directly into the owning [`Body`]'s own accumulated facts by lowering rather than tracked separately per
+/// closure. It also reuses the *same* [`LocalId`] numbering as its owning [`Body`] rather than starting a fresh
+/// local space at zero: the frontend lowering that builds this model (`src/frontend/body_ir.rs`) already keeps one
+/// flat, function-wide local/binding namespace with no scope push/pop machinery (nested blocks shadow by simple
+/// overwrite, restored explicitly around closure bodies specifically -- see `BodyBuilder::lower_closure`), so
+/// giving each closure a separate zero-based local space would mean inventing a parallel indexing scheme just for
+/// this one construct. Reusing the owning body's monotonic counter keeps every [`LocalId`] in a function globally
+/// unique and lets [`Self::param_locals`]/[`Self::capture_locals`] simply index into the same [`Body::locals`] the
+/// rest of the function uses, so a closure's own parameters and captures show up in the ordinary `locals:` listing
+/// like any other local.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureBody {
+    /// The closure's own declared parameters, in order. Each entry indexes into the owning [`Body`]'s `locals` (see
+    /// the type-level docs for why closures do not carry their own separate locals vector).
+    pub param_locals: Vec<LocalId>,
+    /// The closure's own captured-binding locals, in the same order as [`Rvalue::Closure::captured_operands`] --
+    /// `capture_locals[i]` is where a read of the `i`-th captured operand's value is durably bound inside the
+    /// closure body, so subsequent reads inside the body see it as an ordinary local rather than re-reading the
+    /// enclosing body's place directly.
+    pub capture_locals: Vec<LocalId>,
+    /// Statements needed to compute `result`.
+    pub stmts: Vec<Statement>,
+    /// The closure body expression's value.
+    pub result: Operand,
+}
+
+impl ClosureBody {
+    /// Render a deterministic maintainer-facing spelling for this closure body, flattening its (possibly
+    /// multi-line) statement rendering onto one `; `-joined line so it nests inside the single-line
+    /// [`Rvalue::render_snapshot`] output the same way every other `Rvalue` variant does.
+    fn render_snapshot(&self) -> String {
+        let flattened = render_flattened_stmts(&self.stmts);
+        if flattened.is_empty() {
+            format!("result: {}", self.result.render_snapshot())
+        } else {
+            format!("{}; result: {}", flattened.join("; "), self.result.render_snapshot())
+        }
+    }
+}
+
+/// Render `stmts` at zero indentation and split into trimmed, non-empty lines, for embedding a (possibly
+/// multi-statement) nested block into a single-line snapshot alongside a trailing `result: ...`/`if ...` segment.
+/// Shared by [`ClosureBody::render_snapshot`] and [`MatchArm::render_snapshot`], which both need to flatten a
+/// nested [`Block`]-shaped computation the same way.
+fn render_flattened_stmts(stmts: &[Statement]) -> Vec<String> {
+    let mut body = String::new();
+    for stmt in stmts {
+        render_statement(&mut body, stmt, "", 0);
+    }
+    body.lines().map(str::trim).map(str::to_string).collect()
+}
+
+/// One arm of a [`Rvalue::Match`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    /// The pattern tested against the match scrutinee.
+    pub pattern: Pattern,
+    /// Statements needed to compute `guard`, run only once this arm's `pattern` has already matched (a guard may
+    /// read this arm's own pattern-bound locals -- see [`Pattern::Var`]). Empty when the arm has no `if` guard, or
+    /// when its guard needs no supporting statements of its own.
+    pub guard_stmts: Vec<Statement>,
+    /// The arm's optional `if` guard: when present and this arm's pattern matches, the arm only runs if this also
+    /// evaluates truthy; otherwise matching falls through to the next arm. `None` for an unguarded arm.
+    pub guard: Option<Operand>,
+    /// Statements needed to compute `result`, run once this arm is selected (its pattern matched, and its `guard`,
+    /// if any, was truthy).
+    pub body_stmts: Vec<Statement>,
+    /// This arm's produced value. A source arm whose body is a statement block rather than a single `=> expr`
+    /// always resolves to [`Constant::Unit`], mirroring the existing Rust-emission backend's own
+    /// `IrExprKind::Block { stmts, value: None }` treatment of the same shape
+    /// (`src/backend/ir/lower/expr/patterns.rs`'s `lower_match_arms`).
+    pub result: Operand,
+}
+
+impl MatchArm {
+    /// Render a deterministic maintainer-facing spelling for this arm, flattening `guard_stmts`/`body_stmts` onto
+    /// one `; `-joined segment each so the whole arm nests inside [`Rvalue::render_snapshot`]'s single-line output.
+    fn render_snapshot(&self) -> String {
+        let mut out = self.pattern.render_snapshot();
+        if let Some(guard) = &self.guard {
+            let flattened = render_flattened_stmts(&self.guard_stmts);
+            if flattened.is_empty() {
+                let _ = write!(&mut out, " if {}", guard.render_snapshot());
+            } else {
+                let _ = write!(
+                    &mut out,
+                    " if {{ {}; {} }}",
+                    flattened.join("; "),
+                    guard.render_snapshot()
+                );
+            }
+        }
+        let flattened = render_flattened_stmts(&self.body_stmts);
+        if flattened.is_empty() {
+            let _ = write!(&mut out, " => {}", self.result.render_snapshot());
+        } else {
+            let _ = write!(
+                &mut out,
+                " => {{ {}; {} }}",
+                flattened.join("; "),
+                self.result.render_snapshot()
+            );
+        }
+        out
+    }
+}
+
+/// A `match` arm's pattern.
+///
+/// Mirrors the existing Rust-emission backend's own closed `Pattern` vocabulary (`src/backend/ir/expr.rs`) almost
+/// exactly -- see #1101's B6 pre-intake in `plan.md` for why this vocabulary is already small and closed rather
+/// than something this bucket needed to design from scratch: the existing backend compiles each variant here
+/// directly into the matching native Rust pattern syntax and lets rustc itself do the actual destructuring/
+/// dispatch, so a target backend consuming this model can do the same. The one deliberate divergence from the
+/// existing backend's vocabulary is [`Self::Var`]: the existing backend's `Pattern::Var(String)` carries a bare
+/// source name (that backend's own separate, string-keyed scope tracks what it resolves to), while this model's
+/// [`PatternBinding`] carries an already-declared [`LocalId`] plus the Duckborrower fact/last-use marker for
+/// reading that part of the scrutinee -- consistent with #653's requirement that ownership decisions be
+/// represented as explicit facts on the model itself, not deferred to a target backend's own name resolution.
+///
+/// v0 does not model the existing backend's union-type pattern narrowing (matching one member of a source `Union`
+/// type against a target's own narrower union subset, rewriting the pattern and synthesizing extra arms --
+/// `lower_narrowed_union_capture_arms`/`union_pattern_target` in `src/backend/ir/lower/expr/patterns.rs`) or RFC
+/// 021 field-alias resolution for named struct-pattern fields (`resolve_field_alias`, private to that backend's
+/// own lowering pass, with no Body IR v0 equivalent). Both are backend-owned refinements layered on top of the same
+/// closed vocabulary below, not part of the vocabulary itself, and out of scope for this bucket; a pattern that
+/// would need either still lowers structurally through the plain (non-narrowed) mapping, at the cost of the
+/// resulting field types sometimes falling back to [`IncanType::Unknown`] where the existing backend's richer
+/// resolution would have found something more precise.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// `_`: matches anything, binds nothing.
+    Wildcard,
+    /// A plain name pattern (`x`): matches anything and binds the matched value (or, when nested inside a
+    /// [`Self::Tuple`]/[`Self::Struct`]/[`Self::Enum`], the matched sub-value) to a fresh local.
+    Var(PatternBinding),
+    /// A literal pattern (`42`, `"hello"`, `true`, `none`, ...): matches only a scrutinee equal to this constant.
+    Literal(Constant),
+    /// A tuple pattern (`(a, b)`): matches a tuple scrutinee and recursively matches/binds each element.
+    Tuple(Vec<Pattern>),
+    /// A named-field constructor pattern (`Point(x=a, y=b)`): matches a model/class scrutinee and recursively
+    /// matches/binds each named field.
+    Struct {
+        name: String,
+        fields: Vec<(String, Pattern)>,
+    },
+    /// A positional constructor pattern (`Some(x)`, `Ok(value)`, `Shape::Circle(r)`): matches an enum-variant (or
+    /// `Option`/`Result`) scrutinee and recursively matches/binds each positional field. `name` is the enum type
+    /// name when known, or empty when v0 lowering could not resolve it (matching the existing backend's own
+    /// `Pattern::Enum { name: String::new(), .. }` fallback for a bare, non-union constructor pattern) -- a target
+    /// backend must not rely on `name` being populated.
+    Enum {
+        name: String,
+        variant: String,
+        fields: Vec<Pattern>,
+    },
+    /// An alternation pattern (`A | B`): matches if any alternative matches. Incan's typechecker (RFC 071) requires
+    /// every alternative to bind an identical name/type set (`check_or_pattern` in
+    /// `src/frontend/typechecker/check_expr/match_.rs`), so lowering declares exactly one shared local per bound
+    /// name across all alternatives rather than one per alternative -- see `BodyBuilder::lower_match_pattern` in
+    /// `src/frontend/body_ir.rs`.
+    Or(Vec<Pattern>),
+}
+
+impl Pattern {
+    /// Render a deterministic maintainer-facing spelling for this pattern.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Wildcard => "_".to_string(),
+            Self::Var(binding) => binding.render_snapshot(),
+            Self::Literal(constant) => constant.render_snapshot(),
+            Self::Tuple(items) => {
+                let items: Vec<String> = items.iter().map(Pattern::render_snapshot).collect();
+                format!("({})", items.join(", "))
+            }
+            Self::Struct { name, fields } => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(field_name, pat)| format!("{field_name}: {}", pat.render_snapshot()))
+                    .collect();
+                format!("{name} {{ {} }}", fields.join(", "))
+            }
+            Self::Enum { name, variant, fields } => {
+                let label = if name.is_empty() {
+                    variant.clone()
+                } else {
+                    format!("{name}::{variant}")
+                };
+                if fields.is_empty() {
+                    label
+                } else {
+                    let fields: Vec<String> = fields.iter().map(Pattern::render_snapshot).collect();
+                    format!("{label}({})", fields.join(", "))
+                }
+            }
+            Self::Or(items) => {
+                let items: Vec<String> = items.iter().map(Pattern::render_snapshot).collect();
+                items.join(" | ")
+            }
+        }
+    }
+}
+
+/// A name bound by a [`Pattern::Var`], pairing the fresh arm-scoped [`LocalId`] lowering declared for it with the
+/// Duckborrower fact/last-use marker for reading the part of the scrutinee it binds.
+///
+/// See [`Rvalue::Match`]'s docs for why a pattern binding is modeled as this kind of read rather than an explicit
+/// `Assign` statement copying out of the scrutinee: the actual value transfer happens as a side effect of the
+/// target backend's native pattern match, and this model only needs to record *how* that transfer should be
+/// treated (move/clone/borrow/copy) -- the same way [`PlaceOperand`] records it for an ordinary read.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PatternBinding {
+    pub local: LocalId,
+    /// The ownership decision selected for this binding, computed the same way [`PlaceOperand::fact`] is: the
+    /// frontend lowering that builds this model (`src/frontend/body_ir.rs`) calls its own equivalent of the same
+    /// place-read ownership selection used for every other read in this file, on the scrutinee place this binding
+    /// projects into.
+    pub fact: OwnershipFact,
+    /// Whether this is statically the last read of the underlying scrutinee place this binding was computed from
+    /// (see [`PlaceOperand::last_use`] for the same caveat about `fact`/`last_use` being kept as separate facts).
+    pub last_use: bool,
+}
+
+impl PatternBinding {
+    /// Render a deterministic maintainer-facing spelling for this binding.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "bind(_{}, {}{})",
+            self.local.0,
+            self.fact.as_str(),
+            if self.last_use { ", last_use" } else { "" }
+        )
+    }
+}
+
+/// One part of an [`Rvalue::Format`] f-string, either a literal text chunk carried through verbatim or an
+/// already-lowered embedded expression plus the formatting style its source `{expr}`/`{expr!r}` syntax requested.
+/// Mirrors the existing Rust-emission backend's `FormatPart` (`src/backend/ir/expr.rs`), except the expression side
+/// carries an [`Operand`] rather than a full expression tree -- Body IR always lowers embedded expressions through
+/// the same [`Operand`]-producing path as any other read, so ownership facts and last-use tracking apply to
+/// f-string interpolations exactly like any other expression use.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FormatPart {
+    /// Literal text between interpolations, carried through unescaped -- brace/format-string escaping is an
+    /// emission-target concern (see the existing Rust-emission backend's `escape_format_literal`), not something
+    /// this target-agnostic model commits to.
+    Literal(String),
+    /// An interpolated `{expr}` or `{expr!r}` segment.
+    Expr {
+        /// The already-lowered embedded expression's value.
+        operand: Operand,
+        /// Which formatting style the source syntax requested for this interpolation.
+        style: FormatStyle,
+    },
+}
+
+impl FormatPart {
+    /// Render a deterministic maintainer-facing spelling for this format part.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Literal(s) => format!("lit({s:?})"),
+            Self::Expr { operand, style } => format!("{}:{}", operand.render_snapshot(), style.as_str()),
+        }
+    }
+}
+
+/// Formatting style requested by one f-string interpolation (`{expr}` vs. `{expr!r}`). Mirrors the existing
+/// Rust-emission backend's `FormatStyle` (`src/backend/ir/expr.rs`); unlike that backend's version, this one carries
+/// no `emits_rust_debug`-style target-representation logic, since Body IR v0 stays target-agnostic and leaves the
+/// decision of how a given style maps to a concrete formatting call to the consuming backend.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormatStyle {
+    /// User-facing display formatting (`{value}`).
+    Display,
+    /// Structured debug formatting (`{value!r}`).
+    Debug,
+}
+
+impl FormatStyle {
+    /// Compact snapshot spelling for this formatting style.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Display => "display",
+            Self::Debug => "debug",
         }
     }
 }
@@ -498,6 +973,15 @@ impl BinOp {
 pub enum AggregateKind {
     Tuple,
     List,
+    /// `{k: v, ...}` dict literal. The paired [`Rvalue::Aggregate`] operand vector alternates key, value, key,
+    /// value, ... (`operands[2*i]` is the i-th entry's key, `operands[2*i + 1]` is its value), so a single flat
+    /// operand vector can carry key/value pairs without a second `Rvalue` shape. Callers must always push keys and
+    /// values in matching pairs; this doc comment is the single source of truth for that invariant, since
+    /// [`Rvalue::Aggregate`] itself carries no static arity guarantee.
+    Dict,
+    /// `{v, ...}` set literal. Operands are the set's elements, one per entry -- the same flat shape as
+    /// [`AggregateKind::List`].
+    Set,
     Constructor(String),
 }
 
@@ -507,6 +991,8 @@ impl AggregateKind {
         match self {
             Self::Tuple => "tuple".to_string(),
             Self::List => "list".to_string(),
+            Self::Dict => "dict".to_string(),
+            Self::Set => "set".to_string(),
             Self::Constructor(name) => format!("constructor({name})"),
         }
     }
@@ -526,6 +1012,10 @@ pub enum Callee {
     /// spelling plus argument ownership facts, which is enough to prove the model end-to-end.
     Function(String),
     /// A method call `receiver.method(args)`. `args[0]` in the surrounding [`StatementKind::Call`] is the receiver.
+    ///
+    /// Also used for compiler-synthesized collection-growth calls a comprehension desugar introduces (`push`/
+    /// `insert`) that have no source-level call site of their own -- see `lower_comprehension_terminal` in
+    /// `src/frontend/body_ir.rs` for the synthesized case.
     Method(String),
     /// A compiler-owned runtime/helper operation, represented explicitly instead of as a generated-Rust helper-call
     /// idiom (#653 criterion 3).
@@ -654,6 +1144,9 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
             let value_str = value.as_ref().map(Operand::render_snapshot).unwrap_or_default();
             let _ = writeln!(out, "{indent}return {value_str}");
         }
+        StatementKind::Yield { value } => {
+            let _ = writeln!(out, "{indent}yield {}", value.render_snapshot());
+        }
         StatementKind::Assert {
             cond,
             message,
@@ -669,8 +1162,70 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
         StatementKind::Expr { value } => {
             let _ = writeln!(out, "{indent}expr {}", value.render_snapshot());
         }
+        StatementKind::TryPropagate { destination, operand } => {
+            let _ = writeln!(
+                out,
+                "{indent}{} = try?({})",
+                destination.render_snapshot(),
+                operand.render_snapshot()
+            );
+        }
+        StatementKind::IterNext {
+            destination,
+            iterator,
+            protocol,
+        } => {
+            let _ = writeln!(
+                out,
+                "{indent}{} = iter_next({}, {})",
+                destination.render_snapshot(),
+                iterator.render_snapshot(),
+                protocol.render_snapshot()
+            );
+        }
         StatementKind::Unsupported { description } => {
             let _ = writeln!(out, "{indent}unsupported({description})");
+        }
+    }
+}
+
+/// How [`StatementKind::IterNext`] should poll one iteration, mirroring the two paths the existing Rust-emission
+/// backend already branches on for general-iterable `for` (`src/backend/ir/lower/stmt.rs`'s `ast::Statement::For`
+/// arm, keyed by `TypeCheckInfo::protocol_iteration`): a builtin collection needs no named method dispatch at all,
+/// while a user-defined iterable resolves concrete `__iter__`/`__next__`-shaped method names through the
+/// typechecker's iteration-protocol resolution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IterProtocol {
+    /// Iterate a builtin collection (`List`/`Dict`/`String`) or a range with no explicit method dispatch. How to
+    /// concretely advance such an iterator is left to the consuming backend, matching how a plain `for` doesn't
+    /// manually unroll `IntoIterator` at the existing Rust-emission backend's own IR level either.
+    Builtin,
+    /// Iterate through a resolved user-defined iterator-protocol dispatch (`__iter__`/`__next__`-shaped magic
+    /// methods).
+    UserDefined {
+        /// Method resolved on the iterator object to poll the next item (`iterator.__next__()`).
+        next_method: String,
+        /// Whether `next_method` returns a fallible `Result[Option[T], E]` rather than a plain `Option[T]`
+        /// (`for item in iterable?:`, RFC 115). When `true`, [`StatementKind::IterNext`]'s implicit poll also
+        /// carries an implicit early-return-with-conversion on the failure variant, mirroring
+        /// [`StatementKind::TryPropagate`]'s own `From`/`Into` semantics, before the ordinary
+        /// exhausted-vs-produced-a-value branch applies to the success payload.
+        fallible: bool,
+    },
+}
+
+impl IterProtocol {
+    /// Compact snapshot spelling for this iteration protocol.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Builtin => "builtin".to_string(),
+            Self::UserDefined { next_method, fallible } => {
+                if *fallible {
+                    format!("user_defined({next_method}, fallible)")
+                } else {
+                    format!("user_defined({next_method})")
+                }
+            }
         }
     }
 }
@@ -716,6 +1271,18 @@ pub enum StatementKind {
     Continue,
     /// Return from the body, optionally with a value.
     Return { value: Option<Operand> },
+    /// `yield value` in statement position, suspending a generator body to produce one value.
+    ///
+    /// Only the statement-position form with a value is modeled -- see the module docs and
+    /// [`Body::is_generator`]. A bare `yield` (no value) and expression-position `yield` (the two-way send/receive
+    /// protocol, e.g. `x = yield val`) are out of scope for v0: both are stubs even in the existing Rust-emission
+    /// backend today (`ast::Expr::Yield(_) => (IrExprKind::Unit, IrType::Unknown)` in
+    /// `src/backend/ir/lower/expr/mod.rs`), so there is no real, delivered behavior for this variant to preserve.
+    /// A generator function's body needs no distinct suspendable-state-machine representation of its own: it
+    /// lowers through the exact same statement vocabulary as any other body, and the actual state-machine
+    /// transformation is left entirely to the target backend (the existing Rust-emission backend defers to Rust's
+    /// own native generator/coroutine support rather than the compiler modeling suspension points itself).
+    Yield { value: Operand },
     /// `assert cond[, message]`.
     Assert {
         cond: Operand,
@@ -724,6 +1291,43 @@ pub enum StatementKind {
     },
     /// An expression evaluated for its side effects only; its value is discarded.
     Expr { value: Operand },
+    /// `operand?` (try/propagate). Evaluates `operand` (a `Result`-typed value; the current typechecker only
+    /// allows `?` on `Result`, not `Option` -- see `validate_try_result_type` in
+    /// `src/frontend/typechecker/check_expr/control_flow.rs`). On the failure variant (`Err`), returns early from
+    /// the enclosing function with the failure value, converting it via `From`/`Into` when the enclosing
+    /// function's error type differs from `operand`'s, mirroring Rust's built-in `?` desugaring. Otherwise stores
+    /// the unwrapped success value (`Ok(v)`'s `v`) into `destination` and falls through to the next statement.
+    ///
+    /// Modeled as a single compiler-owned primitive rather than decomposed into explicit `is_err`/`unwrap`-style
+    /// calls, matching the same #653-criterion-3 rationale as [`Callee::Helper`]: this operation is a
+    /// compiler-owned semantic, not something to be inferred later from generated Rust call shapes, and full
+    /// call-target resolution for a manual decomposition is out of scope for v0 (see the module docs). Unlike
+    /// [`Callee::Helper`] this needs no runtime-helper requirement: the conversion is Rust's own `From`/`Into`
+    /// machinery, not a compiler-provided function call.
+    TryPropagate { destination: Place, operand: Operand },
+    /// Poll one iteration of a general (non-range) `for` loop or comprehension `for` clause, standing in for
+    /// `iterator.next_method()` (or a builtin collection's implicit advance) plus the branch on its result -- the
+    /// same #653-criterion-3 "compiler-owned semantic gets its own explicit node" treatment as
+    /// [`Self::TryPropagate`], applied to `Option`-shaped loop polling instead of `Result`-shaped early return.
+    ///
+    /// On exhaustion (the poll conceptually returns `None`, or `Ok(None)` under [`IterProtocol::UserDefined`]'s
+    /// `fallible` flag), breaks out of the innermost enclosing [`Self::Loop`] -- mirroring how a range-based `for`
+    /// already injects a leading conditional `Break` for its own exhaustion check. On a produced value (`Some(v)`,
+    /// or `Ok(Some(v))` when fallible), stores `v` into `destination` and falls through to the next statement. When
+    /// `protocol` is [`IterProtocol::UserDefined`] with `fallible: true`, a failure result (`Err(e)`) additionally
+    /// short-circuits with an early return from the enclosing function, converting `e` via `From`/`Into` exactly
+    /// like [`Self::TryPropagate`] -- so this single statement can carry up to three implicit outcomes when
+    /// fallible, matching what `for item in iterable?:` (RFC 115) means as one syntactic form at the source level
+    /// rather than decomposing it into a raw match a downstream consumer would have to re-derive.
+    IterNext {
+        /// Where the produced item is written when the iterator was not exhausted.
+        destination: Place,
+        /// The iterator being polled (already materialized by an earlier `Assign`/`Call` -- see
+        /// `lower_general_iteration` in `src/frontend/body_ir.rs`).
+        iterator: Operand,
+        /// Which iteration protocol drives this poll.
+        protocol: IterProtocol,
+    },
     /// A source construct v0 lowering does not yet model. Keeps the model total over real programs instead of
     /// panicking or silently dropping the construct.
     Unsupported { description: String },
@@ -891,6 +1495,310 @@ mod tests {
     }
 
     #[test]
+    fn dict_aggregate_renders_as_key_value_pairs() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Aggregate(
+                        AggregateKind::Dict,
+                        vec![
+                            Operand::Constant(Constant::Str("a".to_string())),
+                            Operand::Constant(Constant::Int(1)),
+                        ],
+                    ),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(
+            snapshot.contains("dict[const(\"a\"): const(1)]"),
+            "dict aggregate should render key/value pairs, not a flat list: {snapshot}"
+        );
+    }
+
+    #[test]
+    fn set_aggregate_renders_as_a_flat_element_list() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Aggregate(AggregateKind::Set, vec![Operand::Constant(Constant::Int(1))]),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(snapshot.contains("set[const(1)]"));
+    }
+
+    #[test]
+    fn slice_projection_renders_optional_components() {
+        let full_slice = Place {
+            local: LocalId(0),
+            projection: vec![PlaceElem::Slice {
+                start: Some(Box::new(Operand::Constant(Constant::Int(1)))),
+                end: Some(Box::new(Operand::Constant(Constant::Int(3)))),
+                step: None,
+            }],
+        };
+        assert_eq!(full_slice.render_snapshot(), "_0[const(1):const(3)]");
+
+        let stepped_slice = Place {
+            local: LocalId(0),
+            projection: vec![PlaceElem::Slice {
+                start: None,
+                end: None,
+                step: Some(Box::new(Operand::Constant(Constant::Int(2)))),
+            }],
+        };
+        assert_eq!(stepped_slice.render_snapshot(), "_0[::const(2)]");
+    }
+
+    #[test]
+    fn try_propagate_statement_renders_destination_and_operand() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::TryPropagate {
+                    destination: Place::from_local(LocalId(2)),
+                    operand: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Move, true),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(snapshot.contains("_2 = try?(move(_0, last_use))"));
+    }
+
+    #[test]
+    fn iter_next_renders_builtin_protocol() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::IterNext {
+                    destination: Place::from_local(LocalId(2)),
+                    iterator: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::MutBorrow, false),
+                    protocol: IterProtocol::Builtin,
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(snapshot.contains("_2 = iter_next(mut_borrow(_0), builtin)"));
+    }
+
+    #[test]
+    fn iter_next_renders_user_defined_protocol_and_fallible_flag() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::IterNext {
+                    destination: Place::from_local(LocalId(2)),
+                    iterator: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::MutBorrow, false),
+                    protocol: IterProtocol::UserDefined {
+                        next_method: "__next__".to_string(),
+                        fallible: false,
+                    },
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(snapshot.contains("_2 = iter_next(mut_borrow(_0), user_defined(__next__))"));
+
+        let mut fallible_body = sample_body();
+        fallible_body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::IterNext {
+                    destination: Place::from_local(LocalId(2)),
+                    iterator: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::MutBorrow, false),
+                    protocol: IterProtocol::UserDefined {
+                        next_method: "__next__".to_string(),
+                        fallible: true,
+                    },
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let fallible_snapshot = fallible_body.render_snapshot();
+        assert!(fallible_snapshot.contains("_2 = iter_next(mut_borrow(_0), user_defined(__next__, fallible))"));
+    }
+
+    #[test]
+    fn format_rvalue_renders_literal_and_expr_parts_in_order() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Format(vec![
+                        FormatPart::Literal("x=".to_string()),
+                        FormatPart::Expr {
+                            operand: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Copy, false),
+                            style: FormatStyle::Display,
+                        },
+                        FormatPart::Literal(" y=".to_string()),
+                        FormatPart::Expr {
+                            operand: Operand::place(Place::from_local(LocalId(1)), OwnershipFact::Borrow, false),
+                            style: FormatStyle::Debug,
+                        },
+                    ]),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(
+            snapshot.contains("_2 = fstring(lit(\"x=\"), copy(_0):display, lit(\" y=\"), borrow(_1):debug)"),
+            "unexpected fstring rendering: {snapshot}"
+        );
+    }
+
+    #[test]
+    fn closure_rvalue_renders_params_captures_and_nested_body() {
+        let mut body = sample_body();
+        // Simulate `(z: int) => x + z` capturing `_0` (the sample body's `x` param) with a `clone` fact, where the
+        // closure's own param `z` gets local `_3` and the capture gets local `_4`.
+        let param_local = LocalId(3);
+        let capture_local = LocalId(4);
+        body.locals.push(LocalDecl {
+            id: param_local,
+            name: Some("z".to_string()),
+            ty: IncanType::Primitive(IncanPrimitiveType::Int),
+            origin: LocalOrigin::Parameter,
+            scope: ScopeId(0),
+            span: HirSourceSpan::new(0, 1),
+        });
+        body.locals.push(LocalDecl {
+            id: capture_local,
+            name: Some("x".to_string()),
+            ty: IncanType::Primitive(IncanPrimitiveType::Int),
+            origin: LocalOrigin::Captured,
+            scope: ScopeId(0),
+            span: HirSourceSpan::new(0, 1),
+        });
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Closure {
+                        params: vec![ClosureParam {
+                            name: "z".to_string(),
+                            ty: IncanType::Primitive(IncanPrimitiveType::Int),
+                        }],
+                        captured_operands: vec![Operand::place(
+                            Place::from_local(LocalId(0)),
+                            OwnershipFact::Clone,
+                            false,
+                        )],
+                        body: Box::new(ClosureBody {
+                            param_locals: vec![param_local],
+                            capture_locals: vec![capture_local],
+                            stmts: Vec::new(),
+                            result: Operand::place(
+                                Place {
+                                    local: capture_local,
+                                    projection: Vec::new(),
+                                },
+                                OwnershipFact::Copy,
+                                false,
+                            ),
+                        }),
+                    },
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(
+            snapshot.contains("closure(params=[z: int], captures=[clone(_0)]) { result: copy(_4) }"),
+            "unexpected closure rendering: {snapshot}"
+        );
+        assert!(snapshot.contains("local 4 x : int [captured]"));
+    }
+
+    #[test]
+    fn yield_statement_renders_and_marks_the_body_as_a_generator() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Yield {
+                    value: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Copy, false),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+        assert!(
+            snapshot.contains("yield copy(_0)"),
+            "unexpected yield rendering: {snapshot}"
+        );
+        assert!(
+            body.is_generator(),
+            "a top-level yield should mark the body a generator"
+        );
+    }
+
+    #[test]
+    fn is_generator_finds_a_yield_nested_inside_if_and_loop_blocks() {
+        let mut body = sample_body();
+        let yield_stmt = Statement {
+            kind: StatementKind::Yield {
+                value: Operand::Constant(Constant::Int(1)),
+            },
+            span: HirSourceSpan::new(0, 1),
+        };
+        // Nested under a `Loop` inside an `If`'s `then_block`, mirroring `yield` inside `if cond: while ...`.
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::If {
+                    cond: Operand::Constant(Constant::Bool(true)),
+                    then_block: Block {
+                        scope: ScopeId(0),
+                        stmts: vec![Statement {
+                            kind: StatementKind::Loop {
+                                body: Block {
+                                    scope: ScopeId(0),
+                                    stmts: vec![yield_stmt],
+                                },
+                            },
+                            span: HirSourceSpan::new(0, 1),
+                        }],
+                    },
+                    else_block: None,
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        assert!(
+            body.is_generator(),
+            "a yield nested under If -> Loop should still be found"
+        );
+    }
+
+    #[test]
+    fn is_generator_is_false_without_any_yield_statement() {
+        assert!(
+            !sample_body().is_generator(),
+            "sample_body contains no yield and must not be reported as a generator"
+        );
+    }
+
+    #[test]
     fn locals_requiring_unwind_drop_is_conservative_over_non_copy_locals() {
         let mut body = sample_body();
         body.locals.push(LocalDecl {
@@ -959,5 +1867,134 @@ mod tests {
         let snapshot = module.render_snapshot();
         assert!(snapshot.starts_with("body_ir_module module:m\n"));
         assert!(snapshot.contains("body add decl:m::add"));
+    }
+
+    /// One `Rvalue::Match` exercising every `Pattern` variant this data model closes over (see #1101's B6): a
+    /// literal, a tuple nesting a binding and a wildcard behind a guard, a named-field struct constructor, a
+    /// positional enum constructor, and an alternation. Mirrors `sample_body`'s own style of hand-building a
+    /// [`Statement`] rather than going through the frontend lowering the `src/frontend/body_ir.rs` integration
+    /// tests exercise instead.
+    #[test]
+    fn match_rvalue_renders_scrutinee_and_every_pattern_shape() {
+        let mut body = sample_body();
+        let match_stmt = Statement {
+            kind: StatementKind::Assign {
+                place: Place::from_local(LocalId(2)),
+                rvalue: Rvalue::Match {
+                    scrutinee: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Borrow, false),
+                    arms: vec![
+                        MatchArm {
+                            pattern: Pattern::Literal(Constant::Int(0)),
+                            guard_stmts: Vec::new(),
+                            guard: None,
+                            body_stmts: Vec::new(),
+                            result: Operand::Constant(Constant::Int(100)),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Tuple(vec![
+                                Pattern::Var(PatternBinding {
+                                    local: LocalId(1),
+                                    fact: OwnershipFact::Copy,
+                                    last_use: false,
+                                }),
+                                Pattern::Wildcard,
+                            ]),
+                            guard_stmts: Vec::new(),
+                            guard: Some(Operand::place(
+                                Place::from_local(LocalId(1)),
+                                OwnershipFact::Copy,
+                                false,
+                            )),
+                            body_stmts: Vec::new(),
+                            result: Operand::place(Place::from_local(LocalId(1)), OwnershipFact::Copy, false),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Struct {
+                                name: "Point".to_string(),
+                                fields: vec![("x".to_string(), Pattern::Wildcard)],
+                            },
+                            guard_stmts: Vec::new(),
+                            guard: None,
+                            body_stmts: Vec::new(),
+                            result: Operand::Constant(Constant::Unit),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Enum {
+                                name: String::new(),
+                                variant: "Some".to_string(),
+                                fields: vec![Pattern::Wildcard],
+                            },
+                            guard_stmts: Vec::new(),
+                            guard: None,
+                            body_stmts: Vec::new(),
+                            result: Operand::Constant(Constant::Unit),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Or(vec![
+                                Pattern::Literal(Constant::Int(1)),
+                                Pattern::Literal(Constant::Int(2)),
+                            ]),
+                            guard_stmts: Vec::new(),
+                            guard: None,
+                            body_stmts: Vec::new(),
+                            result: Operand::Constant(Constant::Unit),
+                        },
+                    ],
+                },
+            },
+            span: HirSourceSpan::new(0, 1),
+        };
+        body.block.stmts.insert(0, match_stmt);
+        let snapshot = body.render_snapshot();
+
+        assert!(
+            snapshot.contains("match borrow(_0) {"),
+            "unexpected match rendering: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(0) => const(100)"),
+            "literal pattern: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("(bind(_1, copy), _) if copy(_1) => copy(_1)"),
+            "tuple pattern with a nested binding, wildcard, and guard: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("Point { x: _ } => const(())"),
+            "named-field struct pattern: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("Some(_) => const(())"),
+            "positional enum pattern: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(1) | const(2) => const(())"),
+            "alternation pattern: {snapshot}"
+        );
+    }
+
+    #[test]
+    fn match_rvalue_snapshot_is_deterministic() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Match {
+                        scrutinee: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Borrow, false),
+                        arms: vec![MatchArm {
+                            pattern: Pattern::Wildcard,
+                            guard_stmts: Vec::new(),
+                            guard: None,
+                            body_stmts: Vec::new(),
+                            result: Operand::Constant(Constant::Unit),
+                        }],
+                    },
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        assert_eq!(body.render_snapshot(), body.render_snapshot());
     }
 }

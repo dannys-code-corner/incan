@@ -9,26 +9,34 @@
 //!
 //! Body IR v0 lowers a representative, explicitly documented subset of the language surface (see
 //! [`incan_semantics_core::body_ir`] module docs for the full rationale). Statements fully lowered: assignment
-//! (inferred/let/mutable/reassignment), `return`, `if`/`elif`/`else`, `while`, `for` over a `start..end` range,
-//! expression statements, `assert`, `pass`, `break`, `continue`. Expressions fully lowered: identifiers, `self`,
-//! literals (int/float/decimal/bool/string), binary/unary operators, calls, method calls, field access, indexing,
-//! parenthesization, tuples, list literals (no spreads), and constructors. Everything else lowers to an explicit
+//! (inferred/let/mutable/reassignment), field/index assignment (including their pre-desugared compound `<op>=`
+//! forms), compound assignment (`x <op>= y`), tuple unpacking, multi-target (lvalue) tuple assignment, chained
+//! assignment, `return`, `if`/`elif`/`else`, `while`, `for` (both a `start..end` range and a general iterable --
+//! builtin collections or a resolved `__iter__`/`__next__` protocol, including the fallible `for item in
+//! iterable?:` form), expression statements, statement-position `yield value` (see [`BodyBuilder::lower_stmt_into`]
+//! and [`bir::Body::is_generator`]), `assert`, `pass`, `break` (including a value-producing `break` inside a `loop`
+//! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
+//! binary/unary operators, calls, method calls, field access, indexing, slicing, parenthesization, tuples,
+//! list/dict/set literals (no spreads), constructors, expression-position `if`/`loop`, `try` (`?`), f-strings,
+//! list/dict comprehensions, closure literals, partial callables (see
+//! [`BodyBuilder::lower_closure`]/[`BodyBuilder::lower_partial`] for how captures
+//! are computed and represented explicitly rather than left implicit), and `match` (see [`BodyBuilder::lower_match`]
+//! for how patterns are lowered and their bindings scoped). Everything else -- generator expressions, a bare
+//! `yield` with no value, and expression-position `yield` (the two-way send/receive protocol) -- lowers to an explicit
 //! `Statement::Unsupported` / `Operand::Unknown` node rather than panicking, so the model stays total over real
-//! programs.
-//!
-//! Class/model/trait methods (#1102) are lowered through the same statement/expression subset above — this module
-//! does not widen that subset just because the body happens to belong to a method rather than a top-level `def`.
-//! In particular, `self.field = value` (`ast::Statement::FieldAssignment`) still lowers to `Unsupported`: field
-//! assignment is unsupported for *every* receiver today (`obj.field = value` is exactly as unmodeled as
-//! `self.field = value`), so closing that gap is general statement-surface work for #1101, not something specific
-//! to `self` that belongs in this method-lowering slice.
+//! programs. Expression-position `yield` is a stub even in the existing Rust-emission backend today, not real
+//! behavior this bucket needs to preserve.
 
 use std::collections::{HashMap, HashSet};
 
 use incan_semantics_core::body_ir as bir;
-use incan_semantics_core::{AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanPrimitiveType, IncanType};
+use incan_semantics_core::{
+    AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanCallableParam, IncanCallableParamKind,
+    IncanPrimitiveType, IncanType,
+};
 
 use crate::frontend::ast;
+use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::{TypeCheckInfo, semantic_type_from_resolved};
 
 /// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
@@ -307,6 +315,14 @@ struct BodyBuilder<'a> {
     /// Locals whose value has been moved out via a full-value (non-projected) read, so scope-exit drop insertion
     /// skips them.
     moved_out: HashSet<bir::LocalId>,
+    /// Stack of the innermost-to-outermost enclosing loop's `break`-value target, pushed/popped by every loop-
+    /// lowering path (`while`, `for`, and value-producing `loop` expressions) around its own body. `Some(local)`
+    /// means the innermost loop is a value-producing `loop:` expression (see [`Self::lower_loop_expr`]) whose
+    /// `break value` statements should assign into `local` instead of carrying the value on the `Break` statement
+    /// itself; `None` means the innermost loop does not produce a value (`while`/`for`, which never legally see a
+    /// `break value` today, or a `loop:` expression's own synthetic exit checks). Always non-empty while lowering
+    /// any loop body, so [`Self::lower_break`] can look up the innermost target with `.last()`.
+    loop_break_targets: Vec<Option<bir::LocalId>>,
     runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     panic_facts: Vec<bir::PanicFact>,
     next_local: u32,
@@ -324,6 +340,7 @@ impl<'a> BodyBuilder<'a> {
             external_locals: HashMap::new(),
             remaining_reads: HashMap::new(),
             moved_out: HashSet::new(),
+            loop_break_targets: Vec::new(),
             runtime_requirements: Vec::new(),
             panic_facts: Vec::new(),
             next_local: 0,
@@ -372,6 +389,24 @@ impl<'a> BodyBuilder<'a> {
         span: HirSourceSpan,
         remaining: &[ast::Spanned<ast::Statement>],
     ) -> bir::LocalId {
+        let total_reads = count_reads_in_stmts(&name, remaining);
+        self.declare_new_local_with_reads(name, ty, scope, span, total_reads)
+    }
+
+    /// Declare a new user-facing local with an already-computed last-use countdown, for declaration sites whose
+    /// "remaining reads" context is not a plain statement suffix -- currently only comprehension/generator `for`
+    /// clause bindings (see `Self::lower_comprehension_clauses`), whose remaining context is a tail of
+    /// [`ast::ComprehensionClause`]s plus a terminal element/key/value expression, not
+    /// [`ast::Statement`]s. [`Self::declare_new_local`] is a thin wrapper over this that seeds `total_reads` from a
+    /// statement suffix via [`count_reads_in_stmts`].
+    fn declare_new_local_with_reads(
+        &mut self,
+        name: String,
+        ty: IncanType,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        total_reads: usize,
+    ) -> bir::LocalId {
         let id = bir::LocalId(self.next_local);
         self.next_local += 1;
         self.locals.push(bir::LocalDecl {
@@ -382,7 +417,6 @@ impl<'a> BodyBuilder<'a> {
             scope,
             span,
         });
-        let total_reads = count_reads_in_stmts(&name, remaining);
         self.bindings.insert(name, id);
         self.remaining_reads.insert(id, total_reads);
         id
@@ -691,6 +725,22 @@ impl<'a> BodyBuilder<'a> {
         let span = hir_span(stmt.span);
         match &stmt.node {
             ast::Statement::Assignment(assignment) => self.lower_assignment(assignment, remaining, scope, span, out),
+            ast::Statement::FieldAssignment(field_assignment) => {
+                self.lower_field_assignment(field_assignment, scope, span, out)
+            }
+            ast::Statement::IndexAssignment(index_assignment) => {
+                self.lower_index_assignment(index_assignment, scope, span, out)
+            }
+            ast::Statement::CompoundAssignment(compound_assignment) => {
+                self.lower_compound_assignment(compound_assignment, scope, span, out)
+            }
+            ast::Statement::TupleUnpack(tuple_unpack) => {
+                self.lower_tuple_unpack(tuple_unpack, remaining, scope, span, out)
+            }
+            ast::Statement::TupleAssign(tuple_assign) => self.lower_tuple_assign(tuple_assign, scope, span, out),
+            ast::Statement::ChainedAssignment(chained_assignment) => {
+                self.lower_chained_assignment(chained_assignment, remaining, scope, span, out)
+            }
             ast::Statement::Return(value) => {
                 let value = value.as_ref().map(|v| self.lower_expr_to_operand(v, scope, out));
                 out.push(bir::Statement {
@@ -702,21 +752,25 @@ impl<'a> BodyBuilder<'a> {
             ast::Statement::While(while_stmt) => self.lower_while(while_stmt, scope, span, out),
             ast::Statement::For(for_stmt) => self.lower_for(for_stmt, scope, span, out),
             ast::Statement::Expr(expr) => {
-                let value = self.lower_expr_to_operand(expr, scope, out);
-                out.push(bir::Statement {
-                    kind: bir::StatementKind::Expr { value },
-                    span,
-                });
+                // `yield value` parses as an ordinary expression statement wrapping `ast::Expr::Yield(Some(_))`
+                // (there is no separate `ast::Statement::Yield` AST node) -- mirror the existing Rust-emission
+                // backend's own `lower_statement` (`src/backend/ir/lower/stmt.rs`), which special-cases this exact
+                // shape before falling back to generic expression-statement lowering. A bare `yield` (no value)
+                // falls through to the generic `Expr` arm below, same as that backend, and lowers via the
+                // expression-position `yield` stub (see the module docs).
+                if let ast::Expr::Yield(Some(value)) = &expr.node {
+                    self.lower_yield(value, scope, span, out);
+                } else {
+                    let value = self.lower_expr_to_operand(expr, scope, out);
+                    out.push(bir::Statement {
+                        kind: bir::StatementKind::Expr { value },
+                        span,
+                    });
+                }
             }
             ast::Statement::Assert(assert_stmt) => self.lower_assert(assert_stmt, scope, span, out),
             ast::Statement::Pass => {}
-            ast::Statement::Break(value) => {
-                let value = value.as_ref().map(|v| self.lower_expr_to_operand(v, scope, out));
-                out.push(bir::Statement {
-                    kind: bir::StatementKind::Break { value },
-                    span,
-                });
-            }
+            ast::Statement::Break(value) => self.lower_break(value.as_ref(), scope, span, out),
             ast::Statement::Continue => out.push(bir::Statement {
                 kind: bir::StatementKind::Continue,
                 span,
@@ -758,6 +812,356 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
+    /// Lower `obj.field = value` (including the compound `obj.field <op>= value` form). The parser already
+    /// desugars a compound `FieldAssignmentStmt` so `value` is the full `obj.field <op> rhs` expression
+    /// (`crates/incan_syntax/src/parser/stmts.rs`'s `assignment_or_expr_stmt`) -- `fa.compound_op` is purely a
+    /// formatter hint for round-tripping `+=` spelling and carries no separate lowering semantics here, so this
+    /// only needs to build the write-side place and lower `value` normally.
+    fn lower_field_assignment(
+        &mut self,
+        field_assignment: &ast::FieldAssignmentStmt,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let mut place = self.lower_expr_to_place(&field_assignment.object, scope, out);
+        place
+            .projection
+            .push(bir::PlaceElem::Field(field_assignment.field.clone()));
+        let value = self.lower_expr_to_operand(&field_assignment.value, scope, out);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place,
+                rvalue: bir::Rvalue::Use(value),
+            },
+            span,
+        });
+    }
+
+    /// Lower `obj[index] = value` (including the compound `obj[index] <op>= value` form, pre-desugared into
+    /// `value` by the parser -- see [`Self::lower_field_assignment`]'s docs for the same note on
+    /// `IndexAssignmentStmt::compound_op`). The object place is lowered before the index operand, preserving the
+    /// established assignment evaluation order in the Rust-emission backend: object, index, then assigned value.
+    fn lower_index_assignment(
+        &mut self,
+        index_assignment: &ast::IndexAssignmentStmt,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let mut place = self.lower_expr_to_place(&index_assignment.object, scope, out);
+        let index_operand = self.lower_expr_to_operand(&index_assignment.index, scope, out);
+        place.projection.push(bir::PlaceElem::Index(Box::new(index_operand)));
+        let value = self.lower_expr_to_operand(&index_assignment.value, scope, out);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place,
+                rvalue: bir::Rvalue::Use(value),
+            },
+            span,
+        });
+    }
+
+    /// Lower `name <op>= value` (`x += y`, `x &= y`, ...). Unlike field/index compound assignment, the parser
+    /// leaves `ca.value` as the plain right-hand operand rather than pre-desugaring it, so this explicitly reads
+    /// `name`'s current value, combines it with `value` via [`Self::lower_binary_from_operands`] (shared with
+    /// [`Self::lower_binary`], so string-concat compound assignment routes through the same helper-call machinery
+    /// as `+`), and writes the result back. An operator with no Body IR equivalent (see [`lower_binary_op`]) or a
+    /// name that is not currently bound (should not happen after a successful typecheck) falls back to an explicit
+    /// unsupported placeholder instead of panicking.
+    fn lower_compound_assignment(
+        &mut self,
+        compound_assignment: &ast::CompoundAssignmentStmt,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let Some(&local) = self.bindings.get(&compound_assignment.name) else {
+            self.push_unsupported_stmt(
+                format!("compound assignment to unbound name `{}`", compound_assignment.name),
+                span,
+                out,
+            );
+            return;
+        };
+        let lhs_ty = self.locals[local.index()].ty.clone();
+        let op = compound_assignment.op.binary_op();
+        let rhs_ty = self.resolve_ty(compound_assignment.value.span);
+        if !Self::binary_op_is_supported(op, &lhs_ty, &rhs_ty) {
+            self.push_unsupported_stmt(
+                format!("compound assignment operator {:?}", compound_assignment.op),
+                span,
+                out,
+            );
+            return;
+        }
+        let lhs_place = bir::Place::from_local(local);
+        let (fact, last_use) = self.ownership_fact_for_place(&lhs_place, &lhs_ty);
+        let lhs_operand = bir::Operand::place(lhs_place, fact, last_use);
+        let rhs_operand = self.lower_expr_to_operand(&compound_assignment.value, scope, out);
+        let result = self.lower_binary_from_operands(
+            op,
+            &lhs_ty,
+            lhs_operand,
+            &rhs_ty,
+            rhs_operand,
+            lhs_ty.clone(),
+            scope,
+            span,
+            out,
+        );
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(local),
+                rvalue: bir::Rvalue::Use(result),
+            },
+            span,
+        });
+    }
+
+    /// Resolve or declare the local for one name bound by a multi-target assignment (tuple unpack or chained
+    /// assignment). A `Reassign` binding reuses an existing local exactly like [`Self::lower_assignment`] does for
+    /// a plain single-target reassignment; every other binding kind always declares a fresh local, matching
+    /// source-level shadowing semantics.
+    fn bind_multi_target_name(
+        &mut self,
+        name: &str,
+        ty: IncanType,
+        binding: ast::BindingKind,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        remaining: &[ast::Spanned<ast::Statement>],
+    ) -> bir::LocalId {
+        match binding {
+            ast::BindingKind::Reassign => self
+                .bindings
+                .get(name)
+                .copied()
+                .unwrap_or_else(|| self.declare_new_local(name.to_string(), ty, scope, span, remaining)),
+            ast::BindingKind::Inferred | ast::BindingKind::Let | ast::BindingKind::Mutable => {
+                self.declare_new_local(name.to_string(), ty, scope, span, remaining)
+            }
+        }
+    }
+
+    /// Lower `a, b = value` / `let a, b = value` into a sequence of single-target `Assign` statements: materialize
+    /// `value` once, then bind each name to the corresponding `.{index}` tuple-field projection off it, in
+    /// left-to-right order. Element reads go through the same [`Self::ownership_fact_for_place`] a plain
+    /// `.field`/`[index]` read anywhere else in v0 uses, so a non-Copy element borrows rather than moves (v0 does
+    /// not track partial-move state out of a place, per [`Self::ownership_fact_for_place`]'s own docs) --
+    /// consistent with, not a special case of, that existing policy.
+    fn lower_tuple_unpack(
+        &mut self,
+        tuple_unpack: &ast::TupleUnpackStmt,
+        remaining: &[ast::Spanned<ast::Statement>],
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let value_ty = self.resolve_ty(tuple_unpack.value.span);
+        let value_operand = self.lower_expr_to_operand(&tuple_unpack.value, scope, out);
+        let value_place = self.materialize_operand_to_place(value_operand, value_ty.clone(), scope, span, out);
+        let element_types = tuple_element_types(&value_ty, tuple_unpack.names.len());
+
+        for (index, (name, element_ty)) in tuple_unpack.names.iter().zip(&element_types).enumerate() {
+            let mut element_place = value_place.clone();
+            element_place.projection.push(bir::PlaceElem::Field(index.to_string()));
+            let (fact, last_use) = self.ownership_fact_for_place(&element_place, element_ty);
+            let element_operand = bir::Operand::place(element_place, fact, last_use);
+            let local =
+                self.bind_multi_target_name(name, element_ty.clone(), tuple_unpack.binding, scope, span, remaining);
+            out.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place: bir::Place::from_local(local),
+                    rvalue: bir::Rvalue::Use(element_operand),
+                },
+                span,
+            });
+        }
+    }
+
+    /// Lower `t1, t2 = value` where the targets are lvalue expressions (`arr[i], arr[j] = ...`), not new bindings
+    /// -- used for swaps and other multi-target reassignments. Materializes `value` once, then reads and
+    /// materializes each element into its own fresh temporary *before* writing to any target, so aliased targets
+    /// and sources (for example `arr[i], arr[j] = arr[j], arr[i]`) read the pre-assignment values rather than one
+    /// another's already-written results. This is genuinely new coverage: the existing Rust-emission backend does
+    /// not implement `TupleAssign` at all (`src/backend/ir/lower/stmt.rs` returns a `LoweringError`), so there is
+    /// no existing behavior to mirror here -- the evaluation order above is v0's own design, chosen specifically
+    /// to make `a, b = b, a` swap correctly.
+    fn lower_tuple_assign(
+        &mut self,
+        tuple_assign: &ast::TupleAssignStmt,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let value_ty = self.resolve_ty(tuple_assign.value.span);
+        let value_operand = self.lower_expr_to_operand(&tuple_assign.value, scope, out);
+        let value_place = self.materialize_operand_to_place(value_operand, value_ty.clone(), scope, span, out);
+        let element_types = tuple_element_types(&value_ty, tuple_assign.targets.len());
+
+        let mut element_operands = Vec::with_capacity(tuple_assign.targets.len());
+        for (index, element_ty) in element_types.iter().enumerate() {
+            let mut element_place = value_place.clone();
+            element_place.projection.push(bir::PlaceElem::Field(index.to_string()));
+            let (fact, last_use) = self.ownership_fact_for_place(&element_place, element_ty);
+            let element_operand = bir::Operand::place(element_place, fact, last_use);
+            element_operands.push(self.push_assign_temp(
+                bir::Rvalue::Use(element_operand),
+                element_ty.clone(),
+                scope,
+                span,
+                out,
+            ));
+        }
+
+        for (target, value) in tuple_assign.targets.iter().zip(element_operands) {
+            let place = self.lower_expr_to_place(target, scope, out);
+            out.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place,
+                    rvalue: bir::Rvalue::Use(value),
+                },
+                span,
+            });
+        }
+    }
+
+    /// Lower `x = y = z = value` into `z = value; y = <read z>; x = <read y>` (rightmost target first), matching
+    /// the direction the existing Rust-emission backend already chose for this same desugar
+    /// (`src/backend/ir/lower/stmt.rs`'s `ChainedAssignment` arm).
+    fn lower_chained_assignment(
+        &mut self,
+        chained_assignment: &ast::ChainedAssignmentStmt,
+        remaining: &[ast::Spanned<ast::Statement>],
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let Some(last_name) = chained_assignment.targets.last() else {
+            self.push_unsupported_stmt("empty chained assignment".to_string(), span, out);
+            return;
+        };
+        let value_ty = self.resolve_ty(chained_assignment.value.span);
+        let value_operand = self.lower_expr_to_operand(&chained_assignment.value, scope, out);
+        let mut prev_local = self.bind_multi_target_name(
+            last_name,
+            value_ty.clone(),
+            chained_assignment.binding,
+            scope,
+            span,
+            remaining,
+        );
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(prev_local),
+                rvalue: bir::Rvalue::Use(value_operand),
+            },
+            span,
+        });
+
+        // Walk the remaining targets right-to-left, each one reading the local immediately to its right.
+        for name in chained_assignment.targets[..chained_assignment.targets.len() - 1]
+            .iter()
+            .rev()
+        {
+            // `remaining_reads[prev_local]` was seeded only from statements *after* this whole chained-assignment
+            // statement (see `Self::declare_new_local`'s `remaining` parameter) -- it does not know about the
+            // synthetic read performed right here, within the very statement that (re)bound `prev_local`. Bump it
+            // by one first so the shared `Self::ownership_fact_for_place` decrement below still lands on the
+            // correct move/clone decision instead of under-counting by one.
+            if let Some(remaining_count) = self.remaining_reads.get_mut(&prev_local) {
+                *remaining_count += 1;
+            }
+            let place = bir::Place::from_local(prev_local);
+            let (fact, last_use) = self.ownership_fact_for_place(&place, &value_ty);
+            let operand = bir::Operand::place(place, fact, last_use);
+            let local = self.bind_multi_target_name(
+                name,
+                value_ty.clone(),
+                chained_assignment.binding,
+                scope,
+                span,
+                remaining,
+            );
+            out.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place: bir::Place::from_local(local),
+                    rvalue: bir::Rvalue::Use(operand),
+                },
+                span,
+            });
+            prev_local = local;
+        }
+    }
+
+    /// Lower a `break` / `break value` statement. A value routes into the innermost enclosing loop's result place
+    /// when that loop is a value-producing `loop:` expression (see [`Self::lower_loop_expr`]) -- otherwise it stays
+    /// on the `Break` statement itself, matching [`bir::StatementKind::Break`]'s documented default. The innermost
+    /// context comes from [`Self::loop_break_targets`], which every loop-lowering path pushes/pops around its own
+    /// body so a `break` always targets the loop it is lexically inside, never an outer one.
+    fn lower_break(
+        &mut self,
+        value: Option<&ast::Spanned<ast::Expr>>,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let target = self.loop_break_targets.last().copied().flatten();
+        match (value, target) {
+            (Some(expr), Some(result_local)) => {
+                let operand = self.lower_expr_to_operand(expr, scope, out);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Assign {
+                        place: bir::Place::from_local(result_local),
+                        rvalue: bir::Rvalue::Use(operand),
+                    },
+                    span,
+                });
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Break { value: None },
+                    span,
+                });
+            }
+            _ => {
+                let operand = value.map(|v| self.lower_expr_to_operand(v, scope, out));
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Break { value: operand },
+                    span,
+                });
+            }
+        }
+    }
+
+    /// Lower a statement-position `yield value` (`ast::Expr::Yield(Some(value))` reached through
+    /// [`Self::lower_stmt_into`]'s `ast::Statement::Expr` arm) into a [`bir::StatementKind::Yield`].
+    ///
+    /// `value` is lowered through the same [`Self::lower_expr_to_operand`] path every other statement's operand
+    /// goes through, so ownership facts/last-use tracking apply to a yielded value exactly like any other read.
+    /// Records the runtime dependencies the existing Rust-emission backend's own `yield` lowering actually needs
+    /// (`__incan_yield.yield_value(..)` on a `GeneratorYield` handle backed by `std::thread::spawn` and
+    /// `std::sync::mpsc::sync_channel` -- see `crates/incan_stdlib/src/iter.rs`'s `Generator`/`SpawnedGenerator`):
+    /// a named runtime helper (mirroring how [`Self::lower_fstring`] records `"fstring"` without a new
+    /// [`bir::HelperOp`] variant, since `Yield` is its own statement kind, not a [`bir::Callee::Helper`] call),
+    /// [`AbiV0RuntimeRequirement::HostedStd`] (the spawned-thread/channel machinery is not freestanding-compatible),
+    /// and [`AbiV0RuntimeRequirement::Allocator`] (the channel and boxed iterator both allocate).
+    fn lower_yield(
+        &mut self,
+        value: &ast::Spanned<ast::Expr>,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let operand = self.lower_expr_to_operand(value, scope, out);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Yield { value: operand },
+            span,
+        });
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper("generator".to_string()));
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::HostedStd);
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+    }
+
     /// Lower `if`/`elif`/`else` into a [`bir::StatementKind::If`] chain. `elif` branches are folded into nested
     /// `else { if ... }` wrappers from the last branch inward (see the inline comment above the fold loop), and an
     /// `if let` pattern condition — not yet modeled by v0 — lowers to an explicit unsupported placeholder instead of
@@ -775,44 +1179,22 @@ impl<'a> BodyBuilder<'a> {
         };
         let cond = self.lower_expr_to_operand(cond_expr, scope, out);
 
-        let then_scope = self.new_scope(Some(scope), span);
-        let mut then_stmts = Vec::new();
-        self.lower_block_into(&if_stmt.then_body, then_scope, &mut then_stmts);
-        self.insert_scope_drops(&mut then_stmts, then_scope);
-        let then_block = bir::Block {
-            scope: then_scope,
-            stmts: then_stmts,
-        };
-
-        let mut else_block = if let Some(else_body) = &if_stmt.else_body {
-            let else_scope = self.new_scope(Some(scope), span);
-            let mut else_stmts = Vec::new();
-            self.lower_block_into(else_body, else_scope, &mut else_stmts);
-            self.insert_scope_drops(&mut else_stmts, else_scope);
-            Some(bir::Block {
-                scope: else_scope,
-                stmts: else_stmts,
-            })
-        } else {
-            None
-        };
+        let then_block = self.lower_branch_block(&if_stmt.then_body, scope, span);
+        let mut else_block = if_stmt
+            .else_body
+            .as_ref()
+            .map(|else_body| self.lower_branch_block(else_body, scope, span));
 
         // Fold `elif` branches into nested `else { if ... }` wrappers, innermost (last elif) first, so the earlier
         // conditions end up evaluated first at the top of the chain once wrapped by the outer `if` pushed below.
         for (elif_cond, elif_body) in if_stmt.elif_branches.iter().rev() {
-            let body_scope = self.new_scope(Some(scope), span);
             let mut wrapper = Vec::new();
             let cond_operand = self.lower_expr_to_operand(elif_cond, scope, &mut wrapper);
-            let mut body_stmts = Vec::new();
-            self.lower_block_into(elif_body, body_scope, &mut body_stmts);
-            self.insert_scope_drops(&mut body_stmts, body_scope);
+            let then_block = self.lower_branch_block(elif_body, scope, span);
             wrapper.push(bir::Statement {
                 kind: bir::StatementKind::If {
                     cond: cond_operand,
-                    then_block: bir::Block {
-                        scope: body_scope,
-                        stmts: body_stmts,
-                    },
+                    then_block,
                     else_block,
                 },
                 span,
@@ -828,6 +1210,93 @@ impl<'a> BodyBuilder<'a> {
             },
             span,
         });
+    }
+
+    /// Lower one `if`/`elif`/`else` branch body into its own scoped [`bir::Block`]: allocate a child scope, lower
+    /// the statements into it, then insert scope-exit drops. Shared by [`Self::lower_if`]'s then/else/elif bodies
+    /// and [`Self::lower_if_expr`]'s then/else bodies, since both need exactly this shape.
+    fn lower_branch_block(
+        &mut self,
+        body: &[ast::Spanned<ast::Statement>],
+        parent_scope: bir::ScopeId,
+        span: HirSourceSpan,
+    ) -> bir::Block {
+        let branch_scope = self.new_scope(Some(parent_scope), span);
+        let mut stmts = Vec::new();
+        self.lower_block_into(body, branch_scope, &mut stmts);
+        self.insert_scope_drops(&mut stmts, branch_scope);
+        bir::Block {
+            scope: branch_scope,
+            stmts,
+        }
+    }
+
+    /// Lower an expression-position `if` (`ast::Expr::If`) into the same [`bir::StatementKind::If`] shape
+    /// statement-position `if` uses (see [`Self::lower_if`]), reusing [`Self::lower_branch_block`] for both
+    /// branches. The typechecker gives an expression-position `if` type `Unit` unconditionally (`check_if_expr` in
+    /// `src/frontend/typechecker/check_expr/control_flow.rs` discards any branch value and always returns
+    /// `ResolvedType::Unit`) -- unlike a `loop` expression, an `if` expression cannot yet produce a value from its
+    /// branches, so its Body IR operand is always the `Unit` constant rather than a place read.
+    fn lower_if_expr(
+        &mut self,
+        if_expr: &ast::IfExpr,
+        scope: bir::ScopeId,
+        span: ast::Span,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let cond = self.lower_expr_to_operand(&if_expr.condition, scope, out);
+        let then_block = self.lower_branch_block(&if_expr.then_body, scope, hir_span_value);
+        let else_block = if_expr
+            .else_body
+            .as_ref()
+            .map(|body| self.lower_branch_block(body, scope, hir_span_value));
+        out.push(bir::Statement {
+            kind: bir::StatementKind::If {
+                cond,
+                then_block,
+                else_block,
+            },
+            span: hir_span_value,
+        });
+        bir::Operand::Constant(bir::Constant::Unit)
+    }
+
+    /// Lower a value-producing `loop:` expression (`ast::Expr::Loop`) into a [`bir::StatementKind::Loop`] plus a
+    /// dedicated result local that every `break value` inside the loop's *own* body (not a nested loop's --
+    /// enforced by [`Self::loop_break_targets`]) assigns into before exiting. The typechecker resolves this
+    /// expression's type from the union of its `break value` operand types (`check_loop_expr` in
+    /// `src/frontend/typechecker/check_expr/control_flow.rs`), so -- unlike an `if` expression, which is always
+    /// `Unit` -- a `loop` expression's produced value genuinely comes from its branches and needs this
+    /// merge-into-one-place treatment; see [`Self::lower_break`] for the other half of the mechanism.
+    fn lower_loop_expr(
+        &mut self,
+        loop_expr: &ast::LoopExpr,
+        scope: bir::ScopeId,
+        span: ast::Span,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let ty = self.resolve_ty(span);
+        let loop_scope = self.new_scope(Some(scope), hir_span_value);
+        let result_local = self.new_temp(ty.clone(), loop_scope, hir_span_value);
+
+        self.loop_break_targets.push(Some(result_local));
+        let mut body_stmts = Vec::new();
+        self.lower_block_into(&loop_expr.body, loop_scope, &mut body_stmts);
+        self.insert_scope_drops(&mut body_stmts, loop_scope);
+        self.loop_break_targets.pop();
+
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Loop {
+                body: bir::Block {
+                    scope: loop_scope,
+                    stmts: body_stmts,
+                },
+            },
+            span: hir_span_value,
+        });
+        self.temp_operand(result_local, &ty)
     }
 
     /// Lower `while cond: body` into Body IR's single normalized loop shape: a [`bir::StatementKind::Loop`] whose
@@ -846,6 +1315,10 @@ impl<'a> BodyBuilder<'a> {
         };
 
         let loop_scope = self.new_scope(Some(scope), span);
+        // `while` never produces a value from `break`, so push `None`: a `break` inside this loop's body must
+        // resolve to a plain valueless exit even if this `while` is lexically nested inside a value-producing
+        // `loop:` expression (see `Self::loop_break_targets`'s docs for why the stack exists).
+        self.loop_break_targets.push(None);
         let mut body_stmts = Vec::new();
         let cond_operand = self.lower_expr_to_operand(cond_expr, loop_scope, &mut body_stmts);
         let negated = self.negate_operand(cond_operand, loop_scope, span, &mut body_stmts);
@@ -868,6 +1341,7 @@ impl<'a> BodyBuilder<'a> {
 
         self.lower_block_into(&while_stmt.body, loop_scope, &mut body_stmts);
         self.insert_scope_drops(&mut body_stmts, loop_scope);
+        self.loop_break_targets.pop();
 
         out.push(bir::Statement {
             kind: bir::StatementKind::Loop {
@@ -880,10 +1354,14 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
-    /// Lower `for x in start..end: body` into a normalized counting `Loop`. Only range-shaped iterables are
-    /// supported in v0 (see module docs); any other iterable or a non-binding loop pattern lowers to
-    /// `Unsupported`, since general iterator-protocol lowering needs call-target resolution machinery out of scope
-    /// here.
+    /// Lower a `for` statement. `for x in start..end: body` (range-shaped iterables) lowers into a normalized
+    /// counting `Loop`, preserving #1103's original range-loop shape unchanged. Every other iterable -- builtin
+    /// collections (`List`/`Dict`/`String`) and user-defined iterables implementing the RFC 068 `__iter__`/
+    /// `__next__` protocol, including the fallible `for item in iterable?:` form (RFC 115) -- lowers through
+    /// [`Self::lower_general_iteration`], sharing its per-clause iteration primitive with comprehensions and
+    /// generator expressions (see [`Self::lower_comprehension_clauses`]). A non-binding loop pattern lowers to
+    /// `Unsupported` either way, since destructuring loop patterns need `match`-shaped pattern compilation (#1101
+    /// bucket B6), out of scope here.
     fn lower_for(
         &mut self,
         for_stmt: &ast::ForStmt,
@@ -895,8 +1373,29 @@ impl<'a> BodyBuilder<'a> {
             self.push_unsupported_stmt("for-loop pattern is not a simple binding".to_string(), span, out);
             return;
         };
+        // The typechecker enters a lexical block scope for the loop header/body, so a binding introduced by the
+        // pattern must disappear after the statement. Keep the active lookup map for restoration while leaving the
+        // loop local itself in Body IR for the loop's statements to reference.
+        let enclosing_bindings = self.bindings.clone();
         let ast::Expr::Range { start, end, inclusive } = &for_stmt.iter.node else {
-            self.push_unsupported_stmt("for-loop over a non-range iterable".to_string(), span, out);
+            let var_ty = self.resolve_ty(for_stmt.pattern.span);
+            let loop_scope = self.new_scope(Some(scope), span);
+            let total_reads = count_reads_in_stmts(var_name, &for_stmt.body);
+            let pattern_local =
+                self.declare_new_local_with_reads(var_name.clone(), var_ty, loop_scope, span, total_reads);
+            self.lower_general_iteration(
+                &for_stmt.iter,
+                pattern_local,
+                scope,
+                loop_scope,
+                span,
+                out,
+                |builder, loop_scope, body_stmts| {
+                    builder.lower_block_into(&for_stmt.body, loop_scope, body_stmts);
+                    builder.insert_scope_drops(body_stmts, loop_scope);
+                },
+            );
+            self.bindings = enclosing_bindings;
             return;
         };
 
@@ -912,6 +1411,8 @@ impl<'a> BodyBuilder<'a> {
         });
 
         let loop_scope = self.new_scope(Some(scope), span);
+        // `for` never produces a value from `break` (same reasoning as `while` -- see `Self::lower_while`).
+        self.loop_break_targets.push(None);
         let mut body_stmts = Vec::new();
 
         let end_operand = self.lower_expr_to_operand(end, loop_scope, &mut body_stmts);
@@ -973,6 +1474,7 @@ impl<'a> BodyBuilder<'a> {
             },
             span,
         });
+        self.loop_break_targets.pop();
 
         out.push(bir::Statement {
             kind: bir::StatementKind::Loop {
@@ -983,6 +1485,345 @@ impl<'a> BodyBuilder<'a> {
             },
             span,
         });
+        self.bindings = enclosing_bindings;
+    }
+
+    /// Lower one general (non-range) iteration: materialize an iterator from `iter_expr` before the loop, then push
+    /// a single [`bir::StatementKind::Loop`] whose body opens with a [`bir::StatementKind::IterNext`] writing each
+    /// produced item into `pattern_local`, followed by `body_fn`. Shared by [`Self::lower_for`]'s general-iterable
+    /// path and [`Self::lower_comprehension_clauses`]'s `for`-clause handling, so builtin-vs-protocol iteration is
+    /// resolved in exactly one place rather than twice.
+    ///
+    /// Looks up [`TypeCheckInfo::protocol_iteration`] at `iter_expr`'s span to decide the [`bir::IterProtocol`]:
+    /// `None` means a builtin collection or range, where "the iterator" is modeled as the iterable's own value (no
+    /// method dispatch) -- a plain `Assign`; `Some` means a resolved `__iter__`/`__next__` protocol, where the
+    /// iterator is obtained via an explicit `iter_method` [`bir::Callee::Method`] call. When the resolved protocol
+    /// is fallible (`for item in iterable?:`, RFC 115), `iter_expr` is itself `ast::Expr::Try(inner)` with the `?`
+    /// acting as the fallible-poll marker rather than an ordinary `Result` unwrap -- `inner` is lowered directly as
+    /// the iterable in that case (matching the existing Rust-emission backend's own `(Expr::Try(inner), Some(_)) =>
+    /// lower inner` special case in `src/backend/ir/lower/stmt.rs`), so the marker `?` is not double-lowered through
+    /// [`Self::lower_try`]. Any other `Expr::Try` (an ordinary `for item in result_of_iterable?:` unwrap) falls
+    /// through to the normal expression-lowering path, which already turns it into a
+    /// [`bir::StatementKind::TryPropagate`] ahead of the loop via [`Self::lower_expr_to_place`]'s existing
+    /// `Expr::Try` handling -- no special-casing needed for that form.
+    ///
+    /// The iterable is always read as a [`bir::OwnershipFact::Borrow`], matching
+    /// [`Self::lower_method_call`]'s established receiver-borrow precedent (never an unsound move, and consistent
+    /// with obtaining an iterator conceptually borrowing its source rather than consuming it at this normalized
+    /// level); the materialized iterator local is polled with [`bir::OwnershipFact::MutBorrow`] each iteration,
+    /// since polling advances its internal state.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_general_iteration(
+        &mut self,
+        iter_expr: &ast::Spanned<ast::Expr>,
+        pattern_local: bir::LocalId,
+        outer_scope: bir::ScopeId,
+        loop_scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+        body_fn: impl FnOnce(&mut Self, bir::ScopeId, &mut Vec<bir::Statement>),
+    ) {
+        let protocol = self.type_info.protocol_iteration(iter_expr.span).cloned();
+        let fallible = protocol.as_ref().is_some_and(|p| p.fallible_error_type.is_some());
+        let effective_iter_expr: &ast::Spanned<ast::Expr> = match (&iter_expr.node, fallible) {
+            (ast::Expr::Try(inner), true) => inner,
+            _ => iter_expr,
+        };
+
+        let iterable_place = self.lower_expr_to_place(effective_iter_expr, outer_scope, out);
+        let iterator_ty = match &protocol {
+            Some(p) => semantic_type_from_resolved(&p.iterator_type),
+            None => self.resolve_ty(effective_iter_expr.span),
+        };
+        let iterator_local = self.new_temp(iterator_ty, outer_scope, span);
+        match &protocol {
+            Some(p) => out.push(bir::Statement {
+                kind: bir::StatementKind::Call {
+                    destination: Some(bir::Place::from_local(iterator_local)),
+                    callee: bir::Callee::Method(p.iter_method.clone()),
+                    args: vec![bir::Operand::place(iterable_place, bir::OwnershipFact::Borrow, false)],
+                    may_panic: false,
+                },
+                span,
+            }),
+            None => out.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place: bir::Place::from_local(iterator_local),
+                    rvalue: bir::Rvalue::Use(bir::Operand::place(iterable_place, bir::OwnershipFact::Borrow, false)),
+                },
+                span,
+            }),
+        }
+
+        self.loop_break_targets.push(None);
+        let mut body_stmts = Vec::new();
+
+        let iter_protocol = match &protocol {
+            Some(p) => bir::IterProtocol::UserDefined {
+                next_method: p.next_method.clone(),
+                fallible,
+            },
+            None => bir::IterProtocol::Builtin,
+        };
+        body_stmts.push(bir::Statement {
+            kind: bir::StatementKind::IterNext {
+                destination: bir::Place::from_local(pattern_local),
+                iterator: bir::Operand::place(
+                    bir::Place::from_local(iterator_local),
+                    bir::OwnershipFact::MutBorrow,
+                    false,
+                ),
+                protocol: iter_protocol,
+            },
+            span,
+        });
+
+        body_fn(self, loop_scope, &mut body_stmts);
+        self.loop_break_targets.pop();
+
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Loop {
+                body: bir::Block {
+                    scope: loop_scope,
+                    stmts: body_stmts,
+                },
+            },
+            span,
+        });
+    }
+
+    /// Lower a list comprehension `[expr for pattern in iter if filter]` into: an empty
+    /// `AggregateKind::List` temporary, the desugared clause-chain loop (see
+    /// [`Self::lower_comprehension_clauses`]), pushing each accepted element into it via a compiler-synthesized
+    /// `push` [`bir::Callee::Method`] call, then a read of the completed list. Only v0's single mirrored
+    /// `(pattern, iter, filter)` clause is lowered -- `comp.clauses` is intentionally not consulted, since neither
+    /// the typechecker (`check_list_comp` in `src/frontend/typechecker/check_expr/comps.rs`) nor the existing
+    /// Rust-emission backend (`src/backend/ir/lower/expr/comprehensions.rs`) reads it either; a list comprehension
+    /// with more than one `for` clause is not actually type-checked or emitted as multi-clause today; treating
+    /// `comp.clauses` as authoritative here would silently lower a shape nothing else in the pipeline validates.
+    fn lower_list_comp(
+        &mut self,
+        comp: &ast::ListComp,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let ty = self.resolve_ty(span);
+        let list_local = self.new_temp(ty.clone(), scope, hir_span_value);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(list_local),
+                rvalue: bir::Rvalue::Aggregate(bir::AggregateKind::List, Vec::new()),
+            },
+            span: hir_span_value,
+        });
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+
+        let clauses = single_comprehension_clauses(&comp.pattern, &comp.iter, comp.filter.as_ref());
+        let terminal = ComprehensionTerminal::ListPush {
+            list_local,
+            element: &comp.expr,
+        };
+        self.lower_scoped_comprehension_clauses(&clauses, &terminal, scope, hir_span_value, out);
+        self.temp_operand(list_local, &ty)
+    }
+
+    /// Lower a dict comprehension `{key: value for pattern in iter if filter}` the same way
+    /// [`Self::lower_list_comp`] lowers a list comprehension, but growing an `AggregateKind::Dict` temporary via a
+    /// compiler-synthesized `insert` call. See [`Self::lower_list_comp`]'s docs for why only the single mirrored
+    /// clause is lowered, not `comp.clauses`.
+    fn lower_dict_comp(
+        &mut self,
+        comp: &ast::DictComp,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let ty = self.resolve_ty(span);
+        let dict_local = self.new_temp(ty.clone(), scope, hir_span_value);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(dict_local),
+                rvalue: bir::Rvalue::Aggregate(bir::AggregateKind::Dict, Vec::new()),
+            },
+            span: hir_span_value,
+        });
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+
+        let clauses = single_comprehension_clauses(&comp.pattern, &comp.iter, comp.filter.as_ref());
+        let terminal = ComprehensionTerminal::DictInsert {
+            dict_local,
+            key: &comp.key,
+            value: &comp.value,
+        };
+        self.lower_scoped_comprehension_clauses(&clauses, &terminal, scope, hir_span_value, out);
+        self.temp_operand(dict_local, &ty)
+    }
+
+    /// Record the current generator-expression boundary without misrepresenting its lazy semantics.
+    ///
+    /// The established language behavior is a lazy iterator-adapter chain. Materializing its clauses into a `List`
+    /// while reporting `Generator[T]` changes source-visible evaluation order and cannot serve as replacement-backend
+    /// evidence. #1123 owns a suspension-aware representation; until then the Body IR must retain an explicit
+    /// unsupported marker for this expression.
+    fn lower_generator_expr(
+        &mut self,
+        generator: &ast::GeneratorExpr,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let _ = generator;
+        self.unsupported_operand(
+            "generator expression requires lazy suspension semantics (#1123)".to_string(),
+            scope,
+            hir_span(span),
+            out,
+        )
+    }
+
+    /// Lower a comprehension/generator clause chain with bindings that are lexical to that expression. The clause
+    /// lowering itself declares each `for` pattern binding through [`Self::declare_new_local_with_reads`] so normal
+    /// operand lowering can resolve it. Those bindings must disappear when the expression ends, however: unlike a
+    /// statement `for`, a comprehension's `x` in `[x for x in values]` cannot shadow an enclosing `x` in the next
+    /// enclosing statement. Preserve the outer lookup map while retaining the locals and ownership facts the nested
+    /// lowering legitimately recorded in the Body IR.
+    fn lower_scoped_comprehension_clauses(
+        &mut self,
+        clauses: &[ast::ComprehensionClause],
+        terminal: &ComprehensionTerminal<'_>,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let enclosing_bindings = self.bindings.clone();
+        self.lower_comprehension_clauses(clauses, terminal, scope, span, out);
+        self.bindings = enclosing_bindings;
+    }
+
+    /// Recursively desugar a comprehension/generator clause chain into nested `Loop`/`If` statements, terminating
+    /// in `terminal`'s compiler-synthesized collection-growth call once every clause has been satisfied for one
+    /// binding combination. `For` clauses reuse [`Self::lower_general_iteration`] (the same builtin-vs-protocol
+    /// iteration primitive [`Self::lower_for`] uses), so comprehensions never duplicate that split. A non-binding
+    /// `For` clause pattern lowers to `Unsupported`, matching [`Self::lower_for`]'s own restriction (destructuring
+    /// patterns need `match`-shaped compilation, out of scope here).
+    fn lower_comprehension_clauses(
+        &mut self,
+        clauses: &[ast::ComprehensionClause],
+        terminal: &ComprehensionTerminal<'_>,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let Some((head, tail)) = clauses.split_first() else {
+            self.lower_comprehension_terminal(terminal, scope, out);
+            return;
+        };
+        match head {
+            ast::ComprehensionClause::If(cond) => {
+                let cond_operand = self.lower_expr_to_operand(cond, scope, out);
+                let then_scope = self.new_scope(Some(scope), span);
+                let mut then_stmts = Vec::new();
+                self.lower_comprehension_clauses(tail, terminal, then_scope, span, &mut then_stmts);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::If {
+                        cond: cond_operand,
+                        then_block: bir::Block {
+                            scope: then_scope,
+                            stmts: then_stmts,
+                        },
+                        else_block: None,
+                    },
+                    span,
+                });
+            }
+            ast::ComprehensionClause::For { pattern, iter } => {
+                let ast::Pattern::Binding(var_name) = &pattern.node else {
+                    self.push_unsupported_stmt(
+                        "comprehension for-clause pattern is not a simple binding".to_string(),
+                        span,
+                        out,
+                    );
+                    return;
+                };
+                let var_ty = self.resolve_ty(pattern.span);
+                let loop_scope = self.new_scope(Some(scope), span);
+                let total_reads = terminal.count_reads(var_name) + count_reads_in_comprehension_clauses(var_name, tail);
+                let pattern_local =
+                    self.declare_new_local_with_reads(var_name.clone(), var_ty, loop_scope, span, total_reads);
+                self.lower_general_iteration(
+                    iter,
+                    pattern_local,
+                    scope,
+                    loop_scope,
+                    span,
+                    out,
+                    move |builder, loop_scope, body_stmts| {
+                        builder.lower_comprehension_clauses(tail, terminal, loop_scope, span, body_stmts);
+                        builder.insert_scope_drops(body_stmts, loop_scope);
+                    },
+                );
+            }
+        }
+    }
+
+    /// Lower the innermost action of one accepted comprehension/generator binding combination: evaluate the
+    /// element (or key/value) expression(s) and push a compiler-synthesized `push`/`insert`
+    /// [`bir::Callee::Method`] call growing the target collection. The receiver is read as
+    /// [`bir::OwnershipFact::MutBorrow`] since the call mutates the collection in place -- the first real producer
+    /// of that fact in this module (every other place read so far has been `Copy`/`Move`/`Clone`/`Borrow`).
+    fn lower_comprehension_terminal(
+        &mut self,
+        terminal: &ComprehensionTerminal<'_>,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        match terminal {
+            ComprehensionTerminal::ListPush { list_local, element } => {
+                let element_operand = self.lower_expr_to_operand(element, scope, out);
+                let span = hir_span(element.span);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Call {
+                        destination: None,
+                        callee: bir::Callee::Method("push".to_string()),
+                        args: vec![
+                            bir::Operand::place(
+                                bir::Place::from_local(*list_local),
+                                bir::OwnershipFact::MutBorrow,
+                                false,
+                            ),
+                            element_operand,
+                        ],
+                        may_panic: false,
+                    },
+                    span,
+                });
+            }
+            ComprehensionTerminal::DictInsert { dict_local, key, value } => {
+                let key_operand = self.lower_expr_to_operand(key, scope, out);
+                let value_operand = self.lower_expr_to_operand(value, scope, out);
+                let span = hir_span(value.span);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Call {
+                        destination: None,
+                        callee: bir::Callee::Method("insert".to_string()),
+                        args: vec![
+                            bir::Operand::place(
+                                bir::Place::from_local(*dict_local),
+                                bir::OwnershipFact::MutBorrow,
+                                false,
+                            ),
+                            key_operand,
+                            value_operand,
+                        ],
+                        may_panic: false,
+                    },
+                    span,
+                });
+            }
+        }
     }
 
     /// Lower `assert cond[, message]`, recording an [`bir::PanicReason::AssertFailure`] panic fact and a
@@ -1069,6 +1910,7 @@ impl<'a> BodyBuilder<'a> {
                 let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
                 bir::Operand::place(place, fact, last_use)
             }
+            ast::Expr::Slice(base, slice) => self.lower_slice(base, slice, expr.span, scope, out),
             ast::Expr::Unary(op, inner) => {
                 let un_op = lower_unary_op(*op);
                 let operand = self.lower_expr_to_operand(inner, scope, out);
@@ -1094,7 +1936,19 @@ impl<'a> BodyBuilder<'a> {
                     .collect();
                 self.lower_aggregate(bir::AggregateKind::List, &items, expr.span, scope, out)
             }
+            ast::Expr::Dict(entries) => self.lower_dict(entries, expr.span, scope, out),
+            ast::Expr::Set(items) => self.lower_aggregate(bir::AggregateKind::Set, items, expr.span, scope, out),
             ast::Expr::Constructor(name, args) => self.lower_constructor(name, args, expr.span, scope, out),
+            ast::Expr::ListComp(comp) => self.lower_list_comp(comp, expr.span, scope, out),
+            ast::Expr::DictComp(comp) => self.lower_dict_comp(comp, expr.span, scope, out),
+            ast::Expr::Generator(generator) => self.lower_generator_expr(generator, expr.span, scope, out),
+            ast::Expr::If(if_expr) => self.lower_if_expr(if_expr, scope, expr.span, out),
+            ast::Expr::Loop(loop_expr) => self.lower_loop_expr(loop_expr, scope, expr.span, out),
+            ast::Expr::Try(inner) => self.lower_try(inner, expr.span, scope, out),
+            ast::Expr::FString(parts) => self.lower_fstring(parts, expr.span, scope, out),
+            ast::Expr::Closure(params, body) => self.lower_closure(params, body, expr.span, scope, out),
+            ast::Expr::Partial(partial) => self.lower_partial(partial, expr.span, scope, out),
+            ast::Expr::Match(subject, arms) => self.lower_match(subject, arms, expr.span, scope, out),
             other => self.unsupported_operand(unsupported_expr_label(other), scope, span, out),
         }
     }
@@ -1122,32 +1976,47 @@ impl<'a> BodyBuilder<'a> {
                 place
             }
             ast::Expr::Paren(inner) => self.lower_expr_to_place(inner, scope, out),
-            _ => match self.lower_expr_to_operand(expr, scope, out) {
-                bir::Operand::Place(place_operand) => place_operand.place,
-                constant @ bir::Operand::Constant(_) => {
-                    let ty = self.resolve_ty(expr.span);
-                    let temp = self.new_temp(ty, scope, hir_span(expr.span));
-                    out.push(bir::Statement {
-                        kind: bir::StatementKind::Assign {
-                            place: bir::Place::from_local(temp),
-                            rvalue: bir::Rvalue::Use(constant),
-                        },
-                        span: hir_span(expr.span),
-                    });
-                    bir::Place::from_local(temp)
-                }
-            },
+            _ => {
+                let ty = self.resolve_ty(expr.span);
+                let operand = self.lower_expr_to_operand(expr, scope, out);
+                self.materialize_operand_to_place(operand, ty, scope, hir_span(expr.span), out)
+            }
         }
     }
 
-    /// Lower a binary-operator expression. When both operands are string-like and the operator has a compiler-owned
-    /// string helper (see [`string_helper_for_binop`]), the operation is emitted as an explicit
-    /// [`bir::Callee::Helper`] call with the matching runtime requirements recorded, rather than as a
-    /// [`bir::Rvalue::BinaryOp`] — this is Body IR's compiler-owned-runtime-operation requirement (#653 criterion
-    /// 3) applied to string operators specifically. Otherwise the operator lowers to a plain `BinaryOp` rvalue, with
-    /// a division/modulo panic fact recorded when [`bir::BinOp::may_panic`] holds. An operator with neither a string
-    /// helper nor a direct Body IR equivalent (see [`lower_binary_op`]) lowers to an explicit unsupported
-    /// placeholder.
+    /// Ensure `operand` is place-shaped, materializing a fresh temporary holding it first if it is a bare constant.
+    /// Used wherever a value that has already been lowered to an [`bir::Operand`] needs a [`bir::Place`] to project
+    /// further into -- [`Self::lower_expr_to_place`]'s own non-place-shaped fallback, plus tuple-element
+    /// extraction for [`Self::lower_tuple_unpack`]/[`Self::lower_tuple_assign`].
+    fn materialize_operand_to_place(
+        &mut self,
+        operand: bir::Operand,
+        ty: IncanType,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Place {
+        match operand {
+            bir::Operand::Place(place_operand) => place_operand.place,
+            constant @ bir::Operand::Constant(_) => {
+                let temp = self.new_temp(ty, scope, span);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Assign {
+                        place: bir::Place::from_local(temp),
+                        rvalue: bir::Rvalue::Use(constant),
+                    },
+                    span,
+                });
+                bir::Place::from_local(temp)
+            }
+        }
+    }
+
+    /// Lower a binary-operator expression. Bails out to an explicit unsupported placeholder *before* evaluating
+    /// either operand when `op` has no Body IR v0 handling at all (see [`Self::binary_op_is_supported`]), so an
+    /// unsupported operator's sub-expressions are never partially lowered. Otherwise defers to
+    /// [`Self::lower_binary_from_operands`] for the actual string-helper-or-plain-binop emission, which is also
+    /// shared with [`Self::lower_compound_assignment`].
     fn lower_binary(
         &mut self,
         lhs: &ast::Spanned<ast::Expr>,
@@ -1162,12 +2031,57 @@ impl<'a> BodyBuilder<'a> {
         let rhs_ty = self.resolve_ty(rhs.span);
         let result_ty = self.resolve_ty(span);
 
-        if is_string_like(&lhs_ty)
-            && is_string_like(&rhs_ty)
+        if !Self::binary_op_is_supported(op, &lhs_ty, &rhs_ty) {
+            return self.unsupported_operand(format!("binary operator {op:?}"), scope, hir_span_value, out);
+        }
+        let lhs_operand = self.lower_expr_to_operand(lhs, scope, out);
+        let rhs_operand = self.lower_expr_to_operand(rhs, scope, out);
+        self.lower_binary_from_operands(
+            op,
+            &lhs_ty,
+            lhs_operand,
+            &rhs_ty,
+            rhs_operand,
+            result_ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Whether `op` between operands of `lhs_ty`/`rhs_ty` has any Body IR v0 handling (either the string-helper
+    /// path or a direct [`bir::BinOp`] mapping). Checked *before* evaluating operand sub-expressions in both
+    /// [`Self::lower_binary`] and [`Self::lower_compound_assignment`], so an operator v0 does not model never
+    /// causes its operands' side effects (calls, reads) to be lowered on the way to an unsupported placeholder.
+    fn binary_op_is_supported(op: ast::BinaryOp, lhs_ty: &IncanType, rhs_ty: &IncanType) -> bool {
+        (is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some())
+            || lower_binary_op(op).is_some()
+    }
+
+    /// Emit the result of a binary operator given already-lowered operands: an explicit [`bir::Callee::Helper`]
+    /// call (with runtime requirements recorded) when both operand types are string-like and `op` has a
+    /// compiler-owned string helper (see [`string_helper_for_binop`]) -- Body IR's compiler-owned-runtime-operation
+    /// requirement (#653 criterion 3) applied to string operators specifically -- otherwise a plain
+    /// [`bir::Rvalue::BinaryOp`], with a division/modulo panic fact recorded when [`bir::BinOp::may_panic`] holds.
+    /// Callers are expected to have already checked [`Self::binary_op_is_supported`]; an operator with neither
+    /// handling still falls back to an explicit unsupported placeholder defensively rather than panicking.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_binary_from_operands(
+        &mut self,
+        op: ast::BinaryOp,
+        lhs_ty: &IncanType,
+        lhs_operand: bir::Operand,
+        rhs_ty: &IncanType,
+        rhs_operand: bir::Operand,
+        result_ty: IncanType,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        if is_string_like(lhs_ty)
+            && is_string_like(rhs_ty)
             && let Some(helper) = string_helper_for_binop(op)
         {
-            let lhs_operand = self.lower_expr_to_operand(lhs, scope, out);
-            let rhs_operand = self.lower_expr_to_operand(rhs, scope, out);
             self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper(helper.as_str().to_string()));
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
             return self.push_call_temp(
@@ -1175,20 +2089,18 @@ impl<'a> BodyBuilder<'a> {
                 vec![lhs_operand, rhs_operand],
                 result_ty,
                 scope,
-                hir_span_value,
+                span,
                 false,
                 out,
             );
         }
 
         let Some(bin_op) = lower_binary_op(op) else {
-            return self.unsupported_operand(format!("binary operator {op:?}"), scope, hir_span_value, out);
+            return self.unsupported_operand(format!("binary operator {op:?}"), scope, span, out);
         };
-        let lhs_operand = self.lower_expr_to_operand(lhs, scope, out);
-        let rhs_operand = self.lower_expr_to_operand(rhs, scope, out);
         if bin_op.may_panic() {
             self.panic_facts.push(bir::PanicFact {
-                span: hir_span_value,
+                span,
                 reason: bir::PanicReason::DivisionOrModulo,
             });
             self.record_runtime_requirement(AbiV0RuntimeRequirement::PanicStrategy);
@@ -1197,7 +2109,7 @@ impl<'a> BodyBuilder<'a> {
             bir::Rvalue::BinaryOp(bin_op, lhs_operand, rhs_operand),
             result_ty,
             scope,
-            hir_span_value,
+            span,
             out,
         )
     }
@@ -1320,9 +2232,9 @@ impl<'a> BodyBuilder<'a> {
         )
     }
 
-    /// Lower a tuple or (non-spread) list literal to a [`bir::Rvalue::Aggregate`], recording an
-    /// [`AbiV0RuntimeRequirement::Allocator`] requirement for lists specifically (list construction always
-    /// allocates; tuples do not).
+    /// Lower a tuple, (non-spread) list literal, or set literal to a [`bir::Rvalue::Aggregate`], recording an
+    /// [`AbiV0RuntimeRequirement::Allocator`] requirement for lists and sets specifically (list/set construction
+    /// always allocates; tuples do not).
     fn lower_aggregate(
         &mut self,
         kind: bir::AggregateKind,
@@ -1337,10 +2249,142 @@ impl<'a> BodyBuilder<'a> {
             .map(|item| self.lower_expr_to_operand(item, scope, out))
             .collect();
         let ty = self.resolve_ty(span);
-        if matches!(kind, bir::AggregateKind::List) {
+        if matches!(kind, bir::AggregateKind::List | bir::AggregateKind::Set) {
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
         }
         self.push_assign_temp(bir::Rvalue::Aggregate(kind, operands), ty, scope, hir_span_value, out)
+    }
+
+    /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Aggregate`] with [`bir::AggregateKind::Dict`], whose
+    /// operand vector alternates key, value, key, value, ... in source order (see that variant's own docs for the
+    /// invariant). A spread entry (`{**other}`) -- not yet modeled by v0, matching how a list literal's spread
+    /// entries are also unsupported in [`Self::lower_expr_to_operand`] -- lowers to an explicit unsupported
+    /// placeholder instead.
+    fn lower_dict(
+        &mut self,
+        entries: &[ast::DictEntry],
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        if entries.iter().any(|entry| matches!(entry, ast::DictEntry::Spread(_))) {
+            return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
+        }
+        let mut operands = Vec::with_capacity(entries.len() * 2);
+        for entry in entries {
+            let ast::DictEntry::Pair(key, value) = entry else {
+                return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
+            };
+            operands.push(self.lower_expr_to_operand(key, scope, out));
+            operands.push(self.lower_expr_to_operand(value, scope, out));
+        }
+        let ty = self.resolve_ty(span);
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+        self.push_assign_temp(
+            bir::Rvalue::Aggregate(bir::AggregateKind::Dict, operands),
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Lower an f-string `f"...{expr}...{expr!r}..."` to a [`bir::Rvalue::Format`]. Literal text chunks are
+    /// carried through verbatim; each embedded expression is lowered through the same
+    /// [`Self::lower_expr_to_operand`] path as any other read, so ownership facts and last-use tracking apply to
+    /// f-string interpolations exactly like any other expression use. Mirrors the existing Rust-emission backend's
+    /// dedicated `Format` node (`src/backend/ir/lower/expr/mod.rs`) rather than desugaring into a helper call --
+    /// see [`bir::Rvalue::Format`]'s own docs for why this needed its own `Rvalue` shape.
+    ///
+    /// Building the formatted string always allocates and always needs the `fstring` runtime helper
+    /// (`incan_stdlib::strings::fstring`, the function the existing Rust-emission backend's `Format` node itself
+    /// compiles down to -- see `src/backend/ir/emit/expressions/format.rs`), so both requirements are recorded
+    /// unconditionally here, the same way [`Self::lower_binary_from_operands`] records requirements for its own
+    /// compiler-owned string helpers.
+    fn lower_fstring(
+        &mut self,
+        parts: &[ast::FStringPart],
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let ir_parts: Vec<bir::FormatPart> = parts
+            .iter()
+            .map(|part| match part {
+                ast::FStringPart::Literal(s) => bir::FormatPart::Literal(s.clone()),
+                ast::FStringPart::Expr { expr, format } => {
+                    let operand = self.lower_expr_to_operand(expr, scope, out);
+                    let style = match format {
+                        ast::FStringFormat::Display => bir::FormatStyle::Display,
+                        ast::FStringFormat::Debug => bir::FormatStyle::Debug,
+                    };
+                    bir::FormatPart::Expr { operand, style }
+                }
+            })
+            .collect();
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper("fstring".to_string()));
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+        let ty = self.resolve_ty(span);
+        self.push_assign_temp(bir::Rvalue::Format(ir_parts), ty, scope, hir_span_value, out)
+    }
+
+    /// Lower `base[start:end:step]` (each component independently optional) into a value read through a
+    /// [`bir::PlaceElem::Slice`] projection, mirroring how `Expr::Index` builds an `[index]`-projected place read
+    /// in [`Self::lower_expr_to_operand`] (including that same arm's index-before-base evaluation order, extended
+    /// here to start-then-end-then-step-then-base).
+    fn lower_slice(
+        &mut self,
+        base: &ast::Spanned<ast::Expr>,
+        slice: &ast::SliceExpr,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let start = slice
+            .start
+            .as_ref()
+            .map(|e| Box::new(self.lower_expr_to_operand(e, scope, out)));
+        let end = slice
+            .end
+            .as_ref()
+            .map(|e| Box::new(self.lower_expr_to_operand(e, scope, out)));
+        let step = slice
+            .step
+            .as_ref()
+            .map(|e| Box::new(self.lower_expr_to_operand(e, scope, out)));
+        let mut place = self.lower_expr_to_place(base, scope, out);
+        place.projection.push(bir::PlaceElem::Slice { start, end, step });
+        let ty = self.resolve_ty(span);
+        let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
+        bir::Operand::place(place, fact, last_use)
+    }
+
+    /// Lower `expr?` (`ast::Expr::Try`) into a single [`bir::StatementKind::TryPropagate`] primitive rather than
+    /// decomposing it into explicit `is_err`/`unwrap`-shaped calls -- see that variant's own docs for the full
+    /// rationale (it mirrors the same #653-criterion-3 compiler-owned-primitive treatment as
+    /// [`bir::Callee::Helper`], standing in for what the existing Rust-emission backend defers entirely to Rust's
+    /// native `?` operator).
+    fn lower_try(
+        &mut self,
+        inner: &ast::Spanned<ast::Expr>,
+        outer_span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(outer_span);
+        let operand = self.lower_expr_to_operand(inner, scope, out);
+        let ty = self.resolve_ty(outer_span);
+        let destination = self.new_temp(ty.clone(), scope, hir_span_value);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::TryPropagate {
+                destination: bir::Place::from_local(destination),
+                operand,
+            },
+            span: hir_span_value,
+        });
+        self.temp_operand(destination, &ty)
     }
 
     /// Lower a nominal constructor call `Name(args)` to a [`bir::Rvalue::Aggregate`] with
@@ -1381,6 +2425,665 @@ impl<'a> BodyBuilder<'a> {
             out,
         )
     }
+
+    // ---- Closures and partial callables (#1101 bucket B4) ----
+
+    /// Lower a closure literal `(params) => expr` into a [`bir::Rvalue::Closure`].
+    ///
+    /// Body IR must represent captures explicitly rather than deferring to a consuming backend's own closure syntax
+    /// to auto-capture (see this module's docs and #1101's B4 pre-intake), so this: (1) statically determines every
+    /// free variable the closure body reads via [`free_vars_in_closure_body`]; (2) reads each one exactly once, at
+    /// this closure-creation site, through the same [`Self::ownership_fact_for_place`] path any other read in this
+    /// body uses, recording the result as this closure's `captured_operands`; (3) declares a fresh
+    /// [`bir::LocalOrigin::Captured`] local per capture plus one [`bir::LocalOrigin::Parameter`] local per declared
+    /// parameter, shadowing (and restoring afterward) any outer binding of the same name, so the closure body's own
+    /// reads resolve to its own bound copy rather than silently reading through to the enclosing scope; then (4)
+    /// lowers the body expression under those bindings. The restore step is what makes this different from every
+    /// other nested block this file lowers -- ordinary nested blocks (`if`/`loop` bodies) let a shadowing binding
+    /// leak forward in `self.bindings` with no restore, which is harmless for straight-line control flow but would
+    /// be wrong here: code lexically after the closure literal must keep resolving the shadowed name to the
+    /// *enclosing* variable, not to the closure's own captured copy.
+    fn lower_closure(
+        &mut self,
+        params: &[ast::Spanned<ast::Param>],
+        body_expr: &ast::Spanned<ast::Expr>,
+        expr_span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(expr_span);
+        let closure_scope = self.new_scope(Some(scope), hir_span_value);
+
+        // ---- Capture every free variable exactly once, at this closure-creation site ----
+        let free_names = free_vars_in_closure_body(params, body_expr);
+        let mut captured_operands = Vec::with_capacity(free_names.len());
+        let mut capture_locals = Vec::with_capacity(free_names.len());
+        let mut saved_bindings: Vec<(String, Option<bir::LocalId>)> = Vec::new();
+        for name in &free_names {
+            // A free name lowering cannot resolve to a tracked outer local (e.g. a module-level `const`) is not
+            // captured -- the closure body's own `Self::local_for_name` lookup synthesizes an `External` reference
+            // for it exactly like anywhere else, since there is nothing meaningful to read-and-rebind.
+            let Some(&outer_local) = self.bindings.get(name) else {
+                continue;
+            };
+            let outer_ty = self.locals[outer_local.index()].ty.clone();
+            let outer_place = bir::Place::from_local(outer_local);
+            let (fact, last_use) = self.ownership_fact_for_place(&outer_place, &outer_ty);
+            captured_operands.push(bir::Operand::place(outer_place, fact, last_use));
+
+            let total_reads = count_reads_in_expr(name, &body_expr.node);
+            let capture_local =
+                self.declare_new_local_with_reads(name.clone(), outer_ty, closure_scope, hir_span_value, total_reads);
+            self.locals[capture_local.index()].origin = bir::LocalOrigin::Captured;
+            capture_locals.push(capture_local);
+            saved_bindings.push((name.clone(), Some(outer_local)));
+        }
+
+        // ---- Bind the closure's own parameters, shadowing any outer binding of the same name ----
+        let param_types = self.closure_param_types(params, expr_span);
+        let mut closure_params = Vec::with_capacity(params.len());
+        let mut param_locals = Vec::with_capacity(params.len());
+        for (param, ty) in params.iter().zip(param_types) {
+            let previous = self.bindings.get(&param.node.name).copied();
+            let total_reads = count_reads_in_expr(&param.node.name, &body_expr.node);
+            let local = self.declare_new_local_with_reads(
+                param.node.name.clone(),
+                ty.clone(),
+                closure_scope,
+                hir_span(param.span),
+                total_reads,
+            );
+            self.locals[local.index()].origin = bir::LocalOrigin::Parameter;
+            closure_params.push(bir::ClosureParam {
+                name: param.node.name.clone(),
+                ty,
+            });
+            param_locals.push(local);
+            saved_bindings.push((param.node.name.clone(), previous));
+        }
+
+        // ---- Lower the body under the closure's own bindings, then restore the enclosing scope's ----
+        let mut body_stmts = Vec::new();
+        let result = self.lower_expr_to_operand(body_expr, closure_scope, &mut body_stmts);
+        for (name, previous) in saved_bindings {
+            match previous {
+                Some(local) => {
+                    self.bindings.insert(name, local);
+                }
+                None => {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
+
+        let closure_body = bir::ClosureBody {
+            param_locals,
+            capture_locals,
+            stmts: body_stmts,
+            result,
+        };
+        let ty = self.resolve_ty(expr_span);
+        self.push_assign_temp(
+            bir::Rvalue::Closure {
+                params: closure_params,
+                captured_operands,
+                body: Box::new(closure_body),
+            },
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Resolve each of a closure literal's parameter types from the typechecker's resolved callable type at the
+    /// closure's own span, falling back to [`IncanType::Unknown`] per parameter when unavailable or of mismatched
+    /// length. Mirrors the existing Rust-emission backend's own `recorded_param_types` fallback
+    /// (`src/backend/ir/lower/expr/mod.rs`), minus that backend's additional Rust-display-exact override, which is
+    /// meaningful only for concrete Rust closure syntax, not this target-agnostic model.
+    fn closure_param_types(&self, params: &[ast::Spanned<ast::Param>], expr_span: ast::Span) -> Vec<IncanType> {
+        let resolved = self.type_info.expr_type(expr_span).and_then(|ty| match ty {
+            ResolvedType::Function(callable_params, _) => Some(
+                callable_params
+                    .iter()
+                    .map(|p| semantic_type_from_resolved(&p.ty))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        });
+        match resolved {
+            Some(types) if types.len() == params.len() => types,
+            _ => vec![IncanType::Unknown; params.len()],
+        }
+    }
+
+    /// Lower a partial callable preset expression (`partial Target(name=value, ...)`) into the same
+    /// [`bir::Rvalue::Closure`] shape a closure literal produces, mirroring how the existing Rust-emission backend
+    /// already desugars a partial application into a synthesized closure that forwards the still-missing arguments
+    /// into a call (`src/backend/ir/lower/expr/mod.rs`'s `ast::Expr::Partial` arm) -- see #1101's B4 pre-intake.
+    /// Body IR's own call shape ([`bir::Callee`]) only models bare-identifier direct calls with positional
+    /// arguments (see [`Self::lower_call`]), so this only supports a bare function-name `target` whose full
+    /// parameter list the typechecker resolved as a top-level function binding; anything else (a method-shaped
+    /// partial target from `partial recv.method(...)`, explicit type arguments, or a target with an unnamed
+    /// parameter) lowers to an explicit unsupported placeholder instead.
+    ///
+    /// Preset values (`partial.args`) are lowered once each, at the partial-creation site -- exactly like an
+    /// ordinary call argument, not deduplicated per free-variable name the way [`Self::lower_closure`]'s captures
+    /// are -- and folded into the synthesized closure's own `captured_operands` so its body can read them as
+    /// pre-bound locals. Every declared parameter the target function has that is *not* covered by a preset becomes
+    /// one of the synthesized closure's own parameters, in the target's declaration order. The synthesized body is
+    /// a single call forwarding every target parameter, positionally, from whichever of the two sources supplied
+    /// it. A compound-assignment-style mutation of a captured preset from inside a nested closure is out of scope
+    /// here in the same way [`Self::lower_closure`]'s own docs note for ordinary closures.
+    ///
+    /// This deliberately does **not** reuse [`Self::resolve_ty`] for the resulting closure's own [`IncanType`]:
+    /// the typechecker's own resolved type for a `partial` expression (`check_partial_expr` in
+    /// `src/frontend/typechecker/check_expr/mod.rs`, via `project_partial_params` in
+    /// `src/frontend/typechecker/collect.rs`) keeps *every* one of the target's original parameters, merely marking
+    /// the preset ones `has_default: true` internally -- it does not shrink the parameter list the way this
+    /// lowering's own `params` does. The existing Rust-emission backend's own `ast::Expr::Partial` arm mirrors that
+    /// full-arity shape exactly (building one Rust closure parameter per *original* target parameter) and relies on
+    /// a separate `partial_expr_signatures` side table, consulted elsewhere during call-argument lowering, to fill
+    /// a preset's value in at each call site that omits it -- machinery Body IR v0 has no equivalent of anywhere
+    /// else in this file. Reusing the typechecker's full-arity type here would leave the rendered
+    /// [`bir::Rvalue::Closure`] internally inconsistent (an `IncanType::Function` claiming N parameters next to a
+    /// `params` list with fewer entries), so this instead builds its own [`IncanType::Function`] directly from the
+    /// residual `closure_params`/target return type -- semantically equivalent (calling the residual closure with
+    /// the missing arguments behaves like calling the target with the preset values already applied),
+    /// self-contained, and consistent with the rest of this model, at the cost of not literally mirroring the
+    /// existing backend's own default-argument side-channel bit for bit. See `plan.md`'s "B4 implementation notes"
+    /// for the full pre-intake-vs-reality discrepancy this resolves.
+    fn lower_partial(
+        &mut self,
+        partial: &ast::PartialExpr,
+        expr_span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(expr_span);
+        let ast::Expr::Ident(target_name) = &partial.target.node else {
+            return self.unsupported_operand(
+                "partial callable with a non-function-name target".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        };
+        if !partial.type_args.is_empty() {
+            return self.unsupported_operand(
+                "partial callable with explicit type arguments".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        }
+        let Some(binding) = self.type_info.declarations.function_bindings.get(target_name).cloned() else {
+            return self.unsupported_operand(
+                "partial callable target with no resolvable top-level function signature".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        };
+        if binding.params.iter().any(|param| param.name.is_none()) {
+            return self.unsupported_operand(
+                "partial callable target with an unnamed parameter".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        }
+        let target_name = target_name.clone();
+        let closure_scope = self.new_scope(Some(scope), hir_span_value);
+
+        // ---- Lower each preset value once, at the partial-creation site, as a captured operand ----
+        let mut captured_operands = Vec::with_capacity(partial.args.len());
+        let mut capture_locals = Vec::with_capacity(partial.args.len());
+        let mut preset_lookup: HashMap<String, bir::LocalId> = HashMap::with_capacity(partial.args.len());
+        let mut saved_bindings = Vec::with_capacity(binding.params.len());
+        for arg in &partial.args {
+            let value_ty = self.resolve_ty(arg.value.span);
+            let operand = self.lower_expr_to_operand(&arg.value, scope, out);
+            captured_operands.push(operand);
+            let previous = self.bindings.get(&arg.name).copied();
+            let capture_local =
+                self.declare_new_local_with_reads(arg.name.clone(), value_ty, closure_scope, hir_span_value, 1);
+            self.locals[capture_local.index()].origin = bir::LocalOrigin::Captured;
+            capture_locals.push(capture_local);
+            preset_lookup.insert(arg.name.clone(), capture_local);
+            saved_bindings.push((arg.name.clone(), previous));
+        }
+
+        // ---- Every target parameter not covered by a preset becomes one of the closure's own parameters ----
+        let mut closure_params = Vec::new();
+        let mut param_locals = Vec::new();
+        let mut call_arg_locals = Vec::with_capacity(binding.params.len());
+        for param in &binding.params {
+            let Some(param_name) = &param.name else {
+                return self.unsupported_operand(
+                    "partial callable target with an unnamed parameter".to_string(),
+                    scope,
+                    hir_span_value,
+                    out,
+                );
+            };
+            if let Some(&capture_local) = preset_lookup.get(param_name) {
+                call_arg_locals.push(capture_local);
+                continue;
+            }
+            let ty = semantic_type_from_resolved(&param.ty);
+            let previous = self.bindings.get(param_name).copied();
+            let local =
+                self.declare_new_local_with_reads(param_name.clone(), ty.clone(), closure_scope, hir_span_value, 1);
+            self.locals[local.index()].origin = bir::LocalOrigin::Parameter;
+            closure_params.push(bir::ClosureParam {
+                name: param_name.clone(),
+                ty,
+            });
+            param_locals.push(local);
+            call_arg_locals.push(local);
+            saved_bindings.push((param_name.clone(), previous));
+        }
+
+        // ---- Synthesize the forwarding call as the closure's single-statement body ----
+        let mut body_stmts = Vec::new();
+        let call_args: Vec<bir::Operand> = call_arg_locals
+            .iter()
+            .zip(&binding.params)
+            .map(|(&local, param)| {
+                let ty = semantic_type_from_resolved(&param.ty);
+                let place = bir::Place::from_local(local);
+                let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
+                bir::Operand::place(place, fact, last_use)
+            })
+            .collect();
+        let ret_ty = semantic_type_from_resolved(&binding.return_type);
+        let result = self.push_call_temp(
+            bir::Callee::Function(target_name),
+            call_args,
+            ret_ty.clone(),
+            closure_scope,
+            hir_span_value,
+            false,
+            &mut body_stmts,
+        );
+
+        let closure_body = bir::ClosureBody {
+            param_locals,
+            capture_locals,
+            stmts: body_stmts,
+            result,
+        };
+
+        // ---- The synthesized closure's bindings are lexically private to it, not new outer bindings ----
+        for (name, previous) in saved_bindings.into_iter().rev() {
+            match previous {
+                Some(local) => {
+                    self.bindings.insert(name, local);
+                }
+                None => {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
+
+        // Built directly from `closure_params`/`ret_ty` rather than `Self::resolve_ty(expr_span)` -- see this
+        // method's own docs for why the typechecker's resolved type for a `partial` expression is not usable here.
+        let ty = IncanType::Function {
+            params: closure_params
+                .iter()
+                .map(|param| IncanCallableParam {
+                    name: Some(param.name.clone()),
+                    ty: param.ty.clone(),
+                    kind: IncanCallableParamKind::Normal,
+                    has_default: false,
+                })
+                .collect(),
+            return_type: Box::new(ret_ty),
+        };
+        self.push_assign_temp(
+            bir::Rvalue::Closure {
+                params: closure_params,
+                captured_operands,
+                body: Box::new(closure_body),
+            },
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Lower a `match` expression (`ast::Expr::Match`) into a single [`bir::Rvalue::Match`], mirroring the existing
+    /// Rust-emission backend's own `IrExprKind::Match { scrutinee, arms }` node -- see [`bir::Rvalue::Match`]'s docs
+    /// for why matching stays one structured node rather than being decomposed into a chain of `If` statements, and
+    /// [`bir::Pattern`]'s docs for the closed pattern vocabulary this mirrors and its two deliberate v0 gaps (no
+    /// union-type pattern narrowing, no RFC 021 field-alias resolution).
+    ///
+    /// Bails the whole expression to an explicit unsupported placeholder *before* lowering the scrutinee when any
+    /// arm's pattern contains a byte-string literal (the one pattern shape [`bir::Constant`] cannot represent --
+    /// see [`match_pattern_is_supported`]), mirroring [`Self::lower_binary`]'s "check before partially lowering"
+    /// precedent so an unrepresentable pattern never produces a partially-lowered `Rvalue::Match`.
+    fn lower_match(
+        &mut self,
+        subject: &ast::Spanned<ast::Expr>,
+        arms: &[ast::Spanned<ast::MatchArm>],
+        expr_span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(expr_span);
+        if arms
+            .iter()
+            .any(|arm| !match_pattern_is_supported(&arm.node.pattern.node))
+        {
+            return self.unsupported_operand(
+                "match arm with a byte-string literal pattern".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        }
+
+        let scrutinee_ty = self.resolve_ty(subject.span);
+        let scrutinee_place = self.lower_expr_to_place(subject, scope, out);
+        // Always read as `Borrow` -- see `bir::Rvalue::Match::scrutinee`'s own docs for why the overall scrutinee
+        // read must not risk an unconditional move while individual pattern bindings below compute their own,
+        // more precise facts against projected places rooted at this same scrutinee.
+        let scrutinee_operand = bir::Operand::place(scrutinee_place.clone(), bir::OwnershipFact::Borrow, false);
+
+        let mut lowered_arms = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let arm_span = hir_span(arm.span);
+            let arm_scope = self.new_scope(Some(scope), arm_span);
+
+            // ---- Lower the pattern, declaring one fresh arm-scoped local per distinct bound name ----
+            let mut seen: HashMap<String, bir::LocalId> = HashMap::new();
+            let mut saved_bindings: Vec<(String, Option<bir::LocalId>)> = Vec::new();
+            let pattern = self.lower_match_pattern(
+                &arm.node.pattern,
+                &scrutinee_ty,
+                &scrutinee_place,
+                arm_scope,
+                &arm.node,
+                &mut seen,
+                &mut saved_bindings,
+            );
+
+            // ---- Guard and body see this arm's own pattern bindings, shadowing any outer binding of the same name
+            // ----
+            let mut guard_stmts = Vec::new();
+            let guard = arm
+                .node
+                .guard
+                .as_ref()
+                .map(|g| self.lower_expr_to_operand(g, arm_scope, &mut guard_stmts));
+
+            let (body_stmts, result) = match &arm.node.body {
+                ast::MatchBody::Expr(e) => {
+                    let mut stmts = Vec::new();
+                    let result = self.lower_expr_to_operand(e, arm_scope, &mut stmts);
+                    (stmts, result)
+                }
+                ast::MatchBody::Block(block_stmts) => {
+                    let mut stmts = Vec::new();
+                    self.lower_block_into(block_stmts, arm_scope, &mut stmts);
+                    self.insert_scope_drops(&mut stmts, arm_scope);
+                    (stmts, bir::Operand::Constant(bir::Constant::Unit))
+                }
+            };
+
+            // ---- Restore the enclosing scope's bindings before moving on to the next (mutually exclusive) arm ----
+            for (name, previous) in saved_bindings {
+                match previous {
+                    Some(local) => {
+                        self.bindings.insert(name, local);
+                    }
+                    None => {
+                        self.bindings.remove(&name);
+                    }
+                }
+            }
+
+            lowered_arms.push(bir::MatchArm {
+                pattern,
+                guard_stmts,
+                guard,
+                body_stmts,
+                result,
+            });
+        }
+
+        let ty = self.resolve_ty(expr_span);
+        self.push_assign_temp(
+            bir::Rvalue::Match {
+                scrutinee: scrutinee_operand,
+                arms: lowered_arms,
+            },
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Recursively lower one source `ast::Pattern` node into a [`bir::Pattern`], declaring a fresh arm-scoped local
+    /// the first time a bound name is encountered and reusing it for any later `Or`-alternative occurrence of the
+    /// same name (`seen`) -- Incan's typechecker (RFC 071) requires every alternative of an `A(x) | B(x)` pattern to
+    /// bind an identical name/type set, so Rust's own single shared binding slot per name is the correct target
+    /// shape, not one local per occurrence. `saved_bindings` accumulates `(name, previous_local)` pairs so
+    /// [`Self::lower_match`] can restore `self.bindings` to the enclosing scope once this arm's guard/body have
+    /// both been lowered, the same save/restore shape [`Self::lower_closure`] already uses around its own
+    /// params/captures.
+    ///
+    /// `place` is the (possibly already-projected) scrutinee place this pattern node corresponds to; each
+    /// recursive call into a `Tuple`/`Struct`/`Enum` sub-pattern extends it with one more
+    /// [`bir::PlaceElem::Field`] projection -- named for a struct field, or the zero-based positional index as a
+    /// string for a tuple/enum-variant positional field, mirroring [`Self::lower_tuple_unpack`]'s own tuple-element
+    /// projection convention (`.0`/`.1` Rust tuple-field-access spelling) rather than inventing a second one.
+    ///
+    /// `expected_ty` is the best available type for this pattern node: propagated through [`Self::lower_match`]'s
+    /// own `Self::resolve_ty` call on the scrutinee for the root pattern, and through
+    /// [`tuple_element_types`] for `Tuple` sub-patterns (both already-established sources elsewhere in this file);
+    /// a `Struct`/`Enum` constructor pattern's own fields fall back to [`IncanType::Unknown`] per field, since
+    /// resolving a model/class/enum-variant's real field types would mean rebuilding the existing Rust-emission
+    /// backend's own field-type-projection machinery (`constructor_field_types_for_pattern` in
+    /// `src/backend/ir/lower/expr/patterns.rs`), which this bucket deliberately does not mirror -- see
+    /// [`bir::Pattern`]'s own docs.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_match_pattern(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        expected_ty: &IncanType,
+        place: &bir::Place,
+        arm_scope: bir::ScopeId,
+        arm: &ast::MatchArm,
+        seen: &mut HashMap<String, bir::LocalId>,
+        saved_bindings: &mut Vec<(String, Option<bir::LocalId>)>,
+    ) -> bir::Pattern {
+        let span = hir_span(pattern.span);
+        match &pattern.node {
+            ast::Pattern::Wildcard => bir::Pattern::Wildcard,
+            ast::Pattern::Binding(name) => {
+                let local = match seen.get(name) {
+                    Some(&local) => local,
+                    None => {
+                        let total_reads = count_reads_in_match_arm(name, arm);
+                        let previous = self.bindings.get(name).copied();
+                        let local = self.declare_new_local_with_reads(
+                            name.clone(),
+                            expected_ty.clone(),
+                            arm_scope,
+                            span,
+                            total_reads,
+                        );
+                        seen.insert(name.clone(), local);
+                        saved_bindings.push((name.clone(), previous));
+                        local
+                    }
+                };
+                let (fact, last_use) = self.ownership_fact_for_place(place, expected_ty);
+                bir::Pattern::Var(bir::PatternBinding { local, fact, last_use })
+            }
+            // `match_pattern_is_supported` has already ruled out the one shape `lower_literal` cannot represent
+            // (a byte-string literal) for every arm in this match before `Self::lower_match` calls this method at
+            // all, so the `None` case here is unreachable in practice; `Constant::Unit` is a harmless, structurally
+            // valid fallback rather than a panic if that invariant is ever violated.
+            ast::Pattern::Literal(lit) => bir::Pattern::Literal(lower_literal(lit).unwrap_or(bir::Constant::Unit)),
+            ast::Pattern::Tuple(items) => {
+                let element_types = tuple_element_types(expected_ty, items.len());
+                let fields = items
+                    .iter()
+                    .zip(element_types.iter())
+                    .enumerate()
+                    .map(|(index, (item, element_ty))| {
+                        let mut field_place = place.clone();
+                        field_place.projection.push(bir::PlaceElem::Field(index.to_string()));
+                        self.lower_match_pattern(item, element_ty, &field_place, arm_scope, arm, seen, saved_bindings)
+                    })
+                    .collect();
+                bir::Pattern::Tuple(fields)
+            }
+            ast::Pattern::Constructor(name, args) => {
+                // Mirrors the existing Rust-emission backend's own `lower_pattern` (non-union-aware) mapping
+                // exactly: a mix of named and positional arguments (unusual, likely non-representative source)
+                // still lowers every sub-pattern's own bindings for side effects, but only the named fields survive
+                // into the constructed `Pattern` once `has_named` is known.
+                let mut named_fields = Vec::new();
+                let mut positional_fields = Vec::new();
+                let mut has_named = false;
+                let mut positional_index = 0usize;
+                for arg in args {
+                    match arg {
+                        ast::PatternArg::Named(field, pat) => {
+                            has_named = true;
+                            let mut field_place = place.clone();
+                            field_place.projection.push(bir::PlaceElem::Field(field.clone()));
+                            let lowered = self.lower_match_pattern(
+                                pat,
+                                &IncanType::Unknown,
+                                &field_place,
+                                arm_scope,
+                                arm,
+                                seen,
+                                saved_bindings,
+                            );
+                            named_fields.push((field.clone(), lowered));
+                        }
+                        ast::PatternArg::Positional(pat) => {
+                            let mut field_place = place.clone();
+                            field_place
+                                .projection
+                                .push(bir::PlaceElem::Field(positional_index.to_string()));
+                            positional_index += 1;
+                            let lowered = self.lower_match_pattern(
+                                pat,
+                                &IncanType::Unknown,
+                                &field_place,
+                                arm_scope,
+                                arm,
+                                seen,
+                                saved_bindings,
+                            );
+                            positional_fields.push(lowered);
+                        }
+                    }
+                }
+                if has_named {
+                    bir::Pattern::Struct {
+                        name: name.clone(),
+                        fields: named_fields,
+                    }
+                } else {
+                    bir::Pattern::Enum {
+                        name: String::new(),
+                        variant: name.clone(),
+                        fields: positional_fields,
+                    }
+                }
+            }
+            ast::Pattern::Group(inner) => {
+                self.lower_match_pattern(inner, expected_ty, place, arm_scope, arm, seen, saved_bindings)
+            }
+            ast::Pattern::Or(items) => {
+                let alternatives = items
+                    .iter()
+                    .map(|item| {
+                        self.lower_match_pattern(item, expected_ty, place, arm_scope, arm, seen, saved_bindings)
+                    })
+                    .collect();
+                bir::Pattern::Or(alternatives)
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Comprehension desugaring helpers
+// ============================================================================
+
+/// The innermost action a list/dict-comprehension clause chain performs once every clause accepts one binding
+/// combination -- what [`BodyBuilder::lower_comprehension_terminal`] lowers. It distinguishes a list's
+/// single-element push from a dict's key/value insert while sharing the same clause-chain desugar.
+enum ComprehensionTerminal<'a> {
+    /// Push `element`'s value into the list at `list_local`.
+    ListPush {
+        list_local: bir::LocalId,
+        element: &'a ast::Spanned<ast::Expr>,
+    },
+    /// Insert `key`/`value` into the dict at `dict_local`.
+    DictInsert {
+        dict_local: bir::LocalId,
+        key: &'a ast::Spanned<ast::Expr>,
+        value: &'a ast::Spanned<ast::Expr>,
+    },
+}
+
+impl ComprehensionTerminal<'_> {
+    /// Count `name` occurrences in this terminal's own expression(s), for seeding a comprehension `for`-clause
+    /// binding's last-use countdown (see [`BodyBuilder::declare_new_local_with_reads`]'s doc for why comprehension
+    /// bindings cannot reuse the statement-suffix-based [`count_reads_in_stmts`]).
+    fn count_reads(&self, name: &str) -> usize {
+        match self {
+            Self::ListPush { element, .. } => count_reads_in_expr(name, &element.node),
+            Self::DictInsert { key, value, .. } => {
+                count_reads_in_expr(name, &key.node) + count_reads_in_expr(name, &value.node)
+            }
+        }
+    }
+}
+
+/// Build the single mirrored `(pattern, iter, filter)` clause list a list/dict comprehension carries, as an owned
+/// `Vec<ast::ComprehensionClause>` so [`BodyBuilder::lower_comprehension_clauses`] can share its
+/// `&[ast::ComprehensionClause]`-based recursion with generator expressions' real multi-clause `generator.clauses`
+/// without a second clause-walking implementation. See [`BodyBuilder::lower_list_comp`]'s docs for why only this
+/// single mirrored clause is used, not the comprehension's own (unread-elsewhere) `clauses` field.
+fn single_comprehension_clauses(
+    pattern: &ast::Spanned<ast::Pattern>,
+    iter: &ast::Spanned<ast::Expr>,
+    filter: Option<&ast::Spanned<ast::Expr>>,
+) -> Vec<ast::ComprehensionClause> {
+    let mut clauses = vec![ast::ComprehensionClause::For {
+        pattern: pattern.clone(),
+        iter: iter.clone(),
+    }];
+    if let Some(filter) = filter {
+        clauses.push(ast::ComprehensionClause::If(filter.clone()));
+    }
+    clauses
+}
+
+/// Count `name` occurrences across a tail of comprehension/generator clauses, for seeding a `for`-clause binding's
+/// last-use countdown alongside [`ComprehensionTerminal::count_reads`] (see
+/// [`BodyBuilder::lower_comprehension_clauses`]).
+fn count_reads_in_comprehension_clauses(name: &str, clauses: &[ast::ComprehensionClause]) -> usize {
+    clauses
+        .iter()
+        .map(|clause| match clause {
+            ast::ComprehensionClause::For { iter, .. } => count_reads_in_expr(name, &iter.node),
+            ast::ComprehensionClause::If(cond) => count_reads_in_expr(name, &cond.node),
+        })
+        .sum()
 }
 
 // ============================================================================
@@ -1461,14 +3164,8 @@ fn lower_literal(lit: &ast::Literal) -> Option<bir::Constant> {
 /// Short diagnostic label for a statement kind v0 does not lower.
 fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
     match stmt {
-        ast::Statement::FieldAssignment(_) => "field assignment".to_string(),
-        ast::Statement::IndexAssignment(_) => "index assignment".to_string(),
         ast::Statement::Unsafe(_) => "unsafe block".to_string(),
         ast::Statement::VocabExpressionItem(_) => "vocab expression item".to_string(),
-        ast::Statement::CompoundAssignment(_) => "compound assignment".to_string(),
-        ast::Statement::TupleUnpack(_) => "tuple unpack".to_string(),
-        ast::Statement::TupleAssign(_) => "tuple assignment".to_string(),
-        ast::Statement::ChainedAssignment(_) => "chained assignment".to_string(),
         ast::Statement::Surface(_) => "surface statement".to_string(),
         ast::Statement::VocabBlock(_) => "vocab block".to_string(),
         _ => "statement".to_string(),
@@ -1478,22 +3175,23 @@ fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
 /// Short diagnostic label for an expression kind v0 does not lower.
 fn unsupported_expr_label(expr: &ast::Expr) -> String {
     match expr {
-        ast::Expr::Slice(..) => "slice expression".to_string(),
         ast::Expr::Partial(_) => "partial callable preset".to_string(),
-        ast::Expr::Try(_) => "try (`?`) expression".to_string(),
-        ast::Expr::Match(..) => "match expression".to_string(),
-        ast::Expr::If(_) => "if expression".to_string(),
-        ast::Expr::Loop(_) => "loop expression".to_string(),
-        ast::Expr::ListComp(_) => "list comprehension".to_string(),
-        ast::Expr::DictComp(_) => "dict comprehension".to_string(),
-        ast::Expr::Generator(_) => "generator expression".to_string(),
         ast::Expr::Closure(..) => "closure".to_string(),
-        ast::Expr::Dict(_) => "dict literal".to_string(),
-        ast::Expr::Set(_) => "set literal".to_string(),
-        ast::Expr::FString(_) => "f-string".to_string(),
         ast::Expr::Yield(_) => "yield expression".to_string(),
         ast::Expr::Range { .. } => "range expression outside a for-loop".to_string(),
         _ => "expression".to_string(),
+    }
+}
+
+/// Resolve the per-element types for a tuple-typed value being destructured into `count` targets, falling back to
+/// [`IncanType::Unknown`] per element when the resolved type is not (or not yet) known to be a tuple of the right
+/// arity -- mirrors how the existing Rust-emission backend falls back to `IrType::Unknown` per slot in the same
+/// situation (`src/backend/ir/lower/stmt.rs`'s `TupleUnpack` lowering). Used by
+/// [`BodyBuilder::lower_tuple_unpack`] and [`BodyBuilder::lower_tuple_assign`].
+fn tuple_element_types(ty: &IncanType, count: usize) -> Vec<IncanType> {
+    match ty {
+        IncanType::Tuple(items) if items.len() == count => items.clone(),
+        _ => vec![IncanType::Unknown; count],
     }
 }
 
@@ -1517,6 +3215,26 @@ fn count_reads_in_stmts(name: &str, stmts: &[ast::Spanned<ast::Statement>]) -> u
 fn count_reads_in_stmt(name: &str, stmt: &ast::Statement) -> usize {
     match stmt {
         ast::Statement::Assignment(a) => count_reads_in_expr(name, &a.value.node),
+        ast::Statement::FieldAssignment(fa) => {
+            count_reads_in_expr(name, &fa.object.node) + count_reads_in_expr(name, &fa.value.node)
+        }
+        ast::Statement::IndexAssignment(ia) => {
+            count_reads_in_expr(name, &ia.object.node)
+                + count_reads_in_expr(name, &ia.index.node)
+                + count_reads_in_expr(name, &ia.value.node)
+        }
+        ast::Statement::CompoundAssignment(ca) => {
+            usize::from(ca.name == name) + count_reads_in_expr(name, &ca.value.node)
+        }
+        ast::Statement::TupleUnpack(tu) => count_reads_in_expr(name, &tu.value.node),
+        ast::Statement::TupleAssign(ta) => {
+            ta.targets
+                .iter()
+                .map(|t| count_reads_in_expr(name, &t.node))
+                .sum::<usize>()
+                + count_reads_in_expr(name, &ta.value.node)
+        }
+        ast::Statement::ChainedAssignment(ca) => count_reads_in_expr(name, &ca.value.node),
         ast::Statement::Return(Some(e)) => count_reads_in_expr(name, &e.node),
         ast::Statement::Return(None) => 0,
         ast::Statement::If(if_stmt) => {
@@ -1580,7 +3298,25 @@ fn count_reads_in_expr(name: &str, expr: &ast::Expr) -> usize {
         }
         ast::Expr::Field(e, _) => count_reads_in_expr(name, &e.node),
         ast::Expr::Index(e, idx) => count_reads_in_expr(name, &e.node) + count_reads_in_expr(name, &idx.node),
-        ast::Expr::Paren(e) => count_reads_in_expr(name, &e.node),
+        ast::Expr::Slice(base, slice) => {
+            count_reads_in_expr(name, &base.node)
+                + slice
+                    .start
+                    .as_ref()
+                    .map(|e| count_reads_in_expr(name, &e.node))
+                    .unwrap_or(0)
+                + slice
+                    .end
+                    .as_ref()
+                    .map(|e| count_reads_in_expr(name, &e.node))
+                    .unwrap_or(0)
+                + slice
+                    .step
+                    .as_ref()
+                    .map(|e| count_reads_in_expr(name, &e.node))
+                    .unwrap_or(0)
+        }
+        ast::Expr::Paren(e) | ast::Expr::Try(e) => count_reads_in_expr(name, &e.node),
         ast::Expr::Tuple(items) | ast::Expr::Set(items) => {
             items.iter().map(|i| count_reads_in_expr(name, &i.node)).sum()
         }
@@ -1590,11 +3326,488 @@ fn count_reads_in_expr(name: &str, expr: &ast::Expr) -> usize {
                 ast::ListEntry::Element(e) | ast::ListEntry::Spread(e) => count_reads_in_expr(name, &e.node),
             })
             .sum(),
+        ast::Expr::Dict(entries) => entries
+            .iter()
+            .map(|entry| match entry {
+                ast::DictEntry::Pair(k, v) => count_reads_in_expr(name, &k.node) + count_reads_in_expr(name, &v.node),
+                ast::DictEntry::Spread(e) => count_reads_in_expr(name, &e.node),
+            })
+            .sum(),
         ast::Expr::Constructor(_, args) => args.iter().map(|a| count_reads_in_call_arg(name, a)).sum(),
         ast::Expr::Range { start, end, .. } => {
             count_reads_in_expr(name, &start.node) + count_reads_in_expr(name, &end.node)
         }
+        ast::Expr::If(if_expr) => {
+            count_reads_in_expr(name, &if_expr.condition.node)
+                + count_reads_in_stmts(name, &if_expr.then_body)
+                + if_expr
+                    .else_body
+                    .as_ref()
+                    .map(|body| count_reads_in_stmts(name, body))
+                    .unwrap_or(0)
+        }
+        ast::Expr::Loop(loop_expr) => count_reads_in_stmts(name, &loop_expr.body),
+        ast::Expr::FString(parts) => parts
+            .iter()
+            .map(|part| match part {
+                ast::FStringPart::Literal(_) => 0,
+                ast::FStringPart::Expr { expr, .. } => count_reads_in_expr(name, &expr.node),
+            })
+            .sum(),
+        ast::Expr::ListComp(comp) => {
+            count_reads_in_expr(name, &comp.iter.node)
+                + comp
+                    .filter
+                    .as_ref()
+                    .map(|f| count_reads_in_expr(name, &f.node))
+                    .unwrap_or(0)
+                + count_reads_in_expr(name, &comp.expr.node)
+        }
+        ast::Expr::DictComp(comp) => {
+            count_reads_in_expr(name, &comp.iter.node)
+                + comp
+                    .filter
+                    .as_ref()
+                    .map(|f| count_reads_in_expr(name, &f.node))
+                    .unwrap_or(0)
+                + count_reads_in_expr(name, &comp.key.node)
+                + count_reads_in_expr(name, &comp.value.node)
+        }
+        ast::Expr::Generator(generator) => {
+            count_reads_in_comprehension_clauses(name, &generator.clauses)
+                + count_reads_in_expr(name, &generator.expr.node)
+        }
+        ast::Expr::Closure(params, body) => {
+            // `BodyBuilder::lower_closure` reads a captured free variable exactly once at the closure-creation
+            // site, however many times the closure body itself uses it afterward (subsequent uses read the
+            // closure's own captured-binding local, not the outer one this count seeds) -- so this contributes at
+            // most 1, not the raw in-body occurrence count. A name shadowed by the closure's own parameter is never
+            // captured at all and so contributes 0, regardless of how many times the body uses its own parameter.
+            if params.iter().any(|p| p.node.name == name) {
+                0
+            } else {
+                usize::from(count_reads_in_expr(name, &body.node) > 0)
+            }
+        }
+        ast::Expr::Partial(partial) => {
+            // Unlike a closure's captures, a partial callable's preset values are lowered as ordinary sub-expression
+            // reads (see `BodyBuilder::lower_partial`), not deduplicated per free-variable name, so this counts them
+            // plainly like any other nested expression.
+            count_reads_in_expr(name, &partial.target.node)
+                + partial
+                    .args
+                    .iter()
+                    .map(|a| count_reads_in_expr(name, &a.value.node))
+                    .sum::<usize>()
+        }
+        // `BodyBuilder::lower_yield` lowers a yielded value through the same `lower_expr_to_operand` path as any
+        // other statement's operand, so a name read inside `yield value` must be counted here too -- otherwise it
+        // would be undercounted for last-use purposes, the same soundness gap #1101's f-string bucket found and
+        // fixed for `count_reads_in_expr`'s `FString` arm.
+        ast::Expr::Yield(value) => value.as_ref().map_or(0, |v| count_reads_in_expr(name, &v.node)),
+        // Same soundness class as the `Yield`/`FString` arms above: a `match` scrutinee, guard, or arm body is
+        // lowered through the ordinary expression/statement paths (`BodyBuilder::lower_match`), so a read of `name`
+        // reachable inside any of them must be counted here too. Unlike `collect_free_vars_in_expr`'s `Match` arm,
+        // this does not need to exclude an arm's own pattern-bound names from the count: this function is a coarse,
+        // source-order over-approximation by design (see its own docs), and over-counting only ever biases the
+        // resulting ownership fact toward `Clone`/`Borrow` rather than `Move` -- never unsound.
+        ast::Expr::Match(subject, arms) => {
+            count_reads_in_expr(name, &subject.node)
+                + arms
+                    .iter()
+                    .map(|arm| count_reads_in_match_arm(name, &arm.node))
+                    .sum::<usize>()
+        }
         _ => 0,
+    }
+}
+
+/// Count `name` occurrences reachable from one `match` arm's guard and body, for seeding a pattern-bound local's
+/// last-use countdown the same way [`count_reads_in_stmts`] seeds an ordinary binding's -- see
+/// [`BodyBuilder::lower_match_pattern`]. Also reused by [`count_reads_in_expr`]'s own `Match` arm so both counting
+/// paths agree on what "a read inside this arm" means.
+fn count_reads_in_match_arm(name: &str, arm: &ast::MatchArm) -> usize {
+    let guard_reads = arm.guard.as_ref().map_or(0, |g| count_reads_in_expr(name, &g.node));
+    let body_reads = match &arm.body {
+        ast::MatchBody::Expr(e) => count_reads_in_expr(name, &e.node),
+        ast::MatchBody::Block(stmts) => count_reads_in_stmts(name, stmts),
+    };
+    guard_reads + body_reads
+}
+
+/// Whether `pattern` is representable by [`bir::Pattern`]'s closed vocabulary. The only unrepresentable shape is a
+/// byte-string literal pattern ([`bir::Constant`] has no byte-string variant -- see [`lower_literal`]'s own `None`
+/// case for the identical gap in plain literal *expressions*); every other pattern shape lowers structurally, with
+/// [`IncanType::Unknown`] field-type fallbacks where needed rather than an outright failure (see
+/// [`BodyBuilder::lower_match_pattern`]'s own docs). Checked for every arm before [`BodyBuilder::lower_match`]
+/// lowers any of them, mirroring [`BodyBuilder::binary_op_is_supported`]'s "check before partially lowering"
+/// precedent.
+fn match_pattern_is_supported(pattern: &ast::Pattern) -> bool {
+    match pattern {
+        ast::Pattern::Literal(ast::Literal::Bytes(_)) => false,
+        ast::Pattern::Literal(_) | ast::Pattern::Wildcard | ast::Pattern::Binding(_) => true,
+        ast::Pattern::Tuple(items) => items.iter().all(|item| match_pattern_is_supported(&item.node)),
+        ast::Pattern::Constructor(_, args) => args.iter().all(|arg| match arg {
+            ast::PatternArg::Positional(pat) | ast::PatternArg::Named(_, pat) => match_pattern_is_supported(&pat.node),
+        }),
+        ast::Pattern::Group(inner) => match_pattern_is_supported(&inner.node),
+        ast::Pattern::Or(items) => items.iter().all(|item| match_pattern_is_supported(&item.node)),
+    }
+}
+
+/// Determine every free variable a closure literal's body reads from its enclosing scope, in first-occurrence
+/// source order, given the closure's own declared parameters as the initial bound set. A "free variable" is any
+/// `Ident` read the closure body itself does not bind -- exactly the set [`BodyBuilder::lower_closure`] must
+/// capture before lowering the body, so each one gets its own explicit Duckborrower read at the point the closure
+/// is constructed (see this module's docs on why Body IR cannot rely on a target backend's own closure syntax to
+/// auto-capture the way the existing Rust-emission backend does).
+fn free_vars_in_closure_body(params: &[ast::Spanned<ast::Param>], body: &ast::Spanned<ast::Expr>) -> Vec<String> {
+    let mut bound: HashSet<String> = params.iter().map(|p| p.node.name.clone()).collect();
+    let mut free = Vec::new();
+    collect_free_vars_in_expr(&body.node, &mut bound, &mut free);
+    free
+}
+
+/// Record `name` in `free` (in first-occurrence order, deduplicated) unless it is already in `bound`.
+fn push_free(name: &str, bound: &HashSet<String>, free: &mut Vec<String>) {
+    if !bound.contains(name) && !free.iter().any(|existing| existing == name) {
+        free.push(name.to_string());
+    }
+}
+
+/// Bind `pattern`'s introduced name into `bound`, if it is a plain [`ast::Pattern::Binding`]. Any other pattern
+/// shape introduces no bound name at this level, matching how the rest of this module's lowering only ever binds a
+/// plain [`ast::Pattern::Binding`] for `for`/comprehension clauses (a destructuring pattern lowers to
+/// `Unsupported` -- see [`BodyBuilder::lower_for`]).
+fn bind_pattern(pattern: &ast::Pattern, bound: &mut HashSet<String>) {
+    if let ast::Pattern::Binding(name) = pattern {
+        bound.insert(name.clone());
+    }
+}
+
+/// Collect every name a `match` pattern binds, recursing into every sub-pattern shape -- unlike [`bind_pattern`]
+/// above, which only handles the plain [`ast::Pattern::Binding`] shape `for`/comprehension patterns are restricted
+/// to. Used by [`collect_free_vars_in_expr`]'s `Match` arm to exclude an arm's own pattern-bound names from being
+/// treated as free variables of an enclosing closure, mirroring [`BodyBuilder::lower_match_pattern`]'s own binding
+/// walk in spirit (though this one only needs names, not the full binding/ownership machinery that walk builds).
+fn bind_match_pattern_names(pattern: &ast::Pattern, bound: &mut HashSet<String>) {
+    match pattern {
+        ast::Pattern::Wildcard | ast::Pattern::Literal(_) => {}
+        ast::Pattern::Binding(name) => {
+            bound.insert(name.clone());
+        }
+        ast::Pattern::Tuple(items) => {
+            for item in items {
+                bind_match_pattern_names(&item.node, bound);
+            }
+        }
+        ast::Pattern::Constructor(_, args) => {
+            for arg in args {
+                match arg {
+                    ast::PatternArg::Positional(pat) | ast::PatternArg::Named(_, pat) => {
+                        bind_match_pattern_names(&pat.node, bound);
+                    }
+                }
+            }
+        }
+        ast::Pattern::Group(inner) => bind_match_pattern_names(&inner.node, bound),
+        ast::Pattern::Or(items) => {
+            for item in items {
+                bind_match_pattern_names(&item.node, bound);
+            }
+        }
+    }
+}
+
+/// Recursively collect free variables from an expression, given the names already bound at this point in `bound`.
+/// Constructs that introduce their own bindings for a sub-expression (comprehension/`for`-clause patterns, nested
+/// closures' own parameters, or a nested expression-position `if`/`loop`'s own statement-block bindings) extend a
+/// *cloned* copy of `bound` before recursing into that sub-expression, so a binding introduced in one branch never
+/// leaks into a sibling branch or back out to the caller -- unlike [`BodyBuilder`]'s own flat `self.bindings` map,
+/// which this analysis runs entirely independently of (see [`free_vars_in_closure_body`]'s docs).
+fn collect_free_vars_in_expr(expr: &ast::Expr, bound: &mut HashSet<String>, free: &mut Vec<String>) {
+    match expr {
+        ast::Expr::Ident(name) => push_free(name, bound, free),
+        ast::Expr::Binary(l, _, r) => {
+            collect_free_vars_in_expr(&l.node, bound, free);
+            collect_free_vars_in_expr(&r.node, bound, free);
+        }
+        ast::Expr::Unary(_, e) | ast::Expr::Paren(e) | ast::Expr::Try(e) => {
+            collect_free_vars_in_expr(&e.node, bound, free)
+        }
+        ast::Expr::Call(callee, _, args) => {
+            collect_free_vars_in_expr(&callee.node, bound, free);
+            for arg in args {
+                collect_free_vars_in_call_arg(arg, bound, free);
+            }
+        }
+        ast::Expr::MethodCall(recv, _, _, args) => {
+            collect_free_vars_in_expr(&recv.node, bound, free);
+            for arg in args {
+                collect_free_vars_in_call_arg(arg, bound, free);
+            }
+        }
+        ast::Expr::Field(e, _) => collect_free_vars_in_expr(&e.node, bound, free),
+        ast::Expr::Index(e, idx) => {
+            collect_free_vars_in_expr(&e.node, bound, free);
+            collect_free_vars_in_expr(&idx.node, bound, free);
+        }
+        ast::Expr::Slice(base, slice) => {
+            collect_free_vars_in_expr(&base.node, bound, free);
+            for component in [&slice.start, &slice.end, &slice.step].into_iter().flatten() {
+                collect_free_vars_in_expr(&component.node, bound, free);
+            }
+        }
+        ast::Expr::Tuple(items) | ast::Expr::Set(items) => {
+            for item in items {
+                collect_free_vars_in_expr(&item.node, bound, free);
+            }
+        }
+        ast::Expr::List(entries) => {
+            for entry in entries {
+                match entry {
+                    ast::ListEntry::Element(e) | ast::ListEntry::Spread(e) => {
+                        collect_free_vars_in_expr(&e.node, bound, free)
+                    }
+                }
+            }
+        }
+        ast::Expr::Dict(entries) => {
+            for entry in entries {
+                match entry {
+                    ast::DictEntry::Pair(k, v) => {
+                        collect_free_vars_in_expr(&k.node, bound, free);
+                        collect_free_vars_in_expr(&v.node, bound, free);
+                    }
+                    ast::DictEntry::Spread(e) => collect_free_vars_in_expr(&e.node, bound, free),
+                }
+            }
+        }
+        ast::Expr::Constructor(_, args) => {
+            for arg in args {
+                collect_free_vars_in_call_arg(arg, bound, free);
+            }
+        }
+        ast::Expr::Range { start, end, .. } => {
+            collect_free_vars_in_expr(&start.node, bound, free);
+            collect_free_vars_in_expr(&end.node, bound, free);
+        }
+        ast::Expr::FString(parts) => {
+            for part in parts {
+                if let ast::FStringPart::Expr { expr, .. } = part {
+                    collect_free_vars_in_expr(&expr.node, bound, free);
+                }
+            }
+        }
+        ast::Expr::If(if_expr) => {
+            collect_free_vars_in_expr(&if_expr.condition.node, bound, free);
+            let mut then_bound = bound.clone();
+            collect_free_vars_in_stmts(&if_expr.then_body, &mut then_bound, free);
+            if let Some(else_body) = &if_expr.else_body {
+                let mut else_bound = bound.clone();
+                collect_free_vars_in_stmts(else_body, &mut else_bound, free);
+            }
+        }
+        ast::Expr::Loop(loop_expr) => {
+            let mut loop_bound = bound.clone();
+            collect_free_vars_in_stmts(&loop_expr.body, &mut loop_bound, free);
+        }
+        ast::Expr::ListComp(comp) => {
+            collect_free_vars_in_expr(&comp.iter.node, bound, free);
+            let mut inner_bound = bound.clone();
+            bind_pattern(&comp.pattern.node, &mut inner_bound);
+            if let Some(filter) = &comp.filter {
+                collect_free_vars_in_expr(&filter.node, &mut inner_bound, free);
+            }
+            collect_free_vars_in_expr(&comp.expr.node, &mut inner_bound, free);
+        }
+        ast::Expr::DictComp(comp) => {
+            collect_free_vars_in_expr(&comp.iter.node, bound, free);
+            let mut inner_bound = bound.clone();
+            bind_pattern(&comp.pattern.node, &mut inner_bound);
+            if let Some(filter) = &comp.filter {
+                collect_free_vars_in_expr(&filter.node, &mut inner_bound, free);
+            }
+            collect_free_vars_in_expr(&comp.key.node, &mut inner_bound, free);
+            collect_free_vars_in_expr(&comp.value.node, &mut inner_bound, free);
+        }
+        ast::Expr::Generator(generator) => {
+            let mut inner_bound = bound.clone();
+            for clause in &generator.clauses {
+                match clause {
+                    ast::ComprehensionClause::For { pattern, iter } => {
+                        collect_free_vars_in_expr(&iter.node, &mut inner_bound, free);
+                        bind_pattern(&pattern.node, &mut inner_bound);
+                    }
+                    ast::ComprehensionClause::If(cond) => collect_free_vars_in_expr(&cond.node, &mut inner_bound, free),
+                }
+            }
+            collect_free_vars_in_expr(&generator.expr.node, &mut inner_bound, free);
+        }
+        ast::Expr::Closure(params, body) => {
+            let mut inner_bound = bound.clone();
+            for param in params {
+                inner_bound.insert(param.node.name.clone());
+            }
+            collect_free_vars_in_expr(&body.node, &mut inner_bound, free);
+        }
+        ast::Expr::Partial(partial) => {
+            collect_free_vars_in_expr(&partial.target.node, bound, free);
+            for arg in &partial.args {
+                collect_free_vars_in_expr(&arg.value.node, bound, free);
+            }
+        }
+        // Mirrors `count_reads_in_expr`'s `Yield` arm: a yielded value is an ordinary nested expression for
+        // free-variable purposes, so a name it reads from an enclosing closure scope must still be captured.
+        ast::Expr::Yield(Some(value)) => collect_free_vars_in_expr(&value.node, bound, free),
+        // The scrutinee is read in the enclosing scope like any other sub-expression. Each arm gets its own
+        // *cloned* `bound` set (matching the `If`/`Loop` arms above) extended with that arm's own pattern-bound
+        // names (via `bind_match_pattern_names`, unlike `for`/comprehension patterns' plain `bind_pattern`, since a
+        // match pattern can destructure and bind more than one name) before walking its guard and body, so one
+        // arm's bindings never leak into a sibling arm or shadow an outer free variable of the same name.
+        ast::Expr::Match(subject, arms) => {
+            collect_free_vars_in_expr(&subject.node, bound, free);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                bind_match_pattern_names(&arm.node.pattern.node, &mut arm_bound);
+                if let Some(guard) = &arm.node.guard {
+                    collect_free_vars_in_expr(&guard.node, &mut arm_bound, free);
+                }
+                match &arm.node.body {
+                    ast::MatchBody::Expr(e) => collect_free_vars_in_expr(&e.node, &mut arm_bound, free),
+                    ast::MatchBody::Block(stmts) => collect_free_vars_in_stmts(stmts, &mut arm_bound, free),
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Collect free variables from one call argument's expression, regardless of whether it is positional, named, or an
+/// unpack -- matching [`count_reads_in_call_arg`]'s own "count the expression either way" stance, even though
+/// [`BodyBuilder::lower_positional_args`] itself rejects named/unpack arguments during real lowering.
+fn collect_free_vars_in_call_arg(arg: &ast::CallArg, bound: &mut HashSet<String>, free: &mut Vec<String>) {
+    match arg {
+        ast::CallArg::Positional(e)
+        | ast::CallArg::Named(_, e)
+        | ast::CallArg::PositionalUnpack(e)
+        | ast::CallArg::KeywordUnpack(e) => collect_free_vars_in_expr(&e.node, bound, free),
+    }
+}
+
+/// Collect free variables from an `if`/`while` condition, including the value expression of a `Condition::Let`
+/// pattern condition (even though v0 lowering does not model `if let`/`while let` themselves -- see
+/// [`BodyBuilder::lower_if`]/[`BodyBuilder::lower_while`]) -- a pattern-bound name still shadows an outer name of
+/// the same spelling for anything nested inside the branch this condition gates, so it is bound defensively here
+/// even though the branch itself lowers to `Unsupported`.
+fn collect_free_vars_in_condition(cond: &ast::Condition, bound: &mut HashSet<String>, free: &mut Vec<String>) {
+    match cond {
+        ast::Condition::Expr(e) => collect_free_vars_in_expr(&e.node, bound, free),
+        ast::Condition::Let { pattern, value } => {
+            collect_free_vars_in_expr(&value.node, bound, free);
+            bind_pattern(&pattern.node, bound);
+        }
+    }
+}
+
+/// Collect free variables from a statement block in source order, threading a progressively-extended `bound` set
+/// through each statement so a binding one statement introduces (`let`, `for`, tuple unpack, ...) is visible to
+/// every later statement in the *same* block, matching ordinary lexical scoping -- and, symmetrically, does not
+/// leak into a sibling block (an `if`'s `else` body, for instance), since callers always pass a freshly cloned
+/// `bound` per block (see [`collect_free_vars_in_expr`]'s `If`/`Loop` arms).
+fn collect_free_vars_in_stmts(
+    stmts: &[ast::Spanned<ast::Statement>],
+    bound: &mut HashSet<String>,
+    free: &mut Vec<String>,
+) {
+    for stmt in stmts {
+        collect_free_vars_in_stmt(&stmt.node, bound, free);
+    }
+}
+
+/// Collect free variables from one statement, recursing into every statement kind [`BodyBuilder`]'s own lowering
+/// walks (see this module's module-level docs for the covered subset) and extending `bound` wherever that statement
+/// introduces a new binding for the remainder of its enclosing block. Statement kinds outside v0's lowered subset
+/// are not walked and neither read nor bind anything this analysis needs to know about.
+fn collect_free_vars_in_stmt(stmt: &ast::Statement, bound: &mut HashSet<String>, free: &mut Vec<String>) {
+    match stmt {
+        ast::Statement::Assignment(a) => {
+            collect_free_vars_in_expr(&a.value.node, bound, free);
+            bound.insert(a.name.clone());
+        }
+        ast::Statement::FieldAssignment(fa) => {
+            collect_free_vars_in_expr(&fa.object.node, bound, free);
+            collect_free_vars_in_expr(&fa.value.node, bound, free);
+        }
+        ast::Statement::IndexAssignment(ia) => {
+            collect_free_vars_in_expr(&ia.object.node, bound, free);
+            collect_free_vars_in_expr(&ia.index.node, bound, free);
+            collect_free_vars_in_expr(&ia.value.node, bound, free);
+        }
+        ast::Statement::CompoundAssignment(ca) => {
+            // A compound assignment target must already exist, so it is a read of whatever bound it (an outer
+            // capture, if this statement lives inside a closure body and `ca.name` was never rebound locally), not
+            // a fresh binding -- see `Self::lower_partial`'s docs for the known limitation this implies for
+            // mutating a captured variable from inside a closure.
+            push_free(&ca.name, bound, free);
+            collect_free_vars_in_expr(&ca.value.node, bound, free);
+        }
+        ast::Statement::TupleUnpack(tu) => {
+            collect_free_vars_in_expr(&tu.value.node, bound, free);
+            for name in &tu.names {
+                bound.insert(name.clone());
+            }
+        }
+        ast::Statement::TupleAssign(ta) => {
+            for target in &ta.targets {
+                collect_free_vars_in_expr(&target.node, bound, free);
+            }
+            collect_free_vars_in_expr(&ta.value.node, bound, free);
+        }
+        ast::Statement::ChainedAssignment(ca) => {
+            collect_free_vars_in_expr(&ca.value.node, bound, free);
+            for name in &ca.targets {
+                bound.insert(name.clone());
+            }
+        }
+        ast::Statement::Return(Some(e)) => collect_free_vars_in_expr(&e.node, bound, free),
+        ast::Statement::Return(None) => {}
+        ast::Statement::If(if_stmt) => {
+            collect_free_vars_in_condition(&if_stmt.condition, bound, free);
+            let mut then_bound = bound.clone();
+            collect_free_vars_in_stmts(&if_stmt.then_body, &mut then_bound, free);
+            for (cond, body) in &if_stmt.elif_branches {
+                collect_free_vars_in_expr(&cond.node, bound, free);
+                let mut elif_bound = bound.clone();
+                collect_free_vars_in_stmts(body, &mut elif_bound, free);
+            }
+            if let Some(else_body) = &if_stmt.else_body {
+                let mut else_bound = bound.clone();
+                collect_free_vars_in_stmts(else_body, &mut else_bound, free);
+            }
+        }
+        ast::Statement::While(w) => {
+            collect_free_vars_in_condition(&w.condition, bound, free);
+            let mut loop_bound = bound.clone();
+            collect_free_vars_in_stmts(&w.body, &mut loop_bound, free);
+        }
+        ast::Statement::For(f) => {
+            collect_free_vars_in_expr(&f.iter.node, bound, free);
+            let mut loop_bound = bound.clone();
+            bind_pattern(&f.pattern.node, &mut loop_bound);
+            collect_free_vars_in_stmts(&f.body, &mut loop_bound, free);
+        }
+        ast::Statement::Expr(e) => collect_free_vars_in_expr(&e.node, bound, free),
+        ast::Statement::Assert(a) => {
+            if let ast::AssertKind::Condition(e) = &a.kind {
+                collect_free_vars_in_expr(&e.node, bound, free);
+            }
+            if let Some(message) = &a.message {
+                collect_free_vars_in_expr(&message.node, bound, free);
+            }
+        }
+        ast::Statement::Break(Some(e)) => collect_free_vars_in_expr(&e.node, bound, free),
+        _ => {}
     }
 }
 
@@ -1732,9 +3945,11 @@ mod tests {
     #[test]
     fn unsupported_constructs_lower_to_an_explicit_placeholder_instead_of_panicking()
     -> Result<(), Box<dyn std::error::Error>> {
-        // v0 only lowers `for` over a `start..end` range; iterating a list literal is valid Incan but hits the
+        // v0 does not lower destructuring for-loop patterns (that needs `match`-shaped pattern compilation, out of
+        // scope for #1101's iterator-protocol bucket); a tuple-unpack `for` binding is valid Incan but hits the
         // explicit `Unsupported` placeholder rather than being silently dropped or panicking.
-        let source = "def pick(x: int) -> int:\n  for i in [1, 2, 3]:\n    return i\n  return x\n";
+        let source =
+            "def pick(x: int) -> int:\n  for idx, name in enumerate([\"a\", \"b\"]):\n    return idx\n  return x\n";
         let module = build(source, &["m", "unsupported"])?;
         let snapshot = module.render_snapshot();
 
@@ -1755,17 +3970,35 @@ mod tests {
         assert!(snapshot.contains("local 0 self : Counter [receiver]"));
         // `self.value` is a projected read of an `int` (Copy) field, so it reads `copy`, never `move` or `clone`.
         assert!(snapshot.contains("return copy(_0.value)"));
+
         Ok(())
     }
 
     #[test]
-    fn mut_self_receiver_origin_is_mutable_and_field_mutation_stays_an_explicit_placeholder()
-    -> Result<(), Box<dyn std::error::Error>> {
-        // `self.field = value` (`ast::Statement::FieldAssignment`) is unsupported for every receiver today, not only
-        // `self` (see this module's docs) -- this test asserts the receiver is modeled correctly (`mut self`
-        // producing a `[receiver_mut]` origin) and that the unmodeled mutation still lowers to an explicit
-        // `Unsupported` placeholder rather than being silently dropped, consistent with v0's "total over real
-        // programs" contract.
+    fn lowers_for_over_a_builtin_list_using_the_builtin_iter_protocol() -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            "def total(items: list[int]) -> int:\n  mut acc = 0\n  for x in items:\n    acc = acc + x\n  return acc\n";
+        let module = build(source, &["m", "builtin_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("iter_next(mut_borrow("),
+            "builtin for should poll via IterNext: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(", builtin)"),
+            "builtin collection iteration should use IterProtocol::Builtin: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "should not fall back to Unsupported: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mut_self_receiver_origin_is_mutable_and_field_mutation_lowers() -> Result<(), Box<dyn std::error::Error>> {
+        // `mut self` must remain a mutable receiver when its field assignment is lowered.
         let source = "model Counter:\n  value: int\n\n  def bump(mut self) -> None:\n    self.value = self.value + 1\n";
         let module = build(source, &["m", "receiver_mut"])?;
         let snapshot = module.render_snapshot();
@@ -1773,8 +4006,201 @@ mod tests {
         assert!(snapshot.contains("body bump decl:m::receiver_mut::Counter::bump"));
         assert!(snapshot.contains("local 0 self : Counter [receiver_mut]"));
         assert!(
-            snapshot.contains("unsupported(field assignment)"),
-            "field assignment is not yet lowered for any receiver: {snapshot}"
+            !snapshot.contains("unsupported("),
+            "mutable receiver field assignment should lower without a placeholder: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn for_pattern_bindings_do_not_escape_the_loop_scope() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def keep_outer(x: int, items: list[int]) -> int:\n  for x in items:\n    pass\n  return x\n";
+        let module = build(source, &["m", "for_scope"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("return copy(_0)"),
+            "the trailing read must resolve the enclosing parameter, not the for-pattern local: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_for_over_a_user_defined_iteration_protocol() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model CounterIter:\n  value: int\n  limit: int\n\n  def __next__(self) -> Option[int]:\n    if self.value < self.limit:\n      return Some(self.value)\n    return None\n\nmodel Counter:\n  limit: int\n\n  def __iter__(self) -> CounterIter:\n    return CounterIter(value=0, limit=self.limit)\n\ndef total() -> int:\n  mut acc = 0\n  for item in Counter(limit=3):\n    acc = acc + item\n  return acc\n";
+        let module = build(source, &["m", "protocol_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("call method:__iter__"),
+            "should call the resolved __iter__ method to obtain an iterator: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("user_defined(__next__)"),
+            "should poll via the resolved __next__ method, non-fallible: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_fallible_for_iteration_with_an_implicit_try_propagate_semantic() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "model ChunkStream:\n  def __iter__(self) -> ChunkStream:\n    return self\n\n  def __next__(self) -> Result[Option[int], str]:\n    return Ok(None)\n\ndef total() -> Result[int, str]:\n  mut acc = 0\n  for chunk in ChunkStream()?:\n    acc = acc + chunk\n  return Ok(acc)\n";
+        let module = build(source, &["m", "fallible_for"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("user_defined(__next__, fallible)"),
+            "fallible protocol iteration should mark IterNext as fallible: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_list_comprehension_into_a_push_loop() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def doubled(items: list[int]) -> list[int]:\n  return [x * 2 for x in items]\n";
+        let module = build(source, &["m", "list_comp"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("list[]"),
+            "should start from an empty list aggregate: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call method:push(mut_borrow("),
+            "should grow the list via a synthesized push call: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("iter_next("),
+            "should desugar into the shared iteration primitive: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_filtered_list_comprehension_with_a_guarding_if() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def evens(items: list[int]) -> list[int]:\n  return [x for x in items if x % 2 == 0]\n";
+        let module = build(source, &["m", "list_comp_filter"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("call method:push("),
+            "filtered comprehension should still push accepted elements: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("if "),
+            "the filter clause should lower to a guarding If: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn comprehension_bindings_do_not_escape_the_expression_scope() -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            "def keep_outer(x: int, items: list[int]) -> int:\n  doubled = [x * 2 for x in items]\n  return x\n";
+        let module = build(source, &["m", "comprehension_scope"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("return copy(_0)"),
+            "the trailing read must resolve the enclosing parameter, not the comprehension binding: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_dict_comprehension_into_an_insert_loop() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def doubled(items: list[int]) -> dict[int, int]:\n  return {x: x * 2 for x in items}\n";
+        let module = build(source, &["m", "dict_comp"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("dict[]"),
+            "should start from an empty dict aggregate: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call method:insert(mut_borrow("),
+            "should grow the dict via a synthesized insert call: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generator_expression_is_explicitly_unsupported_pending_1123() -> Result<(), Box<dyn std::error::Error>> {
+        // Mirrors the multi-clause fixture from `test_rfc006_generator_expression_infers_element_type` in
+        // `src/frontend/typechecker/tests.rs`, which is real, delivered RFC 006 behavior: two `for` clauses and two
+        // `if` filters chained in source order.
+        let source = "def positives(xs: list[int], ys: list[int]) -> Generator[int]:\n  return (x * y for x in xs if x > 0 for y in ys if y > x)\n";
+        let module = build(source, &["m", "generator_expr"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("unsupported(generator expression requires lazy suspension semantics (#1123))"),
+            "generator expressions must stay explicit until Body IR models lazy suspension: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("list[]"),
+            "a generator expression must not materialize an eager list while claiming Generator[T]: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_dict_literal_as_a_dict_aggregate_with_paired_operands() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def make() -> dict[str, int]:\n  return {\"a\": 1, \"b\": 2}\n";
+        let module = build(source, &["m", "dict_lit"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("dict[const(\"a\"): const(1), const(\"b\"): const(2)]"),
+            "dict aggregate should render key/value pairs: {snapshot}"
+        );
+        assert!(snapshot.contains("allocator"));
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_set_literal_as_a_set_aggregate() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def make() -> set[str]:\n  return {\"a\", \"b\"}\n";
+        let module = build(source, &["m", "set_lit"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("set[const(\"a\"), const(\"b\")]"),
+            "set aggregate should render as a flat element list: {snapshot}"
+        );
+        assert!(snapshot.contains("allocator"));
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_slice_expression_as_a_slice_projected_place_read() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def middle(s: str) -> str:\n  return s[1:3]\n";
+        let module = build(source, &["m", "slice"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("[const(1):const(3)]"),
+            "slice projection should render start/end operands: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_tuple_unpack_into_field_projected_reads_off_a_materialized_tuple()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def sum_pair() -> int:\n  pair = (1, 2)\n  a, b = pair\n  return a + b\n";
+        let module = build(source, &["m", "tuple_unpack"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains(".0") && snapshot.contains(".1"),
+            "tuple unpack should project each element by index: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "tuple unpack should not fall back: {snapshot}"
         );
         Ok(())
     }
@@ -1801,6 +4227,31 @@ mod tests {
             "an abstract method has no body to lower, and must not produce an Unsupported placeholder body either: {:?}",
             module.bodies
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_tuple_assign_swap_with_correct_evaluation_order() -> Result<(), Box<dyn std::error::Error>> {
+        // `arr[i], arr[j] = (arr[j], arr[i])` must read both original values before writing either target, or the
+        // swap would clobber `arr[i]` before `arr[j]`'s read observes it. A leading plain-identifier target (`a, b
+        // = ...`) always parses as `TupleUnpackStmt` instead (new bindings, possibly shadowing) -- lvalue index/
+        // field targets are what actually reaches `TupleAssignStmt`, matching the parser's own routing
+        // (`crates/incan_syntax/src/parser/stmts.rs`'s `assignment_or_expr_stmt`).
+        let source = "def swap(mut arr: list[int], i: int, j: int) -> int:\n  arr[i], arr[j] = (arr[j], arr[i])\n  return arr[i]\n";
+        let module = build(source, &["m", "tuple_assign"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "tuple assign should not fall back: {snapshot}"
+        );
+        // Both targets should end up written via a plain `Assign` into an `[index]`-projected place, not
+        // `Unsupported`.
+        assert!(
+            snapshot.matches("] = ").count() >= 2,
+            "both index-projected targets should be assigned: {snapshot}"
+        );
         Ok(())
     }
 
@@ -1813,6 +4264,24 @@ mod tests {
         assert!(snapshot.contains("body identity decl:m::trait_default::Identity::identity"));
         assert!(snapshot.contains("local 0 self : Self [receiver]"));
         assert!(snapshot.contains("return clone(_0)"));
+
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_chained_assignment_right_to_left() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def chain() -> int:\n  x = y = z = 5\n  return x + y + z\n";
+        let module = build(source, &["m", "chained"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "chained assignment should not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(5)"),
+            "the rightmost target reads the literal value: {snapshot}"
+        );
         Ok(())
     }
 
@@ -1826,6 +4295,637 @@ mod tests {
         assert!(
             !snapshot.contains("[receiver"),
             "a static/associated method (receiver: None) must not declare a receiver local: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_compound_assignment_as_a_read_modify_write() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def accumulate(step: int) -> int:\n  mut total = 0\n  total += step\n  return total\n";
+        let module = build(source, &["m", "compound"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "compound assignment should not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(" + "),
+            "compound assignment should desugar through a binary op: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_compound_string_assignment_through_the_string_concat_helper() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def greet(name: str) -> str:\n  mut out = \"hi \"\n  out += name\n  return out\n";
+        let module = build(source, &["m", "compound_str"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("call helper:str_concat"),
+            "string compound assignment should route through the same helper as `+`: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_field_assignment_on_a_mutable_model_parameter() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Counter:\n  count: int\n\ndef bump(mut c: Counter) -> int:\n  c.count = c.count + 1\n  return c.count\n";
+        let module = build(source, &["m", "field_assign"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "field assignment should not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains(".count = "),
+            "should assign into the `.count` projection: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_index_assignment_on_a_mutable_list_parameter() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def set_first(mut items: list[int], value: int) -> None:\n  items[0] = value\n  return\n";
+        let module = build(source, &["m", "index_assign"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "index assignment should not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("[const(0)] = "),
+            "should assign into the `[0]` projection: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn index_assignment_evaluates_object_before_index() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def make_items() -> list[int]:\n  return [1]\n\ndef make_index() -> int:\n  return 0\n\ndef assign() -> None:\n  make_items()[make_index()] = 7\n  return\n";
+        let module = build(source, &["m", "index_assignment_order"])?;
+        let snapshot = module.render_snapshot();
+        let object_call = snapshot
+            .find("call fn:make_items()")
+            .ok_or("missing index-assignment object call")?;
+        let index_call = snapshot
+            .find("call fn:make_index()")
+            .ok_or("missing index-assignment index call")?;
+
+        assert!(
+            object_call < index_call,
+            "index assignment must evaluate its object before its index: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_expression_position_if_as_unit_typed() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def maybe_print(flag: bool) -> None:\n  if flag:\n    pass\n  else:\n    pass\n  return\n";
+        // `if` used purely as a statement already covers the statement-position path; this test instead exercises
+        // the expression-position path via a plain expression statement wrapping an `if` expression's value.
+        let source_expr = "def maybe(flag: bool) -> None:\n  _ = if flag:\n    pass\n  else:\n    pass\n  return\n";
+        let _ = build(source, &["m", "if_stmt"])?; // sanity: statement-position if still works unchanged
+        let module = build(source_expr, &["m", "if_expr"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "expression-position if should not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(())"),
+            "an if-expression's value should be the Unit constant: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_loop_expression_break_value_into_a_merged_result_place() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def find(flag: bool) -> int:\n  return loop:\n    if flag:\n      break 42\n    break 7\n";
+        let module = build(source, &["m", "loop_expr"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "loop-expression should not fall back: {snapshot}"
+        );
+        // Both `break 42` and `break 7` should have been rewritten into an assignment to the shared result local
+        // followed by a plain, valueless `break`, rather than carrying a value on `Break` itself.
+        assert!(snapshot.contains("const(42)"));
+        assert!(snapshot.contains("const(7)"));
+        assert!(
+            !snapshot.contains("break const"),
+            "break value should be assigned into the result place, not carried on `break`: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_while_break_inside_a_loop_expression_does_not_target_the_outer_loop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A plain `break` inside a nested `while` must exit the `while`, not accidentally get rewritten into an
+        // assignment to the outer `loop:` expression's result place.
+        let source = "def find(limit: int) -> int:\n  return loop:\n    mut i = 0\n    while i < limit:\n      if i == 5:\n        break\n      i = i + 1\n    break i\n";
+        let module = build(source, &["m", "nested_loop"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "nested while/loop should not fall back: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_try_into_an_explicit_try_propagate_statement() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "enum E:\n  Bad\n\ndef half(x: int) -> Result[int, E]:\n  if x % 2 != 0:\n    return Err(E.Bad)\n  return Ok(x // 2)\n\ndef quarter(x: int) -> Result[int, E]:\n  h = half(x)?\n  return half(h)\n";
+        let module = build(source, &["m", "try_expr"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("= try?("),
+            "`?` should lower to an explicit try-propagate statement: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_an_fstring_into_a_format_rvalue_with_literal_and_display_parts() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "def greet(name: str) -> str:\n  return f\"hello {name}\"\n";
+        let module = build(source, &["m", "fstring_display"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("fstring(lit(\"hello \"), move(_0, last_use):display"),
+            "f-string should lower to an explicit Format rvalue with literal and display parts: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_an_fstring_debug_interpolation_using_the_debug_style() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def show(n: int) -> str:\n  return f\"n={n:?}\"\n";
+        let module = build(source, &["m", "fstring_debug"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains(":debug"),
+            "`{{n:?}}` should lower to a Debug-styled format part: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains(":display"),
+            "a debug interpolation should not also render as display: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fstring_records_the_fstring_runtime_helper_and_allocator_requirements() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "def label(x: int) -> str:\n  return f\"x={x}\"\n";
+        let module = build(source, &["m", "fstring_reqs"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("runtime_requirements:"));
+        assert!(snapshot.contains("runtime_helper(fstring)"));
+        assert!(snapshot.contains("allocator"));
+        Ok(())
+    }
+
+    #[test]
+    fn fstring_embedded_expression_participates_in_last_use_tracking() -> Result<(), Box<dyn std::error::Error>> {
+        // `s` is read twice: once as a plain binding RHS and once inside the f-string. The f-string's embedded read
+        // must still count toward `s`'s last-use countdown (see `count_reads_in_expr`'s `ast::Expr::FString` arm),
+        // so the first (non-last) read clones and only the f-string's read -- the true last use -- moves.
+        let source = "def dup(s: str) -> str:\n  first = s\n  return f\"value={s}\"\n";
+        let module = build(source, &["m", "fstring_last_use"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("clone(_0)"),
+            "the first, non-last read of `s` should clone: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("fstring(lit(\"value=\"), move(_0, last_use):display"),
+            "the f-string's embedded read is the true last use and should move: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn comprehension_embedded_expression_participates_in_last_use_tracking() -> Result<(), Box<dyn std::error::Error>> {
+        // Mirrors `fstring_embedded_expression_participates_in_last_use_tracking`'s regression shape for the same
+        // class of bug: `count_reads_in_expr` must recurse into `ast::Expr::ListComp`'s element expression, or the
+        // earlier, non-comprehension read of `s` on the first line would be miscounted as the last use (`Move`)
+        // even though the list comprehension on the next line reads `s` again -- an unsound move, not merely an
+        // imprecise clone. `s` is read twice: once as a plain binding RHS, once inside the comprehension's element.
+        let source = "def dup(s: str, items: list[int]) -> list[str]:\n  first = s\n  return [s for n in items]\n";
+        let module = build(source, &["m", "comp_last_use"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("clone(_0)"),
+            "the first, non-last read of `s` should clone because the comprehension reads it again: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_closure_capturing_nothing_with_an_empty_capture_list() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def make(step: int) -> int:\n  add: (int) -> int = (x) => x + 1\n  return add(step)\n";
+        let module = build(source, &["m", "closure_no_capture"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a closure literal should lower fully, not fall back: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("captures=[]"),
+            "a closure that reads no outer variable should capture nothing: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("closure(params=[x: int]"),
+            "the closure's own parameter should be recorded: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_closure_capturing_an_outer_variable_with_a_real_clone_fact() -> Result<(), Box<dyn std::error::Error>> {
+        // `name` is read once inside the closure (a capture) and again afterward by `return name`, so the capture
+        // is not the last use: it must clone, not move -- a real Duckborrower fact, not a placeholder.
+        let source = "def greet(name: str) -> str:\n  make_msg: () -> str = () => name\n  return name\n";
+        let module = build(source, &["m", "closure_capture_clone"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("captures=[clone(_0)]"),
+            "capturing `name` before its last use should clone: {snapshot}"
+        );
+        assert!(snapshot.contains("local 1 name : str [captured]"));
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_closure_capturing_an_outer_variable_at_its_last_use() -> Result<(), Box<dyn std::error::Error>> {
+        // `name` is read once, inside the closure, and never again -- the capture itself is `name`'s last use, so
+        // it should move rather than clone.
+        let source = "def greet(name: str) -> str:\n  make_msg: () -> str = () => name\n  return make_msg()\n";
+        let module = build(source, &["m", "closure_capture_move"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("captures=[move(_0, last_use)]"),
+            "capturing `name` at its only/last use should move: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn closure_body_can_still_read_its_capture_after_lowering_restores_outer_bindings()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The closure's own capture-binding local must resolve inside the closure body (via `result:`), and the
+        // enclosing function's own read of `step` afterward must resolve back to the *outer* local, not the
+        // closure's capture -- i.e. `Self::lower_closure`'s save/restore of `self.bindings` must round-trip.
+        let source = "def make(step: int) -> int:\n  add: () -> int = () => step\n  return step\n";
+        let module = build(source, &["m", "closure_capture_restore"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("result: copy(_1)"),
+            "the closure body should read its own capture-binding local for `step` (an `int`, so `copy`): {snapshot}"
+        );
+        assert!(
+            snapshot.contains("return copy(_0)"),
+            "the function's own trailing `return step` must resolve back to the *outer* local `_0`, not the \
+             closure's capture-binding local `_1`, proving the save/restore round-trips: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "nothing here should fall back: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_partial_callable_into_a_forwarding_closure() -> Result<(), Box<dyn std::error::Error>> {
+        // `partial add3(a=1)` should synthesize a closure with two residual parameters (`b`, `c`, in `add3`'s own
+        // declaration order) plus one captured preset (`a`), whose body forwards all three, positionally, into a
+        // call to `add3`.
+        // No explicit type annotation on `add_with_one`: the typechecker's own resolved type for a `partial` expr
+        // keeps *all* of the target's original parameters (marking the preset one `has_default` internally, not
+        // shrinking the list -- see `Self::lower_partial`'s docs on why Body IR deliberately does not mirror that),
+        // so annotating this binding with a residual 2-param type would be a real type mismatch against what the
+        // typechecker itself reports for the expression, not a Body IR concern.
+        // The call below passes all three arguments positionally: the typechecker's own resolved type for
+        // `add_with_one` keeps all of `add3`'s original parameters (see the comment above), so that is what the
+        // *source* must satisfy to typecheck, independent of how Body IR itself represents the synthesized closure.
+        let source = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(9, 2, 3)\n";
+        let module = build(source, &["m", "partial_callable"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a bare-function-name partial callable should lower fully: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("closure(params=[b: int, c: int], captures=["),
+            "residual params should be b/c, in add3's declaration order, with one captured preset: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call fn:add3("),
+            "the synthesized closure body should forward into a call to the target function: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn partial_callable_restores_enclosing_bindings_after_lowering() -> Result<(), Box<dyn std::error::Error>> {
+        // `partial join(prefix="hi ")` synthesizes a residual closure parameter called `suffix`, but that internal
+        // binding must not replace the enclosing function parameter of the same name. The trailing return must read
+        // the original function parameter (`_0`), not the closure-only parameter allocated while lowering the
+        // partial expression.
+        let source = "def join(prefix: str, suffix: str) -> str:\n  return prefix + suffix\n\ndef keep_outer(suffix: str) -> str:\n  formatter = partial join(prefix=\"hi \")\n  return suffix\n";
+        let module = build(source, &["m", "partial_binding_restore"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("return move(_0, last_use)"),
+            "the trailing return must resolve the enclosing `suffix` parameter, not a synthesized partial local: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_single_yield_and_marks_the_body_a_generator() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def numbers() -> Generator[int]:\n  yield 1\n";
+        let module = build(source, &["m", "single_yield"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("yield const(1)"),
+            "yield should lower to an explicit Yield statement: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "statement-position yield with a value must not fall back to Unsupported: {snapshot}"
+        );
+        let body = module
+            .bodies
+            .iter()
+            .find(|b| b.name == "numbers")
+            .ok_or("numbers body missing from module")?;
+        assert!(
+            body.is_generator(),
+            "a body containing a yield must report is_generator()"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_multiple_yields_across_control_flow_inside_a_loop() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def counter(n: int) -> Generator[int]:\n  mut i = 0\n  while i < n:\n    yield i\n    i = i + 1\n  yield -1\n";
+        let module = build(source, &["m", "loop_yield"])?;
+        let snapshot = module.render_snapshot();
+
+        // Two yields: one nested inside the normalized `loop:` the `while` desugars into, one at the top level
+        // after the loop.
+        assert_eq!(
+            snapshot.matches("yield ").count(),
+            2,
+            "expected exactly two yield statements: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("loop:"),
+            "while should still desugar to a normalized loop: {snapshot}"
+        );
+        let body = module
+            .bodies
+            .iter()
+            .find(|b| b.name == "counter")
+            .ok_or("counter body missing from module")?;
+        assert!(
+            body.is_generator(),
+            "a yield nested inside a loop must still be found by is_generator()"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_non_generator_function_is_not_reported_as_a_generator() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def add(x: int, y: int) -> int:\n  return x + y\n";
+        let module = build(source, &["m", "not_a_generator"])?;
+        let body = module
+            .bodies
+            .iter()
+            .find(|b| b.name == "add")
+            .ok_or("add body missing from module")?;
+        assert!(
+            !body.is_generator(),
+            "an ordinary function body must not be reported as a generator"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn yield_records_the_generator_runtime_requirements() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def numbers() -> Generator[int]:\n  yield 1\n";
+        let module = build(source, &["m", "yield_requirements"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("runtime_requirements:"));
+        assert!(snapshot.contains("runtime_helper(generator)"));
+        assert!(snapshot.contains("hosted_std"));
+        assert!(snapshot.contains("allocator"));
+        Ok(())
+    }
+
+    #[test]
+    fn yielded_expression_participates_in_last_use_tracking() -> Result<(), Box<dyn std::error::Error>> {
+        // `s` is read once, inside the yielded value, and never again afterward -- it should read as a last-use
+        // `move`, not fall back to an undercounted `clone`/`borrow` the way #1101's f-string bucket found and fixed
+        // for embedded f-string reads (`count_reads_in_expr`'s `FString` arm); `Yield` needed the same fix.
+        let source = "def one(s: str) -> Generator[str]:\n  yield s\n";
+        let module = build(source, &["m", "yield_last_use"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("yield move(_0, last_use)"),
+            "the yielded value should be a last-use move: {snapshot}"
+        );
+        Ok(())
+    }
+
+    // ---- #1101 B6: match ----
+
+    #[test]
+    fn lowers_a_literal_and_wildcard_match_as_a_single_structured_rvalue() -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def classify(x: int) -> str:\n",
+            "  match x:\n",
+            "    case 0:\n",
+            "      return \"zero\"\n",
+            "    case _:\n",
+            "      return \"other\"\n",
+            "  return \"unreachable\"\n",
+        );
+        let module = build(source, &["m", "match_literal"])?;
+        let snapshot_first = module.render_snapshot();
+        let snapshot_second = build(source, &["m", "match_literal"])?.render_snapshot();
+        assert_eq!(snapshot_first, snapshot_second, "lowering must be deterministic");
+
+        assert!(
+            snapshot_first.contains("match borrow(_0)"),
+            "the scrutinee should be a single explicit read, not decomposed into ifs: {snapshot_first}"
+        );
+        assert!(
+            snapshot_first.contains("const(0)"),
+            "the literal pattern should render: {snapshot_first}"
+        );
+        assert!(
+            snapshot_first.contains(" _ =>"),
+            "the wildcard pattern should render: {snapshot_first}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_an_enum_variant_pattern_that_binds_a_field() -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def unwrap_or_zero(x: Option[int]) -> int:\n",
+            "  match x:\n",
+            "    case Some(value):\n",
+            "      return value\n",
+            "    case None:\n",
+            "      return 0\n",
+        );
+        let module = build(source, &["m", "match_enum"])?;
+        let snapshot = module.render_snapshot();
+
+        // `Some`'s field type is not resolved (v0 does not mirror the existing backend's constructor field-type
+        // projection -- see `Pattern`'s own docs), so the binding reads through the conservative
+        // non-Copy/projected-read fallback (`borrow`, never `move`) even though `value`'s actual type is `int`.
+        assert!(
+            snapshot.contains("Some(bind(_1, borrow))"),
+            "a positional constructor pattern should bind its field: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(none)"),
+            "a bare `None` pattern is a literal, not a zero-field constructor: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_guarded_arm_with_the_guard_seeing_the_pattern_binding() -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def sign(x: int) -> str:\n",
+            "  match x:\n",
+            "    case n if n > 0:\n",
+            "      return \"positive\"\n",
+            "    case n if n < 0:\n",
+            "      return \"negative\"\n",
+            "    case _:\n",
+            "      return \"zero\"\n",
+        );
+        let module = build(source, &["m", "match_guard"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains(" if "),
+            "a guarded arm should render its guard: {snapshot}"
+        );
+        // `n` binds `_1`/`_3` in the two arms; the guard should read that same pattern-bound local, not the
+        // scrutinee's own `_0` -- confirming the guard sees the pattern binding, not a re-read of the scrutinee.
+        assert!(
+            snapshot.contains("bind(_1, copy) if { _2 = copy(_1) > const(0);"),
+            "the first arm's guard should read the pattern-bound `n` (`_1`): {snapshot}"
+        );
+        assert!(
+            snapshot.contains("bind(_3, copy) if { _4 = copy(_3) < const(0);"),
+            "the second arm's guard should read its own pattern-bound `n` (`_3`): {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_nested_tuple_pattern_with_field_projected_bindings() -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def sum_pair(pair: (int, int)) -> int:\n",
+            "  match pair:\n",
+            "    case (a, b):\n",
+            "      return a + b\n",
+        );
+        let module = build(source, &["m", "match_tuple"])?;
+        let snapshot = module.render_snapshot();
+
+        // Unlike a `Struct`/`Enum` constructor pattern's fields (`Unknown`-typed, see the enum test above), a
+        // `Tuple` pattern's element types are resolved precisely via the already-established `tuple_element_types`
+        // helper (`BodyBuilder::lower_tuple_unpack`'s own precedent), so both bindings declare as real `int`s...
+        assert!(snapshot.contains("local 1 a : int [binding]"));
+        assert!(snapshot.contains("local 2 b : int [binding]"));
+        // ...and, being Copy `int`s read through a non-empty (tuple-element) projection, read as `copy`, never
+        // `move` -- a projected read never moves (see `ownership_fact_for_place`'s own docs).
+        assert!(
+            snapshot.contains("(bind(_1, copy), bind(_2, copy))"),
+            "a tuple pattern should recursively bind each element as a copy: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn byte_string_literal_pattern_lowers_to_an_explicit_placeholder() -> Result<(), Box<dyn std::error::Error>> {
+        // `bir::Constant` has no byte-string variant (mirrors `lower_literal`'s own gap for a plain literal
+        // *expression*), so a match with an unrepresentable arm bails the whole expression to `Unsupported` before
+        // lowering the scrutinee, rather than silently mis-rendering the pattern as a catch-all wildcard the way
+        // the existing Rust-emission backend's own `lower_pattern` does.
+        let source = concat!(
+            "def check(data: bytes) -> str:\n",
+            "  match data:\n",
+            "    case b\"\\x00\":\n",
+            "      return \"null\"\n",
+            "    case _:\n",
+            "      return \"other\"\n",
+        );
+        let module = build(source, &["m", "match_bytes"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("unsupported(match arm with a byte-string literal pattern)"),
+            "should record an explicit placeholder rather than mis-rendering the pattern: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn or_pattern_alternatives_share_one_local_for_a_bound_name() -> Result<(), Box<dyn std::error::Error>> {
+        // RFC 071 requires every `A(x) | B(x)` alternative to bind an identical name/type set, so Rust's own
+        // compiled target has exactly one shared binding slot for `x`, not one per alternative -- `seen` in
+        // `BodyBuilder::lower_match_pattern` reuses the same local for the second occurrence rather than declaring
+        // a second one.
+        let source = concat!(
+            "enum Shape:\n",
+            "  Circle(int)\n",
+            "  Square(int)\n",
+            "\n",
+            "def get_size(s: Shape) -> int:\n",
+            "  match s:\n",
+            "    case Circle(x) | Square(x):\n",
+            "      return x\n",
+        );
+        let module = build(source, &["m", "match_or_binding"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("Circle(bind(_1, borrow)) | Square(bind(_1, borrow))"),
+            "both alternatives should bind the same shared local `_1`: {snapshot}"
         );
         Ok(())
     }
