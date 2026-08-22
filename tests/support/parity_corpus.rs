@@ -19,19 +19,28 @@
 //! ## Receipt-awareness (#986, landed via PR #1120)
 //!
 //! #987's own scope calls for "receipt-aware reference/replacement or shadow comparisons where both paths are
-//! available." #986 landed [`incan::backend::selection`], so [`compute_receipt`] declares a real
+//! available." #986 landed [`incan::backend::selection`], so [`evaluate_case`] declares a real
 //! [`BackendSelection`], resolves it, and finalizes a real [`BackendExecutionReceipt`] for every case's source —
-//! the same three-call sequence `src/cli/commands/build.rs` uses for an actual build. The replacement backend
-//! itself is not implemented yet (#653), so every case's shadow comparison against it is genuinely
-//! [`ShadowComparisonState::Unavailable`], not a guessed placeholder: [`ReceiptRef::ShadowUnavailable`] carries the
-//! real receipt's content identity, and the summary's `receipt_schema_available` field is `true` because the
-//! comparison the corpus attempted was real, even though its result is not yet green.
+//! the same three-call sequence `src/cli/commands/build.rs` uses for an actual build. The first #988 Body-IR cases
+//! additionally execute the replacement backend and carry their own selection/execution receipt, Body-IR snapshot,
+//! ownership evidence, and runtime requirements. Their requested shadow comparison remains genuinely
+//! [`ShadowComparisonState::Unavailable`] because no source-observable legacy comparator exists; generated Rust is
+//! never substituted as semantic proof.
 
+use incan::backend::replacement::{
+    OwnershipReadProjection, ReplacementValue, RuntimeRequirementProjection, execute_prevalidated_free_function,
+    prepare_free_function_execution,
+};
 use incan::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, BackendSelectionError, FallbackPolicy,
     ShadowComparisonState, digest_output, finalize_receipt, resolve_execution, select_backend,
+    unavailable_shadow_comparison,
 };
+use incan::frontend::body_ir::build_body_ir_module_v0;
 use incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
+use incan::frontend::typechecker::TypeChecker;
+use incan::frontend::{lexer, parser};
+use incan_semantics_core::body_ir::BodyIrModule;
 use std::collections::BTreeSet;
 
 // ============================================================================
@@ -79,6 +88,8 @@ pub(crate) enum EvidenceLane {
     CodegenSnapshot,
     /// Integration tests, stdlib runtime tests, smoke tests — compiled/runtime behavior.
     GeneratedProjectRun,
+    /// Typed source lowered to Body IR and executed directly by the bounded replacement profile.
+    DirectReplacementBodyIr,
     /// Package consumer fixtures, facade/reexport tests, checked API metadata tests.
     ///
     /// No seed case uses this lane yet — deferred to plan step 4 alongside `RustInteropBehavior`.
@@ -143,17 +154,38 @@ impl Disposition {
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum ReceiptRef {
-    /// A real receipt was produced, but its shadow comparison against the replacement backend is unavailable
-    /// because the replacement backend itself is not implemented yet (#653). This is the only reachable variant
-    /// today: every seed case lands here, honestly, until #653 gives the replacement backend something to compare
-    /// against. See [`OverallState::NonGreenShadowUnavailable`].
+    /// A real legacy receipt was produced, but its requested source-observable comparison is unavailable. This is
+    /// the honest state for pre-#988 seed rows that do not yet own a direct replacement execution. See
+    /// [`OverallState::NonGreenShadowUnavailable`].
     ShadowUnavailable { receipt_identity: String, reason: String },
-    /// A real receipt's shadow comparison against the replacement backend matched. Not reachable until #653 lands
-    /// the replacement backend; kept so the schema does not need another shape change when it does.
+    /// A #988 replacement execution with its own #986 selection/execution receipt and Body-IR evidence.
+    ///
+    /// The comparison remains non-green because the requested source-observable legacy comparator is unavailable;
+    /// this variant proves replacement execution without promoting it to parity.
+    ReplacementExecuted {
+        /// Identity of the pre-execution replacement selection.
+        selection_identity: String,
+        /// Identity of the finalized replacement execution receipt.
+        receipt_identity: String,
+        /// Identity of the direct Body-IR output bound into that receipt.
+        output_identity: String,
+        /// Deterministic snapshot of the Body IR the replacement executor consumed.
+        body_snapshot: String,
+        /// Canonical ownership facts observed during direct execution.
+        ownership_reads: Vec<OwnershipReadProjection>,
+        /// Canonical Body-IR runtime requirements observed by direct execution.
+        runtime_requirements: Vec<RuntimeRequirementProjection>,
+        /// Concrete reason the intentionally requested semantic comparison is non-green.
+        comparison_reason: String,
+    },
+    /// A real receipt's source-observable shadow comparison against the replacement backend matched. Not reachable
+    /// until a paired legacy runtime comparator is implemented; kept so the schema does not need another shape
+    /// change when it does.
     #[allow(dead_code)]
     ShadowMatched { receipt_identity: String },
     /// A real receipt's shadow comparison against the replacement backend diverged — a genuine regression signal
-    /// on the backend-selection axis itself, not a schema gap. Not reachable until #653 lands.
+    /// on the backend-selection axis itself, not a schema gap. Not reachable until a paired legacy runtime
+    /// comparator exists.
     #[allow(dead_code)]
     ShadowDiverged { receipt_identity: String, detail: String },
     /// The backend-selection API itself returned an error while declaring or resolving a selection for this
@@ -163,15 +195,8 @@ pub(crate) enum ReceiptRef {
     SelectionError { detail: String },
 }
 
-/// Declare, resolve, and finalize a real #986 backend-selection receipt for `source`, and fold the outcome into a
-/// [`ReceiptRef`].
-///
-/// Mirrors the exact `select_backend` -> `resolve_execution` -> `finalize_receipt` sequence
-/// `src/cli/commands/build.rs`'s `select_and_resolve_backend`/`finalize_backend_receipt` helpers use for a real
-/// build, including requesting a shadow comparison and using the same "replacement backend not implemented yet
-/// (#653)" reason `build.rs` records — so this corpus exercises the real #986 contract rather than a parallel,
-/// possibly-drifting reimplementation of it.
-pub(crate) fn compute_receipt(source: &str) -> ReceiptRef {
+/// Declare, resolve, and finalize the legacy-side #986 receipt retained by the pre-#988 seed rows.
+fn compute_legacy_receipt(source: &str) -> ReceiptRef {
     let source_identity = digest_output(&[source]);
     let selection = select_backend(
         BackendKind::Legacy,
@@ -199,17 +224,151 @@ pub(crate) fn compute_receipt(source: &str) -> ReceiptRef {
     }
 }
 
+/// The behavior result and #986 receipt produced by one direct replacement execution.
+///
+/// The two values are inseparable evidence: the value comes from the same selected, validated Body-IR execution
+/// whose output identity is finalized into `receipt`.
+struct ReplacementPlanEvidence {
+    behavior_outcome: ComparisonOutcome,
+    receipt: ReceiptRef,
+}
+
+/// Execute one #988 plan once, through #986 selection, and bind the observed Body-IR result to its receipt.
+fn execute_replacement_plan(source: &str, plan: ReplacementExecutionPlan) -> ReplacementPlanEvidence {
+    let arguments = (plan.arguments)();
+    let expected = (plan.expected)();
+    let selection = select_backend(
+        BackendKind::Replacement,
+        true,
+        true,
+        digest_output(&[source]),
+        FallbackPolicy::Refuse,
+    );
+    let body_ir = match lower_replacement_case(source) {
+        Ok(body_ir) => body_ir,
+        Err(detail) => return replacement_profile_refusal(&selection, detail),
+    };
+    let execution_plan = match prepare_free_function_execution(&body_ir, plan.function, &arguments) {
+        Ok(execution_plan) => execution_plan,
+        Err(error) => return replacement_profile_refusal(&selection, error.to_string()),
+    };
+    let executed = match resolve_execution(&selection, true) {
+        Ok(backend) => backend,
+        Err(error) => {
+            return ReplacementPlanEvidence {
+                behavior_outcome: ComparisonOutcome::Incompatible {
+                    reason: format!("replacement corpus selection failure: {error}"),
+                },
+                receipt: receipt_ref_from_error(&error),
+            };
+        }
+    };
+    let execution = match execute_prevalidated_free_function(execution_plan) {
+        Ok(execution) => execution,
+        Err(error) => {
+            return ReplacementPlanEvidence {
+                behavior_outcome: ComparisonOutcome::Mismatch {
+                    detail: format!("replacement corpus execution failure: {error}"),
+                },
+                receipt: ReceiptRef::SelectionError {
+                    detail: format!("replacement corpus execution failure: {error}"),
+                },
+            };
+        }
+    };
+    let behavior_outcome = if execution.value == expected {
+        ComparisonOutcome::Match
+    } else {
+        ComparisonOutcome::Mismatch {
+            detail: format!(
+                "replacement `{}` returned {:?}, expected {:?}",
+                plan.function, execution.value, expected
+            ),
+        }
+    };
+    let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
+    let comparison_reason = match &shadow_comparison {
+        ShadowComparisonState::Unavailable { reason } => reason.clone(),
+        state => {
+            return ReplacementPlanEvidence {
+                behavior_outcome,
+                receipt: ReceiptRef::SelectionError {
+                    detail: format!("replacement corpus expected unavailable shadow comparison, got {state:?}"),
+                },
+            };
+        }
+    };
+    let receipt = match finalize_receipt(
+        &selection,
+        executed,
+        execution.output_identity.clone(),
+        shadow_comparison,
+        DIAGNOSTIC_SCHEMA_VERSION,
+    ) {
+        Ok(receipt) => receipt,
+        Err(error) => {
+            return ReplacementPlanEvidence {
+                behavior_outcome,
+                receipt: receipt_ref_from_error(&error),
+            };
+        }
+    };
+    if let Err(error) = receipt.verify_identity() {
+        return ReplacementPlanEvidence {
+            behavior_outcome,
+            receipt: receipt_ref_from_error(&error),
+        };
+    }
+    let output_identity = execution.output_identity.clone();
+    let body_snapshot = execution.body_snapshot.clone();
+    let ownership_reads = execution.ownership_evidence();
+    let runtime_requirements = execution.runtime_requirement_evidence();
+    ReplacementPlanEvidence {
+        behavior_outcome,
+        receipt: ReceiptRef::ReplacementExecuted {
+            selection_identity: receipt.selection.identity,
+            receipt_identity: receipt.identity,
+            output_identity,
+            body_snapshot,
+            ownership_reads,
+            runtime_requirements,
+            comparison_reason,
+        },
+    }
+}
+
+/// Refuse a replacement corpus profile through the canonical #986 selection boundary.
+///
+/// A Body-IR lowering or profile error must not execute directly, and must not silently turn into legacy behavior.
+/// Resolving the declared selection with availability set to `false` preserves that refusal as receipt evidence.
+fn replacement_profile_refusal(selection: &BackendSelection, detail: String) -> ReplacementPlanEvidence {
+    match resolve_execution(selection, false) {
+        Ok(executed) => ReplacementPlanEvidence {
+            behavior_outcome: ComparisonOutcome::Incompatible {
+                reason: format!("replacement corpus profile refusal: {detail}"),
+            },
+            receipt: ReceiptRef::SelectionError {
+                detail: format!(
+                    "replacement corpus profile refusal was incorrectly resolved to `{executed:?}`: {detail}"
+                ),
+            },
+        },
+        Err(error) => ReplacementPlanEvidence {
+            behavior_outcome: ComparisonOutcome::Incompatible {
+                reason: format!("replacement corpus profile refusal: {detail}"),
+            },
+            receipt: ReceiptRef::SelectionError {
+                detail: format!("replacement corpus profile refusal: {detail}; selection refusal: {error}"),
+            },
+        },
+    }
+}
+
 /// Decide the shadow-comparison state for a selection, matching `build.rs`'s own `backend_shadow_comparison`
 /// helper exactly (same condition, same reason string) so the two do not drift into disagreeing explanations for
 /// the same unavailability.
 fn shadow_comparison_for(selection: &BackendSelection) -> ShadowComparisonState {
-    if selection.shadow_requested {
-        ShadowComparisonState::Unavailable {
-            reason: "replacement backend not implemented yet (#653)".to_string(),
-        }
-    } else {
-        ShadowComparisonState::NotRequested
-    }
+    unavailable_shadow_comparison(selection.shadow_requested)
 }
 
 /// Fold a finalized receipt's shadow-comparison outcome into the [`ReceiptRef`] a [`CaseReport`] carries.
@@ -255,9 +414,9 @@ pub(crate) enum ComparisonOutcome {
     Mismatch { detail: String },
     /// The comparison was not run for a stated reason (for example, the required backend path does not exist yet).
     ///
-    /// No seed case produces this yet — every seed `evaluate` function can run today. Reserved for cases that
-    /// depend on a boundary that does not exist yet (for example Body IR execution, #653), so a future case can
-    /// report "not run" honestly instead of being omitted from the corpus entirely.
+    /// No seed case produces this yet — every seed `evaluate` function can run today. Reserved for a future source
+    /// profile whose required execution boundary is unavailable, so that case can report "not run" honestly instead
+    /// of being omitted from the corpus entirely.
     #[allow(dead_code)]
     Skipped { reason: String },
     /// The two sides of the comparison are not comparable (for example, mismatched build profiles).
@@ -291,13 +450,42 @@ pub(crate) struct ParityCase {
     /// Repo-relative pointer to the primary evidence for this case (fixture path, test name, or doc anchor).
     pub(crate) evidence: &'static str,
     pub(crate) disposition: Disposition,
-    /// The case's own Incan source, used to derive a real #986 backend-selection receipt via [`compute_receipt`].
+    /// The case's own Incan source, used to derive a real #986 backend-selection receipt via [`evaluate_case`].
     /// Red-state fixtures that never reach [`evaluate_case`] may use a trivial placeholder since it is unused.
     pub(crate) source: &'static str,
-    /// Executes the actual comparison and returns its outcome. Must not panic on an expected-non-green result —
-    /// return [`ComparisonOutcome::Mismatch`]/`Skipped`/`Incompatible` instead so the corpus test can assert on
-    /// the report rather than on a panicking case function.
-    pub(crate) evaluate: fn() -> ComparisonOutcome,
+    /// Executes the legacy/non-replacement comparison for this case. Direct replacement plans instead derive their
+    /// outcome from the single selected execution that also produces their receipt. Must not panic on an expected
+    /// non-green result — return [`ComparisonOutcome::Mismatch`]/`Skipped`/`Incompatible` instead.
+    pub(crate) evaluate: Option<fn() -> ComparisonOutcome>,
+    /// Optional direct replacement execution that owns this case's #988 proof bundle.
+    pub(crate) replacement_execution: Option<ReplacementExecutionPlan>,
+}
+
+/// A parameterized direct replacement execution bound to one stable #987 corpus case.
+///
+/// This intentionally names a function plus concrete values rather than a generated-Rust entrypoint. The source is
+/// typechecked and lowered to Body IR in-process, then the replacement executor consumes that Body IR directly.
+#[derive(Clone, Copy)]
+pub(crate) struct ReplacementExecutionPlan {
+    /// Source-level free function executed by the replacement profile.
+    pub(crate) function: &'static str,
+    /// Concrete typed values passed to `function` in source parameter order.
+    pub(crate) arguments: fn() -> Vec<ReplacementValue>,
+    /// The source-observable value the direct execution must produce.
+    pub(crate) expected: fn() -> ReplacementValue,
+}
+
+/// Typecheck and lower source into the Body IR that replacement selection validates before execution.
+fn lower_replacement_case(source: &str) -> Result<BodyIrModule, String> {
+    let tokens = lexer::lex(source).map_err(|errors| format!("replacement corpus lex failure: {errors:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errors| format!("replacement corpus parse failure: {errors:?}"))?;
+    let module_path = vec!["parity_987_replacement".to_string()];
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    checker
+        .check_program(&program)
+        .map_err(|errors| format!("replacement corpus typecheck failure: {errors:?}"))?;
+    Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
 }
 
 // ============================================================================
@@ -404,20 +592,17 @@ pub(crate) struct CaseReport {
 /// The final, honest per-case state a CI consumer or #655 should read.
 ///
 /// There is deliberately no plain `Green` reachable today: reaching it requires both a [`ComparisonOutcome::Match`]
-/// behavior outcome *and* a matched shadow comparison against the replacement backend, and the replacement backend
-/// itself is not implemented yet (#653). This keeps the summary from ever silently claiming full backend-cutover
-/// parity before that dependency exists — even though #986's receipt contract has landed and every case now
-/// consults a real receipt.
+/// behavior outcome *and* a matched source-observable shadow comparison against the replacement backend. #988's
+/// direct executions remain non-green until the same source profile has a paired legacy runtime comparator, even
+/// though every case already consults a real receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OverallState {
-    /// Behavior matched and a real shadow comparison against the replacement backend also matched. Not reachable
-    /// until #653 lands the replacement backend — kept as a variant so the summary schema does not need to change
-    /// when it does.
+    /// Behavior matched and a real source-observable shadow comparison against the replacement backend also
+    /// matched. Not reachable until a paired legacy runtime comparator exists.
     Green,
     /// Behavior matched and a real receipt was produced, but its shadow comparison against the replacement
-    /// backend is unavailable (today: always this, for a `Match` case) because the replacement backend is not
-    /// implemented yet (#653).
+    /// backend is unavailable because the active source profile has no paired legacy runtime comparator.
     NonGreenShadowUnavailable,
     /// The case's own behavior evaluation did not match (mismatch, skip, or incompatible) — a real signal.
     NonGreenBehavior,
@@ -426,8 +611,25 @@ pub(crate) enum OverallState {
 /// Evaluate one case: run its behavior probe, consult a real #986 receipt for its source, and fold both into a
 /// [`CaseReport`].
 pub(crate) fn evaluate_case(case: &ParityCase) -> CaseReport {
-    let behavior_outcome = (case.evaluate)();
-    let receipt = compute_receipt(case.source);
+    let (behavior_outcome, receipt) = match case.replacement_execution {
+        Some(plan) => {
+            let evidence = execute_replacement_plan(case.source, plan);
+            (evidence.behavior_outcome, evidence.receipt)
+        }
+        None => match case.evaluate {
+            Some(evaluate) => (evaluate(), compute_legacy_receipt(case.source)),
+            None => (
+                ComparisonOutcome::Incompatible {
+                    reason: "corpus case has neither a legacy behavior probe nor a replacement execution plan"
+                        .to_string(),
+                },
+                ReceiptRef::SelectionError {
+                    detail: "corpus case has neither a legacy behavior probe nor a replacement execution plan"
+                        .to_string(),
+                },
+            ),
+        },
+    };
     // `shadow_matched` is its own match (rather than folded into one match on `(outcome, receipt)`) so that adding
     // a future reachable `ReceiptRef` variant only requires updating this one arm.
     let shadow_matched = matches!(receipt, ReceiptRef::ShadowMatched { .. });
@@ -466,12 +668,11 @@ pub(crate) struct CorpusSummary {
     pub(crate) cases: Vec<CaseReport>,
 }
 
-/// The current CI-summary schema version. Bumped to `2`: `#986` landed, so every case now consults a real receipt
-/// instead of a placeholder, `non_green_pending_receipt` was renamed to `non_green_shadow_unavailable` to describe
-/// what is actually unavailable (the replacement backend, not the receipt schema), and `receipt_schema_available`
-/// now reflects reality (`true`) instead of always being `false`. Bump again whenever `CorpusSummary`'s or
+/// The current CI-summary schema version. Version `3` adds `ReceiptRef::ReplacementExecuted`, which binds the five
+/// #988 Body-IR cases to their own selection/execution identities and canonical body, ownership, and runtime
+/// evidence while retaining an explicit non-green unavailable comparison. Bump again whenever `CorpusSummary`'s or
 /// `CaseReport`'s field shape changes in a way a consumer (including #655) would need to notice.
-pub(crate) const SCHEMA_VERSION: u32 = 2;
+pub(crate) const SCHEMA_VERSION: u32 = 3;
 
 /// Evaluate every case in the corpus and assemble the CI-readable summary.
 ///

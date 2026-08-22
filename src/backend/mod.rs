@@ -43,6 +43,7 @@
 pub(crate) mod c_abi;
 pub mod ir;
 pub mod project;
+pub mod replacement;
 pub mod selection;
 
 // Re-export the unified codegen entrypoint

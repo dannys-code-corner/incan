@@ -182,13 +182,13 @@ pub enum ColorMode {
     Never,
 }
 
-/// CLI-facing selector for [`crate::backend::selection::BackendKind`] (`--backend`, `--backend-fallback`).
+/// CLI-facing selector for [`crate::backend::selection::BackendKind`] (`--backend`).
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 #[value(rename_all = "lower")]
 pub enum BackendCliKind {
     /// The current Rust-source-emission pipeline.
     Legacy,
-    /// The Body IR replacement backend tracked by #653. Not implemented yet.
+    /// The intentionally partial Body-IR replacement backend.
     Replacement,
 }
 
@@ -197,6 +197,27 @@ impl From<BackendCliKind> for crate::backend::selection::BackendKind {
         match kind {
             BackendCliKind::Legacy => crate::backend::selection::BackendKind::Legacy,
             BackendCliKind::Replacement => crate::backend::selection::BackendKind::Replacement,
+        }
+    }
+}
+
+/// CLI-facing fallback policy for `incan build --backend-fallback`.
+///
+/// The #988 source-only profile exposes only `refuse`: it has no receipt-bound legacy execution path for an
+/// unsupported source profile, so accepting a target backend spelling here would promise a fallback the CLI cannot
+/// truthfully perform. #986 retains `FallbackPolicy::AllowTo` for a future profile that implements both dispatch
+/// and its paired execution receipt.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum BackendFallbackCliKind {
+    /// Refuse an unavailable backend selection instead of substituting another backend.
+    Refuse,
+}
+
+impl From<BackendFallbackCliKind> for crate::backend::selection::FallbackPolicy {
+    fn from(kind: BackendFallbackCliKind) -> Self {
+        match kind {
+            BackendFallbackCliKind::Refuse => crate::backend::selection::FallbackPolicy::Refuse,
         }
     }
 }
@@ -344,18 +365,19 @@ pub enum Command {
         #[arg(long)]
         release: bool,
         /// Select the compiler backend for this build. Defaults to the legacy Rust-emission backend, declared
-        /// explicitly even when this flag is omitted. `replacement` is not implemented yet (#653); requesting it
-        /// fails visibly unless `--backend-fallback` is also given.
+        /// explicitly even when this flag is omitted. The `replacement` profile is source-only and partial: it
+        /// executes supported free functions from Body IR and refuses unsupported input visibly.
         #[arg(long = "backend", value_enum)]
         backend: Option<BackendCliKind>,
-        /// Request a shadow comparison against the replacement backend alongside normal execution. Recorded
-        /// explicitly as unavailable until the replacement backend exists.
+        /// Request a source-observable shadow comparison against the replacement backend. Recorded explicitly as
+        /// unavailable when the selected profile has no such legacy/replacement comparator; generated Rust is not
+        /// used as semantic proof.
         #[arg(long = "shadow")]
         shadow: bool,
-        /// Allow the build to fall back to this backend if `--backend` cannot execute, recording the substitution
-        /// explicitly in the build report instead of refusing.
+        /// Declare the explicit refusal policy for an unavailable backend. The #988 source-only profile accepts
+        /// only `refuse` until a receipt-bound legacy fallback execution path exists.
         #[arg(long = "backend-fallback", value_enum)]
-        backend_fallback: Option<BackendCliKind>,
+        backend_fallback: Option<BackendFallbackCliKind>,
         /// Emit a machine-readable build report
         #[arg(long = "report", value_enum)]
         report: Option<BuildReportFormat>,
@@ -1501,7 +1523,7 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                         explicit: backend.is_some(),
                         shadow,
                         fallback_policy: backend_fallback
-                            .map(|kind| crate::backend::selection::FallbackPolicy::AllowTo(kind.into()))
+                            .map(Into::into)
                             .unwrap_or(crate::backend::selection::FallbackPolicy::Refuse),
                     },
                 },
