@@ -395,6 +395,7 @@ impl TypeChecker {
                         ty: Self::concretize_self_type_in_annotation(&param.ty, self_ty),
                         kind: param.kind,
                         has_default: param.has_default,
+                        is_partial_preset: param.is_partial_preset,
                     })
                     .collect(),
                 Box::new(Self::concretize_self_type_in_annotation(ret, self_ty)),
@@ -456,6 +457,7 @@ impl TypeChecker {
                 ty: Self::concretize_self_type_in_annotation(&param.ty, self_ty),
                 kind: param.kind,
                 has_default: param.has_default,
+                is_partial_preset: param.is_partial_preset,
             })
             .collect();
         concrete.return_type = Self::concretize_self_type_in_annotation(&method.return_type, self_ty);

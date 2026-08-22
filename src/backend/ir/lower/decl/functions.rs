@@ -1,7 +1,7 @@
 //! Function declaration lowering.
 
 use super::super::super::Mutability;
-use super::super::super::decl::{FunctionParam, IrFunction, IrTraitBound, IrTraitBoundOrigin};
+use super::super::super::decl::{FunctionParam, FunctionParamDefault, IrFunction, IrTraitBound, IrTraitBoundOrigin};
 use super::super::super::expr::{IrDictEntry, IrExprKind, IrGeneratorClause, IrListEntry};
 use super::super::super::stmt::{AssignTarget, IrStmt, IrStmtKind};
 use super::super::super::types::IrType;
@@ -407,7 +407,9 @@ impl AstLowering {
                     },
                     is_self: false,
                     kind: p.node.kind,
-                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                    default: self
+                        .lower_param_default_expr(p.node.default.as_ref())?
+                        .map(FunctionParamDefault::source),
                 })
             })
             .collect::<Result<_, LoweringError>>()?;

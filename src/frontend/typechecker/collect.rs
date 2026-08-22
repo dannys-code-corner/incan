@@ -483,6 +483,20 @@ impl TypeChecker {
         ok.then_some(params)
     }
 
+    /// Preserve a local partial's full callable surface while marking construction-time presets.
+    ///
+    /// [`Self::project_partial_params`] marks every preset defaulted for module partial declarations. A local
+    /// [`Expr::Partial`] has the same name-overrideable default surface, plus `is_partial_preset` to preserve its
+    /// residual positional rule: positional calls bind only non-preset parameters, while a named argument may replace
+    /// the captured value for one invocation.
+    pub(crate) fn local_partial_params(mut params: Vec<CallableParam>, args: &[PartialArg]) -> Vec<CallableParam> {
+        let preset_names: HashSet<&str> = args.iter().map(|arg| arg.name.as_str()).collect();
+        for param in &mut params {
+            param.is_partial_preset = param.name().is_some_and(|name| preset_names.contains(name));
+        }
+        params
+    }
+
     /// Register a module-level const binding (first pass).
     ///
     /// Note: the initializer is validated in the second pass.

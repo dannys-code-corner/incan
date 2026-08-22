@@ -354,6 +354,7 @@ impl AstLowering {
                         ty: self.expand_pub_manifest_type_aliases(library, param.ty, expanding),
                         kind: param.kind,
                         has_default: param.has_default,
+                        is_partial_preset: param.is_partial_preset,
                     })
                     .collect(),
                 Box::new(self.expand_pub_manifest_type_aliases(library, *ret, expanding)),

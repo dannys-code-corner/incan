@@ -793,7 +793,13 @@ impl<'a> BodyBuilder<'a> {
         span: HirSourceSpan,
         out: &mut Vec<bir::Statement>,
     ) {
-        let ty = self.resolve_ty(assignment.value.span);
+        // A closure value already carries the typechecker's callable shape. A partial retains that full callable
+        // type, with captured presets represented as named-overrideable defaults. Positional calls skip those preset
+        // slots, and `LocalCallableTarget::parameter_slots` records the resulting declaration mapping. Keeping this
+        // type on the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
+        let ty = self
+            .callable_value_ty(&assignment.value)
+            .unwrap_or_else(|| self.resolve_ty(assignment.value.span));
         let value = self.lower_expr_to_operand(&assignment.value, scope, out);
         let local = match assignment.binding {
             ast::BindingKind::Reassign => self
@@ -2281,10 +2287,18 @@ impl<'a> BodyBuilder<'a> {
         Some(operands)
     }
 
-    /// Lower a direct call `name(args)` to a [`bir::Callee::Function`] call. An indirect callee (anything other than
-    /// a bare identifier), explicit type arguments, or non-positional arguments each lower to an explicit
-    /// unsupported placeholder instead — v0 defers full call-target resolution (see [`bir::Callee::Function`]'s own
-    /// docs) and does not model generic call-site type arguments.
+    /// Lower a call to either a locally held callable value or a direct named function.
+    ///
+    /// A bare identifier that resolves to one of this body's locals is deliberately a
+    /// [`bir::CallableTarget::Local`] call: it carries the local read's ownership fact, so a closure's lexical
+    /// environment is not lost by pretending the identifier were a declaration. Its callable signature also
+    /// enforces the stored value's fixed callable contract before any call arguments are lowered. A bare identifier
+    /// with no local binding remains a direct [`bir::Callee::Function`] call. Local fixed-parameter callables
+    /// additionally normalize supplied arguments into declaration order before the IR call. A partial's preset slot
+    /// stays present for named overrides but is skipped by positional binding, and the local target records the
+    /// resulting declaration-slot map. Non-identifier callees, type arguments, unpack arguments, local
+    /// rest-parameter callables, and named calls that would need a non-trailing non-preset default hole remain
+    /// explicit unsupported forms; v0 has no general dynamic-call-target or sparse-argument-map node for them yet.
     fn lower_call(
         &mut self,
         callee: &ast::Spanned<ast::Expr>,
@@ -2307,6 +2321,64 @@ impl<'a> BodyBuilder<'a> {
             );
         }
         let name = name.clone();
+
+        if let Some(&local) = self.bindings.get(&name) {
+            let local_ty = self.locals[local.index()].ty.clone();
+            let IncanType::Function { params, return_type: _ } = local_ty else {
+                return self.unsupported_operand(
+                    format!("call to non-callable local `{name}`"),
+                    scope,
+                    hir_span_value,
+                    out,
+                );
+            };
+            let planned_args = match plan_local_callable_args(&name, &params, args) {
+                Ok(planned_args) => planned_args,
+                Err(description) => {
+                    return self.unsupported_operand(description, scope, hir_span_value, out);
+                }
+            };
+
+            // Source evaluation observes the callable value before its arguments. The target read also performs the
+            // one ownership/last-use decision for that lexical environment, which `CallableTarget::Local` preserves
+            // for a later executor instead of re-deriving it from the local's source spelling.
+            let place = bir::Place::from_local(local);
+            let (fact, last_use) = self.ownership_fact_for_place(&place, &self.locals[local.index()].ty.clone());
+            // The plan keeps expressions in source evaluation order, then fills their normalized declaration slots.
+            // A caller can therefore use a captured preset by omission or override it by name without turning the
+            // flat call-argument vector into an ambiguous sparse representation.
+            let mut normalized_args: Vec<Option<bir::Operand>> = vec![None; params.len()];
+            for (index, expr) in planned_args {
+                normalized_args[index] = Some(self.lower_expr_to_operand(expr, scope, out));
+            }
+            let highest_supplied = normalized_args.iter().rposition(Option::is_some);
+            let mut operands = Vec::with_capacity(highest_supplied.map_or(0, |highest| highest + 1));
+            let mut parameter_slots = Vec::with_capacity(operands.capacity());
+            if let Some(highest) = highest_supplied {
+                for (index, operand) in normalized_args.into_iter().take(highest + 1).enumerate() {
+                    let Some(operand) = operand else {
+                        if params[index].is_partial_preset {
+                            continue;
+                        }
+                        return self.unsupported_operand(
+                            format!("local callable `{name}` has an omitted argument at position {index}"),
+                            scope,
+                            hir_span_value,
+                            out,
+                        );
+                    };
+                    operands.push(operand);
+                    parameter_slots.push(index);
+                }
+            }
+            let callee = bir::Callee::Function(bir::CallableTarget::Local(bir::LocalCallableTarget {
+                operand: bir::PlaceOperand { place, fact, last_use },
+                parameter_slots,
+            }));
+            let ty = self.resolve_ty(span);
+            return self.push_call_temp(callee, operands, ty, scope, hir_span_value, false, out);
+        }
+
         let Some(operands) = self.lower_positional_args(args, scope, out) else {
             return self.unsupported_operand(
                 "call with named or unpack arguments".to_string(),
@@ -2317,7 +2389,7 @@ impl<'a> BodyBuilder<'a> {
         };
         let ty = self.resolve_ty(span);
         self.push_call_temp(
-            bir::Callee::Function(name),
+            bir::Callee::Function(bir::CallableTarget::Named(name)),
             operands,
             ty,
             scope,
@@ -2325,6 +2397,17 @@ impl<'a> BodyBuilder<'a> {
             false,
             out,
         )
+    }
+
+    /// Return the typechecker's callable type for a closure or local partial value that Body IR constructs itself.
+    ///
+    /// Local partials use the typechecker's canonical full signature with overrideable preset-default slots, so the
+    /// binding, its [`bir::Rvalue::Closure`], and a later [`Self::lower_call`] share one arity/default contract.
+    fn callable_value_ty(&self, expr: &ast::Spanned<ast::Expr>) -> Option<IncanType> {
+        match &expr.node {
+            ast::Expr::Closure(_, _) | ast::Expr::Partial(_) => Some(self.resolve_ty(expr.span)),
+            _ => None,
+        }
     }
 
     /// Lower a method call `recv.name(args)` to a [`bir::Callee::Method`] call, with the receiver prepended to
@@ -2643,6 +2726,8 @@ impl<'a> BodyBuilder<'a> {
             closure_params.push(bir::ClosureParam {
                 name: param.node.name.clone(),
                 ty,
+                has_default: param.node.default.is_some(),
+                preset_capture: None,
             });
             param_locals.push(local);
             saved_bindings.push((param.node.name.clone(), previous));
@@ -2707,38 +2792,24 @@ impl<'a> BodyBuilder<'a> {
     /// [`bir::Rvalue::Closure`] shape a closure literal produces, mirroring how the existing Rust-emission backend
     /// already desugars a partial application into a synthesized closure that forwards the still-missing arguments
     /// into a call (`src/backend/ir/lower/expr/mod.rs`'s `ast::Expr::Partial` arm) -- see #1101's B4 pre-intake.
-    /// Body IR's own call shape ([`bir::Callee`]) only models bare-identifier direct calls with positional
-    /// arguments (see [`Self::lower_call`]), so this only supports a bare function-name `target` whose full
-    /// parameter list the typechecker resolved as a top-level function binding; anything else (a method-shaped
-    /// partial target from `partial recv.method(...)`, explicit type arguments, or a target with an unnamed
-    /// parameter) lowers to an explicit unsupported placeholder instead.
+    /// Partial construction currently supports only a bare top-level function-name `target` whose full parameter list
+    /// the typechecker resolved. General Body IR calls still distinguish named functions from local callable values
+    /// and record local supplied-parameter slots (see [`Self::lower_call`]). A method-shaped partial target from
+    /// `partial recv.method(...)`, explicit type arguments, or a target with an unnamed parameter lowers to an
+    /// explicit unsupported placeholder instead.
     ///
     /// Preset values (`partial.args`) are lowered once each, at the partial-creation site -- exactly like an
     /// ordinary call argument, not deduplicated per free-variable name the way [`Self::lower_closure`]'s captures
-    /// are -- and folded into the synthesized closure's own `captured_operands` so its body can read them as
-    /// pre-bound locals. Every declared parameter the target function has that is *not* covered by a preset becomes
-    /// one of the synthesized closure's own parameters, in the target's declaration order. The synthesized body is
-    /// a single call forwarding every target parameter, positionally, from whichever of the two sources supplied
-    /// it. A compound-assignment-style mutation of a captured preset from inside a nested closure is out of scope
-    /// here in the same way [`Self::lower_closure`]'s own docs note for ordinary closures.
+    /// are -- and folded into the synthesized closure's own `captured_operands`. Every declared target parameter
+    /// remains a closure parameter in declaration order. A preset parameter has `has_default` plus an explicit
+    /// `preset_capture`, so callers may omit it to use the construction-time value or override it by name. Positional
+    /// local calls skip those preset-default parameters; [`Self::lower_call`] records the supplied declaration slots
+    /// rather than pretending the complete callable surface is a residual function type.
     ///
-    /// This deliberately does **not** reuse [`Self::resolve_ty`] for the resulting closure's own [`IncanType`]:
-    /// the typechecker's own resolved type for a `partial` expression (`check_partial_expr` in
-    /// `src/frontend/typechecker/check_expr/mod.rs`, via `project_partial_params` in
-    /// `src/frontend/typechecker/collect.rs`) keeps *every* one of the target's original parameters, merely marking
-    /// the preset ones `has_default: true` internally -- it does not shrink the parameter list the way this
-    /// lowering's own `params` does. The existing Rust-emission backend's own `ast::Expr::Partial` arm mirrors that
-    /// full-arity shape exactly (building one Rust closure parameter per *original* target parameter) and relies on
-    /// a separate `partial_expr_signatures` side table, consulted elsewhere during call-argument lowering, to fill
-    /// a preset's value in at each call site that omits it -- machinery Body IR v0 has no equivalent of anywhere
-    /// else in this file. Reusing the typechecker's full-arity type here would leave the rendered
-    /// [`bir::Rvalue::Closure`] internally inconsistent (an `IncanType::Function` claiming N parameters next to a
-    /// `params` list with fewer entries), so this instead builds its own [`IncanType::Function`] directly from the
-    /// residual `closure_params`/target return type -- semantically equivalent (calling the residual closure with
-    /// the missing arguments behaves like calling the target with the preset values already applied),
-    /// self-contained, and consistent with the rest of this model, at the cost of not literally mirroring the
-    /// existing backend's own default-argument side-channel bit for bit. See `plan.md`'s "B4 implementation notes"
-    /// for the full pre-intake-vs-reality discrepancy this resolves.
+    /// `Expr::Partial` uses this same full callable surface through `local_partial_params`; module-level partial
+    /// declarations intentionally keep their existing full-signature-plus-preset-metadata projection for backend
+    /// and export consumers. A compound-assignment-style mutation of a captured preset from inside a nested closure
+    /// is out of scope here in the same way [`Self::lower_closure`]'s own docs note for ordinary closures.
     fn lower_partial(
         &mut self,
         partial: &ast::PartialExpr,
@@ -2771,9 +2842,13 @@ impl<'a> BodyBuilder<'a> {
                 out,
             );
         };
-        if binding.params.iter().any(|param| param.name.is_none()) {
+        if binding
+            .params
+            .iter()
+            .any(|param| param.name.is_none() || param.kind != ast::ParamKind::Normal)
+        {
             return self.unsupported_operand(
-                "partial callable target with an unnamed parameter".to_string(),
+                "partial callable target with an unnamed or rest parameter".to_string(),
                 scope,
                 hir_span_value,
                 out,
@@ -2786,21 +2861,22 @@ impl<'a> BodyBuilder<'a> {
         let mut captured_operands = Vec::with_capacity(partial.args.len());
         let mut capture_locals = Vec::with_capacity(partial.args.len());
         let mut preset_lookup: HashMap<String, bir::LocalId> = HashMap::with_capacity(partial.args.len());
-        let mut saved_bindings = Vec::with_capacity(binding.params.len());
+        let mut saved_bindings = Vec::with_capacity(binding.params.len() + partial.args.len());
         for arg in &partial.args {
             let value_ty = self.resolve_ty(arg.value.span);
             let operand = self.lower_expr_to_operand(&arg.value, scope, out);
             captured_operands.push(operand);
-            let previous = self.bindings.get(&arg.name).copied();
+            let capture_name = format!("__partial_preset_{}", arg.name);
+            let previous = self.bindings.get(&capture_name).copied();
             let capture_local =
-                self.declare_new_local_with_reads(arg.name.clone(), value_ty, closure_scope, hir_span_value, 1);
+                self.declare_new_local_with_reads(capture_name.clone(), value_ty, closure_scope, hir_span_value, 1);
             self.locals[capture_local.index()].origin = bir::LocalOrigin::Captured;
             capture_locals.push(capture_local);
             preset_lookup.insert(arg.name.clone(), capture_local);
-            saved_bindings.push((arg.name.clone(), previous));
+            saved_bindings.push((capture_name, previous));
         }
 
-        // ---- Every target parameter not covered by a preset becomes one of the closure's own parameters ----
+        // ---- Every target parameter stays on the closure surface; presets become overrideable defaults ----
         let mut closure_params = Vec::new();
         let mut param_locals = Vec::new();
         let mut call_arg_locals = Vec::with_capacity(binding.params.len());
@@ -2813,10 +2889,6 @@ impl<'a> BodyBuilder<'a> {
                     out,
                 );
             };
-            if let Some(&capture_local) = preset_lookup.get(param_name) {
-                call_arg_locals.push(capture_local);
-                continue;
-            }
             let ty = semantic_type_from_resolved(&param.ty);
             let previous = self.bindings.get(param_name).copied();
             let local =
@@ -2825,6 +2897,8 @@ impl<'a> BodyBuilder<'a> {
             closure_params.push(bir::ClosureParam {
                 name: param_name.clone(),
                 ty,
+                has_default: param.has_default || preset_lookup.contains_key(param_name),
+                preset_capture: preset_lookup.get(param_name).copied(),
             });
             param_locals.push(local);
             call_arg_locals.push(local);
@@ -2845,9 +2919,9 @@ impl<'a> BodyBuilder<'a> {
             .collect();
         let ret_ty = semantic_type_from_resolved(&binding.return_type);
         let result = self.push_call_temp(
-            bir::Callee::Function(target_name),
+            bir::Callee::Function(bir::CallableTarget::Named(target_name)),
             call_args,
-            ret_ty.clone(),
+            ret_ty,
             closure_scope,
             hir_span_value,
             false,
@@ -2873,20 +2947,7 @@ impl<'a> BodyBuilder<'a> {
             }
         }
 
-        // Built directly from `closure_params`/`ret_ty` rather than `Self::resolve_ty(expr_span)` -- see this
-        // method's own docs for why the typechecker's resolved type for a `partial` expression is not usable here.
-        let ty = IncanType::Function {
-            params: closure_params
-                .iter()
-                .map(|param| IncanCallableParam {
-                    name: Some(param.name.clone()),
-                    ty: param.ty.clone(),
-                    kind: IncanCallableParamKind::Normal,
-                    has_default: false,
-                })
-                .collect(),
-            return_type: Box::new(ret_ty),
-        };
+        let ty = self.resolve_ty(expr_span);
         self.push_assign_temp(
             bir::Rvalue::Closure {
                 params: closure_params,
@@ -3235,6 +3296,92 @@ fn count_reads_in_comprehension_clauses(name: &str, clauses: &[ast::Comprehensio
 // ============================================================================
 // Free helper functions
 // ============================================================================
+
+/// Plan a local callable's supplied arguments into declaration parameter slots before lowering any expression.
+///
+/// This validates the whole call before a callee or argument ownership read is emitted, then leaves the returned
+/// expressions in source evaluation order. The caller can therefore lower values left-to-right while the final
+/// [`bir::StatementKind::Call`] argument vector follows parameter order. Preset-default slots are intentionally
+/// omitted from positional binding and may be skipped in the vector because the local target records each supplied
+/// operand's declaration slot. An interior ordinary default hole still needs a future sparse argument-map node and
+/// is refused explicitly instead of being compacted into the wrong position.
+fn plan_local_callable_args<'a>(
+    name: &str,
+    params: &[IncanCallableParam],
+    args: &'a [ast::CallArg],
+) -> Result<Vec<(usize, &'a ast::Spanned<ast::Expr>)>, String> {
+    if params.iter().any(|param| param.kind != IncanCallableParamKind::Normal) {
+        return Err(format!("local callable `{name}` has a rest parameter"));
+    }
+    let positional_slots: Vec<usize> = params
+        .iter()
+        .enumerate()
+        .filter_map(|(index, param)| (!param.is_partial_preset).then_some(index))
+        .collect();
+    let mut slots: Vec<Option<&ast::Spanned<ast::Expr>>> = vec![None; params.len()];
+    let mut positional_index = 0usize;
+    let mut planned = Vec::with_capacity(args.len());
+    for arg in args {
+        let (index, expr) = match arg {
+            ast::CallArg::Positional(expr) => {
+                if positional_index >= positional_slots.len() {
+                    return Err(format!(
+                        "local callable `{name}` expects at most {} positional arguments, got {}",
+                        positional_slots.len(),
+                        args.len()
+                    ));
+                }
+                let index = positional_slots[positional_index];
+                positional_index += 1;
+                (index, expr)
+            }
+            ast::CallArg::Named(arg_name, expr) => {
+                let Some(index) = params
+                    .iter()
+                    .position(|param| param.name.as_deref() == Some(arg_name.as_str()))
+                else {
+                    return Err(format!("local callable `{name}` has no parameter `{arg_name}`"));
+                };
+                (index, expr)
+            }
+            ast::CallArg::PositionalUnpack(_) | ast::CallArg::KeywordUnpack(_) => {
+                return Err("call with unpack arguments".to_string());
+            }
+        };
+        if slots[index].is_some() {
+            let parameter = params[index].name.as_deref().unwrap_or("<unnamed>");
+            return Err(format!("local callable `{name}` receives `{parameter}` more than once"));
+        }
+        slots[index] = Some(expr);
+        planned.push((index, expr));
+    }
+
+    let required = params.iter().filter(|param| !param.has_default).count();
+    if let Some((_index, parameter)) = params
+        .iter()
+        .enumerate()
+        .find(|(index, parameter)| slots[*index].is_none() && !parameter.has_default)
+    {
+        return Err(format!(
+            "local callable `{name}` expects at least {required} required arguments, got {}; missing required parameter `{}`",
+            args.len(),
+            parameter.name.as_deref().unwrap_or("<unnamed>")
+        ));
+    }
+    if let Some(highest_supplied) = slots.iter().rposition(Option::is_some)
+        && let Some((index, _)) = slots
+            .iter()
+            .enumerate()
+            .take(highest_supplied + 1)
+            .find(|(index, value)| value.is_none() && !params[*index].is_partial_preset)
+    {
+        let parameter = params[index].name.as_deref().unwrap_or("<unnamed>");
+        return Err(format!(
+            "local callable `{name}` omits non-trailing default parameter `{parameter}`"
+        ));
+    }
+    Ok(planned)
+}
 
 /// Whether a type is string-like enough to route binary operators through the compiler-owned string helpers
 /// (mirrors `is_string_like_type` in `src/backend/ir/conversions.rs`, restated here so Body IR does not depend on
@@ -4096,6 +4243,33 @@ mod tests {
         Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
     }
 
+    /// Lower an intentionally-invalid source program after recording its typecheck diagnostics.
+    ///
+    /// Positive local-partial coverage must go through [`build`], which requires ordinary typechecking. This helper
+    /// is only for Body IR's fail-closed assertions: after the source checker correctly rejects an invalid residual
+    /// call, lowering must still make its unsupported representation explicit rather than approximating it.
+    fn build_after_expected_typecheck_errors(
+        source: &str,
+        module_path: &[&str],
+    ) -> Result<(bir::BodyIrModule, Vec<String>), Box<dyn std::error::Error>> {
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let module_path: Vec<String> = module_path.iter().map(|s| s.to_string()).collect();
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        let diagnostics = checker
+            .check_program(&program)
+            .err()
+            .ok_or("expected the intentional residual-call diagnostic")?
+            .into_iter()
+            .map(|diagnostic| diagnostic.message)
+            .collect();
+        Ok((
+            build_body_ir_module_v0(&program, &module_path, checker.type_info()),
+            diagnostics,
+        ))
+    }
+
     /// Build a Body IR module from `source` after rewriting its first `for a, b in ...:` header into the nested
     /// `for a, (b, c) in ...:` shape the parser has no spelling for (see
     /// `nested_tuple_for_patterns_have_no_source_spelling_yet`). The rewrite happens *before* typechecking, so the
@@ -4927,6 +5101,31 @@ mod tests {
     }
 
     #[test]
+    fn invokes_a_stored_closure_through_its_local_operand_and_preserves_its_capture_ownership()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The local `decorate` is a value with a lexical environment, not a declaration named `decorate`.
+        // Its call target must therefore retain the closure-local read (including its ownership fact) rather than
+        // being approximated as a direct function call and losing the relationship to the captured `prefix`.
+        let source = "def greet(prefix: str) -> str:\n  decorate: (str) -> str = (suffix) => prefix + suffix\n  return decorate(\"!\")\n";
+        let module = build(source, &["m", "stored_closure_call"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("captures=[move(_0, last_use)]"),
+            "the closure must own its last-use capture explicitly: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call local:move(_"),
+            "the stored closure must be invoked through its local operand: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("call fn:decorate("),
+            "a stored closure must never be misrepresented as a named function: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn closure_body_can_still_read_its_capture_after_lowering_restores_outer_bindings()
     -> Result<(), Box<dyn std::error::Error>> {
         // The closure's own capture-binding local must resolve inside the closure body (via `result:`), and the
@@ -4954,18 +5153,9 @@ mod tests {
 
     #[test]
     fn lowers_a_partial_callable_into_a_forwarding_closure() -> Result<(), Box<dyn std::error::Error>> {
-        // `partial add3(a=1)` should synthesize a closure with two residual parameters (`b`, `c`, in `add3`'s own
-        // declaration order) plus one captured preset (`a`), whose body forwards all three, positionally, into a
-        // call to `add3`.
-        // No explicit type annotation on `add_with_one`: the typechecker's own resolved type for a `partial` expr
-        // keeps *all* of the target's original parameters (marking the preset one `has_default` internally, not
-        // shrinking the list -- see `Self::lower_partial`'s docs on why Body IR deliberately does not mirror that),
-        // so annotating this binding with a residual 2-param type would be a real type mismatch against what the
-        // typechecker itself reports for the expression, not a Body IR concern.
-        // The call below passes all three arguments positionally: the typechecker's own resolved type for
-        // `add_with_one` keeps all of `add3`'s original parameters (see the comment above), so that is what the
-        // *source* must satisfy to typecheck, independent of how Body IR itself represents the synthesized closure.
-        let source = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(9, 2, 3)\n";
+        // A local partial retains every target parameter in its callable surface. The captured `method` is a
+        // defaulted, overrideable slot, while `path` remains required and `content_type` keeps the target default.
+        let source = "def route(method: str, path: str, content_type: str = \"text\") -> str:\n  return method + path + content_type\n\ndef make() -> str:\n  get = partial route(method=\"GET\")\n  return get(path=\"/health\")\n";
         let module = build(source, &["m", "partial_callable"])?;
         let snapshot = module.render_snapshot();
 
@@ -4974,12 +5164,107 @@ mod tests {
             "a bare-function-name partial callable should lower fully: {snapshot}"
         );
         assert!(
-            snapshot.contains("closure(params=[b: int, c: int], captures=["),
-            "residual params should be b/c, in add3's declaration order, with one captured preset: {snapshot}"
+            snapshot.contains("method: str = captured("),
+            "the preset must remain an overrideable closure parameter backed by a captured default: {snapshot}"
         );
         assert!(
-            snapshot.contains("call fn:add3("),
+            snapshot.contains("call local:move(_"),
+            "a stored partial must be invoked through its local operand: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("call fn:get("),
+            "a stored partial must never be misrepresented as a named function: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call fn:route("),
             "the synthesized closure body should forward into a call to the target function: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stored_partial_refuses_too_few_or_too_many_residual_arguments() -> Result<(), Box<dyn std::error::Error>> {
+        let too_few = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(9)\n";
+        let (too_few_module, diagnostics) = build_after_expected_typecheck_errors(too_few, &["m", "partial_too_few"])?;
+        let too_few_snapshot = too_few_module.render_snapshot();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("Missing required argument 'c'")),
+            "the source checker must diagnose the missing residual parameter: {diagnostics:?}"
+        );
+        assert!(
+            too_few_snapshot
+            .contains("unsupported(local callable `add_with_one` expects at least 2 required arguments, got 1; missing required parameter `c`)"),
+            "a partial invocation may not omit a required residual argument: {too_few_snapshot}"
+        );
+
+        let too_many = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(9, 2, 3)\n";
+        let (too_many_module, diagnostics) =
+            build_after_expected_typecheck_errors(too_many, &["m", "partial_too_many"])?;
+        let too_many_snapshot = too_many_module.render_snapshot();
+        assert!(
+            diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.contains("expects 2 argument(s), got 3")),
+            "the source checker must use the residual arity: {diagnostics:?}"
+        );
+        assert!(
+            too_many_snapshot
+                .contains("unsupported(local callable `add_with_one` expects at most 2 positional arguments, got 3)"),
+            "a partial invocation may not provide more residual positional arguments than its target accepts: {too_many_snapshot}"
+        );
+        assert!(
+            !too_many_snapshot.contains("call fn:add_with_one("),
+            "invalid residual arity must not be approximated as a named-function call: {too_many_snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stored_partial_passes_positional_residual_arguments_in_target_declaration_order()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Positional calls skip the defaulted preset `a`, while Body IR records their target slots explicitly.
+        let source = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(9, 2)\n";
+        let module = build(source, &["m", "partial_order"])?;
+        let snapshot = module.render_snapshot();
+        let local_call = snapshot
+            .lines()
+            .find(|line| line.contains("call local:"))
+            .ok_or("stored partial call missing from Body IR snapshot")?;
+        assert!(
+            local_call.contains("const(9), const(2)"),
+            "residual positional arguments must remain b/c ordered while the preset default stays captured: {local_call}"
+        );
+        assert!(
+            local_call.contains("slots=[1, 2]"),
+            "positional residual arguments must map to their target declaration slots: {local_call}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "the residual Body IR call itself should be executable once admitted by the typechecker: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn stored_partial_allows_a_named_preset_override() -> Result<(), Box<dyn std::error::Error>> {
+        // The construction-time capture remains the default, but a named argument replaces it for this invocation.
+        let source = "def add3(a: int, b: int, c: int) -> int:\n  return a + b + c\n\ndef make() -> int:\n  add_with_one = partial add3(a=1)\n  return add_with_one(a=7, b=9, c=2)\n";
+        let module = build(source, &["m", "partial_named_override"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a named preset override must lower as an ordinary local callable invocation: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("const(7), const(9), const(2)"),
+            "the local invocation must retain the explicit target slots for the override and residual values: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("slots=[0, 1, 2]"),
+            "a named override must explicitly occupy the captured preset's declaration slot: {snapshot}"
         );
         Ok(())
     }

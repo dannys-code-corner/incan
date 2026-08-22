@@ -2434,7 +2434,8 @@ impl<'a> IrEmitter<'a> {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: Self::manifest_param_default_to_ir_expr(library, param),
+                        default: Self::manifest_param_default_to_ir_expr(library, param)
+                            .map(crate::backend::ir::decl::FunctionParamDefault::source),
                     }
                 })
                 .collect(),

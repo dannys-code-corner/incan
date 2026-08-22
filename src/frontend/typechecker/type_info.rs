@@ -1947,5 +1947,6 @@ fn semantic_callable_param_from_resolved(param: &CallableParam) -> IncanCallable
             ParamKind::RestKeyword => IncanCallableParamKind::RestKeyword,
         },
         has_default: param.has_default,
+        is_partial_preset: param.is_partial_preset,
     }
 }

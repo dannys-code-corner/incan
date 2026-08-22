@@ -56,6 +56,7 @@ fn resolve_owner_self_reference(
                     ty: resolve_owner_self_reference(param.ty, Some(owner_name), Some(owner_self_ty)),
                     kind: param.kind,
                     has_default: param.has_default,
+                    is_partial_preset: param.is_partial_preset,
                 })
                 .collect(),
             Box::new(resolve_owner_self_reference(
@@ -138,6 +139,7 @@ fn shadow_declared_type_params(ty: ResolvedType, type_param_names: &HashSet<Stri
                     ty: shadow_declared_type_params(param.ty, type_param_names),
                     kind: param.kind,
                     has_default: param.has_default,
+                    is_partial_preset: param.is_partial_preset,
                 })
                 .collect(),
             Box::new(shadow_declared_type_params(*ret, type_param_names)),
