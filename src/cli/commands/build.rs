@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::runner::resolved_cargo_executable;
+use crate::backend::replacement::execute_free_function;
 use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState,
     digest_output, finalize_receipt, resolve_execution, select_backend,
@@ -33,6 +34,7 @@ use crate::frontend::api_metadata::{
     materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
 use crate::frontend::ast::{Declaration, Decorator, Expr, ImportKind, Literal, Span, Spanned, Statement, Visibility};
+use crate::frontend::body_ir::build_body_ir_module_v0;
 use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_model_bundles};
 use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, collect_checked_public_exports};
 use crate::frontend::library_manifest_index::{
@@ -48,7 +50,7 @@ use crate::frontend::registry_metadata::{
     collect_checked_registry_metadata, materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::frontend::{diagnostics, typechecker};
+use crate::frontend::{diagnostics, lexer, parser, typechecker};
 use crate::generated_cache::resolve_generated_cargo_target;
 #[cfg(feature = "rust_inspect")]
 use crate::library_manifest::LibraryRustAbi;
@@ -2450,6 +2452,127 @@ fn write_backend_receipt(receipt: &crate::backend::selection::BackendExecutionRe
             path.display()
         ))
     })
+}
+
+/// Execute the first #988 replacement-backend profile directly from typed Body IR.
+///
+/// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
+/// containing free functions and executes its zero-argument `main` body through the replacement executor. A
+/// requested replacement build therefore either records a replacement receipt over a real Body-IR result or fails
+/// visibly at the original Incan span; it can never reach `IrCodegen` as an implicit compatibility fallback.
+fn build_replacement_file_report(
+    file_path: &str,
+    options: BuildCommandOptions,
+    report_options: &BuildReportOptions,
+) -> CliResult<serde_json::Value> {
+    reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    let start = Instant::now();
+    let entrypoint = if Path::new(file_path).is_absolute() {
+        PathBuf::from(file_path)
+    } else {
+        env::current_dir()
+            .map_err(|error| CliError::failure(format!("failed to determine current directory: {error}")))?
+            .join(file_path)
+    };
+    let source = fs::read_to_string(&entrypoint).map_err(|error| {
+        CliError::failure(format!(
+            "failed to read replacement entrypoint {}: {error}",
+            entrypoint.display()
+        ))
+    })?;
+    let tokens = lexer::lex(&source).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not lex {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let program = parser::parse(&tokens).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not parse {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    if program.rust_module_path.is_some()
+        || program
+            .declarations
+            .iter()
+            .any(|declaration| !matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_)))
+    {
+        return Err(CliError::failure(
+            "replacement backend #988 supports one source-only free-function module; imports, packages, Rust interop, models, and top-level values are refused",
+        ));
+    }
+    let module_path = vec![
+        entrypoint
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("main")
+            .to_string(),
+    ];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    checker.check_program(&program).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not typecheck {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+    let selection = select_backend(
+        options.backend.requested,
+        options.backend.explicit,
+        options.backend.shadow,
+        digest_output(&[source.as_str()]),
+        options.backend.fallback_policy,
+    );
+    let executed = resolve_execution(&selection, BackendKind::Replacement.is_implemented())
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    if executed != BackendKind::Replacement {
+        return Err(CliError::failure(
+            "replacement backend #988 refuses declared fallback execution; run `--backend legacy` explicitly for the legacy backend",
+        ));
+    }
+    let execution =
+        execute_free_function(&body_ir, "main", &[]).map_err(|error| CliError::failure(error.to_string()))?;
+    let shadow_comparison = if selection.shadow_requested {
+        ShadowComparisonState::Unavailable {
+            reason: "#988's source-only free-function build profile has no source-observable legacy entrypoint; shadow comparison is unavailable rather than inferred from generated Rust".to_string(),
+        }
+    } else {
+        ShadowComparisonState::NotRequested
+    };
+    let backend_receipt = finalize_receipt(
+        &selection,
+        executed,
+        execution.output_identity.clone(),
+        shadow_comparison,
+        diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    let project_root = resolve_project_root(&entrypoint);
+    write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
+    print_build_progress(report_options, "✓ replacement backend executed typed Body IR directly");
+    print_build_progress(
+        report_options,
+        format!("Replacement result: {}", execution.value.observable_text()),
+    );
+    if !report_options.enabled() {
+        println!(
+            "✓ replacement backend executed `main`: {}",
+            execution.value.observable_text()
+        );
+    }
+    Ok(serde_json::json!({
+        "backend": backend_receipt,
+        "replacement_execution": {
+            "result": execution.value.observable_text(),
+            "output_identity": execution.output_identity,
+            "body_snapshot": execution.body_snapshot,
+            "ownership_read_count": execution.ownership_reads.len(),
+            "runtime_requirements": format!("{:?}", execution.runtime_requirements),
+        },
+        "timings_ms": { "total": elapsed_ms(start) },
+    }))
 }
 
 /// Build the project identity block used by build and generated Rust inspection reports.
@@ -9217,6 +9340,11 @@ pub fn build_file(
 ) -> CliResult<ExitCode> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
     ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        let report = build_replacement_file_report(file_path, options, &report_options)?;
+        emit_workspace_build_report(&report, &report_options)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if !report_options.enabled()
         && let Some((project_root, selected, backend_receipt)) =
             select_default_executable_project_output(file_path, output_dir, &options)?
@@ -9242,6 +9370,9 @@ pub(crate) fn build_file_report(
 ) -> CliResult<serde_json::Value> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
     ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return build_replacement_file_report(file_path, options, report_options);
+    }
     let total_start = Instant::now();
     if let Some((project_root, selected, backend_receipt)) =
         select_default_executable_project_output(file_path, output_dir, &options)?
@@ -12708,6 +12839,11 @@ pub fn build_library(
     report_options: BuildReportOptions,
 ) -> CliResult<ExitCode> {
     ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return Err(CliError::failure(
+            "replacement backend #988 supports source-only executable free functions, not libraries or package artifacts",
+        ));
+    }
     let artifact_only = env::var_os(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV).is_some();
     if !artifact_only {
         reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
@@ -13237,6 +13373,11 @@ pub(crate) fn build_library_report(
     report_options: &BuildReportOptions,
 ) -> CliResult<crate::cli::commands::build_report::BuildReport> {
     ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return Err(CliError::failure(
+            "replacement backend #988 supports source-only executable free functions, not libraries or package artifacts",
+        ));
+    }
     let total_start = Instant::now();
     let artifact_only = env::var_os(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV).is_some();
     if !artifact_only {

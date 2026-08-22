@@ -43,7 +43,7 @@ pub const LEGACY_BACKEND_REVISION: u32 = 1;
 ///
 /// #653 owns actual Body IR execution. This constant exists now so that landing #653 only needs
 /// to bump a revision and flip [`BackendKind::is_implemented`], not invent a new schema field.
-pub const REPLACEMENT_BACKEND_REVISION: u32 = 0;
+pub const REPLACEMENT_BACKEND_REVISION: u32 = 1;
 
 /// Compiler backend that can produce or execute a build unit.
 ///
@@ -54,21 +54,20 @@ pub const REPLACEMENT_BACKEND_REVISION: u32 = 0;
 pub enum BackendKind {
     /// The current Rust-source-emission pipeline (`IrCodegen`, `src/backend/ir/`).
     Legacy,
-    /// The Body IR replacement backend tracked by #653. Not yet implemented: selecting it always
-    /// produces an explicit, visible outcome (a refusal or a declared fallback), never a silent
-    /// legacy execution.
+    /// The Body IR replacement backend tracked by #653. Its first executable #988 profile is intentionally partial;
+    /// unsupported source is refused visibly instead of falling back to the legacy backend.
     Replacement,
 }
 
 impl BackendKind {
     /// Whether this backend can actually execute a compilation today.
     ///
-    /// Only [`BackendKind::Legacy`] is implemented until #653 lands. Callers must consult this
-    /// (or pass the equivalent fact into [`resolve_execution`]) instead of assuming a requested
-    /// backend can run.
+    /// Both backends have an executable implementation. The replacement backend still accepts only its declared
+    /// #988 Body-IR profile, so callers must validate source support at the replacement boundary rather than using
+    /// this capability bit as a claim of full language coverage.
     #[must_use]
     pub fn is_implemented(self) -> bool {
-        matches!(self, BackendKind::Legacy)
+        matches!(self, BackendKind::Legacy | BackendKind::Replacement)
     }
 }
 
@@ -609,10 +608,11 @@ mod tests {
     }
 
     #[test]
-    fn declared_fallback_to_an_unavailable_target_still_refuses() {
-        // A fallback target that is itself unimplemented must never be reported as "executed":
-        // otherwise a build that actually ran legacy could claim the replacement backend
-        // executed cleanly with no fallback (`executed_backend == selected_backend`).
+    fn declared_fallback_to_the_available_replacement_target_resolves_explicitly() -> Result<(), BackendSelectionError>
+    {
+        // #988 makes the replacement implementation available for its declared partial profile. A caller that has
+        // independently found the initially selected execution unavailable may therefore resolve an explicitly
+        // declared replacement target, but source-profile validation still belongs to the replacement executor.
         let selection = select_backend(
             BackendKind::Replacement,
             true,
@@ -620,13 +620,9 @@ mod tests {
             "sha256:source",
             FallbackPolicy::AllowTo(BackendKind::Replacement),
         );
-        let Err(error) = resolve_execution(&selection, false) else {
-            panic!("a fallback target that is itself unavailable must still be refused");
-        };
-        match error {
-            BackendSelectionError::Refused { backend, .. } => assert_eq!(backend, BackendKind::Replacement),
-            other => panic!("expected Refused, got {other:?}"),
-        }
+        let resolved = resolve_execution(&selection, false)?;
+        assert_eq!(resolved, BackendKind::Replacement);
+        Ok(())
     }
 
     #[test]

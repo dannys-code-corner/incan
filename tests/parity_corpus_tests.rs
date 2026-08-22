@@ -452,12 +452,11 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 }
 
 #[test]
-fn no_case_reaches_green_while_the_replacement_backend_is_unimplemented() {
-    // This is the corpus's core promise: an unavailable comparison must never be counted as parity. #986 has
-    // landed, so every case now consults a real receipt (`receipt_schema_available` is `true`) — but the
-    // replacement backend itself is not implemented yet (#653), so every case's shadow comparison against it is
-    // genuinely unavailable. Every case — even a behaviorally-confirmed one — must land in
-    // `NonGreenShadowUnavailable`, never `Green`.
+fn existing_seed_cases_remain_non_green_until_each_has_a_real_replacement_execution() {
+    // This is the corpus's core promise: an unavailable comparison must never be counted as parity. #988 now
+    // executes its separately selected free-function profile, but none of these older #987 seed rows has yet been
+    // bound to a matching replacement execution receipt. Every row therefore remains explicitly shadow-unavailable
+    // rather than becoming green merely because some other source corpus is executable.
     let summary = parity_corpus::summarize(&seed_corpus());
     assert!(
         summary.receipt_schema_available,
@@ -470,12 +469,12 @@ fn no_case_reaches_green_while_the_replacement_backend_is_unimplemented() {
         .collect();
     assert!(
         falsely_green.is_empty(),
-        "no case should reach OverallState::Green before #653 lands the replacement backend: {falsely_green:#?}"
+        "no existing seed case should reach OverallState::Green without its own replacement execution: {falsely_green:#?}"
     );
     assert_eq!(summary.green, 0);
     assert_eq!(
         summary.non_green_shadow_unavailable, summary.total_cases,
-        "every behaviorally-confirmed seed case must report shadow-unavailable, not green, today"
+        "every existing seed case must report shadow-unavailable, not green, until it has its own execution evidence"
     );
     assert_eq!(summary.non_green_behavior, 0);
 }
