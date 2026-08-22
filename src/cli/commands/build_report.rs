@@ -265,8 +265,8 @@ pub struct BuildReport {
     /// Compiler-owned workspace identity when this build was selected as part of an RFC 077 member scope.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<BuildWorkspaceContext>,
-    /// Backend-selection identity and execution receipt for this build (#986). Absent for reports
-    /// reconstructed from a completed Oven output cache hit that predates this field.
+    /// Backend-selection identity and execution receipt for this build (#986). A completed-output
+    /// reuse retains the verified receipt sealed by the explicit bake that produced the selected output.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backend: Option<BackendExecutionReceipt>,
 }

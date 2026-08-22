@@ -14,7 +14,7 @@ Both types are plain, I/O-free data — building and executing them does not tou
 
 ## No silent fallback
 
-Every real `incan build` records a selection and a receipt, including the default path: selecting the legacy backend with no flags still produces an explicit `selection_reason: "default"` record rather than an implicit, unrecorded choice.
+Every successful `incan build` exposes a selection and a receipt, including the default path: selecting the legacy backend with no flags produces an explicit `selection_reason: "default"` record rather than an implicit, unrecorded choice. A source-current completed-output reuse is eligible only when its immutable Loaf already carries and verifies that same implicit-default receipt; it republishes the verified receipt after materialization rather than inventing a new execution record.
 
 Requesting the replacement backend today always produces a visible outcome, never a silent legacy execution:
 
@@ -22,6 +22,8 @@ Requesting the replacement backend today always produces a visible outcome, neve
 - With an explicit fallback policy (`--backend-fallback legacy`), the build proceeds through the fallback backend, prints `⚠ backend fallback: ...` to stderr, and records `fallback_outcome: {"declared": {"from": "replacement", "to": "legacy"}}` in the receipt. The substitution is always visible in both the terminal and the machine-readable record.
 
 A `--shadow` comparison request is recorded the same way: since the replacement backend is not implemented yet, the receipt's `shadow_comparison` is `{"unavailable": {"reason": "..."}}` rather than silently reporting `"not_requested"`.
+
+Any explicit backend request, fallback policy, or shadow request bypasses completed-output reuse and takes the normal source-aware preparation path. This prevents a cached default result from being presented as the outcome of a different declared selection.
 
 ## CLI surface
 
@@ -31,7 +33,7 @@ A `--shadow` comparison request is recorded the same way: since the replacement 
 - `--backend-fallback <legacy|replacement>` — declare what to do if `--backend` cannot execute. Omitting this flag means refuse.
 - `--shadow` — request a comparison against the replacement backend alongside normal execution.
 
-A successful build publishes its receipt to `.incan/backend/receipt.json` in the project root (parallel to Oven's own `.incan/oven/receipt.json`), and embeds it as the `backend` field of `incan build --report json` output. Inspect a persisted receipt directly with:
+A successful build publishes its receipt to `.incan/backend/receipt.json` in the project root (parallel to Oven's own `.incan/oven/receipt.json`), and embeds it as the `backend` field of `incan build --report json` output. An eligible completed-output reuse republishes its verified sealed receipt at the same path. Inspect a persisted receipt directly with:
 
 ```bash
 incan inspect backend-selection --receipt .incan/backend/receipt.json

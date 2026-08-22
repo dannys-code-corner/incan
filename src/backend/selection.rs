@@ -229,6 +229,22 @@ pub enum BackendSelectionError {
         /// Concrete reason it could not execute.
         reason: String,
     },
+    /// A caller attempted to record an executed backend that the selection did not authorize.
+    #[error(
+        "backend `{executed_backend:?}` cannot execute a `{selected_backend:?}` selection with fallback policy \
+         `{fallback_policy:?}`"
+    )]
+    UndeclaredExecution {
+        /// Backend declared by the selection.
+        selected_backend: BackendKind,
+        /// Backend the caller attempted to record as having executed.
+        executed_backend: BackendKind,
+        /// Policy that failed to authorize the recorded execution.
+        fallback_policy: FallbackPolicy,
+    },
+    /// A persisted receipt's fallback outcome disagrees with its declared selection and execution.
+    #[error("backend-execution receipt fallback outcome disagrees with its declared selection and executed backend")]
+    ReceiptFallbackOutcomeMismatch,
 }
 
 /// Declare a backend selection for one compilation, before anything executes.
@@ -321,27 +337,19 @@ pub fn resolve_execution(
 /// Bind a real execution outcome to its declared selection, producing a versioned receipt.
 ///
 /// `executed_backend` must be the value [`resolve_execution`] returned (or
-/// `selection.selected_backend` itself, when it executed directly); this function does not
-/// re-validate the fallback policy, it only records what happened. A mismatch between
-/// `executed_backend` and `selection.selected_backend` is recorded as
-/// [`FallbackOutcome::Declared`].
-#[must_use]
+/// `selection.selected_backend` itself, when it executed directly). This function validates that
+/// the declared fallback policy authorizes any mismatch before creating a receipt, so callers
+/// cannot turn an undeclared backend substitution into an identity-valid provenance record.
 pub fn finalize_receipt(
     selection: &BackendSelection,
     executed_backend: BackendKind,
     output_identity: impl Into<String>,
     shadow_comparison: ShadowComparisonState,
     diagnostic_contract_version: u32,
-) -> BackendExecutionReceipt {
+) -> Result<BackendExecutionReceipt, BackendSelectionError> {
+    selection.verify_identity()?;
     let output_identity = output_identity.into();
-    let fallback_outcome = if executed_backend == selection.selected_backend {
-        FallbackOutcome::NotNeeded
-    } else {
-        FallbackOutcome::Declared {
-            from: selection.selected_backend,
-            to: executed_backend,
-        }
-    };
+    let fallback_outcome = fallback_outcome_for_execution(selection, executed_backend)?;
     let compiler_version = crate::version::INCAN_VERSION.to_string();
     let identity = receipt_identity(
         &selection.identity,
@@ -352,7 +360,7 @@ pub fn finalize_receipt(
         diagnostic_contract_version,
         &output_identity,
     );
-    BackendExecutionReceipt {
+    Ok(BackendExecutionReceipt {
         schema_version: BACKEND_SELECTION_SCHEMA_VERSION,
         identity,
         compiler_version,
@@ -362,6 +370,31 @@ pub fn finalize_receipt(
         fallback_outcome,
         diagnostic_contract_version,
         output_identity,
+    })
+}
+
+/// Derive the only fallback outcome a declared selection permits for one execution.
+///
+/// This is shared by receipt finalization and persisted-receipt verification so a receipt that
+/// has a self-consistent content hash still cannot claim an execution the selection never
+/// authorized.
+fn fallback_outcome_for_execution(
+    selection: &BackendSelection,
+    executed_backend: BackendKind,
+) -> Result<FallbackOutcome, BackendSelectionError> {
+    if executed_backend == selection.selected_backend {
+        return Ok(FallbackOutcome::NotNeeded);
+    }
+    match selection.fallback_policy {
+        FallbackPolicy::AllowTo(target) if target == executed_backend => Ok(FallbackOutcome::Declared {
+            from: selection.selected_backend,
+            to: executed_backend,
+        }),
+        fallback_policy => Err(BackendSelectionError::UndeclaredExecution {
+            selected_backend: selection.selected_backend,
+            executed_backend,
+            fallback_policy,
+        }),
     }
 }
 
@@ -422,6 +455,9 @@ impl BackendExecutionReceipt {
                 expected: self.identity.clone(),
                 actual,
             });
+        }
+        if self.fallback_outcome != fallback_outcome_for_execution(&self.selection, self.executed_backend)? {
+            return Err(BackendSelectionError::ReceiptFallbackOutcomeMismatch);
         }
         Ok(())
     }
@@ -511,7 +547,7 @@ mod tests {
             "sha256:output",
             ShadowComparisonState::NotRequested,
             1,
-        );
+        )?;
         assert_eq!(receipt.fallback_outcome, FallbackOutcome::NotNeeded);
         assert_eq!(receipt.executed_backend, BackendKind::Legacy);
         receipt.verify_identity()?;
@@ -535,9 +571,9 @@ mod tests {
 
     #[test]
     fn fallback_refusal_never_produces_a_receipt() {
-        // `resolve_execution` returning `Err` is the only outcome for a refused fallback: there is
-        // no code path in this module that can turn a refusal into a `BackendExecutionReceipt`,
-        // so a refused build cannot be mistaken for a green replacement-backend result.
+        // `resolve_execution` returns `Err` for a refused fallback, and `finalize_receipt` rejects
+        // any undeclared substitution independently. A refused build cannot be mistaken for a
+        // green replacement-backend result.
         let selection = refuse_selection(BackendKind::Replacement, true);
         assert!(resolve_execution(&selection, false).is_err());
     }
@@ -560,7 +596,7 @@ mod tests {
             "sha256:output",
             ShadowComparisonState::NotRequested,
             1,
-        );
+        )?;
         assert_eq!(
             receipt.fallback_outcome,
             FallbackOutcome::Declared {
@@ -602,7 +638,7 @@ mod tests {
         let shadow_comparison = ShadowComparisonState::Unavailable {
             reason: "replacement backend not implemented yet (#653)".to_string(),
         };
-        let receipt = finalize_receipt(&selection, executed, "sha256:output", shadow_comparison.clone(), 1);
+        let receipt = finalize_receipt(&selection, executed, "sha256:output", shadow_comparison.clone(), 1)?;
         assert_eq!(receipt.shadow_comparison, shadow_comparison);
         receipt.verify_identity()?;
         Ok(())
@@ -617,7 +653,7 @@ mod tests {
             "sha256:output",
             ShadowComparisonState::NotRequested,
             1,
-        );
+        )?;
         receipt.verify_identity()?;
 
         // Tamper with the recorded output identity without recomputing `receipt.identity`, the
@@ -638,5 +674,84 @@ mod tests {
             panic!("tampered source identity must be detected");
         };
         assert!(matches!(error, BackendSelectionError::SelectionIdentityMismatch { .. }));
+    }
+
+    #[test]
+    fn receipt_finalization_rejects_an_undeclared_execution() {
+        let refusal = refuse_selection(BackendKind::Legacy, false);
+        let Err(error) = finalize_receipt(
+            &refusal,
+            BackendKind::Replacement,
+            "sha256:output",
+            ShadowComparisonState::NotRequested,
+            1,
+        ) else {
+            panic!("a refusal policy must not record a different executed backend");
+        };
+        assert!(matches!(
+            error,
+            BackendSelectionError::UndeclaredExecution {
+                selected_backend: BackendKind::Legacy,
+                executed_backend: BackendKind::Replacement,
+                fallback_policy: FallbackPolicy::Refuse,
+            }
+        ));
+
+        let declared_legacy = select_backend(
+            BackendKind::Legacy,
+            true,
+            false,
+            "sha256:source",
+            FallbackPolicy::AllowTo(BackendKind::Legacy),
+        );
+        let Err(error) = finalize_receipt(
+            &declared_legacy,
+            BackendKind::Replacement,
+            "sha256:output",
+            ShadowComparisonState::NotRequested,
+            1,
+        ) else {
+            panic!("a fallback policy must name the only backend it authorizes");
+        };
+        assert!(matches!(
+            error,
+            BackendSelectionError::UndeclaredExecution {
+                selected_backend: BackendKind::Legacy,
+                executed_backend: BackendKind::Replacement,
+                fallback_policy: FallbackPolicy::AllowTo(BackendKind::Legacy),
+            }
+        ));
+    }
+
+    #[test]
+    fn receipt_verification_rejects_a_self_consistent_undeclared_execution() -> Result<(), BackendSelectionError> {
+        let selection = refuse_selection(BackendKind::Legacy, false);
+        let mut receipt = finalize_receipt(
+            &selection,
+            BackendKind::Legacy,
+            "sha256:output",
+            ShadowComparisonState::NotRequested,
+            1,
+        )?;
+        receipt.executed_backend = BackendKind::Replacement;
+        receipt.fallback_outcome = FallbackOutcome::Declared {
+            from: BackendKind::Legacy,
+            to: BackendKind::Replacement,
+        };
+        receipt.identity = receipt_identity(
+            &receipt.selection.identity,
+            &receipt.compiler_version,
+            receipt.executed_backend,
+            &receipt.shadow_comparison,
+            receipt.fallback_outcome,
+            receipt.diagnostic_contract_version,
+            &receipt.output_identity,
+        );
+
+        let Err(error) = receipt.verify_identity() else {
+            panic!("identity verification must reject an undeclared execution even with a matching hash");
+        };
+        assert!(matches!(error, BackendSelectionError::UndeclaredExecution { .. }));
+        Ok(())
     }
 }

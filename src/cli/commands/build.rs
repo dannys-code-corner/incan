@@ -20,8 +20,8 @@ use serde::{Deserialize, Serialize};
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::runner::resolved_cargo_executable;
 use crate::backend::selection::{
-    BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState, digest_output,
-    finalize_receipt, resolve_execution, select_backend,
+    BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState,
+    digest_output, finalize_receipt, resolve_execution, select_backend,
 };
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::cli::{CliError, CliResult, ExitCode};
@@ -161,11 +161,10 @@ const OVEN_PACKAGED_LIBRARY_LOAF_MANIFEST_RELATIVE_PATH: &str = "oven/package-lo
 const OVEN_PACKAGED_LIBRARY_LOAF_SCHEMA_VERSION: u32 = 6;
 /// Current wire schema for completed receipt-bound project-output Loafs.
 ///
-/// Version 12 gives every declared executable entrypoint a stable target identity, retains a portable bake-time build
-/// report for frontend-free replay, and separates the canonical semantic lock authority from its derived dependency
-/// fingerprint. Tests validate the shared inspection authority and exact immutable constituents without trusting a
-/// mutable target receipt or report-only plan label.
-const OVEN_PROJECT_OUTPUT_PAYLOAD_SCHEMA_VERSION: u32 = 12;
+/// Version 13 carries the verified default backend execution receipt alongside every completed output. This lets a
+/// source-current cache hit retain the same compiler-backend provenance as the explicit bake without trusting a stale
+/// report snapshot.
+const OVEN_PROJECT_OUTPUT_PAYLOAD_SCHEMA_VERSION: u32 = 13;
 const OVEN_PROJECT_OUTPUT_PROJECTION_SCHEMA_VERSION: u32 = 3;
 const OVEN_PROJECT_OUTPUT_REPORT_SCHEMA_VERSION: u32 = 2;
 const OVEN_PROJECT_OUTPUT_REPORT_PATH_TAG: &str = "$incan_portable_path";
@@ -222,6 +221,20 @@ impl Default for BackendSelectionOptions {
             shadow: false,
             fallback_policy: FallbackPolicy::Refuse,
         }
+    }
+}
+
+impl BackendSelectionOptions {
+    /// Whether this request can reuse a completed project output without changing its recorded backend provenance.
+    ///
+    /// An explicit backend, fallback policy, or shadow comparison is a new declared selection and must take the
+    /// source-aware preparation path so it can be recorded against the current invocation. Only the implicit legacy
+    /// default can reuse the verified default receipt sealed into a completed output.
+    fn allows_completed_output_reuse(&self) -> bool {
+        self.requested == BackendKind::Legacy
+            && !self.explicit
+            && !self.shadow
+            && self.fallback_policy == FallbackPolicy::Refuse
     }
 }
 
@@ -584,6 +597,8 @@ struct OvenProjectOutputPayload {
     build_unit_identity: String,
     receipt_identity: String,
     plan_identity: String,
+    /// Verified backend selection and execution provenance from the explicit bake that produced this output.
+    backend_receipt: BackendExecutionReceipt,
     /// Singular project-level Rust inspection authority selected through this source-current output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inspection_authority: Option<OvenProjectInspectionAuthorityRef>,
@@ -666,6 +681,7 @@ struct OvenProjectOutputBakeRequest<'a> {
     inspection_authority: OvenProjectInspectionAuthorityRef,
     required_project_loafs: Vec<OvenPackagedLibraryLoafEntry>,
     package_loaf_store_relative_path: Option<String>,
+    backend_receipt: BackendExecutionReceipt,
     build_report: Option<OvenProjectOutputReportSnapshot>,
 }
 
@@ -696,6 +712,7 @@ struct PendingOvenProjectOutput {
     files: Vec<OvenProjectOutputBakeFile>,
     required_project_loafs: Vec<OvenPackagedLibraryLoafEntry>,
     package_loaf_store_relative_path: Option<String>,
+    backend_receipt: BackendExecutionReceipt,
     build_report: Option<OvenProjectOutputReportSnapshot>,
 }
 
@@ -2347,16 +2364,17 @@ fn finalize_backend_receipt(
     selection: &BackendSelection,
     executed: BackendKind,
     output_identity: String,
-) -> crate::backend::selection::BackendExecutionReceipt {
+) -> CliResult<crate::backend::selection::BackendExecutionReceipt> {
     let receipt = finalize_receipt(
         selection,
         executed,
         output_identity,
         backend_shadow_comparison(selection),
         diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
-    );
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
     report_backend_fallback(&receipt);
-    receipt
+    Ok(receipt)
 }
 
 /// Pre-flight refusal check for a declared `--backend` request (#986).
@@ -5477,7 +5495,7 @@ fn prepare_oven_project(
             .map_err(|error| CliError::failure(format!("Error generating project: {error}")))?;
         digest_output(&[rust_code.as_str()])
     };
-    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity);
+    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity)?;
     // Not persisted here: `prepare_oven_project` runs for internal/dependency callers too (see
     // `BackendSelectionOptions::default()` call sites), and real compilation (the Oven plan
     // selection and rustc bake below) can still fail after this point. The receipt is instead
@@ -7423,6 +7441,11 @@ fn stored_project_output_from_parts(
 /// Derive the completed-output authority from the project state that the explicit baker has already validated and
 /// compiled.
 fn project_output_payload_for_bake(request: OvenProjectOutputBakeRequest<'_>) -> CliResult<OvenProjectOutputPayload> {
+    request.backend_receipt.verify_identity().map_err(|error| {
+        CliError::failure(format!(
+            "completed Oven project output has an invalid backend receipt: {error}"
+        ))
+    })?;
     let entrypoint_relative_path =
         project_relative_entrypoint(request.project_root, request.entrypoint).ok_or_else(|| {
             CliError::failure(format!(
@@ -7522,6 +7545,7 @@ fn project_output_payload_for_bake(request: OvenProjectOutputBakeRequest<'_>) ->
         build_unit_identity: request.receipt.build_unit_identity.clone(),
         receipt_identity: request.receipt.identity.clone(),
         plan_identity: request.plan_identity,
+        backend_receipt: request.backend_receipt,
         inspection_authority: Some(request.inspection_authority),
         files,
         required_project_loafs,
@@ -8132,10 +8156,50 @@ fn project_output_report_snapshot(
     })
 }
 
+/// Return the verified implicit-default backend receipt sealed into one completed project output.
+///
+/// A completed output is reusable only when its own immutable payload proves that an explicit bake selected and
+/// executed the ordinary legacy default. Older, malformed, or differently selected outputs deliberately return
+/// `None` so the caller takes the normal source-aware path rather than treating cached provenance as current.
+fn completed_output_default_backend_receipt(output: &OvenStoredProjectOutput) -> Option<BackendExecutionReceipt> {
+    let receipt = &output.payload.backend_receipt;
+    if receipt.verify_identity().is_err()
+        || receipt.selection.selected_backend != BackendKind::Legacy
+        || receipt.selection.selection_reason != crate::backend::selection::SelectionReason::Default
+        || receipt.selection.fallback_policy != FallbackPolicy::Refuse
+        || receipt.selection.shadow_requested
+        || receipt.executed_backend != BackendKind::Legacy
+        || receipt.fallback_outcome != FallbackOutcome::NotNeeded
+        || receipt.shadow_comparison != ShadowComparisonState::NotRequested
+    {
+        return None;
+    }
+    Some(receipt.clone())
+}
+
+/// Materialize an executable completed output and republish the verified backend provenance it carries.
+///
+/// Keeping this coupled prevents either normal `build` output path from restoring native bytes while leaving a stale
+/// or unrelated project-local backend receipt behind.
+fn materialize_completed_executable_output(
+    project_root: &Path,
+    output: &OvenStoredProjectOutput,
+    backend_receipt: &BackendExecutionReceipt,
+) -> CliResult<()> {
+    if completed_output_default_backend_receipt(output).as_ref() != Some(backend_receipt) {
+        return Err(CliError::failure(
+            "completed Oven executable output does not carry the backend receipt selected for reuse",
+        ));
+    }
+    materialize_project_output(project_root, output)?;
+    write_backend_receipt(backend_receipt, &default_backend_receipt_path(project_root))
+}
+
 /// Restore and validate one bake-time executable report without reconstructing frontend-owned facts.
 fn completed_executable_output_report(
     project_root: &Path,
     output: &OvenStoredProjectOutput,
+    backend_receipt: &BackendExecutionReceipt,
     total_start: Instant,
 ) -> CliResult<serde_json::Value> {
     let snapshot = output.payload.build_report.as_ref().ok_or_else(|| {
@@ -8185,11 +8249,9 @@ fn completed_executable_output_report(
         .as_object_mut()
         .ok_or_else(|| CliError::failure("completed Oven executable build report is not a JSON object"))?;
     object.remove("workspace");
-    // No fresh selection or execution occurred on this cache-hit reuse path, and the consistency
-    // checks above never validate a sealed snapshot's `backend` sub-object (#986) against current
-    // facts. Drop it rather than pass a stale, unverified receipt through — matching
-    // `completed_library_output_report`'s explicit `backend: None` on the same reuse path.
-    object.remove("backend");
+    let backend = serde_json::to_value(backend_receipt)
+        .map_err(|error| CliError::failure(format!("failed to serialize completed-output backend receipt: {error}")))?;
+    object.insert("backend".to_string(), backend);
     let elapsed = elapsed_ms(total_start);
     object.insert(
         "timings_ms".to_string(),
@@ -8249,6 +8311,17 @@ fn completed_library_output_report(
             &caller_project_output_path(project_root, &native.caller_relative_path)?,
         ));
     }
+    let backend_receipt = completed_output_default_backend_receipt(release).ok_or_else(|| {
+        CliError::failure("completed Oven library output has no verified implicit-default backend receipt")
+    })?;
+    if outputs
+        .iter()
+        .any(|output| completed_output_default_backend_receipt(output).as_ref() != Some(&backend_receipt))
+    {
+        return Err(CliError::failure(
+            "completed Oven library outputs disagree on their verified implicit-default backend receipt",
+        ));
+    }
     let report = BuildReportDraft {
         mode: BuildReportMode::Library,
         profile: "release".to_string(),
@@ -8289,9 +8362,7 @@ fn completed_library_output_report(
             "Reused a completed Oven project-output Loaf; source, dependency, semantic, and interop details were verified at explicit bake time and are intentionally not recomputed during this replay."
                 .to_string(),
         ],
-        // No fresh selection or execution occurred: this reconstructs a report from a sealed cache hit rather than
-        // invoking a backend, so there is no new receipt to attach.
-        backend: None,
+        backend: Some(backend_receipt),
     };
     let mut timings_ms = BTreeMap::new();
     timings_ms.insert("completed_project_output_reuse".to_string(), elapsed_ms(total_start));
@@ -8627,9 +8698,13 @@ fn warn_for_completed_output_lock_fingerprint_drift<'a>(
 fn select_default_library_project_outputs(
     file_path: Option<&str>,
     policy: &CompletedOutputPolicy<'_>,
+    backend_options: &BackendSelectionOptions,
 ) -> CliResult<Option<Vec<OvenStoredProjectOutput>>> {
     policy.reject_cargo_feature_controls("library builds")?;
-    if policy.package_features != &FeatureSelection::default() || policy.sdk_profile.is_some() {
+    if policy.package_features != &FeatureSelection::default()
+        || policy.sdk_profile.is_some()
+        || !backend_options.allows_completed_output_reuse()
+    {
         return Ok(None);
     }
     let project_root = resolve_library_project_root(file_path)?;
@@ -8668,6 +8743,9 @@ fn select_default_library_project_outputs(
             }
             return Ok(None);
         };
+        if completed_output_default_backend_receipt(&selected).is_none() {
+            return Ok(None);
+        }
         outputs.push(selected);
     }
     Ok(Some(outputs))
@@ -9100,8 +9178,8 @@ fn select_default_executable_project_output(
     file_path: &str,
     output_dir: Option<&String>,
     options: &BuildCommandOptions,
-) -> CliResult<Option<(PathBuf, OvenStoredProjectOutput)>> {
-    if output_dir.is_some() {
+) -> CliResult<Option<(PathBuf, OvenStoredProjectOutput, BackendExecutionReceipt)>> {
+    if output_dir.is_some() || !options.backend.allows_completed_output_reuse() {
         return Ok(None);
     }
     let completed_output_policy = CompletedOutputPolicy {
@@ -9123,8 +9201,11 @@ fn select_default_executable_project_output(
     };
     let project_root = project_root_for_completed_output(&normalized_project_entrypoint(file_path)?)?
         .ok_or_else(|| CliError::failure("selected Oven project-output Loaf has no manifest-backed project root"))?;
+    let Some(backend_receipt) = completed_output_default_backend_receipt(&selected) else {
+        return Ok(None);
+    };
     warn_for_completed_output_lock_fingerprint_drift(&project_root, [&selected])?;
-    Ok(Some((project_root, selected)))
+    Ok(Some((project_root, selected, backend_receipt)))
 }
 
 /// Build an Incan file to a Rust project.
@@ -9137,10 +9218,10 @@ pub fn build_file(
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
     ensure_backend_request_available(&options.backend)?;
     if !report_options.enabled()
-        && let Some((project_root, selected)) =
+        && let Some((project_root, selected, backend_receipt)) =
             select_default_executable_project_output(file_path, output_dir, &options)?
     {
-        materialize_project_output(&project_root, &selected)?;
+        materialize_completed_executable_output(&project_root, &selected, &backend_receipt)?;
         println!(
             "✓ Oven build reused sealed project Loaf: {}",
             selected.native_output.display()
@@ -9162,8 +9243,10 @@ pub(crate) fn build_file_report(
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
     ensure_backend_request_available(&options.backend)?;
     let total_start = Instant::now();
-    if let Some((project_root, selected)) = select_default_executable_project_output(file_path, output_dir, &options)? {
-        materialize_project_output(&project_root, &selected)?;
+    if let Some((project_root, selected, backend_receipt)) =
+        select_default_executable_project_output(file_path, output_dir, &options)?
+    {
+        materialize_completed_executable_output(&project_root, &selected, &backend_receipt)?;
         print_build_progress(
             report_options,
             format!(
@@ -9171,7 +9254,7 @@ pub(crate) fn build_file_report(
                 selected.native_output.display()
             ),
         );
-        return completed_executable_output_report(&project_root, &selected, total_start);
+        return completed_executable_output_report(&project_root, &selected, &backend_receipt, total_start);
     }
     let prepare_start = Instant::now();
     let prepared = prepare_oven_project(
@@ -10009,7 +10092,7 @@ fn prepare_library_project(
         record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
         multi_file_output_identity(&main_code, &rust_modules)
     };
-    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity);
+    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity)?;
     // Not persisted here — see the matching comment in `prepare_oven_project`: this function
     // also runs for internal/dependency callers, and real compilation still follows below. The
     // receipt is published once by `build_library_report` after the whole build succeeds (#986).
@@ -12638,10 +12721,18 @@ pub fn build_library(
         };
         if output_dir.is_none()
             && !report_options.enabled()
-            && let Some(outputs) = select_default_library_project_outputs(file_path, &completed_output_policy)?
+            && let Some(outputs) =
+                select_default_library_project_outputs(file_path, &completed_output_policy, &options.backend)?
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            let backend_receipt = outputs
+                .iter()
+                .find(|output| output.profile == "release")
+                .and_then(completed_output_default_backend_receipt)
+                .ok_or_else(|| {
+                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                })?;
             for selected in outputs {
                 materialize_project_output(&project_root, &selected)?;
                 println!(
@@ -12649,6 +12740,7 @@ pub fn build_library(
                     selected.native_output.display()
                 );
             }
+            write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
             return Ok(ExitCode::SUCCESS);
         }
     }
@@ -12859,6 +12951,9 @@ pub(crate) fn bake_oven_project_targets(
                 let selected = prepared.oven.as_ref().ok_or_else(|| {
                     CliError::failure("explicit Oven library preparation did not produce a direct-rustc selection")
                 })?;
+                let backend_receipt = prepared.report.backend.clone().ok_or_else(|| {
+                    CliError::failure("explicit Oven library preparation did not produce backend provenance")
+                })?;
                 generated_sources.insert(
                     oven_bake_project_target_identity(&project_root, target, &prepared.entrypoint)?,
                     prepared.generator.crate_root_path(),
@@ -12975,6 +13070,7 @@ pub(crate) fn bake_oven_project_targets(
                         files,
                         required_project_loafs,
                         package_loaf_store_relative_path: Some(package_loaf_store_relative_path.clone()),
+                        backend_receipt: backend_receipt.clone(),
                         build_report: None,
                     });
                 }
@@ -13028,6 +13124,9 @@ pub(crate) fn bake_oven_project_targets(
                     let receipt = project_bake_receipt_path(&project_root, target, &prepared.entrypoint, profile)?;
                     write_receipt(&prepared.receipt, &receipt).map_err(|error| CliError::failure(error.to_string()))?;
                     let bake = bake_oven_project(&prepared, profile, Some(&mut authority_context))?;
+                    let backend_receipt = prepared.report.backend.clone().ok_or_else(|| {
+                        CliError::failure("explicit Oven executable preparation did not produce backend provenance")
+                    })?;
                     let mut report = prepared.report.clone();
                     report.artifacts.push(artifact_report("binary", &bake.output));
                     let build_report = project_output_report_snapshot(&project_root, &report.finish(BTreeMap::new()))?;
@@ -13048,6 +13147,7 @@ pub(crate) fn bake_oven_project_targets(
                         files,
                         required_project_loafs: Vec::new(),
                         package_loaf_store_relative_path: None,
+                        backend_receipt,
                         build_report: Some(build_report),
                     });
                     remove_completed_generated_cargo_lock(prepared.generator.output_dir())?;
@@ -13113,6 +13213,7 @@ pub(crate) fn bake_oven_project_targets(
             inspection_authority: inspection_authority.reference.clone(),
             required_project_loafs: pending.required_project_loafs,
             package_loaf_store_relative_path: pending.package_loaf_store_relative_path,
+            backend_receipt: pending.backend_receipt,
             build_report: pending.build_report,
         })?;
         published_outputs.push(publish_project_output_loaf(&store, &pending.receipt, &payload, &files)?);
@@ -13149,13 +13250,22 @@ pub(crate) fn build_library_report(
             cargo_all_features: options.cargo_all_features,
         };
         if output_dir.is_none()
-            && let Some(outputs) = select_default_library_project_outputs(file_path, &completed_output_policy)?
+            && let Some(outputs) =
+                select_default_library_project_outputs(file_path, &completed_output_policy, &options.backend)?
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            let backend_receipt = outputs
+                .iter()
+                .find(|output| output.profile == "release")
+                .and_then(completed_output_default_backend_receipt)
+                .ok_or_else(|| {
+                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                })?;
             for output in &outputs {
                 materialize_project_output(&project_root, output)?;
             }
+            write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
             return completed_library_output_report(&project_root, &outputs, total_start);
         }
     }
@@ -13535,6 +13645,31 @@ mod tests {
     };
     use crate::oven_interop::locked_oven_interop_targets;
     use std::fs;
+
+    #[test]
+    fn completed_output_reuse_requires_the_implicit_default_backend_selection() {
+        let default = BackendSelectionOptions::default();
+        assert!(default.allows_completed_output_reuse());
+        assert!(ensure_backend_request_available(&default).is_ok());
+
+        let replacement_refusal = BackendSelectionOptions {
+            requested: BackendKind::Replacement,
+            explicit: true,
+            shadow: false,
+            fallback_policy: FallbackPolicy::Refuse,
+        };
+        assert!(!replacement_refusal.allows_completed_output_reuse());
+        assert!(ensure_backend_request_available(&replacement_refusal).is_err());
+
+        let declared_fallback = BackendSelectionOptions {
+            requested: BackendKind::Replacement,
+            explicit: true,
+            shadow: false,
+            fallback_policy: FallbackPolicy::AllowTo(BackendKind::Legacy),
+        };
+        assert!(!declared_fallback.allows_completed_output_reuse());
+        assert!(ensure_backend_request_available(&declared_fallback).is_ok());
+    }
 
     #[test]
     fn test_dependency_envelope_promotes_aliases_features_and_paths_into_dependencies()
@@ -14266,6 +14401,20 @@ headers = ["interop/include/bridge.h"]
             caller_relative_path: format!("target/fixture/{profile}-{label}"),
             output_relative_path: OVEN_PROJECT_OUTPUT_ARTIFACT_PATH.to_string(),
         }];
+        let backend_selection = select_backend(
+            BackendKind::Legacy,
+            false,
+            false,
+            format!("sha256:fixture-source-{label}"),
+            FallbackPolicy::Refuse,
+        );
+        let backend_receipt = finalize_receipt(
+            &backend_selection,
+            BackendKind::Legacy,
+            format!("sha256:fixture-output-{label}"),
+            ShadowComparisonState::NotRequested,
+            diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+        )?;
         let payload = project_output_payload_for_bake(OvenProjectOutputBakeRequest {
             project_root,
             entrypoint: &entrypoint,
@@ -14283,6 +14432,7 @@ headers = ["interop/include/bridge.h"]
             },
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt,
             build_report: None,
         })?;
         Ok((receipt, payload, files))
@@ -14436,9 +14586,10 @@ headers = ["interop/include/bridge.h"]
             "release",
         )?
         .ok_or("published completed executable report was not selected")?;
-        materialize_project_output(project.path(), &selected)?;
-
-        let report = completed_executable_output_report(project.path(), &selected, Instant::now())?;
+        let backend_receipt = completed_output_default_backend_receipt(&selected)
+            .ok_or("completed output did not retain the verified default backend receipt")?;
+        materialize_completed_executable_output(project.path(), &selected, &backend_receipt)?;
+        let report = completed_executable_output_report(project.path(), &selected, &backend_receipt, Instant::now())?;
 
         assert_eq!(
             report.pointer("/dependencies/rust/0/crate_name"),
@@ -14449,6 +14600,13 @@ headers = ["interop/include/bridge.h"]
             Some(&serde_json::json!(project.path().to_string_lossy()))
         );
         assert!(report.get("workspace").is_none());
+        assert_eq!(
+            report.pointer("/backend/identity"),
+            Some(&serde_json::json!(&backend_receipt.identity))
+        );
+        let persisted = fs::read(default_backend_receipt_path(project.path()))?;
+        let persisted = serde_json::from_slice::<BackendExecutionReceipt>(&persisted)?;
+        assert_eq!(persisted, backend_receipt);
         assert!(report.pointer("/timings_ms/completed_project_output_reuse").is_some());
         Ok(())
     }
@@ -14677,6 +14835,19 @@ headers = ["interop/include/bridge.h"]
             ],
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt: finalize_receipt(
+                &select_backend(
+                    BackendKind::Legacy,
+                    false,
+                    false,
+                    "sha256:fixture-source",
+                    FallbackPolicy::Refuse,
+                ),
+                BackendKind::Legacy,
+                "sha256:fixture-output",
+                ShadowComparisonState::NotRequested,
+                diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            )?,
             build_report: None,
         };
         let files = vec![
@@ -14708,6 +14879,7 @@ headers = ["interop/include/bridge.h"]
             },
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt: payload.backend_receipt.clone(),
             build_report: None,
         });
         let Err(inconsistent) = inconsistent else {
@@ -14981,6 +15153,19 @@ headers = ["interop/include/bridge.h"]
                 base_loaf_identity: None,
             }],
             package_loaf_store_relative_path: Some("target/lib/oven/loafs".to_string()),
+            backend_receipt: finalize_receipt(
+                &select_backend(
+                    BackendKind::Legacy,
+                    false,
+                    false,
+                    "sha256:fixture-library-source",
+                    FallbackPolicy::Refuse,
+                ),
+                BackendKind::Legacy,
+                "sha256:fixture-library-output",
+                ShadowComparisonState::NotRequested,
+                diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            )?,
             build_report: None,
         };
         let files = vec![
