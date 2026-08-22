@@ -185,6 +185,93 @@ main = "src/main.incn"
     Ok(())
 }
 
+/// Issue #1116: real module bindings, including explicit imports, win over ambient core builtin functions; authors
+/// can still select a core builtin through `std.builtins`.
+#[test]
+fn builtin_function_shadowing_is_lexical_and_runtime_visible_issue1116() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("builtin_shadowing_contract");
+    let src_dir = tmp.path().join("src");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+    )?;
+    fs::write(
+        src_dir.join("aggregates.incn"),
+        r#"pub def sum(value: int) -> int:
+  return value + 1
+"#,
+    )?;
+    let main_path = src_dir.join("main.incn");
+    fs::write(
+        &main_path,
+        r#"from aggregates import sum
+
+def len(value: int) -> int:
+  return value + 1
+
+def main() -> None:
+  println(len(4))
+  println(sum(41))
+  println(std.builtins.len([10, 20, 30]))
+"#,
+    )?;
+
+    let out_dir = tmp.path().join("out");
+    let oven_home = tmp.path().join("incan-home");
+    let mut bake_command = incan_command();
+    bake_command
+        .args(["oven", "bake", "--project", "."])
+        .current_dir(tmp.path())
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home);
+    support::configure_explicit_oven_bake_command(&mut bake_command)?;
+    let bake_output = bake_command.output()?;
+    assert!(
+        bake_output.status.success(),
+        "expected explicit Oven bake to prepare the builtin-shadowing contract project.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bake_output.stdout),
+        String::from_utf8_lossy(&bake_output.stderr)
+    );
+
+    let build_output = incan_command()
+        .args([
+            "build",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home)
+        .output()?;
+    assert!(
+        build_output.status.success(),
+        "expected builtin-shadowing contract project to build.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let binary = out_dir.join("oven/release").join(&project_name);
+    assert!(
+        binary.is_file(),
+        "expected Oven to produce the builtin-shadowing executable at {}",
+        binary.display()
+    );
+    let run_output = Command::new(&binary).output()?;
+    assert!(
+        run_output.status.success(),
+        "expected builtin-shadowing executable to run.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run_output.stdout)?.lines().collect::<Vec<_>>(),
+        vec!["5", "42", "3"],
+        "module and imported bindings must win, while `std.builtins` must select the core builtin"
+    );
+    Ok(())
+}
+
 #[test]
 fn build_rejects_unbound_type_annotation_before_generated_rust_issue902() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;

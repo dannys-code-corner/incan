@@ -50,6 +50,26 @@ import models::User
 import utils::format_currency as fmt
 ```
 
+### Imported names and core builtin functions
+
+An explicit import creates a normal binding in the importing module. If it has the same spelling as an ambient core builtin function, the import wins for unqualified calls. This lets a domain library use a natural name without an alias solely to avoid a builtin collision.
+
+```incan
+# aggregates.incn
+pub def sum(value: int) -> int:
+  return value + 1
+
+# report.incn
+from aggregates import sum
+
+def report() -> int:
+  local_total = sum(41)                     # calls aggregates.sum: 42
+  builtin_total = std.builtins.sum([1, 2])  # calls the core builtin: 3
+  return local_total + builtin_total
+```
+
+`std.builtins.<name>` is the explicit escape hatch when an unqualified builtin-function name is shadowed. It always selects the core builtin function; it does not import a source module or create generated runtime code.
+
 ## Published library namespaces
 
 `incan build --lib` preserves the checked module hierarchy below a library's configured source root (normally `src/`). A source directory becomes a public package namespace automatically; there is no `pub module` declaration.
