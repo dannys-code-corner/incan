@@ -10,11 +10,18 @@
 //! Body IR v0 lowers a representative, explicitly documented subset of the language surface (see
 //! [`incan_semantics_core::body_ir`] module docs for the full rationale). Statements fully lowered: assignment
 //! (inferred/let/mutable/reassignment), `return`, `if`/`elif`/`else`, `while`, `for` over a `start..end` range,
-//! expression statements, `assert`, `pass`, `break`, `continue`. Expressions fully lowered: identifiers, literals
-//! (int/float/decimal/bool/string), binary/unary operators, calls, method calls, field access, indexing,
+//! expression statements, `assert`, `pass`, `break`, `continue`. Expressions fully lowered: identifiers, `self`,
+//! literals (int/float/decimal/bool/string), binary/unary operators, calls, method calls, field access, indexing,
 //! parenthesization, tuples, list literals (no spreads), and constructors. Everything else lowers to an explicit
 //! `Statement::Unsupported` / `Operand::Unknown` node rather than panicking, so the model stays total over real
 //! programs.
+//!
+//! Class/model/trait methods (#1102) are lowered through the same statement/expression subset above — this module
+//! does not widen that subset just because the body happens to belong to a method rather than a top-level `def`.
+//! In particular, `self.field = value` (`ast::Statement::FieldAssignment`) still lowers to `Unsupported`: field
+//! assignment is unsupported for *every* receiver today (`obj.field = value` is exactly as unmodeled as
+//! `self.field = value`), so closing that gap is general statement-surface work for #1101, not something specific
+//! to `self` that belongs in this method-lowering slice.
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,12 +31,16 @@ use incan_semantics_core::{AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpa
 use crate::frontend::ast;
 use crate::frontend::typechecker::{TypeCheckInfo, semantic_type_from_resolved};
 
-/// Build Body IR v0 for every top-level function declaration in a typechecked module.
+/// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
+/// typechecked module.
 ///
-/// Methods on models/classes/traits are not lowered by v0 (see module docs); only `ast::Declaration::Function` items
-/// produce a [`bir::Body`]. `module_path` uses the same convention as [`crate::frontend::hir::build_hir_v0`], so the
-/// [`CompilerNodeId`] this function assigns each body matches the id [`crate::frontend::hir::build_hir_v0`] assigns
-/// the corresponding declaration.
+/// `ast::Declaration::Function` items each produce one [`bir::Body`], matching the [`CompilerNodeId`]
+/// [`crate::frontend::hir::build_hir_v0`] assigns the corresponding declaration (see that function's docs).
+/// `ast::Declaration::Model`/`Class`/`Trait` items additionally contribute one [`bir::Body`] per non-abstract method
+/// (#1102) — abstract methods (`body: None`, trait requirements with no implementation) contribute nothing, since
+/// there is no body to lower. Method [`CompilerNodeId`]s are *not* assigned by [`crate::frontend::hir::build_hir_v0`]
+/// today (declaration-level HIR only assigns ids to top-level declarations), so this function constructs its own
+/// method ids by scoping the method name under its owning declaration's name — see [`lower_method_body`].
 pub fn build_body_ir_module_v0(
     program: &ast::Program,
     module_path: &[String],
@@ -40,14 +51,67 @@ pub fn build_body_ir_module_v0(
     let bodies = program
         .declarations
         .iter()
-        .filter_map(|decl| match &decl.node {
-            ast::Declaration::Function(function) => {
-                Some(lower_function_body(function, decl.span, &module_identity, type_info))
+        .flat_map(|decl| -> Vec<bir::Body> {
+            match &decl.node {
+                ast::Declaration::Function(function) => {
+                    vec![lower_function_body(function, decl.span, &module_identity, type_info)]
+                }
+                ast::Declaration::Model(model) => lower_owner_method_bodies(
+                    &model.methods,
+                    &model.name,
+                    owner_self_type(&model.name, &model.type_params),
+                    &module_identity,
+                    type_info,
+                ),
+                ast::Declaration::Class(class) => lower_owner_method_bodies(
+                    &class.methods,
+                    &class.name,
+                    owner_self_type(&class.name, &class.type_params),
+                    &module_identity,
+                    type_info,
+                ),
+                ast::Declaration::Trait(trait_decl) => lower_owner_method_bodies(
+                    &trait_decl.methods,
+                    &trait_decl.name,
+                    IncanType::SelfType,
+                    &module_identity,
+                    type_info,
+                ),
+                _ => Vec::new(),
             }
-            _ => None,
         })
         .collect();
     bir::BodyIrModule { module_id, bodies }
+}
+
+/// Lower every non-abstract method in `methods` (owned by the class/model/trait named `owner_name`) into one
+/// [`bir::Body`] each, skipping abstract methods (`body: None`). `receiver_ty` is the typechecker-equivalent type
+/// for a declared receiver: a concrete nominal type for models/classes or [`IncanType::SelfType`] for trait defaults.
+///
+/// Newtype and enum declarations also carry a `methods` field in the AST (see `crates/incan_syntax/src/ast/
+/// decls.rs`), but #1102's own scope names only class/model/trait bodies, so this function is deliberately not
+/// called for those two declaration kinds — extending method lowering to them is left for a future slice to decide
+/// explicitly rather than folded in here as an unannounced scope expansion.
+fn lower_owner_method_bodies(
+    methods: &[ast::Spanned<ast::MethodDecl>],
+    owner_name: &str,
+    receiver_ty: IncanType,
+    module_identity: &str,
+    type_info: &TypeCheckInfo,
+) -> Vec<bir::Body> {
+    methods
+        .iter()
+        .filter_map(|method| {
+            lower_method_body(
+                &method.node,
+                method.span,
+                owner_name,
+                &receiver_ty,
+                module_identity,
+                type_info,
+            )
+        })
+        .collect()
 }
 
 /// Render a module path into the same module identity spelling [`crate::frontend::hir`] uses, so declaration ids
@@ -120,6 +184,107 @@ fn lower_function_body(
         },
         runtime_requirements: builder.runtime_requirements,
         panic_facts: builder.panic_facts,
+    }
+}
+
+/// Lower one method declaration's body into Body IR v0, or `None` for an abstract method (`body: None` — a trait
+/// requirement with no implementation, which has no body to lower).
+///
+/// Unlike [`lower_function_body`], there is no [`TypeCheckInfo::declarations`] binding table for method parameter
+/// types (`function_bindings`/`function_bindings_by_span` are populated only for top-level `ast::FunctionDecl`
+/// items, never for `ast::MethodDecl`), so non-receiver method parameters declare with an explicit
+/// [`IncanType::Unknown`] rather than a resolved type — the same "no info available" fallback
+/// [`lower_function_body`] already falls back to when its own binding lookup misses. This does not affect the
+/// accuracy of ownership facts computed for actual *reads* of those parameters inside the body: those go through
+/// [`BodyBuilder::resolve_ty`] at each read's own span, which is populated uniformly for every checked expression
+/// regardless of whether it sits in a function or a method body.
+///
+/// The `self`/`mut self` receiver, when present, is declared as the body's first local (before ordinary
+/// parameters) via [`BodyBuilder::declare_receiver_local`], typed with the typechecker-equivalent `receiver_ty`.
+/// A method with `receiver: None` (a static/associated method) lowers with no receiver local at all, identically
+/// in shape to a free function's body.
+fn lower_method_body(
+    method: &ast::MethodDecl,
+    decl_span: ast::Span,
+    owner_name: &str,
+    receiver_ty: &IncanType,
+    module_identity: &str,
+    type_info: &TypeCheckInfo,
+) -> Option<bir::Body> {
+    let body_stmts = method.body.as_ref()?;
+
+    // Method names are not unique across a module the way top-level function names are (two classes can each
+    // declare a method named `new`), so the method's CompilerNodeId is scoped under its owning declaration's name
+    // rather than reusing `CompilerNodeId::declaration(module_identity, &method.name)` directly.
+    let decl_id = CompilerNodeId::declaration(module_identity, &format!("{owner_name}::{}", method.name));
+
+    let mut builder = BodyBuilder::new(type_info);
+    let root_scope = builder.new_scope(None, hir_span(decl_span));
+
+    let mut param_locals = Vec::with_capacity(method.params.len() + 1);
+    if let Some(receiver) = method.receiver {
+        let mutable = matches!(receiver, ast::Receiver::Mutable);
+        let self_local = builder.declare_receiver_local(receiver_ty.clone(), mutable, root_scope, hir_span(decl_span));
+        param_locals.push(self_local);
+    }
+
+    for param in &method.params {
+        let local = builder.declare_new_local(
+            param.node.name.clone(),
+            IncanType::Unknown,
+            root_scope,
+            hir_span(param.span),
+            body_stmts,
+        );
+        builder.locals[local.index()].origin = bir::LocalOrigin::Parameter;
+        param_locals.push(local);
+    }
+
+    let mut stmts = Vec::new();
+    builder.lower_block_into(body_stmts, root_scope, &mut stmts);
+    builder.insert_scope_drops(&mut stmts, root_scope);
+
+    if builder
+        .locals
+        .iter()
+        .any(|local| !local.ty.abi_v0_facts().ownership.is_trivially_copy())
+    {
+        builder.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+    }
+
+    Some(bir::Body {
+        decl_id,
+        name: method.name.clone(),
+        span: hir_span(decl_span),
+        locals: builder.locals,
+        param_locals,
+        scopes: builder.scopes,
+        block: bir::Block {
+            scope: root_scope,
+            stmts,
+        },
+        runtime_requirements: builder.runtime_requirements,
+        panic_facts: builder.panic_facts,
+    })
+}
+
+/// Reconstruct the concrete `self` type for a method declared on `owner_name`, mirroring how
+/// `check_method_with_self_ty` (`src/frontend/typechecker/check_decl.rs`) derives its own `self` binding's type:
+/// a bare [`IncanType::Named`] for a non-generic owner, or an [`IncanType::Generic`] instantiated with the owner's
+/// own type parameters (as type variables) for a generic owner. That typechecker-side resolved type is transient
+/// checker state, not persisted anywhere in [`TypeCheckInfo`], so lowering rebuilds the equivalent type directly
+/// from the AST rather than depending on a lookup table that does not exist.
+fn owner_self_type(owner_name: &str, owner_type_params: &[ast::TypeParam]) -> IncanType {
+    if owner_type_params.is_empty() {
+        IncanType::Named(owner_name.to_string())
+    } else {
+        IncanType::Generic {
+            base: owner_name.to_string(),
+            args: owner_type_params
+                .iter()
+                .map(|type_param| IncanType::TypeVar(type_param.name.clone()))
+                .collect(),
+        }
     }
 }
 
@@ -223,6 +388,35 @@ impl<'a> BodyBuilder<'a> {
         id
     }
 
+    /// Declare a method's `self`/`mut self` receiver as a [`bir::LocalOrigin::Receiver`] local, bound under the
+    /// name `"self"` in [`Self::bindings`] exactly like an ordinary local so [`Self::local_for_name`] resolves
+    /// `self` reads without a separate lookup path.
+    ///
+    /// Unlike [`Self::declare_new_local`], no last-use countdown is seeded: a receiver is always a Rust-level
+    /// reference (`&self`/`&mut self`), so nothing about it can be "used up" the way an owned local's remaining
+    /// reads can — see the receiver carve-out in [`Self::ownership_fact_for_place`], which decides the ownership
+    /// fact for every `self` read before that countdown would ever be consulted.
+    fn declare_receiver_local(
+        &mut self,
+        ty: IncanType,
+        mutable: bool,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+    ) -> bir::LocalId {
+        let id = bir::LocalId(self.next_local);
+        self.next_local += 1;
+        self.locals.push(bir::LocalDecl {
+            id,
+            name: Some("self".to_string()),
+            ty,
+            origin: bir::LocalOrigin::Receiver { mutable },
+            scope,
+            span,
+        });
+        self.bindings.insert("self".to_string(), id);
+        id
+    }
+
     /// Allocate a compiler-introduced temporary. Temporaries are always consumed exactly once, immediately after
     /// creation (by construction of the flattening lowering below), so they are excluded from last-use tracking and
     /// scope-exit drop insertion — see [`Self::temp_operand`] and [`Self::insert_scope_drops`].
@@ -270,9 +464,14 @@ impl<'a> BodyBuilder<'a> {
     ///
     /// Projected reads (`.field`, `[index]`) never move: v0 does not track partial-move state, so a non-Copy
     /// projected read always borrows rather than risking an unsound move out of a place the surrounding code still
-    /// owns. A bare local read decrements its remaining-reads countdown; reaching zero selects `Move` (and records
-    /// the local as moved for [`Self::insert_scope_drops`]), otherwise `Clone`. A local with no tracked countdown
-    /// (an [`bir::LocalOrigin::External`] reference) gets the explicit [`bir::OwnershipFact::Unknown`].
+    /// owns. A bare read of a [`bir::LocalOrigin::Receiver`] local (`self`/`mut self`) never moves either, for a
+    /// stronger reason than the projected case: a receiver is always a Rust-level reference at the emission
+    /// boundary, so moving a non-Copy value out of it would not even compile — the only sound way to produce an
+    /// owned value from it is to clone (mirrors the existing backend ownership planner's treatment of non-Copy
+    /// `self` reads in `src/backend/ir/ownership.rs`, which this module's own docs cite as precedent). Every other
+    /// bare local read decrements its remaining-reads countdown; reaching zero selects `Move` (and records the
+    /// local as moved for [`Self::insert_scope_drops`]), otherwise `Clone`. A local with no tracked countdown (an
+    /// [`bir::LocalOrigin::External`] reference) gets the explicit [`bir::OwnershipFact::Unknown`].
     ///
     /// Note that [`count_reads_in_stmts`] counts a `.field`/`[index]` occurrence of a name toward that local's
     /// total the same as a bare occurrence, but only bare reads ever decrement the countdown here. A local read
@@ -286,6 +485,14 @@ impl<'a> BodyBuilder<'a> {
                 bir::OwnershipFact::Copy
             } else {
                 bir::OwnershipFact::Borrow
+            };
+            return (fact, false);
+        }
+        if self.is_receiver_local(place.local) {
+            let fact = if is_copy {
+                bir::OwnershipFact::Copy
+            } else {
+                bir::OwnershipFact::Clone
             };
             return (fact, false);
         }
@@ -305,6 +512,13 @@ impl<'a> BodyBuilder<'a> {
         } else {
             (bir::OwnershipFact::Clone, false)
         }
+    }
+
+    /// Whether `local` is a method's `self`/`mut self` receiver, per its recorded [`bir::LocalOrigin`].
+    fn is_receiver_local(&self, local: bir::LocalId) -> bool {
+        self.locals
+            .get(local.index())
+            .is_some_and(|decl| matches!(decl.origin, bir::LocalOrigin::Receiver { .. }))
     }
 
     /// Build the operand for a freshly created temporary's single, immediate use.
@@ -825,12 +1039,16 @@ impl<'a> BodyBuilder<'a> {
                 let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
                 bir::Operand::place(place, fact, last_use)
             }
-            ast::Expr::SelfExpr => self.unsupported_operand(
-                "self (methods are not lowered by Body IR v0)".to_string(),
-                scope,
-                span,
-                out,
-            ),
+            ast::Expr::SelfExpr => {
+                // Resolved exactly like `Ident("self")` — see `BodyBuilder::declare_receiver_local`, which binds
+                // the receiver under the name "self" so this shares `local_for_name`'s ordinary lookup path. A
+                // top-level function body can never actually contain `SelfExpr` (the parser only accepts it inside
+                // a method), so this arm's `local_for_name` fallback to an `External` local is purely defensive.
+                let place = bir::Place::from_local(self.local_for_name("self", span));
+                let ty = self.resolve_ty(expr.span);
+                let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
+                bir::Operand::place(place, fact, last_use)
+            }
             ast::Expr::Literal(lit) => match lower_literal(lit) {
                 Some(constant) => bir::Operand::Constant(constant),
                 None => self.unsupported_operand("bytes literal".to_string(), scope, span, out),
@@ -891,6 +1109,7 @@ impl<'a> BodyBuilder<'a> {
     ) -> bir::Place {
         match &expr.node {
             ast::Expr::Ident(name) => bir::Place::from_local(self.local_for_name(name, hir_span(expr.span))),
+            ast::Expr::SelfExpr => bir::Place::from_local(self.local_for_name("self", hir_span(expr.span))),
             ast::Expr::Field(base, name) => {
                 let mut place = self.lower_expr_to_place(base, scope, out);
                 place.projection.push(bir::PlaceElem::Field(name.clone()));
@@ -1522,6 +1741,91 @@ mod tests {
         assert!(
             snapshot.contains("unsupported("),
             "should record an explicit placeholder rather than panicking: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_an_immutable_receiver_read_through_a_field_projection() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Counter:\n  value: int\n\n  def get(self) -> int:\n    return self.value\n";
+        let module = build(source, &["m", "receiver_read"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body get decl:m::receiver_read::Counter::get"));
+        assert!(snapshot.contains("local 0 self : Counter [receiver]"));
+        // `self.value` is a projected read of an `int` (Copy) field, so it reads `copy`, never `move` or `clone`.
+        assert!(snapshot.contains("return copy(_0.value)"));
+        Ok(())
+    }
+
+    #[test]
+    fn mut_self_receiver_origin_is_mutable_and_field_mutation_stays_an_explicit_placeholder()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // `self.field = value` (`ast::Statement::FieldAssignment`) is unsupported for every receiver today, not only
+        // `self` (see this module's docs) -- this test asserts the receiver is modeled correctly (`mut self`
+        // producing a `[receiver_mut]` origin) and that the unmodeled mutation still lowers to an explicit
+        // `Unsupported` placeholder rather than being silently dropped, consistent with v0's "total over real
+        // programs" contract.
+        let source = "model Counter:\n  value: int\n\n  def bump(mut self) -> None:\n    self.value = self.value + 1\n";
+        let module = build(source, &["m", "receiver_mut"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body bump decl:m::receiver_mut::Counter::bump"));
+        assert!(snapshot.contains("local 0 self : Counter [receiver_mut]"));
+        assert!(
+            snapshot.contains("unsupported(field assignment)"),
+            "field assignment is not yet lowered for any receiver: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_method_call_on_self_with_a_borrowed_receiver_argument() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Counter:\n  value: int\n\n  def get(self) -> int:\n    return self.value\n\n  def get_twice(self) -> int:\n    return self.get() + self.get()\n";
+        let module = build(source, &["m", "method_call"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body get_twice decl:m::method_call::Counter::get_twice"));
+        // Method-call receivers borrow, mirroring how any other method call's receiver already lowers.
+        assert!(snapshot.contains("call method:get(borrow(_0))"));
+        Ok(())
+    }
+
+    #[test]
+    fn abstract_trait_method_produces_no_body() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "trait Greeter:\n  def greet(self) -> str: ...\n";
+        let module = build(source, &["m", "abstract_method"])?;
+
+        assert!(
+            module.bodies.is_empty(),
+            "an abstract method has no body to lower, and must not produce an Unsupported placeholder body either: {:?}",
+            module.bodies
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_default_trait_method_with_a_self_typed_receiver() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "trait Identity:\n  def identity(self) -> Self:\n    return self\n";
+        let module = build(source, &["m", "trait_default"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body identity decl:m::trait_default::Identity::identity"));
+        assert!(snapshot.contains("local 0 self : Self [receiver]"));
+        assert!(snapshot.contains("return clone(_0)"));
+        Ok(())
+    }
+
+    #[test]
+    fn static_method_lowers_like_a_free_function_with_no_receiver_local() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Counter:\n  value: int\n\n  def zero() -> Counter:\n    return Counter(value=0)\n";
+        let module = build(source, &["m", "static_method"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body zero decl:m::static_method::Counter::zero"));
+        assert!(
+            !snapshot.contains("[receiver"),
+            "a static/associated method (receiver: None) must not declare a receiver local: {snapshot}"
         );
         Ok(())
     }
