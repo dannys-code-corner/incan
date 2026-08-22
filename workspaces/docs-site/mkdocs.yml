@@ -284,6 +284,7 @@ nav:
           - Compiled SDK provider flow: tooling/explanation/compiled_sdk_provider_flow.md
           - Generated-build storage model: tooling/explanation/generated_build_storage.md
           - LSP architecture: tooling/explanation/lsp_architecture.md
+          - Backend selection & execution receipts: tooling/explanation/backend_selection_receipts.md
       - Reference:
           - CLI reference: tooling/reference/cli_reference.md
           - Binding inspection JSON schema: tooling/reference/binding_inspection_schema.md

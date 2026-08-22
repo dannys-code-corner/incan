@@ -129,6 +129,8 @@ hide:
 
 The publisher pays the compatibility cost once. Oven fingerprints the inputs that made the result valid, seals the result and its receipt into one immutable Loaf, then lets a compatible consumer reuse it without Cargo. If those facts no longer match, Oven refuses reuse and tells you why. Alpha ships complete debug and release standard-library Loaf families plus a compiler-suite family. Explicit project bake can add receipt-bound project extensions and completed application, library, and test outputs without turning normal commands into Cargo frontends.
 
+This Oven receipt selects how already-generated Rust is compiled. A separate, earlier receipt selects and records which compiler backend produced that Rust in the first place: see [Backend selection & execution receipts](backend_selection_receipts.md).
+
 <section class="inc-oven-architecture" aria-label="Oven publisher, Loaf, and consumer architecture">
 
 <ol class="inc-oven-proof-story" aria-label="How Oven turns publisher inputs into reusable proof">
