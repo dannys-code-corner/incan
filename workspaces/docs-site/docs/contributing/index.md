@@ -28,6 +28,7 @@ If you’re new, start with:
 
 - [Contributors](contributors.md) — community acknowledgements for external contributions
 - [Backend behavior inventory](reference/backend_behavior_inventory.md) — phase-0 inventory for preserving supported behavior during backend replacement
+- [Backend-cutover parity corpus](reference/parity_corpus.md) — executable corpus turning the behavior inventory into stable-ID, disposition-classified cases for the 0.6 cutover
 - [Layering rules](explanation/layering.md) — dependency boundaries and guardrails
 - [Generated Rust stdlib coverage](reference/generated_rust_stdlib_coverage.md) — generated-Rust coverage inventory for stdlib modules
 - [Hees.ai v0.5 dependency inventory](reference/hees_ai_v05_dependency_inventory.md) — proof-lane dependency map and scope guardrails
