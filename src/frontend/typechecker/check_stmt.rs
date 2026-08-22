@@ -13,6 +13,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::{NumericTy, result_numeric_type};
 use incan_semantics_core::SurfaceStmtTypeCheck;
+use incan_semantics_core::rust_tuple_arity;
 
 use super::{CAbiSpanLocal, CBindingType, COutputMode, LoopContextKind, TypeChecker};
 use crate::frontend::typechecker::helpers::{collection_type_id, ensure_bool_condition, option_ty};
@@ -45,6 +46,70 @@ struct BranchRefinement {
     ty: ResolvedType,
     is_mutable: bool,
     span: Span,
+}
+
+/// What a value's type says about whether it can be destructured into a fixed number of names.
+///
+/// Reading this once, in one place, is what keeps the three destructuring sites honest. Each used to answer the
+/// question inline and fall back to `vec![Unknown; n]` for anything it did not recognise, which sized the element
+/// list to the name list and so made the arity guard below it unreachable for a non-tuple (#1125, #1132).
+#[derive(Debug)]
+pub(in crate::frontend::typechecker) enum TupleShape {
+    /// A tuple in either Incan spelling, carrying its element types so arity can be checked against them.
+    Tuple(Vec<ResolvedType>),
+    /// A Rust-interop tuple whose arity the compiler can actually read, such as the `(String, JsonValue)` a
+    /// `rust::HashMap::items()` yields.
+    ///
+    /// Element types are not modelled, so it carries only the count and binds `Unknown` per name. Arity is still
+    /// checked, so interop is not simply exempted from the guard.
+    RustTuple(usize),
+    /// A Rust-interop value whose shape the compiler cannot establish.
+    ///
+    /// Deliberately *not* [`TupleShape::Recovery`]. "The frontend has no structural model of this type" is not the
+    /// same claim as "checking already failed", and treating it as recovery would let a genuine non-tuple Rust
+    /// value reach a generated field projection — the exact leakage class #1132 exists to close, arriving through
+    /// interop instead of through `int`. This is the same rule applied to a bare type variable: not proven
+    /// tuple-shaped must refuse.
+    OpaqueRust,
+    /// `Unknown` or `Never`: bind `Unknown` per name and stay silent.
+    ///
+    /// `Unknown` is recovery-only — checking already failed upstream, so a second diagnostic here is noise on top
+    /// of the real one. `Never` is the bottom type, and [`TypeChecker::types_compatible`] already answers
+    /// `(Never, _) => true` for every type including a tuple; accepting it is that established policy rather than
+    /// a carve-out, and the code is unreachable either way.
+    Recovery,
+    /// Anything else, including a bare type variable, which must be reported.
+    NotTuple,
+}
+
+/// Classify a value type for destructuring.
+///
+/// A tuple arrives in two spellings: a tuple *literal* infers [`ResolvedType::Tuple`], while a written
+/// `tuple[A, B]` annotation resolves through the collection-type registry as a [`ResolvedType::Generic`] named
+/// `Tuple`. Both are destructurable and both must be recognised here.
+///
+/// A bare type variable is deliberately [`TupleShape::NotTuple`]. It is not "not yet known" — it is known to be
+/// underdetermined, and `T` can be instantiated as `int`. Incan's bounds are trait-based, so no caller can promise
+/// a tuple shape. This does not affect `tuple[K, V]`, whose *elements* are type variables but whose shape is
+/// known; that takes the [`TupleShape::Tuple`] arm above.
+pub(in crate::frontend::typechecker) fn classify_tuple_shape(ty: &ResolvedType) -> TupleShape {
+    match ty {
+        ResolvedType::Tuple(types) => TupleShape::Tuple(types.clone()),
+        ResolvedType::Generic(name, args)
+            if matches!(collection_type_id(name.as_str()), Some(CollectionTypeId::Tuple)) =>
+        {
+            TupleShape::Tuple(args.clone())
+        }
+        ResolvedType::Unknown | ResolvedType::Never => TupleShape::Recovery,
+        // A Rust type is destructurable only when its shape can actually be read. The parenthesised tuple
+        // spelling gives a reliable arity — `std.json`'s `key, value = item` over a `rust::HashMap` item is
+        // exactly that shape — and everything else is refused rather than assumed.
+        ResolvedType::RustPath(path) => match rust_tuple_arity(path) {
+            Some(arity) => TupleShape::RustTuple(arity),
+            None => TupleShape::OpaqueRust,
+        },
+        _ => TupleShape::NotTuple,
+    }
 }
 
 /// Return the fallback binary dunder used when compound assignment cannot resolve an explicit in-place hook.
@@ -316,23 +381,7 @@ impl TypeChecker {
                 // Check the value expression and get its type
                 let value_ty = self.check_expr(&unpack.value);
 
-                // Extract element types if it's a tuple
-                let element_types: Vec<ResolvedType> = match &value_ty {
-                    ResolvedType::Tuple(types) => types.clone(),
-                    _ => {
-                        // Not a tuple, create Unknown types for each name
-                        vec![ResolvedType::Unknown; unpack.names.len()]
-                    }
-                };
-
-                // Check that tuple has enough elements
-                if element_types.len() < unpack.names.len() {
-                    self.errors.push(errors::tuple_unpack_count_mismatch(
-                        unpack.names.len(),
-                        element_types.len(),
-                        stmt.span,
-                    ));
-                }
+                let element_types = self.destructured_element_types(&value_ty, unpack.names.len(), stmt.span);
 
                 // Define each variable with its corresponding type
                 let is_mutable = matches!(unpack.binding, BindingKind::Mutable);
@@ -357,23 +406,7 @@ impl TypeChecker {
                 // Check the value expression (should be a tuple)
                 let value_ty = self.check_expr(&assign.value);
 
-                // Extract element types if it's a tuple
-                let element_types: Vec<ResolvedType> = match &value_ty {
-                    ResolvedType::Tuple(types) => types.clone(),
-                    _ => {
-                        // Not a tuple, create Unknown types for each target
-                        vec![ResolvedType::Unknown; assign.targets.len()]
-                    }
-                };
-
-                // Check that tuple has enough elements
-                if element_types.len() < assign.targets.len() {
-                    self.errors.push(errors::tuple_unpack_count_mismatch(
-                        assign.targets.len(),
-                        element_types.len(),
-                        stmt.span,
-                    ));
-                }
+                let element_types = self.destructured_element_types(&value_ty, assign.targets.len(), stmt.span);
 
                 // Check each target expression - must be a valid lvalue
                 for (i, target) in assign.targets.iter().enumerate() {
@@ -1247,6 +1280,49 @@ impl TypeChecker {
         self.symbols.exit_scope();
     }
 
+    /// Resolve the element types a statement destructure should bind, reporting the right diagnostic when the
+    /// value cannot supply them.
+    ///
+    /// Returns exactly `arity` types so callers can bind positionally without re-checking length. The `Unknown`
+    /// padding it returns on the error paths is recovery state for the *rest* of the check, not a claim that the
+    /// value had that shape — the diagnostic has already been recorded by then.
+    fn destructured_element_types(&mut self, value_ty: &ResolvedType, arity: usize, span: Span) -> Vec<ResolvedType> {
+        match classify_tuple_shape(value_ty) {
+            TupleShape::Tuple(types) => {
+                if types.len() != arity {
+                    self.errors
+                        .push(errors::tuple_unpack_count_mismatch(arity, types.len(), span));
+                    return vec![ResolvedType::Unknown; arity];
+                }
+                types
+            }
+            TupleShape::RustTuple(rust_arity) => {
+                if rust_arity != arity {
+                    self.errors
+                        .push(errors::tuple_unpack_count_mismatch(arity, rust_arity, span));
+                }
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::OpaqueRust => {
+                self.errors.push(errors::tuple_unpack_rust_shape_unverified(
+                    arity,
+                    &value_ty.to_string(),
+                    span,
+                ));
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::NotTuple => {
+                self.errors.push(errors::tuple_unpack_expects_tuple_value(
+                    arity,
+                    &value_ty.to_string(),
+                    span,
+                ));
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::Recovery => vec![ResolvedType::Unknown; arity],
+        }
+    }
+
     /// Validate a `break` statement against the innermost active loop context.
     ///
     /// For expression-form `loop:` bodies this records the break value type so the loop result can be resolved after
@@ -1322,59 +1398,52 @@ impl TypeChecker {
             }
             Pattern::Wildcard => {}
             Pattern::Tuple(items) => {
-                // A tuple element type reaches here in two spellings: a tuple *literal* infers
-                // `ResolvedType::Tuple`, while a written `tuple[A, B]` annotation resolves through the
-                // collection-type registry and arrives as a `ResolvedType::Generic` named `Tuple`. Reading only the
-                // first spelling left every binding of an annotated tuple iteration typed `Unknown` for the whole
-                // loop body, and suppressed the arity-mismatch diagnostic there too (#1125).
-                let declared = match ty {
-                    ResolvedType::Tuple(types) => Some(types.clone()),
-                    ResolvedType::Generic(name, args)
-                        if matches!(collection_type_id(name.as_str()), Some(CollectionTypeId::Tuple)) =>
-                    {
-                        Some(args.clone())
-                    }
-                    _ => None,
-                };
-                let element_types = match declared {
-                    Some(types) => {
+                // The shape question is answered by `classify_tuple_shape`, shared with the statement-level
+                // destructuring arms (#1132). Only the diagnostic differs: a loop names the *iteration item* type,
+                // because that is what the reader has to change.
+                let element_types = match classify_tuple_shape(ty) {
+                    TupleShape::Tuple(types) => {
                         if types.len() != items.len() {
                             self.errors.push(errors::tuple_unpack_count_mismatch(
                                 items.len(),
                                 types.len(),
                                 pattern.span,
                             ));
+                            vec![ResolvedType::Unknown; items.len()]
+                        } else {
+                            types
                         }
-                        types
                     }
-                    None => {
-                        // A tuple pattern can only destructure a tuple. Binding `Unknown` per name and staying
-                        // silent used to hide `for a, b in items` over a `list[int]` completely, and Body IR would
-                        // then project `.0`/`.1` out of an `int` (#1125).
-                        //
-                        // Exactly two item types are exempt, and a bare type variable is not one of them:
-                        //
-                        // - `Unknown` is recovery-only. It means checking already failed somewhere upstream, so a
-                        //   second diagnostic here would just be noise on top of the real one.
-                        // - `Never` is the bottom type, and `Self::types_compatible` already answers `(Never, _) =>
-                        //   true` for every type including a tuple. Accepting it here is that same established policy,
-                        //   not a carve-out; the loop body is unreachable either way.
-                        //
-                        // An unconstrained type variable is *not* "not yet known" -- it is known to be
-                        // underdetermined, and `T` can be instantiated as `int`. Incan has no tuple-shaped bound a
-                        // caller could write to promise otherwise (bounds are trait-based), so `for a, b in
-                        // list[T]` can never be proven safe and is rejected. Note this does not affect the common
-                        // `list[Tuple[K, V]]` shape, whose item type is a tuple whose *elements* are type
-                        // variables -- that takes the `Some(types)` branch above.
-                        if !matches!(ty, ResolvedType::Unknown | ResolvedType::Never) {
-                            self.errors.push(errors::for_pattern_expects_tuple_item(
+                    TupleShape::RustTuple(rust_arity) => {
+                        if rust_arity != items.len() {
+                            self.errors.push(errors::tuple_unpack_count_mismatch(
                                 items.len(),
-                                &ty.to_string(),
+                                rust_arity,
                                 pattern.span,
                             ));
                         }
                         vec![ResolvedType::Unknown; items.len()]
                     }
+                    TupleShape::OpaqueRust => {
+                        self.errors.push(errors::for_pattern_rust_shape_unverified(
+                            items.len(),
+                            &ty.to_string(),
+                            pattern.span,
+                        ));
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
+                    TupleShape::NotTuple => {
+                        // A tuple pattern can only destructure a tuple. Binding `Unknown` per name and staying
+                        // silent used to hide `for a, b in items` over a `list[int]` completely, and Body IR would
+                        // then project `.0`/`.1` out of an `int` (#1125).
+                        self.errors.push(errors::for_pattern_expects_tuple_item(
+                            items.len(),
+                            &ty.to_string(),
+                            pattern.span,
+                        ));
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
+                    TupleShape::Recovery => vec![ResolvedType::Unknown; items.len()],
                 };
 
                 for (i, item) in items.iter().enumerate() {

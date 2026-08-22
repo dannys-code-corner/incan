@@ -5,6 +5,57 @@
 
 use std::fmt;
 
+/// Read the arity of a Rust tuple type spelling, or `None` when the shape cannot be established.
+///
+/// This is the single place the compiler decides whether an interop value is destructurable, shared by the
+/// typechecker's statement/loop destructuring and by Body IR lowering so the two can never disagree about what
+/// counts as tuple-shaped. `None` means "not proven to be a tuple" — including opaque named paths like
+/// `rust::String` — and callers must refuse rather than assume, because a wrong `yes` re-emits the `.0`/`.1`
+/// field projection into a fieldless value that #1132 exists to prevent.
+///
+/// Parentheses alone do not make a tuple. Rust spells a one-element tuple `(String,)`; plain `(String)` is just a
+/// parenthesised `String` and has no `.0` field at all. The distinguishing fact is a comma at depth zero, so a
+/// spelling with none is reported as unverifiable rather than as a one-element tuple. Commas nested inside a
+/// generic (`(String, HashMap<K, V>)`) are not counted, and a trailing comma does not add an element.
+///
+/// Parsing a type *string* is a deliberate stopgap. The durable fix is structured Rust type-shape metadata, so
+/// that interop shape is a fact the compiler is given rather than one it re-derives from spelling.
+pub fn rust_tuple_arity(path: &str) -> Option<usize> {
+    let path = path.trim();
+    let path = path.strip_prefix("rust::").unwrap_or(path);
+    let inner = path.strip_prefix('(')?.strip_suffix(')')?;
+    if inner.trim().is_empty() {
+        // `()` is the unit type: a genuine zero-element tuple.
+        return Some(0);
+    }
+
+    let mut depth = 0usize;
+    let mut separators = 0usize;
+    let mut trailing_separator = false;
+    for character in inner.chars() {
+        match character {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth = depth.saturating_sub(1),
+            ',' if depth == 0 => {
+                separators += 1;
+                trailing_separator = true;
+                continue;
+            }
+            _ => {}
+        }
+        if !character.is_whitespace() {
+            trailing_separator = false;
+        }
+    }
+
+    if separators == 0 {
+        // `(String)` — a parenthesised type, not a one-element tuple.
+        return None;
+    }
+    // A trailing comma closes the final element rather than opening another: `(String,)` is one element.
+    Some(if trailing_separator { separators } else { separators + 1 })
+}
+
 /// Backend-neutral Incan type universe used by v0.5 middle-end facts.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum IncanType {
@@ -314,5 +365,45 @@ mod tests {
         assert_eq!(interop.identity.canonical, "rust::rubato::Fft");
         assert_eq!(interop.representation, AbiV0Representation::RustInterop);
         assert_eq!(interop.reserved, AbiV0ReservedFacts::default());
+    }
+}
+
+#[cfg(test)]
+mod rust_tuple_arity_tests {
+    use super::rust_tuple_arity;
+
+    /// Parentheses alone do not make a tuple (#1132).
+    ///
+    /// Reading `(String)` as a one-element tuple would let a one-name destructure lower to `.0` on a `String`,
+    /// recreating the raw-Rust failure through a narrower spelling than the `int` case the issue started from.
+    #[test]
+    fn a_parenthesised_type_is_not_a_one_element_tuple() {
+        assert_eq!(rust_tuple_arity("(String)"), None);
+        assert_eq!(rust_tuple_arity("(std::vec::Vec<u8>)"), None);
+        assert_eq!(rust_tuple_arity("( String )"), None);
+    }
+
+    #[test]
+    fn a_trailing_comma_marks_a_genuine_one_element_tuple() {
+        assert_eq!(rust_tuple_arity("(String,)"), Some(1));
+        assert_eq!(rust_tuple_arity("(String, )"), Some(1));
+    }
+
+    #[test]
+    fn multi_element_and_nested_generic_spellings_keep_their_arity() {
+        assert_eq!(rust_tuple_arity("(A, B)"), Some(2));
+        assert_eq!(rust_tuple_arity("(A, B,)"), Some(2));
+        assert_eq!(rust_tuple_arity("(String,incan_stdlib::json::JsonValue)"), Some(2));
+        // A generic's own commas sit at depth one and must not inflate the count.
+        assert_eq!(rust_tuple_arity("(String, HashMap<K, V>)"), Some(2));
+        assert_eq!(rust_tuple_arity("(HashMap<K, V>, Vec<(A, B)>)"), Some(2));
+    }
+
+    #[test]
+    fn unit_is_a_zero_element_tuple_and_opaque_paths_stay_unverifiable() {
+        assert_eq!(rust_tuple_arity("()"), Some(0));
+        assert_eq!(rust_tuple_arity("String"), None);
+        assert_eq!(rust_tuple_arity("std::collections::HashMap<K, V>"), None);
+        assert_eq!(rust_tuple_arity("rust::(A, B)"), Some(2));
     }
 }

@@ -21830,3 +21830,243 @@ def main() -> None:
     // A default method body is one block of source, so it must warn once — not once per implementing type.
     let _ = single_unreachable_warning(source, "a trait default method body with dead code");
 }
+
+// ========================================================================
+// Issue #1132: statement-level tuple unpacking is a typechecking decision
+// ========================================================================
+
+#[test]
+fn test_statement_tuple_unpack_of_non_tuple_value_is_rejected() {
+    let source = r#"
+def main() -> None:
+    a, b = 5
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(source, "unpacking two names from an `int` must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot destructure 2 values from value of type 'int'")),
+        "the diagnostic must name the resolved value type: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_tuple_assign_spelling_of_non_tuple_value_is_rejected() {
+    // The `TupleAssign` spelling reaches a different statement arm than `TupleUnpack`; both carried the same
+    // `vec![Unknown; n]` fallback, so both need the diagnostic.
+    let source = r#"
+def main() -> None:
+    mut xs = [1, 2]
+    xs[0], xs[1] = 5
+"#;
+    let errors = check_str_err(source, "tuple-assigning two lvalues from an `int` must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot destructure 2 values from value of type 'int'")),
+        "the diagnostic must name the resolved value type: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_accepts_inferred_and_annotated_tuples() {
+    let inferred = r#"
+def main() -> None:
+    pair = (1, "two")
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(inferred).is_ok(),
+        "an inferred tuple literal must still destructure: {:?}",
+        check_str(inferred)
+    );
+
+    // A written `tuple[A, B]` annotation resolves through the collection-type registry as
+    // `ResolvedType::Generic("Tuple", args)`, not `ResolvedType::Tuple`. Reading only the latter left every
+    // binding typed `Unknown` and suppressed the arity guard.
+    let annotated = r#"
+def main() -> None:
+    pair: tuple[int, str] = (1, "two")
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(annotated).is_ok(),
+        "an annotated `tuple[int, str]` must destructure: {:?}",
+        check_str(annotated)
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_arity_mismatch_is_rejected_in_both_directions() {
+    let too_many_names = r#"
+def main() -> None:
+    a, b, c = (1, 2)
+    println(f"{a} {b} {c}")
+"#;
+    let errors = check_str_err(too_many_names, "unpacking three names from a 2-tuple must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot unpack 3 values from tuple with 2 elements")),
+        "expected the existing arity diagnostic: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    // The guard used to be `element_types.len() < names.len()`, so a tuple with *more* elements than names was
+    // silently accepted. #1125 settled on an exact-arity comparison for loop patterns; statements match it.
+    let too_few_names = r#"
+def main() -> None:
+    a, b = (1, 2, 3)
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(too_few_names, "unpacking two names from a 3-tuple must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot unpack 2 values from tuple with 3 elements")),
+        "a tuple longer than the name list must not be silently truncated: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_of_a_bare_type_variable_is_rejected() {
+    // An unconstrained type variable is not "not yet known" — it is known to be underdetermined, and `T` can be
+    // instantiated as `int`. Incan's bounds are trait-based, so no caller can promise a tuple shape.
+    let source = r#"
+def split[T](value: T) -> None:
+    a, b = value
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(source, "destructuring a bare type variable must be rejected");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Cannot destructure 2 values from value of type")),
+        "a bare type variable must not be treated as destructurable: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_accepts_a_tuple_of_type_variables() {
+    // `tuple[K, V]` is a tuple whose *elements* are type variables. The shape is known even though the element
+    // types are not, so it destructures — this is the common `dict` item shape and must not regress.
+    let source = r#"
+def split[K, V](pair: tuple[K, V]) -> None:
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(source).is_ok(),
+        "a tuple of type variables must destructure: {:?}",
+        check_str(source)
+    );
+}
+
+#[test]
+fn test_tuple_shape_classifier_covers_both_spellings_and_recovery_types() {
+    use super::check_stmt::{TupleShape, classify_tuple_shape};
+
+    // `Unknown` and `Never` are exercised directly: `Unknown` means checking already failed upstream, and `Never`
+    // reaches a value position only through Rust interop's diverging `!`, which is not cheaply source-expressible.
+    // Both must classify as recovery so no second diagnostic piles onto the real one.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::Unknown),
+        TupleShape::Recovery
+    ));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::Never),
+        TupleShape::Recovery
+    ));
+    assert!(matches!(classify_tuple_shape(&ResolvedType::Int), TupleShape::NotTuple));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::TypeVar("T".to_string())),
+        TupleShape::NotTuple
+    ));
+
+    // Regression for a false positive this change originally introduced: `std.json` destructures a
+    // `rust::HashMap` item, whose type is a Rust tuple path rather than either Incan spelling. Rejecting it broke
+    // the stdlib's own SDK component build.
+    match classify_tuple_shape(&ResolvedType::RustPath(
+        "(String,incan_stdlib::json::JsonValue)".to_string(),
+    )) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("a Rust tuple path must be destructurable with arity 2, got {other:?}"),
+    }
+    // Commas inside a nested generic must not inflate the arity.
+    match classify_tuple_shape(&ResolvedType::RustPath("(String,HashMap<K, V>)".to_string())) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("nested generic commas must not be counted, got {other:?}"),
+    }
+    // An opaque Rust path refuses rather than going silent. "No structural model of this type" is not the same
+    // claim as "checking already failed": treating it as recovery would let a real non-tuple Rust value reach a
+    // generated field projection, which is the same leakage this issue closes, arriving via interop.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("String".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("std::vec::Vec<u8>".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    // A one-element Rust tuple is one element, not two with an empty slot.
+    match classify_tuple_shape(&ResolvedType::RustPath("(String,)".to_string())) {
+        TupleShape::RustTuple(1) => {}
+        other => panic!("`(String,)` is a one-element tuple, got {other:?}"),
+    }
+    // But `(String)` is a parenthesised type with no `.0` field, not a one-element tuple. Reading it as one would
+    // let a single-name destructure lower to `.0` on a `String` — the same raw-Rust failure through a narrower
+    // spelling than `int`.
+    assert!(
+        matches!(
+            classify_tuple_shape(&ResolvedType::RustPath("(String)".to_string())),
+            TupleShape::OpaqueRust
+        ),
+        "a parenthesised Rust type must not be classified as a one-element tuple"
+    );
+
+    let literal = ResolvedType::Tuple(vec![ResolvedType::Int, ResolvedType::Str]);
+    let annotated = ResolvedType::Generic("Tuple".to_string(), vec![ResolvedType::Int, ResolvedType::Str]);
+    for (label, ty) in [("inferred", &literal), ("annotated", &annotated)] {
+        match classify_tuple_shape(ty) {
+            TupleShape::Tuple(elements) => assert_eq!(
+                elements,
+                vec![ResolvedType::Int, ResolvedType::Str],
+                "{label} tuple spelling must yield its element types"
+            ),
+            other => panic!("{label} tuple spelling must classify as a tuple, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_statement_tuple_unpack_of_an_opaque_rust_value_is_refused() {
+    // The `RustPath` path must apply the same rule as a bare type variable: not proven tuple-shaped refuses.
+    // Accepting it silently would re-open the leak through interop — a `rust::String` reaching a `.0` projection
+    // is the same defect as an `int` reaching one.
+    use super::check_stmt::{TupleShape, classify_tuple_shape};
+
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("String".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    // `(String)` is the same type as `String`, only parenthesised, and must be refused identically.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("(String)".to_string())),
+        TupleShape::OpaqueRust
+    ));
+
+    // And the readable tuple spelling the stdlib depends on must keep working, so the refusal is narrow.
+    match classify_tuple_shape(&ResolvedType::RustPath(
+        "(String,incan_stdlib::json::JsonValue)".to_string(),
+    )) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("a readable Rust tuple must still destructure, got {other:?}"),
+    }
+}

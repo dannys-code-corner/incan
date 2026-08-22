@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use incan_semantics_core::body_ir as bir;
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanCallableParam, IncanCallableParamKind,
-    IncanPrimitiveType, IncanType,
+    IncanPrimitiveType, IncanType, rust_tuple_arity,
 };
 
 use incan_core::lang::types::collections::{self, CollectionTypeId};
@@ -961,6 +961,10 @@ impl<'a> BodyBuilder<'a> {
         out: &mut Vec<bir::Statement>,
     ) {
         let value_ty = self.resolve_ty(tuple_unpack.value.span);
+        if let Some(reason) = unsupported_tuple_destructure(&value_ty, tuple_unpack.names.len()) {
+            self.push_unsupported_stmt(reason, span, out);
+            return;
+        }
         let value_operand = self.lower_expr_to_operand(&tuple_unpack.value, scope, out);
         let value_place = self.materialize_operand_to_place(value_operand, value_ty.clone(), scope, span, out);
         let element_types = tuple_element_types(&value_ty, tuple_unpack.names.len());
@@ -998,6 +1002,10 @@ impl<'a> BodyBuilder<'a> {
         out: &mut Vec<bir::Statement>,
     ) {
         let value_ty = self.resolve_ty(tuple_assign.value.span);
+        if let Some(reason) = unsupported_tuple_destructure(&value_ty, tuple_assign.targets.len()) {
+            self.push_unsupported_stmt(reason, span, out);
+            return;
+        }
         let value_operand = self.lower_expr_to_operand(&tuple_assign.value, scope, out);
         let value_place = self.materialize_operand_to_place(value_operand, value_ty.clone(), scope, span, out);
         let element_types = tuple_element_types(&value_ty, tuple_assign.targets.len());
@@ -3335,6 +3343,44 @@ fn unsupported_expr_label(expr: &ast::Expr) -> String {
 /// element read `Borrow` rather than its real Copy/non-Copy fact. The generic base is classified through
 /// [`collections::from_str`] rather than compared against a literal name, so the registry stays the single source
 /// of truth for that vocabulary.
+/// Why a statement-level destructure of `value_ty` into `arity` names cannot be lowered, or `None` when it can.
+///
+/// The statement sibling of [`unsupported_for_pattern`], and it exempts the same two types for the same reason:
+/// `Unknown` and `Never` mean the typechecker either already reported a failure or is looking at unreachable code,
+/// so lowering has nothing to refuse. Everything else — including Rust interop, which is checked against the same
+/// [`rust_tuple_arity`] rule the typechecker uses rather than waved through — must be a tuple of exactly matching
+/// arity before lowering may emit a `.0`/`.1` field projection. Without this, a non-tuple value produced
+/// `__incan_tuple_unpack_*.0` against a fieldless value and surfaced as a raw `rustc` E0610 (#1132).
+fn unsupported_tuple_destructure(value_ty: &IncanType, arity: usize) -> Option<String> {
+    if matches!(value_ty, IncanType::Unknown | IncanType::Never) {
+        return None;
+    }
+    // Interop values go through the same accepted-shape rule the typechecker uses, not an exemption: a readable
+    // tuple spelling lowers, and anything opaque refuses. Waving every `RustInteropPath` through would have let a
+    // genuine non-tuple Rust value reach a `.0`/`.1` projection, which is the leakage #1132 closes.
+    if let IncanType::RustInteropPath(path) = value_ty {
+        return match rust_tuple_arity(path) {
+            Some(rust_arity) if rust_arity == arity => None,
+            Some(rust_arity) => Some(format!(
+                "tuple destructure binds {arity} names but Rust value type `{path}` has {rust_arity} elements"
+            )),
+            None => Some(format!(
+                "tuple destructure of Rust value type `{path}` whose tuple shape cannot be verified"
+            )),
+        };
+    }
+    let Some(element_types) = tuple_type_elements(value_ty) else {
+        return Some(format!("tuple destructure of non-tuple value type `{value_ty}`"));
+    };
+    if element_types.len() != arity {
+        return Some(format!(
+            "tuple destructure binds {arity} names but value type `{value_ty}` has {} elements",
+            element_types.len()
+        ));
+    }
+    None
+}
+
 fn tuple_element_types(ty: &IncanType, count: usize) -> Vec<IncanType> {
     match tuple_type_elements(ty) {
         Some(items) if items.len() == count => items.to_vec(),
@@ -5599,5 +5645,54 @@ mod tests {
             "lowering must not emit tuple-field projections into a type variable: {snapshot}"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tuple_destructure_interop_tests {
+    use super::{IncanType, unsupported_tuple_destructure};
+
+    /// Lowering must apply the same accepted-shape rule as the typechecker to interop values (#1132).
+    ///
+    /// A blanket `RustInteropPath` exemption here would leave the original defect reachable through interop: an
+    /// opaque Rust value would lower to a `.0`/`.1` projection and fail as raw `rustc` output.
+    #[test]
+    fn opaque_rust_interop_values_refuse_to_lower_a_tuple_destructure() {
+        assert!(
+            unsupported_tuple_destructure(&IncanType::RustInteropPath("String".to_string()), 2).is_some(),
+            "an opaque Rust value must not lower to a tuple field projection"
+        );
+        assert!(
+            unsupported_tuple_destructure(&IncanType::RustInteropPath("std::vec::Vec<u8>".to_string()), 2).is_some(),
+            "a Rust generic that is not a tuple must not lower to a tuple field projection"
+        );
+        // `(String)` is a parenthesised `String`, not a one-element tuple, so a single-name destructure must not
+        // lower to `.0` against it.
+        assert!(
+            unsupported_tuple_destructure(&IncanType::RustInteropPath("(String)".to_string()), 1).is_some(),
+            "a parenthesised Rust type has no `.0` field and must refuse to lower"
+        );
+        // The genuine one-element spelling still lowers.
+        assert!(
+            unsupported_tuple_destructure(&IncanType::RustInteropPath("(String,)".to_string()), 1).is_none(),
+            "`(String,)` is a real one-element tuple and must keep lowering"
+        );
+    }
+
+    /// The readable tuple spelling the stdlib relies on must still lower, so the refusal stays narrow.
+    #[test]
+    fn readable_rust_tuple_values_still_lower_a_tuple_destructure() {
+        assert!(
+            unsupported_tuple_destructure(
+                &IncanType::RustInteropPath("(String,incan_stdlib::json::JsonValue)".to_string()),
+                2
+            )
+            .is_none(),
+            "`std.json` destructures a `rust::HashMap` item and must keep lowering"
+        );
+        assert!(
+            unsupported_tuple_destructure(&IncanType::RustInteropPath("(String,JsonValue)".to_string()), 3).is_some(),
+            "a Rust tuple of the wrong arity must still be refused"
+        );
     }
 }

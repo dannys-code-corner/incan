@@ -1973,6 +1973,47 @@ pub fn for_pattern_expects_tuple_item(names: usize, item_ty: &str, span: Span) -
     .with_hint("Iterate a sequence of tuples, or bind each item to a single name")
 }
 
+/// Build the error emitted when a statement destructures a value whose type is not a tuple at all.
+///
+/// The statement-level sibling of [`for_pattern_expects_tuple_item`]: same question, asked where `a, b = value`
+/// binds names rather than where a loop binds an item. Naming the resolved type is the point of the diagnostic —
+/// without it the failure only surfaced as a `rustc` field-projection error against a compiler-internal binding.
+pub fn tuple_unpack_expects_tuple_value(names: usize, value_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot destructure {names} values from value of type '{value_ty}'"),
+        span,
+    )
+    .with_hint("Assign a tuple of matching length, or bind the value to a single name")
+}
+
+/// Build the error emitted when a loop pattern destructures a Rust interop item whose shape is unverifiable.
+///
+/// The loop-shaped sibling of [`tuple_unpack_rust_shape_unverified`], paired the same way
+/// [`for_pattern_expects_tuple_item`] pairs with [`tuple_unpack_expects_tuple_value`]. Separate because the
+/// remedy differs: a loop's reader changes what the sequence yields, not what a single assignment produces.
+pub fn for_pattern_rust_shape_unverified(names: usize, item_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!(
+            "Cannot verify Rust iteration item of type '{item_ty}' is tuple-shaped for destructuring {names} values"
+        ),
+        span,
+    )
+    .with_hint("Iterate a sequence of tuples the compiler can read, or bind each item to a single name")
+}
+
+/// Build the error emitted when destructuring a Rust interop value whose shape the compiler cannot establish.
+///
+/// Distinct from [`tuple_unpack_expects_tuple_value`], which reports a type known *not* to be a tuple. Here the
+/// compiler simply cannot tell, and "not proven tuple-shaped" must refuse for the same reason a bare type variable
+/// does: assuming otherwise re-emits a tuple-field projection into a value that may have no such fields.
+pub fn tuple_unpack_rust_shape_unverified(names: usize, value_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot verify Rust value of type '{value_ty}' is tuple-shaped for destructuring {names} values"),
+        span,
+    )
+    .with_hint("Bind the value to a single name, or return it from Rust as a tuple the compiler can read")
+}
+
 pub fn tuple_unpack_count_mismatch(expected: usize, found: usize, span: Span) -> CompileError {
     CompileError::type_error(
         format!("Cannot unpack {} values from tuple with {} elements", expected, found),
