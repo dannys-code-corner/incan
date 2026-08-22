@@ -2,8 +2,9 @@
 //!
 //! Turns the #646 behavior inventory (`workspaces/docs-site/docs/contributing/reference/
 //! backend_behavior_inventory.md`) into a runnable corpus with stable case IDs and an explicit disposition per
-//! case, per #987's scope. See `tests/support/parity_corpus.rs` for the schema and
-//! `workspaces/docs-site/docs/contributing/reference/parity_corpus.md` for the consumer-facing shape doc (#655).
+//! case, per #987's scope. See `tests/support/parity_corpus.rs` for the schema; implementation status lives on
+//! issue #652, not in permanent contributor docs, since it describes an in-flight migration state rather than a
+//! durable 0.6 end-state contract.
 //!
 //! Run with: `cargo test --test parity_corpus_tests`
 //!
@@ -12,8 +13,8 @@
 //! Per #987's own plan step 3 ("add a narrow source-only seed corpus before public package or Rust-interop
 //! rows"), every seed case here uses a direct-parser/typechecker, generated-project-run, or codegen-snapshot
 //! lane. Package/import, Rust-interop, vocab, and downstream lanes are deferred until the required compiler/ABI
-//! decisions are available (plan step 4). The public parity-corpus reference and issue #987 record the expansion
-//! criteria; a seed case must never imply that an unavailable lane has been proven.
+//! decisions are available (plan step 4). Issue #987 records the expansion criteria; a seed case must never imply
+//! that an unavailable lane has been proven.
 //!
 //! Each case's `evaluate` function probes the *current* compiler directly (not a fixture snapshot of past output),
 //! so a behavior change shows up as [`parity_corpus::ComparisonOutcome::Mismatch`] the next time this test runs.
@@ -26,8 +27,7 @@ use std::path::PathBuf;
 mod parity_corpus;
 
 use parity_corpus::{
-    BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, ReceiptRef,
-    validate_corpus,
+    BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, validate_corpus,
 };
 
 // ============================================================================
@@ -73,8 +73,7 @@ fn outcome_from_typecheck(src: &str, expect: impl FnOnce(&[String]) -> bool, exp
 // Case 1 — Supported language contract: match exhaustiveness is enforced
 // ============================================================================
 
-fn case_supported_match_exhaustiveness() -> ComparisonOutcome {
-    let src = r#"
+const CASE_1_SRC: &str = r#"
 enum Color:
     Red
     Green
@@ -87,8 +86,10 @@ def name(c: Color) -> str:
         case Color.Green:
             return "green"
 "#;
+
+fn case_supported_match_exhaustiveness() -> ComparisonOutcome {
     outcome_from_typecheck(
-        src,
+        CASE_1_SRC,
         |errs| errs.iter().any(|e| e.to_lowercase().contains("exhaustive")),
         "a non-exhaustive-match diagnostic naming the missing `Blue` arm",
     )
@@ -98,12 +99,11 @@ def name(c: Color) -> str:
 // Case 2 — Diagnostic behavior: chained comparisons are rejected, not silently re-parsed
 // ============================================================================
 
-fn case_diagnostic_chained_comparison_rejected() -> ComparisonOutcome {
-    // Incan does not support Python-style chained comparisons (`a < b < c` as `a < b and b < c`). Verified by
-    // direct probe: today it type-errors because `(a < b) < c` compares a `bool` to an `int`. The corpus records
-    // that this stays a rejection, not a silent reinterpretation as chained boolean logic — a real semantic
-    // decision, not just token shape.
-    let src = r#"
+// Incan does not support Python-style chained comparisons (`a < b < c` as `a < b and b < c`). Verified by direct
+// probe: today it type-errors because `(a < b) < c` compares a `bool` to an `int`. The corpus records that this
+// stays a rejection, not a silent reinterpretation as chained boolean logic — a real semantic decision, not just
+// token shape.
+const CASE_2_SRC: &str = r#"
 def main() -> None:
     a = 1
     b = 2
@@ -111,8 +111,10 @@ def main() -> None:
     if a < b < c:
         println("chained")
 "#;
+
+fn case_diagnostic_chained_comparison_rejected() -> ComparisonOutcome {
     outcome_from_typecheck(
-        src,
+        CASE_2_SRC,
         |errs| !errs.is_empty(),
         "a type-mismatch diagnostic rejecting the chained comparison",
     )
@@ -121,6 +123,11 @@ def main() -> None:
 // ============================================================================
 // Case 3 — Stdlib/runtime behavior: string membership (`in`) matches the runtime helper
 // ============================================================================
+
+const CASE_3_SRC: &str = r#"
+def f() -> bool:
+    return "a" in "abc"
+"#;
 
 fn case_stdlib_runtime_string_membership() -> ComparisonOutcome {
     use incan_core::strings::str_contains;
@@ -131,12 +138,8 @@ fn case_stdlib_runtime_string_membership() -> ComparisonOutcome {
         };
     }
 
-    let src = r#"
-def f() -> bool:
-    return "a" in "abc"
-"#;
     outcome_from_typecheck(
-        src,
+        CASE_3_SRC,
         |errs| errs.is_empty(),
         "`\"a\" in \"abc\"` to typecheck as bool with no errors, matching the runtime membership helper",
     )
@@ -146,12 +149,13 @@ def f() -> bool:
 // Case 4 — Generated-artifact behavior: codegen stays inspectable, not semantically authoritative
 // ============================================================================
 
-fn case_generated_artifact_valid_rust_shape() -> ComparisonOutcome {
-    let src = r#"
+const CASE_4_SRC: &str = r#"
 def add(a: int, b: int) -> int:
     return a + b
 "#;
-    let Ok(tokens) = lexer::lex(src) else {
+
+fn case_generated_artifact_valid_rust_shape() -> ComparisonOutcome {
+    let Ok(tokens) = lexer::lex(CASE_4_SRC) else {
         return ComparisonOutcome::Incompatible {
             reason: "lexer failed on a fixture that must lex cleanly".to_string(),
         };
@@ -184,14 +188,12 @@ def add(a: int, b: int) -> int:
 // Case 5 — Accidental accepted behavior: shadowing a builtin name is accepted silently
 // ============================================================================
 
-fn case_accidental_shadowing_builtin_len() -> ComparisonOutcome {
-    // Verified by direct probe: a user-defined top-level `def len(...)` shadows the `len` builtin with no
-    // diagnostic, and the shadowed definition wins at the call site. There is no documented contract for builtin
-    // shadowing in the language reference. Per the #646 inventory's own migration guidance for this category
-    // ("either document and test it as supported or reject it with a clear diagnostic"), this is exactly the kind
-    // of gap #987 exists to surface, not resolve — the disposition below tracks that decision under the cutover
-    // umbrella issue pending the dedicated #1116 disposition decision.
-    let src = r#"
+// Verified by direct probe: a user-defined top-level `def len(...)` shadows the `len` builtin with no diagnostic,
+// and the shadowed definition wins at the call site. There is no documented contract for builtin shadowing in the
+// language reference. Per the #646 inventory's own migration guidance for this category ("either document and test
+// it as supported or reject it with a clear diagnostic"), this is exactly the kind of gap #987 exists to surface,
+// not resolve — the disposition below tracks that decision under #1116.
+const CASE_5_SRC: &str = r#"
 def len(x: int) -> int:
     return x + 1
 
@@ -199,8 +201,10 @@ def main() -> None:
     y = len(5)
     println(y)
 "#;
+
+fn case_accidental_shadowing_builtin_len() -> ComparisonOutcome {
     outcome_from_typecheck(
-        src,
+        CASE_5_SRC,
         |errs| errs.is_empty(),
         "shadowing the `len` builtin to keep typechecking silently (today's accidental-acceptance baseline)",
     )
@@ -210,19 +214,20 @@ def main() -> None:
 // Case 6 — Bug-compatible behavior: dead code after `return` is not flagged
 // ============================================================================
 
-fn case_bug_compatible_dead_code_after_return() -> ComparisonOutcome {
-    // Verified by direct probe: statements after an unconditional `return` typecheck with no diagnostic (Rust
-    // itself would warn `unreachable_code` in the generated function body). Tracked as bug-compatible rather than
-    // supported: current users may have dead code today, and this is not a behavior we want to freeze as an
-    // intentional language contract.
-    let src = r#"
+// Verified by direct probe: statements after an unconditional `return` typecheck with no diagnostic (Rust itself
+// would warn `unreachable_code` in the generated function body). Tracked as bug-compatible rather than supported:
+// current users may have dead code today, and this is not a behavior we want to freeze as an intentional language
+// contract.
+const CASE_6_SRC: &str = r#"
 def f() -> int:
     return 1
     println("dead code")
     return 2
 "#;
+
+fn case_bug_compatible_dead_code_after_return() -> ComparisonOutcome {
     outcome_from_typecheck(
-        src,
+        CASE_6_SRC,
         |errs| errs.is_empty(),
         "unreachable code after `return` to keep typechecking silently (today's bug-compatible baseline)",
     )
@@ -244,7 +249,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs::case_supported_match_exhaustiveness",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_1_SRC,
             evaluate: case_supported_match_exhaustiveness,
         },
         ParityCase {
@@ -254,7 +259,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs::case_diagnostic_chained_comparison_rejected",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_2_SRC,
             evaluate: case_diagnostic_chained_comparison_rejected,
         },
         ParityCase {
@@ -264,7 +269,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             lane: EvidenceLane::GeneratedProjectRun,
             evidence: "tests/parity_corpus_tests.rs::case_stdlib_runtime_string_membership",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_3_SRC,
             evaluate: case_stdlib_runtime_string_membership,
         },
         ParityCase {
@@ -274,7 +279,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             lane: EvidenceLane::CodegenSnapshot,
             evidence: "tests/parity_corpus_tests.rs::case_generated_artifact_valid_rust_shape",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_4_SRC,
             evaluate: case_generated_artifact_valid_rust_shape,
         },
         ParityCase {
@@ -292,7 +297,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                                   backend silently inherit whichever behavior falls out of its symbol resolution \
                                   order.",
             },
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_5_SRC,
             evaluate: case_accidental_shadowing_builtin_len,
         },
         ParityCase {
@@ -309,7 +314,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                                   function body) rather than carrying the silent gap into the replacement \
                                   backend.",
             },
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            source: CASE_6_SRC,
             evaluate: case_bug_compatible_dead_code_after_return,
         },
     ]
@@ -330,7 +335,9 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
+            source: "",
             evaluate: || ComparisonOutcome::Match,
         },
         ParityCase {
@@ -340,7 +347,9 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
+            source: "",
             evaluate: || ComparisonOutcome::Match,
         },
         ParityCase {
@@ -350,7 +359,9 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
+            source: "",
             evaluate: || ComparisonOutcome::Match,
         },
         ParityCase {
@@ -363,7 +374,9 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
                 owning_issue: 0,
                 migration_note: "",
             },
-            receipt: ReceiptRef::PendingSchema { blocking_issue: 986 },
+            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
+            source: "",
             evaluate: || ComparisonOutcome::Match,
         },
     ]
@@ -448,14 +461,16 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 }
 
 #[test]
-fn no_case_is_silently_reported_as_fully_green_while_the_986_receipt_schema_is_pending() {
-    // This is the corpus's core promise: an unavailable receipt-aware comparison must never be counted as
-    // parity. As long as #986 has not landed a receipt type, every case — even a behaviorally-confirmed one —
-    // must land in `NonGreenPendingReceipt`, never `Green`.
+fn no_case_reaches_green_while_the_replacement_backend_is_unimplemented() {
+    // This is the corpus's core promise: an unavailable comparison must never be counted as parity. #986 has
+    // landed, so every case now consults a real receipt (`receipt_schema_available` is `true`) — but the
+    // replacement backend itself is not implemented yet (#653), so every case's shadow comparison against it is
+    // genuinely unavailable. Every case — even a behaviorally-confirmed one — must land in
+    // `NonGreenShadowUnavailable`, never `Green`.
     let summary = parity_corpus::summarize(&seed_corpus());
     assert!(
-        !summary.receipt_schema_available,
-        "the summary must say the #986 receipt schema is unavailable until that slice actually lands"
+        summary.receipt_schema_available,
+        "the summary must say the #986 receipt schema is available now that PR #1120 landed it"
     );
     let falsely_green: Vec<&parity_corpus::CaseReport> = summary
         .cases
@@ -464,12 +479,12 @@ fn no_case_is_silently_reported_as_fully_green_while_the_986_receipt_schema_is_p
         .collect();
     assert!(
         falsely_green.is_empty(),
-        "no case should reach OverallState::Green before #986's receipt schema lands: {falsely_green:#?}"
+        "no case should reach OverallState::Green before #653 lands the replacement backend: {falsely_green:#?}"
     );
     assert_eq!(summary.green, 0);
     assert_eq!(
-        summary.non_green_pending_receipt, summary.total_cases,
-        "every behaviorally-confirmed seed case must be pending-receipt, not green, today"
+        summary.non_green_shadow_unavailable, summary.total_cases,
+        "every behaviorally-confirmed seed case must report shadow-unavailable, not green, today"
     );
     assert_eq!(summary.non_green_behavior, 0);
 }
@@ -500,7 +515,7 @@ fn ci_summary_serializes_with_the_fields_655_needs_and_is_written_to_a_stable_pa
         "schema_version",
         "total_cases",
         "green",
-        "non_green_pending_receipt",
+        "non_green_shadow_unavailable",
         "non_green_behavior",
         "receipt_schema_available",
         "cases",

@@ -16,14 +16,22 @@
 //!   states so that unavailable, skipped, or incompatible comparisons are visible in the emitted summary rather than
 //!   silently counted as parity.
 //!
-//! ## Receipt-awareness (coordination with #986)
+//! ## Receipt-awareness (#986, landed via PR #1120)
 //!
 //! #987's own scope calls for "receipt-aware reference/replacement or shadow comparisons where both paths are
-//! available." The backend-selection receipt contract (#986) has not landed in `0.6-dev` yet.
-//! [`ReceiptRef::PendingSchema`] is a documented placeholder for that dependency: every seed case in
-//! `tests/parity_corpus_tests.rs` currently carries it, and the summary's `receipt_schema_available` field is `false`
-//! so downstream consumers (including #655) can see this is an open item rather than an implemented comparison.
+//! available." #986 landed [`incan::backend::selection`], so [`compute_receipt`] declares a real
+//! [`BackendSelection`], resolves it, and finalizes a real [`BackendExecutionReceipt`] for every case's source —
+//! the same three-call sequence `src/cli/commands/build.rs` uses for an actual build. The replacement backend
+//! itself is not implemented yet (#653), so every case's shadow comparison against it is genuinely
+//! [`ShadowComparisonState::Unavailable`], not a guessed placeholder: [`ReceiptRef::ShadowUnavailable`] carries the
+//! real receipt's content identity, and the summary's `receipt_schema_available` field is `true` because the
+//! comparison the corpus attempted was real, even though its result is not yet green.
 
+use incan::backend::selection::{
+    BackendExecutionReceipt, BackendKind, BackendSelection, BackendSelectionError, FallbackPolicy,
+    ShadowComparisonState, digest_output, finalize_receipt, resolve_execution, select_backend,
+};
+use incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
 use std::collections::BTreeSet;
 
 // ============================================================================
@@ -127,33 +135,110 @@ impl Disposition {
     }
 }
 
-/// A placeholder reference to the #986 backend-selection receipt shape.
+/// The result of actually consulting the #986 backend-selection receipt for one case's source.
 ///
-/// #986 (`backend-selection-receipt`) has not landed a stable repository receipt contract in `0.6-dev`. The corpus
-/// cannot depend on a pre-merge API without risking drift, so the schema and source-only seed proceed without it;
-/// every case carries an explicit placeholder rather than a guessed or silently omitted receipt field.
-///
-/// This is a genuine external dependency, not a TODO this slice can close on its own. It is **intentionally
-/// deferred**, not partially implemented: no case in `tests/parity_corpus_tests.rs` performs a real
-/// reference/replacement or shadow comparison against a live receipt today.
+/// Every variant carries the real [`BackendExecutionReceipt::identity`] this case produced — never a guessed or
+/// presence-checked value — so a consumer can independently re-verify which receipt a case's `overall_state` is
+/// derived from.
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub(crate) enum ReceiptRef {
-    /// #986's receipt type is not yet available. `blocking_issue` names the issue that owns landing it; the case
-    /// cannot perform a receipt-aware reference/replacement comparison yet and must not be scored as green for
-    /// that axis. See [`OverallState::NonGreenPendingReceipt`], which every case with this receipt state and a
-    /// matching `behavior_outcome` lands on instead of [`OverallState::Green`].
-    ///
-    /// What unblocks this: once #986 lands a stable receipt type, add a new `ReceiptRef`
-    /// variant (for example `Recorded(SelectionReceiptSummary)`) that wraps it, keep `PendingSchema` for any case
-    /// that still predates receipt wiring, and update [`evaluate_case`] to treat the new variant as
-    /// `receipt_available: true` after actually performing a reference/replacement comparison against it (not
-    /// just presence-checking the type). At least one seed case in `tests/parity_corpus_tests.rs` should then be
-    /// migrated off `PendingSchema` to exercise the newly reachable [`OverallState::Green`] path, which is
-    /// currently provably unreachable — see the
-    /// `no_case_is_silently_reported_as_fully_green_while_the_986_receipt_schema_is_pending` test in
-    /// `tests/parity_corpus_tests.rs`.
-    PendingSchema { blocking_issue: u32 },
+    /// A real receipt was produced, but its shadow comparison against the replacement backend is unavailable
+    /// because the replacement backend itself is not implemented yet (#653). This is the only reachable variant
+    /// today: every seed case lands here, honestly, until #653 gives the replacement backend something to compare
+    /// against. See [`OverallState::NonGreenShadowUnavailable`].
+    ShadowUnavailable { receipt_identity: String, reason: String },
+    /// A real receipt's shadow comparison against the replacement backend matched. Not reachable until #653 lands
+    /// the replacement backend; kept so the schema does not need another shape change when it does.
+    #[allow(dead_code)]
+    ShadowMatched { receipt_identity: String },
+    /// A real receipt's shadow comparison against the replacement backend diverged — a genuine regression signal
+    /// on the backend-selection axis itself, not a schema gap. Not reachable until #653 lands.
+    #[allow(dead_code)]
+    ShadowDiverged { receipt_identity: String, detail: String },
+    /// The backend-selection API itself returned an error while declaring or resolving a selection for this
+    /// case's source. Defensive: with today's fixed `(Legacy, FallbackPolicy::Refuse)` inputs this cannot actually
+    /// happen, but the corpus must not silently treat an API error as an available, green-eligible receipt.
+    #[allow(dead_code)]
+    SelectionError { detail: String },
+}
+
+/// Declare, resolve, and finalize a real #986 backend-selection receipt for `source`, and fold the outcome into a
+/// [`ReceiptRef`].
+///
+/// Mirrors the exact `select_backend` -> `resolve_execution` -> `finalize_receipt` sequence
+/// `src/cli/commands/build.rs`'s `select_and_resolve_backend`/`finalize_backend_receipt` helpers use for a real
+/// build, including requesting a shadow comparison and using the same "replacement backend not implemented yet
+/// (#653)" reason `build.rs` records — so this corpus exercises the real #986 contract rather than a parallel,
+/// possibly-drifting reimplementation of it.
+pub(crate) fn compute_receipt(source: &str) -> ReceiptRef {
+    let source_identity = digest_output(&[source]);
+    let selection = select_backend(
+        BackendKind::Legacy,
+        false,
+        true,
+        source_identity,
+        FallbackPolicy::Refuse,
+    );
+    let executed = match resolve_execution(&selection, BackendKind::Legacy.is_implemented()) {
+        Ok(backend) => backend,
+        Err(error) => return receipt_ref_from_error(&error),
+    };
+    let shadow_comparison = shadow_comparison_for(&selection);
+    let output_identity = digest_output(&[source]);
+    let receipt: Result<BackendExecutionReceipt, BackendSelectionError> = finalize_receipt(
+        &selection,
+        executed,
+        output_identity,
+        shadow_comparison,
+        DIAGNOSTIC_SCHEMA_VERSION,
+    );
+    match receipt {
+        Ok(receipt) => receipt_ref_from_receipt(receipt),
+        Err(error) => receipt_ref_from_error(&error),
+    }
+}
+
+/// Decide the shadow-comparison state for a selection, matching `build.rs`'s own `backend_shadow_comparison`
+/// helper exactly (same condition, same reason string) so the two do not drift into disagreeing explanations for
+/// the same unavailability.
+fn shadow_comparison_for(selection: &BackendSelection) -> ShadowComparisonState {
+    if selection.shadow_requested {
+        ShadowComparisonState::Unavailable {
+            reason: "replacement backend not implemented yet (#653)".to_string(),
+        }
+    } else {
+        ShadowComparisonState::NotRequested
+    }
+}
+
+/// Fold a finalized receipt's shadow-comparison outcome into the [`ReceiptRef`] a [`CaseReport`] carries.
+fn receipt_ref_from_receipt(receipt: BackendExecutionReceipt) -> ReceiptRef {
+    match receipt.shadow_comparison {
+        ShadowComparisonState::Matched => ReceiptRef::ShadowMatched {
+            receipt_identity: receipt.identity,
+        },
+        ShadowComparisonState::Diverged { detail } => ReceiptRef::ShadowDiverged {
+            receipt_identity: receipt.identity,
+            detail,
+        },
+        ShadowComparisonState::Unavailable { reason } => ReceiptRef::ShadowUnavailable {
+            receipt_identity: receipt.identity,
+            reason,
+        },
+        ShadowComparisonState::NotRequested => ReceiptRef::ShadowUnavailable {
+            receipt_identity: receipt.identity,
+            reason: "no shadow comparison was requested for this case".to_string(),
+        },
+    }
+}
+
+/// Fold a backend-selection API error into a [`ReceiptRef`] rather than panicking or silently treating it as
+/// available.
+fn receipt_ref_from_error(error: &BackendSelectionError) -> ReceiptRef {
+    ReceiptRef::SelectionError {
+        detail: error.to_string(),
+    }
 }
 
 /// The outcome of actually running a case's [`ParityCase::evaluate`] function.
@@ -206,7 +291,9 @@ pub(crate) struct ParityCase {
     /// Repo-relative pointer to the primary evidence for this case (fixture path, test name, or doc anchor).
     pub(crate) evidence: &'static str,
     pub(crate) disposition: Disposition,
-    pub(crate) receipt: ReceiptRef,
+    /// The case's own Incan source, used to derive a real #986 backend-selection receipt via [`compute_receipt`].
+    /// Red-state fixtures that never reach [`evaluate_case`] may use a trivial placeholder since it is unused.
+    pub(crate) source: &'static str,
     /// Executes the actual comparison and returns its outcome. Must not panic on an expected-non-green result —
     /// return [`ComparisonOutcome::Mismatch`]/`Skipped`/`Incompatible` instead so the corpus test can assert on
     /// the report rather than on a panicking case function.
@@ -317,35 +404,39 @@ pub(crate) struct CaseReport {
 /// The final, honest per-case state a CI consumer or #655 should read.
 ///
 /// There is deliberately no plain `Green` reachable today: reaching it requires both a [`ComparisonOutcome::Match`]
-/// behavior outcome *and* an available receipt-aware comparison, and #986's receipt schema has not landed yet. This
-/// keeps the summary from ever silently claiming full backend-cutover parity before that dependency exists.
+/// behavior outcome *and* a matched shadow comparison against the replacement backend, and the replacement backend
+/// itself is not implemented yet (#653). This keeps the summary from ever silently claiming full backend-cutover
+/// parity before that dependency exists — even though #986's receipt contract has landed and every case now
+/// consults a real receipt.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OverallState {
-    /// Behavior matched and a receipt-aware reference/replacement comparison also confirmed it. Not reachable
-    /// until #986 lands — kept as a variant so the summary schema does not need to change when it does.
+    /// Behavior matched and a real shadow comparison against the replacement backend also matched. Not reachable
+    /// until #653 lands the replacement backend — kept as a variant so the summary schema does not need to change
+    /// when it does.
     Green,
-    /// Behavior matched, but receipt-aware comparison is unavailable (today: always this, for a `Match` case).
-    NonGreenPendingReceipt,
+    /// Behavior matched and a real receipt was produced, but its shadow comparison against the replacement
+    /// backend is unavailable (today: always this, for a `Match` case) because the replacement backend is not
+    /// implemented yet (#653).
+    NonGreenShadowUnavailable,
     /// The case's own behavior evaluation did not match (mismatch, skip, or incompatible) — a real signal.
     NonGreenBehavior,
 }
 
-/// Evaluate one case and fold its behavior outcome and receipt availability into a [`CaseReport`].
+/// Evaluate one case: run its behavior probe, consult a real #986 receipt for its source, and fold both into a
+/// [`CaseReport`].
 pub(crate) fn evaluate_case(case: &ParityCase) -> CaseReport {
     let behavior_outcome = (case.evaluate)();
-    // `receipt_available` is its own match (rather than folded into one match on `(outcome, receipt)`) so that
-    // adding a future non-placeholder `ReceiptRef` variant only requires updating this one arm, instead of
-    // producing an unreachable-pattern warning against today's single-variant enum.
-    let receipt_available = match &case.receipt {
-        ReceiptRef::PendingSchema { .. } => false,
-    };
+    let receipt = compute_receipt(case.source);
+    // `shadow_matched` is its own match (rather than folded into one match on `(outcome, receipt)`) so that adding
+    // a future reachable `ReceiptRef` variant only requires updating this one arm.
+    let shadow_matched = matches!(receipt, ReceiptRef::ShadowMatched { .. });
     let overall_state = if !behavior_outcome.is_green() {
         OverallState::NonGreenBehavior
-    } else if receipt_available {
+    } else if shadow_matched {
         OverallState::Green
     } else {
-        OverallState::NonGreenPendingReceipt
+        OverallState::NonGreenShadowUnavailable
     };
     CaseReport {
         id: case.id,
@@ -355,7 +446,7 @@ pub(crate) fn evaluate_case(case: &ParityCase) -> CaseReport {
         evidence: case.evidence,
         disposition_kind: case.disposition.kind(),
         behavior_outcome,
-        receipt: case.receipt.clone(),
+        receipt,
         overall_state,
     }
 }
@@ -369,15 +460,18 @@ pub(crate) struct CorpusSummary {
     pub(crate) schema_version: u32,
     pub(crate) total_cases: usize,
     pub(crate) green: usize,
-    pub(crate) non_green_pending_receipt: usize,
+    pub(crate) non_green_shadow_unavailable: usize,
     pub(crate) non_green_behavior: usize,
     pub(crate) receipt_schema_available: bool,
     pub(crate) cases: Vec<CaseReport>,
 }
 
-/// The current CI-summary schema version. Bump this whenever `CorpusSummary`'s or `CaseReport`'s field shape
-/// changes in a way a consumer (including #655) would need to notice.
-pub(crate) const SCHEMA_VERSION: u32 = 1;
+/// The current CI-summary schema version. Bumped to `2`: `#986` landed, so every case now consults a real receipt
+/// instead of a placeholder, `non_green_pending_receipt` was renamed to `non_green_shadow_unavailable` to describe
+/// what is actually unavailable (the replacement backend, not the receipt schema), and `receipt_schema_available`
+/// now reflects reality (`true`) instead of always being `false`. Bump again whenever `CorpusSummary`'s or
+/// `CaseReport`'s field shape changes in a way a consumer (including #655) would need to notice.
+pub(crate) const SCHEMA_VERSION: u32 = 2;
 
 /// Evaluate every case in the corpus and assemble the CI-readable summary.
 ///
@@ -390,9 +484,9 @@ pub(crate) fn summarize(cases: &[ParityCase]) -> CorpusSummary {
         .iter()
         .filter(|r| r.overall_state == OverallState::Green)
         .count();
-    let non_green_pending_receipt = reports
+    let non_green_shadow_unavailable = reports
         .iter()
-        .filter(|r| r.overall_state == OverallState::NonGreenPendingReceipt)
+        .filter(|r| r.overall_state == OverallState::NonGreenShadowUnavailable)
         .count();
     let non_green_behavior = reports
         .iter()
@@ -402,9 +496,12 @@ pub(crate) fn summarize(cases: &[ParityCase]) -> CorpusSummary {
         schema_version: SCHEMA_VERSION,
         total_cases: reports.len(),
         green,
-        non_green_pending_receipt,
+        non_green_shadow_unavailable,
         non_green_behavior,
-        receipt_schema_available: false,
+        // #986 landed: every case above consulted a real `BackendExecutionReceipt`, not a placeholder. This is
+        // `true` regardless of how many cases reach `Green`, because it reports whether the receipt contract
+        // itself is available, not whether every comparison succeeded.
+        receipt_schema_available: true,
         cases: reports,
     }
 }
