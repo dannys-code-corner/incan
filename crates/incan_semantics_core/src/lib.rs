@@ -35,7 +35,7 @@ pub use facts::{
 pub use hir::{HirDeclaration, HirDeclarationKind, HirModule, HirSourceSpan, SemanticModuleSnapshot};
 pub use types::{
     AbiV0Ownership, AbiV0Representation, AbiV0ReservedFacts, AbiV0RuntimeRequirement, AbiV0TypeFacts,
-    AbiV0TypeIdentity, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType,
+    AbiV0TypeIdentity, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, rust_tuple_arity,
 };
 
 /// Stable feature key used by parser handoff and semantics dispatch.

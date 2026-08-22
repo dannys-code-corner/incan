@@ -365,6 +365,31 @@ fn replacement_body_v0_006_expected() -> ReplacementValue {
 }
 
 // ============================================================================
+// Case 7 — Diagnostic behavior: statement tuple unpack of a non-tuple (migrated from a silent accept)
+// ============================================================================
+
+// Entered the corpus as a silent accept: `a, b = 5` typechecked clean, bound both names `Unknown`, and only
+// failed while compiling the emitted Rust with an `E0610` naming a `__incan_tuple_unpack_*` binding the user never
+// wrote. #1132 migrated it to a source-language decision. Asserted through the message rather than a stable code
+// because this family reports under the broad `INCAN-T0001` typecheck code.
+const CASE_7_SRC: &str = r#"
+def main() -> None:
+    a, b = 5
+    println(f"{a} {b}")
+"#;
+
+fn case_diagnostic_statement_tuple_unpack_of_non_tuple() -> ComparisonOutcome {
+    outcome_from_typecheck(
+        CASE_7_SRC,
+        |errs| {
+            errs.iter()
+                .any(|error| error.contains("Cannot destructure 2 values from value of type 'int'"))
+        },
+        "a typechecker diagnostic naming the non-tuple value type",
+    )
+}
+
+// ============================================================================
 // Seed corpus
 // ============================================================================
 
@@ -447,6 +472,30 @@ fn seed_corpus() -> Vec<ParityCase> {
             },
             source: CASE_6_SRC,
             evaluate: Some(case_diagnostic_unreachable_code_after_return),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0007",
+            title: "Statement tuple unpack of a non-tuple value is a typechecker error",
+            category: BehaviorCategory::DiagnosticBehavior,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "tests/parity_corpus_tests.rs::case_diagnostic_statement_tuple_unpack_of_non_tuple",
+            disposition: Disposition::IntentionalMigration {
+                owning_issue: 1132,
+                migration_note: "Migrated by #1132 before 0.6 cutover: `a, b = <non-tuple>` and the `TupleAssign` \
+                                  spelling now raise a source-span typechecker error naming the resolved value \
+                                  type, instead of binding every name `Unknown` and failing later in generated \
+                                  Rust. Migration guidance for the replacement backend: the contract is the \
+                                  frontend diagnostic, so a replacement backend must not be relied on to \
+                                  reproduce it, and must never emit a tuple-field projection into a value with no \
+                                  such fields. A value is destructurable only when its shape is actually known: \
+                                  inferred tuples, annotated `tuple[A, B]`, and Rust-interop paths whose tuple \
+                                  spelling the compiler can read. `Unknown` and `Never` stay silent as recovery \
+                                  states; a bare type variable and an opaque Rust path are both refused, because \
+                                  \"not proven tuple-shaped\" must not be treated as destructurable.",
+            },
+            source: CASE_7_SRC,
+            evaluate: Some(case_diagnostic_statement_tuple_unpack_of_non_tuple),
             replacement_execution: None,
         },
         ParityCase {

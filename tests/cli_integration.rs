@@ -11863,3 +11863,63 @@ def main() -> None:
 
     Ok(())
 }
+
+/// Statement tuple-unpack of a non-tuple must fail at the source language, not in generated Rust (#1132).
+///
+/// The regression is specifically about *where* the failure surfaces. Before this, `incan check` passed and the
+/// program only failed while compiling emitted Rust, with `error[E0610]` pointing at a `__incan_tuple_unpack_*`
+/// binding the user never wrote. Asserting the absence of both strings is the point: a diagnostic that merely
+/// exists is not enough if the raw Rust error can still reach the user.
+#[test]
+fn check_rejects_statement_tuple_unpack_of_non_tuple_without_leaking_generated_rust()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("unpack.incn");
+    fs::write(
+        &path,
+        r#"def main() -> None:
+    a, b = 5
+    println(f"{a} {b}")
+"#,
+    )?;
+
+    let arg = path.to_str().ok_or("path was not valid UTF-8")?;
+    let output = run_incan(tmp.path(), &["check", arg, "--format", "json"])?;
+    assert_failure(&output, "destructuring an `int` must fail `incan check`");
+    let report = parse_json_stdout(&output)?;
+
+    assert_eq!(report["ok"], serde_json::json!(false));
+    let diagnostics = report["diagnostics"]
+        .as_array()
+        .ok_or("check report had no diagnostics array")?;
+    let first = diagnostics.first().ok_or("expected at least one diagnostic")?;
+    assert_eq!(first["severity"], serde_json::json!("error"));
+    assert_eq!(first["phase"], serde_json::json!("typecheck"));
+    assert!(
+        first["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("Cannot destructure 2 values from value of type 'int'")),
+        "the diagnostic must name the resolved value type: {first}"
+    );
+    assert_eq!(
+        first["primary_span"]["start"]["line"],
+        serde_json::json!(2),
+        "the span must point at the offending statement, not the file: {first}"
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !combined.contains("E0610"),
+        "a raw rustc field-projection error must never reach the user:\n{combined}"
+    );
+    assert!(
+        !combined.contains("__incan_tuple_unpack"),
+        "a compiler-internal binding name must never reach the user:\n{combined}"
+    );
+
+    Ok(())
+}
