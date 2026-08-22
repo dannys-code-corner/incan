@@ -8,8 +8,12 @@
     - RFC 025 (multi-instantiation trait dispatch)
     - RFC 083 (symbol and method aliases)
     - #546 (`pub`/`rust`/`std` namespace-root import syntax)
+    - #652 / #987 (v0.6 backend cutover and its parity corpus)
     - #699 (v0.4 symbol-identity pass)
     - #1072 (plain-assignment scope-lookup bug)
+    - #1116 (builtin-function shadowing contract)
+    - #1125 (destructuring `for` patterns in Body IR)
+    - #1132 (statement-level tuple unpack of a non-tuple value)
 - **Issue:** [#1042](https://github.com/encero-systems/incan/issues/1042)
 - **RFC PR:** —
 - **Written against:** v0.5
@@ -25,7 +29,9 @@ The direct-HIR v0.6 backend cutover removes generated Rust as the normal semanti
 
 Today that model is incomplete. The earlier v0.4 symbol-identity pass intentionally excluded new namespace features — it settled identity for what existed then, not for how imports, aliases, re-exports, generic binders, and members should all resolve onto one shared identity space. Without that, it is possible for two compiler stages to reasonably disagree about whether two references mean the same thing, which is exactly the class of defect this RFC exists to close off before the backend cutover makes generated Rust an unavailable fallback.
 
-This RFC deliberately does not introduce new binding syntax. `let name = value` already exists in Incan (see `scopes_and_name_resolution.md`) as the explicit form for intentionally shadowing an outer binding; plain assignment already documents that it should reassign the nearest active binding rather than create a new one. A real gap between that documented contract and the current implementation exists — plain assignment inside a nested block currently creates an undiagnosed shadow instead of reassigning the outer binding — but that gap is a bug against an already-decided contract, not a new design question, and is tracked separately (see Related). This RFC assumes that bug gets fixed to match the documented contract, and builds canonical identity on top of the binding model as already specified.
+This RFC deliberately does not introduce new binding syntax. `let name = value` and `mut name = value` already exist in Incan (see `scopes_and_name_resolution.md`) as the explicit forms for introducing a new binding in the current scope, including one that deliberately shadows an outer binding; plain assignment already documents that it should reassign the nearest active binding rather than create a new one.
+
+Two gaps between that documented contract and the current implementation exist, and both are bugs against an already-decided contract rather than new design questions. Plain assignment inside a nested block creates an undiagnosed shadow instead of reassigning the outer binding (see Related). And the typechecker does not read the binding form at all: assignment checking inspects `BindingKind` only to decide mutability, so `let x = ...` and plain `x = ...` are checked identically, and `let`'s shadowing semantics are realized solely by the `let` in the emitted Rust. That second gap is the sharpest available statement of why this RFC comes before the cutover: a documented source-level binding contract currently has no frontend representation at all, and would simply disappear the moment generated Rust stops being the semantic handoff. This RFC assumes both gaps get fixed to match the documented contract, and builds canonical identity on top of the binding model as already specified.
 
 ## Guide-level explanation
 
@@ -75,15 +81,48 @@ A generic binder (a type parameter) has its own canonical identity, scoped to th
 
 A member (a field or method reached via `.`) resolves to the canonical identity of its declaration on the owning type, not to a fresh identity per access site.
 
+### Namespace table
+
+Incan has three namespaces, distinguished by *how* a name is looked up rather than by what kind of thing it names. This is deliberately not the type/value split rejected under Alternatives: a model name and a function name share one namespace here, exactly as ordinary Python-like lexical lookup expects.
+
+| Namespace | Binds | Lookup | Scope unit |
+| --- | --- | --- | --- |
+| **Ordinary lexical** | module-level declarations (function, model, class, trait, enum, newtype, `rusttype`, type alias, `const`, `static`, partial); imports, aliases, and re-exports; bare enum variant names; generic binders; parameters and receivers (`self`, `cls`); locals introduced by `let`, `mut`, or a first plain assignment; `for` variables; `with ... as`; `except ... as` | innermost scope outward through the scope chain, then the builtin fallback tier | module, function/method, closure, block, comprehension — and, for a generic binder, the declaration that introduces it |
+| **Members** | fields, methods, computed properties, method aliases, and qualified enum variants | `.`-directed from a resolved owner type; never through the scope chain | the owning nominal type, including its inherited surface |
+| **Module and package paths** | project module paths, the `std` root, `rust::` crate roots and item paths, and `pub::` library roots | path-directed from a namespace root | the compilation's module and package graph |
+
+Beneath the ordinary lexical namespace sits one **builtin fallback tier**: core builtin functions such as `len`, `sum`, and `zip`, plus builtin type spellings and their registry aliases. It is consulted only after the whole scope chain misses, so a real lexical binding — declared or imported — wins over the ambient builtin. That is settled behavior with a documented contract and tests (see Related). Rebinding a builtin-function spelling is therefore **not** a collision, and the shared mechanism below must not begin reporting one; `std.builtins.<name>` remains the explicit way to reach the core builtin from a scope that has rebound the spelling.
+
+Namespaces do not shadow one another. A field named `items` never shadows a local named `items`, and a module path segment never shadows either. Generic binders are ordinary lexical bindings with a declaration-bounded scope rather than a fourth namespace: what makes a binder distinct is its identity kind and the scope it is bounded to, not a separate lookup rule. Today they are registered as builtin-kinded type symbols, which is why a binder and a concrete type are currently indistinguishable to anything downstream.
+
 ### One shared namespace/binding-resolution mechanism
 
-Today, collision and ambiguity detection for named things is scattered: `duplicate_library_export`, `duplicate_rust_module`, `duplicate_trait_instantiation`, `duplicate_alias`, `pub_library_import_name_collision`, and `pub_library_module_member_ambiguous` each independently implement their own narrow check for their own construct, in different files (`types.rs`, `modules.rs`, `check_stmt.rs`, `check_decl.rs`). That fragmentation is itself a source of the defects this RFC exists to close: two constructs can reasonably disagree about whether a collision is a collision, because each is running its own logic instead of consulting one shared answer.
+Today, collision and ambiguity detection for named things is scattered: `duplicate_library_export`, `duplicate_rust_module`, `duplicate_trait_instantiation`, `duplicate_alias`, `pub_library_import_name_collision`, and `pub_library_module_member_ambiguous` each independently implement their own narrow check for their own construct. They are scattered across compiler layers, not merely across files: the library-export check is decided in the build command, the duplicate-`rust`-module check is raised in the parser, and the rest are spread through declaration checking, import collection, and expression checking. That fragmentation is itself a source of the defects this RFC exists to close: two constructs can reasonably disagree about whether a collision is a collision, because each runs its own logic instead of consulting one shared answer — and a check living in the CLI cannot agree with one living in the frontend by construction.
 
-This RFC requires one shared namespace/binding-resolution mechanism that every binding kind — local declarations, imports, aliases, re-exports, library exports, trait instantiations, generic binders, and members — registers into and is checked against. Collision and ambiguity detection is a property of that one mechanism, not something each construct's typechecker code independently decides. A specific diagnostic's wording may still vary by construct for a good user-facing message (an ambiguous `pub::` import and an ambiguous generic instantiation don't need identical phrasing), but the underlying question — "does this binding collide with, or ambiguously resolve against, an already-active binding for this spelling in this namespace" — is answered once, by one mechanism, for every construct.
+This RFC requires one shared namespace/binding-resolution mechanism that every binding kind — local declarations, imports, aliases, re-exports, library exports, trait instantiations, generic binders, and members — registers into and is checked against. One check is deliberately exempt: the duplicate-`rust`-module check runs in the parser, before any resolver exists to consult, and keeps its own narrow implementation (see Design decisions). Collision and ambiguity detection is a property of that one mechanism, not something each construct's typechecker code independently decides. A specific diagnostic's wording may still vary by construct for a good user-facing message (an ambiguous `pub::` import and an ambiguous generic instantiation don't need identical phrasing), but the underlying question — "does this binding collide with, or ambiguously resolve against, an already-active binding for this spelling in this namespace" — is answered once, by one mechanism, for every construct.
 
 ### Namespace rule
 
-At every program point, one spelling resolves to at most one active binding in a given ordinary lexical namespace. This RFC does not redefine how a binding becomes active — that is the existing `let`/plain-assignment/import contract in `scopes_and_name_resolution.md`, once the known scope-lookup bug against that contract is fixed (see Related). This RFC defines what a binding carries once it is resolved (its canonical identity) and requires that "is this binding active, and does it collide with another" be answered by the one shared mechanism above, not reimplemented per construct.
+At every program point, one spelling resolves to at most one active binding in a given ordinary lexical namespace. This RFC does not redefine how a binding becomes active — that is the existing `let` / `mut` / plain-assignment / import contract in `scopes_and_name_resolution.md`, once the known scope-lookup bug against that contract is fixed (see Related). This RFC defines what a binding carries once it is resolved (its canonical identity) and requires that "is this binding active, and does it collide with another" be answered by the one shared mechanism above, not reimplemented per construct.
+
+### Canonical identity payload
+
+A canonical identity is a compiler-owned value, not a rendered string. It carries exactly the data a downstream stage needs to answer "do these two references mean the same thing" without comparing spellings.
+
+| Field | Purpose | Notes |
+| --- | --- | --- |
+| `namespace` | Which of the three namespaces above the binding lives in | Keeps a member and a local that share one spelling from ever comparing equal |
+| `origin` | The module, package, `rust::` crate, or builtin registry owning the declaration | An import, alias, or re-export carries its target's `origin`, never the importing module's |
+| `declaration_name` | The spelling at the **declaration** site | Never the spelling at the reference site, so `run`, `h`, and `helper` in the guide-level example all carry `helper` |
+| `kind` | Declaration category: function, model, class, newtype, `rusttype`, enum, variant, trait, field, method, property, `const`, `static`, local, parameter, receiver, generic binder, module, Rust item, builtin | Today's recorded target kinds cover functions and four type kinds; every other kind resolves to nothing |
+| `scope_discriminant` | Distinguishes bindings that are not unique within their `origin` | Required for locals, parameters, receivers, generic binders, and any block-scoped binding; module-level declarations are already unique within their origin |
+| `declaration_span` | Provenance anchor | One span, at the one declaration site |
+
+Two properties are load-bearing. Identity equality must be decidable without string comparison of source spellings or emitted names. And identity must be stable across the stages of **one** compilation; it is not required to be stable across edits to the source, because `declaration_span` moves when the file changes.
+
+The `scope_discriminant` is the piece today's model is missing most concretely. A local's identity is currently built from module path plus spelling, so two `x` bindings in sibling blocks of one module collapse to the same identity — while a declaration's identity is built from the *referencing* module plus spelling, so an alias splits away from the declaration it names. Those are the two halves of one defect: identities that should differ collapse, and identities that should coincide split.
+
+Emitted names are projections in the direction identity → name, never the reverse. The compiler already has a working precedent in overload emission, where a source binding plus its signature derives a deterministic suffixed Rust name and no stage recovers the binding by parsing that name back. Every backend projection should keep that shape.
 
 ### Propagation through the pipeline
 
@@ -95,17 +134,39 @@ A resolved reference's canonical identity must be preserved, not recomputed from
 - **Oven inspection / codegraph export** — an edge or fact referencing a symbol identifies it by canonical identity, so tooling can determine that two differently-spelled references mean the same thing without string comparison.
 - **Backend emission** — the emitted Rust name for a canonical identity is a projection for that backend; it must not become a second identity another stage compares against.
 
+Every one of those stages recomputes from spelling today, which is what makes this a sequence of real slices rather than a threading exercise. Declaration-level HIR derives its ids from module path plus name, and gives an import declaration no name at all. Body IR resolves identifiers through a flat name-to-local map and synthesizes an opaque external local, with unknown ownership, for any name it cannot find — so a name the resolver resolved perfectly can still arrive at lowering unresolved. The LSP answers "go to definition" with a first-match scan over the current module's declarations, consulting no typechecker output, and therefore cannot follow an import at all. Codegraph keys its records on a `(module path, name, kind)` string triple and silently drops an edge whose triple is unregistered.
+
 ### Diagnostics
 
-A duplicate declaration or import that would introduce a second active binding for the same spelling in the same namespace at the same program point, without going through the explicit `let` shadowing form, is a diagnostic, raised by the one shared namespace/binding-resolution mechanism rather than by construct-specific checks. An import whose target cannot be resolved to exactly one canonical identity — because more than one visible declaration could satisfy it — is a diagnostic naming the candidates, raised by that same mechanism.
+A duplicate declaration or import that would introduce a second active binding for the same spelling in the same namespace at the same program point, without going through an explicit `let` or `mut` shadowing form, is a diagnostic, raised by the one shared namespace/binding-resolution mechanism rather than by construct-specific checks. An import whose target cannot be resolved to exactly one canonical identity — because more than one visible declaration could satisfy it — is a diagnostic naming the candidates, raised by that same mechanism.
 
 Existing construct-specific diagnostics that already implement a narrower version of this check (for example `duplicate_alias`, `duplicate_trait_instantiation`, `duplicate_library_export`) are expected to become call sites of the shared mechanism rather than parallel implementations; their user-facing wording may stay construct-specific, but the collision logic behind them should not. `pub_library_import_name_collision` remains tied to the separate `pub`/`rust`/`std` namespace-root import syntax (see Related) and is out of this RFC's scope to consolidate.
 
 ## Design details
 
+### Binding-form decisions
+
+These are the decisions the implementation must encode. None changes accepted source syntax; each states which binding an existing form targets and what identity it produces.
+
+- **`let name = value`** introduces a new binding in the current scope and gives it a fresh canonical identity, even when an outer binding for that spelling is active. This is the explicit shadowing form. It must become a frontend-modeled decision, because the typechecker currently reads the binding form only for mutability.
+- **`mut name = value`** behaves identically to `let` for binding and identity purposes, and additionally marks the new binding mutable. It is equally a shadowing form. It is **not** "make the existing `name` mutable": it declares a new binding that happens to be mutable, and reading it as a modifier on an already-active name inverts what it does to identity. Any claim that `let` is the *only* form introducing a binding over an active one is imprecise and must not be carried into implementation or tests.
+- **Plain `name = value`** resolves outward through the scope chain and reassigns the nearest active binding, preserving that binding's canonical identity and requiring both `mut` and a compatible type. It introduces a new binding, with a new identity, only when no active binding for that spelling exists anywhere in the chain. It is never a silent shadow.
+- **A duplicate declaration or import** — a second binding for one spelling in one namespace, in the same scope, through a form that is not `let` or `mut` — is a diagnostic from the shared mechanism. Rebinding a core builtin-function spelling is explicitly not this case.
+- **An ambiguous import** — an import whose target resolves to more than one visible canonical identity — is a diagnostic naming the candidate declarations by identity and span, from that same mechanism.
+- **A bare enum variant name** binds into the ordinary lexical namespace without displacing an already-active binding for that spelling. The variant keeps its own canonical identity and stays reachable through its qualified member path; only the bare spelling defers. This preserves existing behavior and does not weaken the namespace rule.
+
 ### Interaction with the scope-lookup bug
 
-This RFC's identity model assumes plain assignment and `let` behave as already documented once the known scope-lookup bug (see Related) is fixed: plain assignment reassigns the nearest active binding (requiring `mut` and a type match); `let` is the only form that introduces a new binding over an already-active one. This RFC does not depend on that fix landing first — the identity model applies equally to whichever binding is active under the corrected contract — but the two should be validated together, since a canonical-identity conformance fixture that exercises shadowing will only pass once the bug is fixed.
+This RFC's identity model assumes plain assignment, `let`, and `mut` behave as decided above once the known scope-lookup bug (see Related) is fixed. That fix has two halves and they must land together. Making plain assignment walk outward is the half the bug report names; honoring `let` and `mut` as binding-introducing forms is the half that keeps documented shadowing working, because a lookup that walks outward *without* that change would turn every in-block `let` into a reassignment of the outer binding.
+
+The identity model as *specified* is independent of that fix: it applies equally to whichever binding is active under the corrected contract. The identity work as *delivered* is not, and is sequenced behind it (see Implementation plan). An identity assigned to a binding the checker resolved to the wrong scope is a precise name for the wrong thing, and no conformance fixture exercising shadowing can pass before the fix lands.
+
+### Reconciliation with in-flight source-semantics work
+
+- **#1072 (assignment semantics)** lands after #1132 and before every slice in this RFC, and must cover both halves explicitly: plain assignment finds the nearest enclosing binding and reassigns it, and `let` and `mut` introduce a binding that may shadow an active outer one. It owns that fix; this RFC contributes the requirement that both halves ship together, because they edit one assignment-checking path and either half alone leaves the documented contract broken in a different way.
+- **#1132 (statement-level tuple unpack of a non-tuple value)** finishes first and owns the statement-checker lane until it does. Its fix corrects an arity guard that a non-tuple fallback renders unreachable; it is independent of identity in semantics and adjacent to it in code. The interaction to respect afterwards is that the statement-level unpack carries its own binding form, so the `let`/`mut`/plain-assignment decision must be applied to the multi-name unpack path rather than left to diverge from single-name assignment.
+- **#1125 (destructuring `for` patterns)** has already landed the loop half. Its loop-pattern bindings are ordinary lexical bindings and need identities like any other, and Body IR already binds them through the flat name-to-local map that the Body IR slice replaces.
+- **#1116 (builtin-function shadowing)** has already settled the lexical contract: a real local or imported binding wins over the ambient builtin, and `std.builtins.<name>` is the explicit escape hatch for reaching the core builtin from a scope that has rebound the spelling. That contract becomes a conformance case for the identity work rather than only a thing not to regress — the rebound spelling and the qualified builtin must resolve to two different canonical identities, and the rebinding itself must report nothing.
 
 ### Interaction with existing features
 
@@ -139,8 +200,8 @@ Rejected because it introduces a second mental model that does not match Incan's
 
 ## Layers affected
 
-- **Parser** — must attach enough declaration-site information for every named source object to be assigned a canonical identity later; must not itself resolve identity.
-- **Typechecker / resolver** — must resolve every import, alias, re-export, generic binder, and member reference to the canonical identity of its underlying declaration; must consolidate collision and ambiguity detection for all binding kinds into one shared namespace/binding-resolution mechanism rather than construct-specific checks, and migrate existing construct-specific diagnostics to call sites of that mechanism.
+- **Parser** — must attach enough declaration-site information for every named source object to be assigned a canonical identity later, including the binding form it already records; must not itself resolve identity.
+- **Typechecker / resolver** — must resolve every import, alias, re-export, generic binder, and member reference to the canonical identity of its underlying declaration; must consolidate collision and ambiguity detection into one shared namespace/binding-resolution mechanism rather than construct-specific checks, and migrate existing construct-specific diagnostics to call sites of that mechanism — including the duplicate-library-export check that is decided in the build command today, and excluding the two checks recorded as exemptions under Design decisions.
 - **HIR / Body IR** — must carry canonical identity on reference nodes rather than recomputable spelling alone.
 - **Diagnostics** — must report a symbol's canonical declaration site regardless of which binding a reference used to reach it.
 - **LSP** — must resolve "go to definition," "find references," and hover through canonical identity.
@@ -155,8 +216,60 @@ Rejected because it introduces a second mental model that does not match Incan's
 - **Provenance:** every canonical identity anchors to the source span of its one declaration site.
 - **Not implicit:** an alias, re-export, or generic instantiation never silently becomes a second identity; a rename at a declaration site is visible as one consistent change everywhere the compiler reports that identity.
 
+## Implementation plan
+
+This plan is the governing delivery map for the work. Two changes land before any slice below, in this order, and neither belongs to this RFC.
+
+1. **#1132 — statement-level tuple unpack of a non-tuple value.** It finishes first because it owns the current statement-checker lane. Its fix is independent of identity in semantics, but it edits the same assignment and unpack region that the binding-form work rewrites, so running the two concurrently buys nothing and costs a merge.
+2. **#1072 — assignment semantics, both halves.** Plain assignment must find the nearest enclosing binding and reassign it; `let` and `mut` must introduce a binding, shadowing an active outer one where present. `mut` is not "make an existing binding mutable" — it declares a new mutable binding, and reading it as a mutability modifier on an existing name is the misreading that must not reach implementation or tests. Owning modules: `src/frontend/typechecker/check_stmt.rs` and `src/frontend/symbols.rs`, applying the same rule to the multi-name unpack path. Conformance: the `reassigns_outer`, `shadows_in_block`, and `shadow_vs_reassign` examples from `scopes_and_name_resolution.md` promoted to executable fixtures, plus both repro cases in #1072.
+
+The canonical-identity slices follow #1072 because correct binding semantics are their foundation: an identity assigned to a binding the checker resolved to the wrong scope is a precise name for the wrong thing.
+
+The slices below are then dependency-ordered and deliberately narrow. Each names the modules that own it and the conformance evidence that proves it. Slices 1-3 are frontend-only and land before anything downstream consumes an identity; slices 4-8 take one consumer each, so a regression in a consumer is attributable to one slice.
+
+### Slice 1: Canonical identity type and declaration-site assignment
+
+Introduce the identity value and assign one at every declaration site, changing no behavior and no diagnostic. Owning modules: `src/frontend/symbols.rs` for assignment at symbol definition, and `crates/incan_semantics_core/src/facts.rs` for the identity type itself, alongside the existing compiler node identity. Conformance: unit coverage proving that two same-spelled bindings in sibling blocks receive different identities, that a generic binder's identity differs from the concrete type instantiating it, and that a module-level declaration's identity is independent of how often it is referenced.
+
+### Slice 2: Reference-side identity recording
+
+Generalize the existing source-target recording so every resolved reference records an identity, rather than only the calls and type uses that carry one today. Owning modules: `src/frontend/typechecker/mod.rs` for the recording and symbol-origin helpers, and `src/frontend/typechecker/type_info.rs` for the recorded target shape. The existing string-shaped target stays as a projection through this slice so codegraph does not have to move in the same change. Conformance: the RFC's own alias and re-export examples, asserting all three spellings record one identity, plus a case proving an imported and a local reference to one declaration compare equal.
+
+### Slice 3: One shared binding-registration and collision mechanism
+
+Give symbol definition a single entry point that answers "does this binding collide with, or ambiguously resolve against, an already-active binding for this spelling in this namespace", and migrate the construct-specific checks to call it. Owning modules: `src/frontend/symbols.rs` for the mechanism; `src/frontend/typechecker/check_decl.rs` for the duplicate-alias and duplicate-trait-instantiation checks; `src/cli/commands/build.rs` for the duplicate-library-export check, which currently lives in the CLI rather than the frontend and should move with it. Explicitly excluded: the duplicate-`rust`-module check, which is raised in `crates/incan_syntax/src/parser/core.rs` and cannot consult a resolver that has not run, and the `pub`-library import-collision check, which stays with #546. Conformance: each migrated diagnostic keeps its existing wording and span under its existing tests, plus a case proving a rebound builtin-function spelling still reports nothing.
+
+### Slice 4: HIR carries identity
+
+Stop deriving declaration ids from module path plus spelling, and give import declarations the name and identity they currently lack. Owning modules: `src/frontend/hir.rs` and `crates/incan_semantics_core/src/facts.rs`. Conformance: a snapshot proving an aliased import and its target declaration share one identity.
+
+### Slice 5: Body IR resolves by identity
+
+Replace name-keyed local resolution so a resolved reference cannot degrade into a synthesized external local with unknown ownership. Owning module: `src/frontend/body_ir.rs`. Conformance: a case proving a shadowed spelling binds the correct local in each scope, and that no reference the resolver resolved arrives as an external local. This slice needs the 0.6 backend line and cannot be developed against a base predating Body IR.
+
+### Slice 6: Diagnostics name declaration sites
+
+Make a diagnostic that names a symbol report its canonical declaration site regardless of which binding the offending reference used. Owning modules: the diagnostics catalog under `crates/incan_syntax/src/diagnostics/`, and the typechecker call sites that build symbol-naming messages. Conformance: a diagnostic raised through an alias naming the original declaration's span.
+
+### Slice 7: LSP resolves through identity
+
+Retain the checked fact snapshot on the LSP document state and answer definition, references, and hover from it, instead of the current first-match declaration scan that consults no typechecker output. Owning module: `src/lsp/backend.rs`. Conformance: definition from each of the three spellings in the re-export example landing on one declaration.
+
+### Slice 8: Codegraph and backend projection
+
+Key codegraph records on identity rather than the `(module path, name, kind)` string triple, and add a guard that no stage recovers a source binding by reading an emitted name. Owning modules: `src/cli/commands/codegraph.rs`, plus the emission path for the projection guard. Conformance: a `jsonl` export in which two differently-spelled references to one declaration are visibly one fact, and a case proving an edge is no longer dropped when its triple is unregistered.
+
+### Cutover conformance
+
+The identity guarantees that must not regress at the v0.6 backend cutover belong in the backend-parity corpus rather than only in frontend unit tests, so a replacement backend cannot silently lose them. The matrix worth pinning is the cross-product of binding entry (local, import, alias, re-export), namespace (lexical, member, path), and scope nesting (module, function, block), plus explicit shadowing with `let` and with `mut`, one generic-binder case, and #1116's builtin contract: a rebound builtin-function spelling and the same name reached through `std.builtins.<name>` must carry two different canonical identities across the cutover.
+
 ## Design decisions
 
 - **Canonical identity covers every ordinary binding form, not just the originally-proposed set:** locals, imports, aliases, re-exports, generic binders, and members, plus `for` loop variables, `with ... as` bindings, and `except ... as` bindings. All are ordinary bindings into a lexical namespace; none earns a separate identity model just because of which statement form introduced it. A decorator's own name reference resolves through the same general mechanism rather than needing special-casing.
-- **Collision and ambiguity detection consolidates into one shared namespace/binding-resolution mechanism, not construct-specific diagnostics:** today's fragmented approach (`duplicate_library_export`, `duplicate_rust_module`, `duplicate_trait_instantiation`, `duplicate_alias`, `pub_library_import_name_collision`, `pub_library_module_member_ambiguous`, each independently implemented in a different file) is itself a source of the defects this RFC exists to close — different constructs can disagree about what counts as a collision because each runs its own logic. Every binding kind registers into and is checked against one shared mechanism; existing construct-specific diagnostics migrate to call sites of it, keeping their own user-facing wording where that's genuinely useful, but not their own collision logic. `pub_library_import_name_collision` stays separate, tied to the `pub`/`rust`/`std` namespace-root import syntax (see Related).
-- **Fixture sequencing relative to the scope-lookup bug fix is not an RFC design question.** The bug (plain assignment silently shadowing instead of reassigning inside a nested block, see Related) is against an already-documented contract; it gets fixed independently, on its own timeline, before or after this RFC's own implementation work as a practical sequencing call, not something this RFC needs to decide.
+- **Collision and ambiguity detection consolidates into one shared namespace/binding-resolution mechanism, not construct-specific diagnostics:** today's fragmented approach (`duplicate_library_export`, `duplicate_rust_module`, `duplicate_trait_instantiation`, `duplicate_alias`, `pub_library_import_name_collision`, `pub_library_module_member_ambiguous`, each implemented independently, and spread across the parser, the frontend, and the build command rather than merely across files) is itself a source of the defects this RFC exists to close — different constructs can disagree about what counts as a collision because each runs its own logic, and a check living in the CLI cannot agree with a frontend check by construction. Every binding kind registers into and is checked against one shared mechanism; existing construct-specific diagnostics migrate to call sites of it, keeping their own user-facing wording where that's genuinely useful, but not their own collision logic. `pub_library_import_name_collision` stays separate, tied to the `pub`/`rust`/`std` namespace-root import syntax (see Related), and the duplicate-`rust`-module check stays in the parser for the reason recorded below.
+- **Delivery order is settled, and the assignment fix's scope with it.** #1132 finishes first because it owns the statement-checker lane; #1072 follows and must cover both halves of assignment semantics; the canonical-identity slices follow #1072. The two halves of #1072 are one change, not a sequencing choice: because assignment checking ignores the binding form today, making plain assignment walk outward without also honoring `let` and `mut` would convert every in-block `let` into a reassignment. This RFC records that order as its governing map without claiming ownership of the two issues that precede it.
+- **`mut` is a shadowing form too, not only `let`.** The originating issue's phrasing that `let` is the only ordinary mechanism introducing a same-spelling binding over an active one does not match the documented binding model, which gives `mut name = value` the same binding-introducing behavior plus mutability. Implementation and conformance fixtures follow the documented model.
+- **Rebinding a builtin-function spelling is not a collision.** The builtin fallback tier sits beneath the whole scope chain, so a declared or imported binding legitimately wins. The consolidation slice must not turn that settled, tested behavior into a duplicate-binding diagnostic.
+- **The duplicate-`rust`-module check stays in the parser.** It is raised before any resolver has run and cannot consult a shared binding mechanism without inverting the pipeline. It keeps its own narrow check, and the consolidation decision above is amended to exclude it rather than pretending it can migrate.
+- **The duplicate-library-export check moves out of the CLI.** It is a namespace collision decided today in the build command rather than the frontend, which is why it can disagree with frontend checks. Migrating it to the shared mechanism is a layering correction, not only a deduplication.
+- **Canonical identity is stable within one compilation, not across source edits.** Every identity anchors to its declaration span, so an edit that moves a declaration changes its identity. Consumers that need cross-edit continuity, such as an editor session, must re-resolve rather than cache an identity across versions.
