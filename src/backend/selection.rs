@@ -2,11 +2,10 @@
 //!
 //! The v0.6 programme tracked by #652 introduces a second compiler backend (the Body IR
 //! "replacement" backend, tracked by #653) alongside the current Rust-source-emission backend
-//! (`IrCodegen`, `src/backend/ir/`, referred to here as "legacy"). Until the replacement backend
-//! actually lands, a build must still be able to declare, record, and report which backend it
-//! intended to use and which backend it actually ran — so that a legacy result is never mistaken
-//! for a replacement-backend result, and so that a caller who explicitly asks for the replacement
-//! backend gets a visible outcome instead of a silent legacy execution.
+//! (`IrCodegen`, `src/backend/ir/`, referred to here as "legacy"). #988 supplies a deliberately partial direct
+//! Body-IR profile; the selection boundary still declares and records which backend was intended and actually ran,
+//! so a legacy result is never mistaken for replacement execution and an unsupported replacement source remains a
+//! visible refusal rather than a silent legacy execution.
 //!
 //! This module owns two boundary types:
 //!
@@ -39,11 +38,17 @@ pub const BACKEND_SELECTION_SCHEMA_VERSION: u32 = 1;
 /// consumer keying reuse on this revision knows to invalidate.
 pub const LEGACY_BACKEND_REVISION: u32 = 1;
 
-/// Implementation revision of the not-yet-implemented replacement backend.
+/// Implementation revision of the partial Body-IR replacement backend.
 ///
-/// #653 owns actual Body IR execution. This constant exists now so that landing #653 only needs
-/// to bump a revision and flip [`BackendKind::is_implemented`], not invent a new schema field.
-pub const REPLACEMENT_BACKEND_REVISION: u32 = 0;
+/// #988 provides its first direct-execution profile. Bump this when that profile's observable execution or
+/// receipt-bound semantic evidence changes for previously accepted source.
+pub const REPLACEMENT_BACKEND_REVISION: u32 = 1;
+
+/// Canonical reason for a requested shadow comparison that has no source-observable legacy comparator yet.
+///
+/// This deliberately names the missing comparison boundary, not implementation availability: a direct replacement
+/// executor exists for #988's narrow profile, while generated Rust remains inspection-only and cannot prove parity.
+pub const SHADOW_COMPARISON_UNAVAILABLE_REASON: &str = "no source-observable legacy/replacement comparator is implemented for this profile; generated Rust is not semantic proof";
 
 /// Compiler backend that can produce or execute a build unit.
 ///
@@ -54,21 +59,20 @@ pub const REPLACEMENT_BACKEND_REVISION: u32 = 0;
 pub enum BackendKind {
     /// The current Rust-source-emission pipeline (`IrCodegen`, `src/backend/ir/`).
     Legacy,
-    /// The Body IR replacement backend tracked by #653. Not yet implemented: selecting it always
-    /// produces an explicit, visible outcome (a refusal or a declared fallback), never a silent
-    /// legacy execution.
+    /// The Body IR replacement backend tracked by #653. Its first executable #988 profile is intentionally partial;
+    /// unsupported source is refused visibly instead of falling back to the legacy backend.
     Replacement,
 }
 
 impl BackendKind {
     /// Whether this backend can actually execute a compilation today.
     ///
-    /// Only [`BackendKind::Legacy`] is implemented until #653 lands. Callers must consult this
-    /// (or pass the equivalent fact into [`resolve_execution`]) instead of assuming a requested
-    /// backend can run.
+    /// Both backends have an executable implementation. The replacement backend still accepts only its declared
+    /// #988 Body-IR profile, so callers must validate source support at the replacement boundary rather than using
+    /// this capability bit as a claim of full language coverage.
     #[must_use]
     pub fn is_implemented(self) -> bool {
-        matches!(self, BackendKind::Legacy)
+        matches!(self, BackendKind::Legacy | BackendKind::Replacement)
     }
 }
 
@@ -122,8 +126,8 @@ pub enum FallbackPolicy {
 pub enum ShadowComparisonState {
     /// No shadow comparison was requested for this compilation.
     NotRequested,
-    /// A shadow comparison was requested but could not run, with the concrete reason (for
-    /// example, the replacement backend is not implemented yet).
+    /// A shadow comparison was requested but could not run, with the concrete reason (for example, the active
+    /// profile has no source-observable legacy/replacement comparator).
     Unavailable { reason: String },
     /// A shadow comparison ran and the replacement backend's output matched the executed
     /// backend's output under the compilation's comparison rules.
@@ -131,6 +135,20 @@ pub enum ShadowComparisonState {
     /// A shadow comparison ran and the outputs diverged, with a human-readable summary of the
     /// difference.
     Diverged { detail: String },
+}
+
+/// Produce the canonical shadow state for a request that cannot yet run a source-observable comparison.
+///
+/// This preserves the distinction between no request and an explicitly requested but non-green unavailable result.
+#[must_use]
+pub fn unavailable_shadow_comparison(shadow_requested: bool) -> ShadowComparisonState {
+    if shadow_requested {
+        ShadowComparisonState::Unavailable {
+            reason: SHADOW_COMPARISON_UNAVAILABLE_REASON.to_string(),
+        }
+    } else {
+        ShadowComparisonState::NotRequested
+    }
 }
 
 /// Whether the backend that actually executed differed from the one declared in the selection.
@@ -561,7 +579,7 @@ mod tests {
         assert_eq!(selection.compatibility_profile, CompatibilityProfile::Partial);
 
         let Err(error) = resolve_execution(&selection, false) else {
-            panic!("replacement backend is not implemented yet; selection must be refused");
+            panic!("an unavailable replacement source profile must be refused");
         };
         match error {
             BackendSelectionError::Refused { backend, .. } => assert_eq!(backend, BackendKind::Replacement),
@@ -609,10 +627,11 @@ mod tests {
     }
 
     #[test]
-    fn declared_fallback_to_an_unavailable_target_still_refuses() {
-        // A fallback target that is itself unimplemented must never be reported as "executed":
-        // otherwise a build that actually ran legacy could claim the replacement backend
-        // executed cleanly with no fallback (`executed_backend == selected_backend`).
+    fn declared_fallback_to_the_available_replacement_target_resolves_explicitly() -> Result<(), BackendSelectionError>
+    {
+        // #988 makes the replacement implementation available for its declared partial profile. A caller that has
+        // independently found the initially selected execution unavailable may therefore resolve an explicitly
+        // declared replacement target, but source-profile validation still belongs to the replacement executor.
         let selection = select_backend(
             BackendKind::Replacement,
             true,
@@ -620,13 +639,9 @@ mod tests {
             "sha256:source",
             FallbackPolicy::AllowTo(BackendKind::Replacement),
         );
-        let Err(error) = resolve_execution(&selection, false) else {
-            panic!("a fallback target that is itself unavailable must still be refused");
-        };
-        match error {
-            BackendSelectionError::Refused { backend, .. } => assert_eq!(backend, BackendKind::Replacement),
-            other => panic!("expected Refused, got {other:?}"),
-        }
+        let resolved = resolve_execution(&selection, false)?;
+        assert_eq!(resolved, BackendKind::Replacement);
+        Ok(())
     }
 
     #[test]
@@ -635,9 +650,7 @@ mod tests {
         assert!(selection.shadow_requested);
 
         let executed = resolve_execution(&selection, true)?;
-        let shadow_comparison = ShadowComparisonState::Unavailable {
-            reason: "replacement backend not implemented yet (#653)".to_string(),
-        };
+        let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
         let receipt = finalize_receipt(&selection, executed, "sha256:output", shadow_comparison.clone(), 1)?;
         assert_eq!(receipt.shadow_comparison, shadow_comparison);
         receipt.verify_identity()?;

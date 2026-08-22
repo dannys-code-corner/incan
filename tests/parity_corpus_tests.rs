@@ -8,7 +8,7 @@
 //!
 //! Run with: `cargo test --test parity_corpus_tests`
 //!
-//! ## Why these six cases
+//! ## Why these eleven cases
 //!
 //! Per #987's own plan step 3 ("add a narrow source-only seed corpus before public package or Rust-interop
 //! rows"), every seed case here uses a direct-parser/typechecker, generated-project-run, or codegen-snapshot
@@ -20,6 +20,7 @@
 //! so a behavior change shows up as [`parity_corpus::ComparisonOutcome::Mismatch`] the next time this test runs.
 
 use incan::backend::IrCodegen;
+use incan::backend::replacement::ReplacementValue;
 use incan::frontend::{lexer, parser, typechecker};
 use std::path::PathBuf;
 
@@ -27,7 +28,8 @@ use std::path::PathBuf;
 mod parity_corpus;
 
 use parity_corpus::{
-    BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, validate_corpus,
+    BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, ReceiptRef,
+    validate_corpus,
 };
 
 // ============================================================================
@@ -233,6 +235,82 @@ fn case_bug_compatible_dead_code_after_return() -> ComparisonOutcome {
 }
 
 // ============================================================================
+// #988 replacement execution corpus — stable receipt-bound source cases
+// ============================================================================
+
+const REPLACEMENT_BODY_V0_001_SRC: &str = r#"
+def add(x: int, y: int) -> int:
+    return x + y
+"#;
+
+const REPLACEMENT_BODY_V0_002_SRC: &str = r#"
+def greet(name: str) -> str:
+    return "hello, " + name
+"#;
+
+const REPLACEMENT_BODY_V0_003_SRC: &str = r#"
+def return_owned() -> str:
+    value = "owned"
+    return value
+"#;
+
+const REPLACEMENT_BODY_V0_004_SRC: &str = r#"
+def control_flow() -> int:
+    for value in range(1, 5):
+        if value % 2 == 0:
+            continue
+    while false:
+        return 0
+    return 10
+"#;
+
+const REPLACEMENT_BODY_V0_005_SRC: &str = r#"
+def guarded_floor_div(a: int, b: int) -> int:
+    assert b != 0
+    return a // b
+"#;
+
+fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
+    vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
+}
+
+fn replacement_body_v0_001_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_002_arguments() -> Vec<ReplacementValue> {
+    vec![ReplacementValue::Str("Ada".to_string())]
+}
+
+fn replacement_body_v0_002_expected() -> ReplacementValue {
+    ReplacementValue::Str("hello, Ada".to_string())
+}
+
+fn replacement_body_v0_003_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_003_expected() -> ReplacementValue {
+    ReplacementValue::Str("owned".to_string())
+}
+
+fn replacement_body_v0_004_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_004_expected() -> ReplacementValue {
+    ReplacementValue::Int(10)
+}
+
+fn replacement_body_v0_005_arguments() -> Vec<ReplacementValue> {
+    vec![ReplacementValue::Int(84), ReplacementValue::Int(2)]
+}
+
+fn replacement_body_v0_005_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+// ============================================================================
 // Seed corpus
 // ============================================================================
 
@@ -249,7 +327,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             evidence: "tests/parity_corpus_tests.rs::case_supported_match_exhaustiveness",
             disposition: Disposition::Preserved,
             source: CASE_1_SRC,
-            evaluate: case_supported_match_exhaustiveness,
+            evaluate: Some(case_supported_match_exhaustiveness),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-0002",
@@ -259,7 +338,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             evidence: "tests/parity_corpus_tests.rs::case_diagnostic_chained_comparison_rejected",
             disposition: Disposition::Preserved,
             source: CASE_2_SRC,
-            evaluate: case_diagnostic_chained_comparison_rejected,
+            evaluate: Some(case_diagnostic_chained_comparison_rejected),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-0003",
@@ -269,7 +349,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             evidence: "tests/parity_corpus_tests.rs::case_stdlib_runtime_string_membership",
             disposition: Disposition::Preserved,
             source: CASE_3_SRC,
-            evaluate: case_stdlib_runtime_string_membership,
+            evaluate: Some(case_stdlib_runtime_string_membership),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-0004",
@@ -279,7 +360,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             evidence: "tests/parity_corpus_tests.rs::case_generated_artifact_valid_rust_shape",
             disposition: Disposition::Preserved,
             source: CASE_4_SRC,
-            evaluate: case_generated_artifact_valid_rust_shape,
+            evaluate: Some(case_generated_artifact_valid_rust_shape),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-0005",
@@ -289,7 +371,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             evidence: "tests/parity_corpus_tests.rs::case_supported_builtin_len_shadowing",
             disposition: Disposition::Preserved,
             source: CASE_5_SRC,
-            evaluate: case_supported_builtin_len_shadowing,
+            evaluate: Some(case_supported_builtin_len_shadowing),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-0006",
@@ -306,7 +389,83 @@ fn seed_corpus() -> Vec<ParityCase> {
                                   backend.",
             },
             source: CASE_6_SRC,
-            evaluate: case_bug_compatible_dead_code_after_return,
+            evaluate: Some(case_bug_compatible_dead_code_after_return),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "replacement-body-v0-001",
+            title: "Parameterized integer addition executes through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-001; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_001_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "add",
+                arguments: replacement_body_v0_001_arguments,
+                expected: replacement_body_v0_001_expected,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-002",
+            title: "Parameterized string concatenation executes through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-002; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_002_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "greet",
+                arguments: replacement_body_v0_002_arguments,
+                expected: replacement_body_v0_002_expected,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-003",
+            title: "Owned local return preserves move evidence through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-003; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_003_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "return_owned",
+                arguments: replacement_body_v0_003_arguments,
+                expected: replacement_body_v0_003_expected,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-004",
+            title: "Normalized range, branch, and while control flow execute through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-004; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_004_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "control_flow",
+                arguments: replacement_body_v0_004_arguments,
+                expected: replacement_body_v0_004_expected,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-005",
+            title: "Assertion and floor division execute through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#988 replacement-body-v0-005; tests/parity_corpus_tests.rs::seed_corpus",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_005_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "guarded_floor_div",
+                arguments: replacement_body_v0_005_arguments,
+                expected: replacement_body_v0_005_expected,
+            }),
         },
     ]
 }
@@ -326,10 +485,11 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // Never reaches `evaluate_case` — `red_state_validate_corpus_...` calls
             // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
             source: "",
-            evaluate: || ComparisonOutcome::Match,
+            evaluate: Some(|| ComparisonOutcome::Match),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-dup",
@@ -338,10 +498,11 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // Never reaches `evaluate_case` — `red_state_validate_corpus_...` calls
             // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
             source: "",
-            evaluate: || ComparisonOutcome::Match,
+            evaluate: Some(|| ComparisonOutcome::Match),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-empty-title",
@@ -350,10 +511,11 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
             lane: EvidenceLane::DirectParserTypechecker,
             evidence: "tests/parity_corpus_tests.rs (red-state fixture)",
             disposition: Disposition::Preserved,
-            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // Never reaches `evaluate_case` — `red_state_validate_corpus_...` calls
             // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
             source: "",
-            evaluate: || ComparisonOutcome::Match,
+            evaluate: Some(|| ComparisonOutcome::Match),
+            replacement_execution: None,
         },
         ParityCase {
             id: "parity-987-unsupported-no-issue",
@@ -365,10 +527,11 @@ fn malformed_cases_for_red_state_proof() -> Vec<ParityCase> {
                 owning_issue: 0,
                 migration_note: "",
             },
-            // Never reaches `evaluate_case`/`compute_receipt` — `red_state_validate_corpus_...` calls
+            // Never reaches `evaluate_case` — `red_state_validate_corpus_...` calls
             // `validate_corpus` directly, so this placeholder source is never hashed into a real receipt.
             source: "",
-            evaluate: || ComparisonOutcome::Match,
+            evaluate: Some(|| ComparisonOutcome::Match),
+            replacement_execution: None,
         },
     ]
 }
@@ -429,8 +592,8 @@ fn seed_corpus_ids_are_stable_and_globally_unique() {
     assert_eq!(sorted.len(), ids.len(), "seed corpus case ids must be globally unique");
     for id in &ids {
         assert!(
-            id.starts_with("parity-987-"),
-            "case id {id} should carry the parity-987- namespace prefix for stability across future slices"
+            id.starts_with("parity-987-") || id.starts_with("replacement-body-v0-"),
+            "case id {id} must carry a stable #987 or #988 replacement-body namespace prefix"
         );
     }
 }
@@ -452,12 +615,10 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 }
 
 #[test]
-fn no_case_reaches_green_while_the_replacement_backend_is_unimplemented() {
-    // This is the corpus's core promise: an unavailable comparison must never be counted as parity. #986 has
-    // landed, so every case now consults a real receipt (`receipt_schema_available` is `true`) — but the
-    // replacement backend itself is not implemented yet (#653), so every case's shadow comparison against it is
-    // genuinely unavailable. Every case — even a behaviorally-confirmed one — must land in
-    // `NonGreenShadowUnavailable`, never `Green`.
+fn seed_cases_and_direct_replacement_cases_remain_non_green_without_a_legacy_runtime_comparator() {
+    // This is the corpus's core promise: direct replacement execution does not become green parity merely because
+    // it has a receipt. The older seed rows and the new #988 rows both stay explicitly shadow-unavailable until a
+    // source-observable legacy comparison is available for the same source profile.
     let summary = parity_corpus::summarize(&seed_corpus());
     assert!(
         summary.receipt_schema_available,
@@ -470,14 +631,80 @@ fn no_case_reaches_green_while_the_replacement_backend_is_unimplemented() {
         .collect();
     assert!(
         falsely_green.is_empty(),
-        "no case should reach OverallState::Green before #653 lands the replacement backend: {falsely_green:#?}"
+        "no existing seed case should reach OverallState::Green without its own replacement execution: {falsely_green:#?}"
     );
     assert_eq!(summary.green, 0);
     assert_eq!(
         summary.non_green_shadow_unavailable, summary.total_cases,
-        "every behaviorally-confirmed seed case must report shadow-unavailable, not green, today"
+        "every corpus row must report shadow-unavailable, not green, until it has a source-observable legacy comparison"
     );
     assert_eq!(summary.non_green_behavior, 0);
+}
+
+/// Bind each selected #988 source case to its own replacement receipt and complete Body-IR proof evidence.
+#[test]
+fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -> Result<(), Box<dyn std::error::Error>>
+{
+    let summary = parity_corpus::summarize(&seed_corpus());
+    let replacement_rows: Vec<&parity_corpus::CaseReport> = summary
+        .cases
+        .iter()
+        .filter(|case| case.id.starts_with("replacement-body-v0-"))
+        .collect();
+    assert_eq!(
+        replacement_rows.len(),
+        5,
+        "the five agreed #988 cases must stay stable in #987"
+    );
+
+    for row in replacement_rows {
+        assert_eq!(row.lane, EvidenceLane::DirectReplacementBodyIr);
+        assert_eq!(row.overall_state, OverallState::NonGreenShadowUnavailable);
+        match &row.receipt {
+            ReceiptRef::ReplacementExecuted {
+                selection_identity,
+                receipt_identity,
+                output_identity,
+                body_snapshot,
+                ownership_reads,
+                runtime_requirements,
+                comparison_reason,
+            } => {
+                assert!(selection_identity.starts_with("sha256:"));
+                assert!(receipt_identity.starts_with("sha256:"));
+                assert!(output_identity.starts_with("sha256:"));
+                assert!(body_snapshot.contains("body "));
+                assert!(
+                    ownership_reads
+                        .iter()
+                        .all(|read| read.span_end >= read.span_start && !read.fact.is_empty()),
+                    "{} lost canonical ownership evidence: {ownership_reads:?}",
+                    row.id
+                );
+                assert!(
+                    runtime_requirements
+                        .iter()
+                        .all(|requirement| !requirement.requirement.is_empty()),
+                    "{} emitted an invalid runtime-requirement projection: {runtime_requirements:?}",
+                    row.id
+                );
+                assert_eq!(
+                    comparison_reason,
+                    incan::backend::selection::SHADOW_COMPARISON_UNAVAILABLE_REASON,
+                    "{} must report the actual missing legacy comparator rather than generated-Rust evidence",
+                    row.id
+                );
+            }
+            receipt => {
+                return Err(format!(
+                    "{} needs its own replacement execution receipt, got {receipt:?}",
+                    row.id
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
 }
 
 // ============================================================================

@@ -173,17 +173,17 @@ Dependency flags:
 - `--features`, `--no-default-features`, `--all-features`: Select public Incan package features for this build.
 - `--sdk-profile <PROFILE>`: Select a non-persistent SDK profile for this build.
 - `--release`: Explicitly request the release profile. This is the default for `incan build`.
-- `--backend <legacy|replacement>`: Declare the compiler backend for this build (#986). Defaults to `legacy`, declared explicitly even when the flag is omitted. `replacement` is the Body IR backend tracked by [#653](https://github.com/encero-systems/incan/issues/653) and is not implemented yet; requesting it fails visibly unless `--backend-fallback` is also given. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
-- `--backend-fallback <legacy|replacement>`: Allow the build to fall back to this backend if `--backend` cannot execute, recording the substitution explicitly instead of refusing.
-- `--shadow`: Request a shadow comparison against the replacement backend alongside normal execution. Recorded explicitly as unavailable until the replacement backend exists.
-- `--report json`: Emit a versioned machine-readable build report.
+- `--backend <legacy|replacement>`: Declare the compiler backend for this build (#986). Defaults to `legacy`, declared explicitly even when the flag is omitted. `replacement` directly executes only a module containing the selected zero-argument `main` Body-IR free function; it visibly refuses sibling functions, aggregates, repeated user-binding names (shadowing or reassignment), and other source outside that bounded #988 profile. It does not create generated Rust or an Oven plan. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
+- `--backend-fallback <refuse>`: Declare the visible refusal policy for an unavailable backend. The #988 source-only profile exposes no legacy fallback target until it has a receipt-bound legacy execution path.
+- `--shadow`: Request a source-observable shadow comparison against the replacement backend alongside normal execution. It is recorded explicitly as unavailable when the active profile has no legacy/replacement comparator; generated Rust is not semantic proof.
+- `--report json`: Emit a versioned machine-readable build report. The source-only replacement path emits its own `incan.replacement_execution.v0` report because it has no generated Rust, native artifact, or Oven plan.
 - `--report-output <PATH>`: Write the build report to a file instead of stdout.
 - `--workspace`: Build every selected workspace member.
 - `--member <NAME_OR_PATH>`: Build one or more selected workspace members.
 
 Normal build, run, and test first select a compatible immutable full-stdlib Loaf from the active toolchain. A project outside that envelope selects its receipt-bound extension from `$INCAN_HOME/oven/store/v2`, or `~/.incan/oven/store/v2` when `INCAN_HOME` is unset, together with the exact base Loaf recorded by the extension. The plan selection key includes target, toolchain, profile, Incan runtime, dependency, feature, and provider inputs. The receipt remains source-strict, so a source change regenerates caller-owned source and receipt while a compatible project can reuse the same immutable base plus extension. `incan inspect oven --receipt PATH --format json` reports the receipt/build-unit identities, selection hit or miss with reason, and physical/logical/reclaimable/lease-protected storage.
 
-Build reports use `schema_version: 1` and describe the successful Oven build rather than restating terminal prose. They include source and generated paths, emitted artifacts, dependency and provider summaries, `oven.receipt_identity`, `oven.build_unit_identity`, `oven.plan_identity`, prepare/build/total elapsed time, a note that no normal Cargo consumer ran, and a `backend` field carrying the build's backend-selection execution receipt (#986). A completed-output reuse is allowed only for the implicit legacy default and retains the verified receipt sealed by its explicit bake; explicit backend, fallback, and shadow requests take the normal preparation path instead.
+Legacy and Oven builds use `schema_version: 1` and describe the successful Oven build rather than restating terminal prose. They include source and generated paths, emitted artifacts, dependency and provider summaries, `oven.receipt_identity`, `oven.build_unit_identity`, `oven.plan_identity`, prepare/build/total elapsed time, a note that no normal Cargo consumer ran, and a `backend` field carrying the build's backend-selection execution receipt (#986). The #988 direct replacement profile instead uses `schema_version: "incan.replacement_execution.v0"` with `status`, `mode`, `entrypoint`, `backend`, direct `replacement_execution` evidence (`result`, `output_identity`, Body-IR snapshot, canonical ownership reads, and runtime requirements), and total elapsed time. It intentionally omits `generated`, artifacts, and `oven`: those facts do not exist for direct Body-IR execution. A completed-output reuse is allowed only for the implicit legacy default and retains the verified receipt sealed by its explicit bake; explicit backend, fallback, and shadow requests take the normal preparation path instead.
 
 A successful build also publishes that same receipt to `.incan/backend/receipt.json` in the project root, independent of `--report`. Inspect it with `incan inspect backend-selection --receipt .incan/backend/receipt.json`. See [Backend selection & execution receipts](../explanation/backend_selection_receipts.md).
 
@@ -200,7 +200,7 @@ incan build src/main.incn --report json
 incan build src/main.incn --features json,http --sdk-profile minimal
 incan build --release
 incan build src/main.incn --report json --report-output target/build-report.json
-incan build src/main.incn --backend replacement --backend-fallback legacy
+incan build src/main.incn --backend replacement --backend-fallback refuse
 ```
 
 ### `incan cache`
