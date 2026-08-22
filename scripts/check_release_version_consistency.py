@@ -59,6 +59,15 @@ def mirrors(version: str) -> list[tuple[Path, re.Pattern[str], str]]:
     ]
 
 
+def workspace_lock_version() -> str | None:
+    """Version ``Cargo.lock`` records for the root package, or ``None`` when the entry is absent."""
+    lock = REPO_ROOT / "Cargo.lock"
+    if not lock.is_file():
+        return None
+    match = re.search(r'^name = "incan"\nversion = "([^"]+)"', lock.read_text(encoding="utf-8"), re.MULTILINE)
+    return match.group(1) if match else None
+
+
 def example_lock_versions() -> list[tuple[Path, str]]:
     """Compiler versions recorded in tracked example lockfiles, which follow whenever examples are rebuilt."""
     listing = subprocess.run(
@@ -79,6 +88,18 @@ def main() -> int:
     version = workspace_version()
     failures: list[str] = []
 
+    # `Cargo.lock` is not hand-written, but bumping the workspace version without letting Cargo refresh it leaves the
+    # two disagreeing, and every release job builds with `--locked`. That fails on the runner rather than here, after
+    # a tag is already pushed, so it is checked alongside the hand-written mirrors.
+    lock_version = workspace_lock_version()
+    if lock_version is None:
+        failures.append("Cargo.lock: no root package version found to compare against the workspace version")
+    elif lock_version != version:
+        failures.append(
+            f"Cargo.lock: records {lock_version!r}, workspace is {version!r}"
+            " (run any cargo command to refresh it, then commit the result)"
+        )
+
     for relative, pattern, expected in mirrors(version):
         path = REPO_ROOT / relative
         if not path.is_file():
@@ -94,8 +115,10 @@ def main() -> int:
         print(f"check_release_version_consistency: workspace is {version}, but mirrored literals disagree:")
         for failure in failures:
             print(f"  {failure}")
-        print("\nThese are overwritten during packaging, so a release still publishes the right version — but the")
-        print("committed values look authoritative and are not. Update them to match the workspace version.")
+        print("\nThe npm and pip literals are overwritten during packaging, so a release still publishes the right")
+        print("version — but the committed values look authoritative and are not. Cargo.lock is different: every")
+        print("release job builds with --locked, so a stale lock fails the build on the runner after a tag is")
+        print("already pushed. Update them to match the workspace version.")
         return 1
 
     print(f"check_release_version_consistency: workspace is {version}, mirrored literals agree")
