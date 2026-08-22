@@ -12122,6 +12122,50 @@ def foo() -> str:
     assert!(check_str(source).is_ok());
 }
 
+/// Issue #1116: a module binding takes precedence over an ambient core builtin, while `std.builtins` remains an
+/// explicit route to the builtin.
+#[test]
+fn module_len_shadowing_and_explicit_builtin_selection_are_supported_issue1116() {
+    let source = r#"
+def len(value: int) -> int:
+  return value + 1
+
+def shadowed_len_call() -> int:
+  return len(4)
+
+def explicit_builtin_len_call() -> int:
+  return std.builtins.len([10, 20, 30])
+"#;
+    assert_check_ok(source);
+}
+
+/// Issue #1116: an explicitly imported source function is a normal lexical binding, not a request for ambient
+/// builtin dispatch with the same spelling.
+#[test]
+fn imported_sum_shadowing_is_supported_issue1116() -> Result<(), String> {
+    let provider = parse_program(
+        r#"
+pub def sum(value: int) -> int:
+  return value + 1
+"#,
+        "issue1116 sum provider",
+    );
+    let consumer = parse_program(
+        r#"
+from aggregates import sum
+
+def imported_sum_call() -> int:
+  return sum(4)
+"#,
+        "issue1116 sum consumer",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_with_imports(&consumer, &[("aggregates", &provider)])
+        .map_err(|errors| format!("imported `sum` should shadow the builtin: {errors:?}"))?;
+    Ok(())
+}
+
 #[test]
 fn test_local_function_named_sleep_ms_shadows_surface_helper() {
     let source = r#"
