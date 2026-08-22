@@ -560,6 +560,12 @@ pub struct CallableParam {
     pub ty: ResolvedType,
     pub kind: ParamKind,
     pub has_default: bool,
+    /// This parameter receives a construction-time-captured partial preset when its caller omits it.
+    ///
+    /// It remains callable by name, but positional calls bind only non-preset parameters so the residual positional
+    /// surface stays stable. This flag is meaningful only for a local `partial` expression; module partial
+    /// declarations retain their established full-signature metadata without it.
+    pub is_partial_preset: bool,
 }
 
 impl CallableParam {
@@ -570,6 +576,7 @@ impl CallableParam {
             ty,
             kind,
             has_default: false,
+            is_partial_preset: false,
         }
     }
 
@@ -580,6 +587,7 @@ impl CallableParam {
             ty,
             kind,
             has_default,
+            is_partial_preset: false,
         }
     }
 
@@ -590,6 +598,7 @@ impl CallableParam {
             ty,
             kind: ParamKind::Normal,
             has_default: false,
+            is_partial_preset: false,
         }
     }
 

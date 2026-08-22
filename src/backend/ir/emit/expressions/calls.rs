@@ -8,7 +8,7 @@ use proc_macro2::TokenStream;
 use quote::quote;
 
 use super::super::super::conversions::{BinOpEmitKind, determine_binop_plan};
-use super::super::super::decl::FunctionParam;
+use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{BinOp, IrCallArg, IrCallArgKind, IrExprKind, TypedExpr, VarRefKind};
 use super::super::super::ownership::{ArgumentPassingPlan, ValueUseSite};
 use super::super::super::types::IrType;
@@ -781,10 +781,48 @@ impl<'a> IrEmitter<'a> {
             return Ok(quote! { #f #turbofish (#(#arg_tokens),*) });
         }
 
-        // Order arguments only when keyword args are present (positional-only calls preserve previous behavior,
-        // which is important for snapshots + for default-arg lowering work that happens elsewhere).
+        // A local partial with captured presets has an explicit slot for each overrideable default. Its positional
+        // arguments skip those slots, while named arguments may fill them; omitted preset slots become typed `None`
+        // values for the synthesized `Option<T>` closure parameters. Other calls preserve the established ordering.
+        let captured_partial_signature = function_sig.filter(|sig| {
+            sig.params.iter().any(|param| {
+                matches!(
+                    param.default.as_ref(),
+                    Some(FunctionParamDefault::CapturedPartialPreset)
+                )
+            })
+        });
         let has_named_args = args.iter().any(|a| a.name.is_some());
-        let ordered_args: Vec<(TypedExpr, bool)> = if has_named_args {
+        let ordered_args: Vec<(TypedExpr, bool)> = if let Some(sig) = captured_partial_signature {
+            let mut positional: Vec<TypedExpr> = Vec::new();
+            let mut named: std::collections::HashMap<&str, TypedExpr> = std::collections::HashMap::new();
+            for arg in args {
+                if let Some(name) = arg.name.as_deref() {
+                    named.insert(name, arg.expr.clone());
+                } else {
+                    positional.push(arg.expr.clone());
+                }
+            }
+
+            let mut pos_idx = 0usize;
+            let mut out = Vec::with_capacity(sig.params.len());
+            for param in &sig.params {
+                if let Some(value) = named.get(param.name.as_str()) {
+                    out.push((value.clone(), false));
+                } else if matches!(
+                    param.default.as_ref(),
+                    Some(FunctionParamDefault::CapturedPartialPreset)
+                ) {
+                    out.push((TypedExpr::new(IrExprKind::None, param.ty.clone()), true));
+                } else if pos_idx < positional.len() {
+                    out.push((positional[pos_idx].clone(), false));
+                    pos_idx += 1;
+                } else if let Some(FunctionParamDefault::Source(default_arg)) = &param.default {
+                    out.push((default_arg.as_ref().clone(), true));
+                }
+            }
+            out
+        } else if has_named_args {
             if let Some(sig) = function_sig {
                 let mut positional: Vec<TypedExpr> = Vec::new();
                 let mut named: std::collections::HashMap<&str, TypedExpr> = std::collections::HashMap::new();
@@ -804,8 +842,8 @@ impl<'a> IrEmitter<'a> {
                     } else if pos_idx < positional.len() {
                         out.push((positional[pos_idx].clone(), false));
                         pos_idx += 1;
-                    } else if let Some(default_arg) = &p.default {
-                        out.push((default_arg.clone(), true));
+                    } else if let Some(FunctionParamDefault::Source(default_arg)) = &p.default {
+                        out.push((default_arg.as_ref().clone(), true));
                     }
                 }
                 out
@@ -816,8 +854,8 @@ impl<'a> IrEmitter<'a> {
             let mut out: Vec<(TypedExpr, bool)> = args.iter().map(|a| (a.expr.clone(), false)).collect();
             if let Some(sig) = function_sig {
                 for p in sig.params.iter().skip(out.len()) {
-                    if let Some(default_arg) = &p.default {
-                        out.push((default_arg.clone(), true));
+                    if let Some(FunctionParamDefault::Source(default_arg)) = &p.default {
+                        out.push((default_arg.as_ref().clone(), true));
                     } else {
                         break;
                     }
@@ -1068,7 +1106,7 @@ impl<'a> IrEmitter<'a> {
                 ParamKind::Normal => {
                     if let Some(arg) = normal_bindings.get(normal_binding_index).and_then(|binding| *binding) {
                         out.push(self.emit_regular_call_arg(func, &arg.expr, param_idx, param)?);
-                    } else if let Some(default_arg) = &param.default {
+                    } else if let Some(FunctionParamDefault::Source(default_arg)) = &param.default {
                         out.push(self.emit_regular_call_arg(func, default_arg, param_idx, param)?);
                     }
                     normal_binding_index += 1;
@@ -1750,7 +1788,7 @@ mod tests {
                     mutability: Mutability::Immutable,
                     is_self: false,
                     kind: ParamKind::Normal,
-                    default: Some(default_expr),
+                    default: Some(FunctionParamDefault::source(default_expr)),
                 },
             ],
             IrType::Int,

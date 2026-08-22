@@ -2032,7 +2032,7 @@ pub def use() -> str:
     }
 
     #[test]
-    fn local_partial_codegen_fills_omitted_preset_argument() {
+    fn local_partial_codegen_captures_a_defaulted_overrideable_preset() {
         let code = generate(
             r#"
 def route(method: str, path: str) -> str:
@@ -2043,11 +2043,29 @@ pub def use() -> str:
   return get(path="/health")
 "#,
         );
-        assert!(code.contains("|method, path|"), "{code}");
+        assert!(code.contains("move |method: Option<String>, path: String|"), "{code}");
+        assert!(code.contains("unwrap_or_else"), "{code}");
+        assert!(code.contains("get(None"), "{code}");
+    }
+
+    #[test]
+    fn local_partial_codegen_materializes_a_trailing_residual_default() {
+        let code = generate(
+            r#"
+def route(method: str, path: str, content_type: str = "text") -> str:
+  return method + path + content_type
+
+pub def use() -> str:
+  get = partial route(method="GET")
+  return get("/health")
+"#,
+        );
         assert!(
-            code.contains("get(\"GET\".to_string(), \"/health\".to_string())"),
+            code.contains("let get = {\n        let __incan_partial_preset_0_method"),
             "{code}"
         );
+        assert!(code.contains("\"GET\".to_string()"), "{code}");
+        assert!(code.contains("return get(None"), "{code}");
     }
 
     #[test]

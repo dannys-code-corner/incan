@@ -3203,7 +3203,9 @@ def main() -> None:
 
 /// End-to-end codegen tests
 mod codegen_tests {
-    use super::{compiled_sdk_provider_artifact_root, incan_command, strip_ansi_escapes};
+    use super::{
+        compiled_sdk_provider_artifact_root, incan_command, strip_ansi_escapes, support, unique_test_project_name,
+    };
     use incan::backend::IrCodegen;
     use incan::frontend::{lexer, parser, typechecker};
     use std::fs;
@@ -3538,6 +3540,121 @@ def main() -> None:
         let stdout = strip_ansi_escapes(&String::from_utf8_lossy(&output.stdout));
         let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
         assert_eq!(lines, vec!["25"], "unexpected variadic rest output:\n{stdout}");
+        Ok(())
+    }
+
+    /// Compile and run one standalone local-partial program through the normal Oven-backed generated-Rust path.
+    fn compile_and_run_local_partial_project(
+        source: &str,
+        project_stem: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let project_name = unique_test_project_name(project_stem);
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir)?;
+        fs::write(
+            tmp.path().join("incan.toml"),
+            format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+        )?;
+        let main_path = src_dir.join("main.incn");
+        fs::write(&main_path, source)?;
+
+        let oven_home = tmp.path().join("incan-home");
+        let mut bake_command = incan_command();
+        bake_command
+            .args(["oven", "bake", "--project", "."])
+            .current_dir(tmp.path())
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home);
+        support::configure_explicit_oven_bake_command(&mut bake_command)?;
+        let bake_output = bake_command.output()?;
+        assert!(
+            bake_output.status.success(),
+            "expected explicit Oven bake to prepare local-partial regression.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bake_output.stdout),
+            String::from_utf8_lossy(&bake_output.stderr)
+        );
+
+        let out_dir = tmp.path().join("out");
+        let build_output = incan_command()
+            .args([
+                "build",
+                main_path.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+            ])
+            .current_dir(tmp.path())
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home)
+            .output()?;
+        assert!(
+            build_output.status.success(),
+            "local partial generated-Rust build regression failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+            build_output.status,
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+
+        let binary = out_dir.join("oven/release").join(&project_name);
+        assert!(
+            binary.is_file(),
+            "expected generated Rust executable at {}",
+            binary.display()
+        );
+        let run_output = Command::new(&binary).output()?;
+        assert!(
+            run_output.status.success(),
+            "local partial generated Rust executable failed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(strip_ansi_escapes(&String::from_utf8_lossy(&run_output.stdout)))
+    }
+
+    #[test]
+    fn local_partial_default_and_override_compile_and_run_issue1124() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+def route(method: str, path: str, content_type: str = "text") -> str:
+  return method + path + content_type
+
+def main() -> None:
+  get = partial route(method="GET")
+  alias = get
+  println(alias("/health") + "|" + alias(method="HEAD", path="/head"))
+"#,
+            "local_partial_default_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["GET/healthtext|HEAD/headtext"],
+            "unexpected local partial output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_partial_runtime_preset_captures_at_construction_issue1124() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+def route(method: int, path: int, content_type: int = 3) -> int:
+  return method + path + content_type
+
+def main() -> None:
+  mut method = 1
+  get = partial route(method=method)
+  method = 2
+  println(get(4))
+  println(get(method=7, path=4))
+"#,
+            "local_partial_capture_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["8", "14"],
+            "the omitted preset must retain its construction-time value while a named call overrides it:\n{stdout}"
+        );
         Ok(())
     }
 

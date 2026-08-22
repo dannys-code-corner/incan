@@ -53,6 +53,7 @@ pub(crate) fn substitute_resolved_type(ty: &ResolvedType, map: &HashMap<String, 
                     ty: substitute_resolved_type(&p.ty, map),
                     kind: p.kind,
                     has_default: p.has_default,
+                    is_partial_preset: p.is_partial_preset,
                 })
                 .collect(),
             Box::new(substitute_resolved_type(ret, map)),
@@ -121,6 +122,7 @@ pub(crate) fn substitute_method_info(info: &MethodInfo, map: &HashMap<String, Re
                 ty: substitute_resolved_type(&p.ty, map),
                 kind: p.kind,
                 has_default: p.has_default,
+                is_partial_preset: p.is_partial_preset,
             })
             .collect(),
         return_type: substitute_resolved_type(&info.return_type, map),

@@ -132,6 +132,11 @@ impl TypeChecker {
     ) -> Vec<ResolvedType> {
         let normal_params: Vec<&CallableParam> =
             params.iter().filter(|param| param.kind == ParamKind::Normal).collect();
+        let positional_params: Vec<&CallableParam> = normal_params
+            .iter()
+            .copied()
+            .filter(|param| !param.is_partial_preset)
+            .collect();
         let rest_positional = params.iter().find(|param| param.kind == ParamKind::RestPositional);
         let rest_keyword = params.iter().find(|param| param.kind == ParamKind::RestKeyword);
         let mut positional_index = 0usize;
@@ -140,7 +145,7 @@ impl TypeChecker {
         for arg in args {
             match arg {
                 CallArg::Positional(expr) => {
-                    let expected = normal_params
+                    let expected = positional_params
                         .get(positional_index)
                         .map(|param| param.ty.clone())
                         .or_else(|| rest_positional.map(|param| param.ty.clone()));
@@ -163,11 +168,11 @@ impl TypeChecker {
                     if let Some(items) = Self::shaped_positional_unpack_items(expr) {
                         let mut item_types = Vec::with_capacity(items.len());
                         for item in items {
-                            let expected = normal_params
+                            let expected = positional_params
                                 .get(positional_index)
                                 .map(|param| param.ty.clone())
                                 .or_else(|| rest_positional.map(|param| param.ty.clone()));
-                            if positional_index < normal_params.len() {
+                            if positional_index < positional_params.len() {
                                 positional_index += 1;
                             }
                             self.call_argument_depth += 1;
@@ -298,6 +303,11 @@ impl TypeChecker {
             .enumerate()
             .filter(|(_, param)| param.kind == ParamKind::Normal)
             .collect();
+        let positional_param_indices: Vec<usize> = normal_params
+            .iter()
+            .enumerate()
+            .filter_map(|(normal_idx, (_, param))| (!param.is_partial_preset).then_some(normal_idx))
+            .collect();
         let rest_positional = params.iter().find(|param| param.kind == ParamKind::RestPositional);
         let rest_keyword = params.iter().find(|param| param.kind == ParamKind::RestKeyword);
 
@@ -310,8 +320,9 @@ impl TypeChecker {
             let arg_span = Self::call_arg_expr(arg).span;
             match arg {
                 CallArg::Positional(_) => {
-                    if let Some((_, param)) = normal_params.get(positional_index) {
-                        normal_bound_spans[positional_index] = Some(arg_span);
+                    if let Some(&normal_idx) = positional_param_indices.get(positional_index) {
+                        let (_, param) = normal_params[normal_idx];
+                        normal_bound_spans[normal_idx] = Some(arg_span);
                         self.infer_type_param_bindings(&param.ty, arg_ty, type_bindings);
                         self.emit_arg_type_mismatch_if_needed(
                             callee,
@@ -350,8 +361,9 @@ impl TypeChecker {
                         self.record_fixed_unpack_plan(arg_span, FixedUnpackPlan::Positional(item_types.to_vec()));
                         for (item, item_ty) in items.iter().zip(item_types.iter()) {
                             let item_span = item.span;
-                            if let Some((_, param)) = normal_params.get(positional_index) {
-                                normal_bound_spans[positional_index] = Some(item_span);
+                            if let Some(&normal_idx) = positional_param_indices.get(positional_index) {
+                                let (_, param) = normal_params[normal_idx];
+                                normal_bound_spans[normal_idx] = Some(item_span);
                                 self.infer_type_param_bindings(&param.ty, item_ty, type_bindings);
                                 self.emit_arg_type_mismatch_if_needed(
                                     callee,
@@ -379,8 +391,9 @@ impl TypeChecker {
                     } else if let Some(item_types) = Self::shaped_positional_unpack_types(arg_ty) {
                         self.record_fixed_unpack_plan(arg_span, FixedUnpackPlan::Positional(item_types.to_vec()));
                         for item_ty in item_types {
-                            if let Some((_, param)) = normal_params.get(positional_index) {
-                                normal_bound_spans[positional_index] = Some(arg_span);
+                            if let Some(&normal_idx) = positional_param_indices.get(positional_index) {
+                                let (_, param) = normal_params[normal_idx];
+                                normal_bound_spans[normal_idx] = Some(arg_span);
                                 self.infer_type_param_bindings(&param.ty, item_ty, type_bindings);
                                 self.emit_arg_type_mismatch_if_needed(
                                     callee,
@@ -562,8 +575,8 @@ impl TypeChecker {
         if unexpected_positional > 0 {
             self.errors.push(errors::builtin_arity(
                 callee,
-                normal_params.len(),
-                normal_params.len() + unexpected_positional,
+                positional_param_indices.len(),
+                positional_param_indices.len() + unexpected_positional,
                 call_span,
             ));
         }

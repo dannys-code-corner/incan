@@ -502,6 +502,91 @@ def use() -> str:
 }
 
 #[test]
+fn test_local_partial_expression_preserves_overrideable_preset_defaults() -> Result<(), String> {
+    let source = r#"
+def add3(a: int, b: int, c: int = 3) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  positional = p(9, 2)
+  named = p(b=9, c=2)
+  override = p(a=7, b=9, c=2)
+  defaulted = p(9)
+  return positional + named + override + defaulted
+"#;
+
+    check_str(source).map_err(|errors| format!("local partial preset defaults should typecheck: {errors:?}"))
+}
+
+#[test]
+fn test_local_partial_expression_rejects_invalid_residual_arity() {
+    let too_few = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  return p(9)
+"#,
+        "a local partial call missing residual c must be rejected",
+    );
+    assert!(
+        too_few
+            .iter()
+            .any(|error| error.message.contains("Missing required argument 'c'")),
+        "missing residual c should be diagnosed: {too_few:?}"
+    );
+    assert!(
+        !too_few
+            .iter()
+            .any(|error| error.message.contains("Missing required argument 'b'")),
+        "the preset a must not leave a phantom positional slot: {too_few:?}"
+    );
+
+    let too_many = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  return p(9, 2, 3)
+"#,
+        "a local partial call with a third residual argument must be rejected",
+    );
+    assert!(
+        too_many
+            .iter()
+            .any(|error| error.message.contains("expects 2 argument(s), got 3")),
+        "residual arity should be two after presetting a: {too_many:?}"
+    );
+}
+
+#[test]
+fn test_local_partial_expression_refuses_partial_of_stored_callable() {
+    let errors = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  q = partial p(b=2)
+  return q(c=3)
+"#,
+        "partial application of a stored callable must fail before lowering",
+    );
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Partial application of a locally stored callable is not supported")),
+        "unsupported local partial composition should have an intentional source diagnostic: {errors:?}"
+    );
+}
+
+#[test]
 fn test_public_partial_exports_projected_defaults() {
     let source = r#"
 pub def route(method: str, path: str, content_type: str = "text") -> str:
@@ -11100,6 +11185,7 @@ def f(encoded: bytes) -> None:
             ty: ResolvedType::TypeVar("implBuf".to_string()),
             kind: ParamKind::Normal,
             has_default: false,
+            is_partial_preset: false,
         }],
         "expected exact call-span decode parameter shape"
     );
@@ -11210,6 +11296,7 @@ def f(encoded: bytes) -> None:
             ty: ResolvedType::TypeVar("implBuf".to_string()),
             kind: ParamKind::Normal,
             has_default: false,
+            is_partial_preset: false,
         }],
         "expected exact call-span decode parameter shape when receiver metadata lacks the trait edge"
     );

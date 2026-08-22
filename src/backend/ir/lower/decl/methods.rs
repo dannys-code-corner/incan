@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::super::super::decl::{FunctionParam, IrAssociatedType, IrDecl, IrDeclKind, IrFunction, IrImpl, Visibility};
+use super::super::super::decl::{
+    FunctionParam, FunctionParamDefault, IrAssociatedType, IrDecl, IrDeclKind, IrFunction, IrImpl, Visibility,
+};
 use super::super::super::expr::{IrCallArg, IrCallArgKind, IrExprKind, VarAccess, VarRefKind};
 use super::super::super::stmt::{IrStmt, IrStmtKind};
 use super::super::super::types::IrType;
@@ -531,7 +533,7 @@ impl AstLowering {
                 mutability: Mutability::Immutable,
                 is_self: false,
                 kind: param.kind,
-                default: defaults.get(idx).cloned().flatten(),
+                default: defaults.get(idx).cloned().flatten().map(FunctionParamDefault::source),
             }
         }));
         let return_type = self.lower_resolved_type(&ret);
@@ -1360,7 +1362,9 @@ impl AstLowering {
                     },
                     is_self: false,
                     kind: p.node.kind,
-                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                    default: self
+                        .lower_param_default_expr(p.node.default.as_ref())?
+                        .map(FunctionParamDefault::source),
                 })
             })
             .collect::<Result<_, LoweringError>>()?;
@@ -1619,7 +1623,9 @@ impl AstLowering {
                     },
                     is_self: p.node.name == keywords::as_str(KeywordId::SelfKw),
                     kind: p.node.kind,
-                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                    default: self
+                        .lower_param_default_expr(p.node.default.as_ref())?
+                        .map(FunctionParamDefault::source),
                 })
             })
             .collect::<Result<_, LoweringError>>()?;

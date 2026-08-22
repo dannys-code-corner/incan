@@ -216,6 +216,11 @@ pub struct IncanCallableParam {
     pub ty: IncanType,
     pub kind: IncanCallableParamKind,
     pub has_default: bool,
+    /// Whether this local partial parameter is defaulted from its closure's construction-time capture.
+    ///
+    /// A caller may override this parameter by name. Positional invocation instead skips it and fills the remaining
+    /// residual parameters in declaration order. Ordinary callable parameters always set this to `false`.
+    pub is_partial_preset: bool,
 }
 
 impl fmt::Display for IncanCallableParam {
@@ -329,12 +334,14 @@ mod tests {
                     },
                     kind: IncanCallableParamKind::Normal,
                     has_default: false,
+                    is_partial_preset: false,
                 },
                 IncanCallableParam {
                     name: Some("rest".to_string()),
                     ty: IncanType::Primitive(IncanPrimitiveType::Str),
                     kind: IncanCallableParamKind::RestPositional,
                     has_default: false,
+                    is_partial_preset: false,
                 },
             ],
             return_type: Box::new(IncanType::Tuple(vec![

@@ -3817,6 +3817,7 @@ impl TypeChecker {
                         ty: self.expand_type_aliases_inner(param.ty, expanding),
                         kind: param.kind,
                         has_default: param.has_default,
+                        is_partial_preset: param.is_partial_preset,
                     })
                     .collect(),
                 Box::new(self.expand_type_aliases_inner(*ret, expanding)),

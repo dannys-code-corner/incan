@@ -982,7 +982,13 @@ impl AstLowering {
             ast::Statement::Assignment(a) => {
                 let rhs_direct_static = self.is_direct_static_ident(&a.value);
                 let lowered_value = self.lower_expr_spanned(&a.value)?;
-                let local_callable_signature = self.partial_expr_signature_for_span(a.value.span);
+                let local_callable_signature = self.partial_expr_signature_for_span(a.value.span).or_else(|| {
+                    if let ast::Expr::Ident(source_name) = &a.value.node {
+                        self.lookup_local_callable_signature(source_name)
+                    } else {
+                        None
+                    }
+                });
                 let type_annotation = a.ty.as_ref().map(|t| self.lower_type(&t.node));
                 let ty = type_annotation.clone().unwrap_or_else(|| lowered_value.ty.clone());
 

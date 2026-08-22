@@ -18,8 +18,10 @@
 //! `Generator[T]` behavior. Expression-position `yield` remains a stub in the existing Rust-emission backend too.
 //!
 //! #1101 adds dict/set aggregates, slices, assignment variants, expression-position `if`/`loop`/`try`, f-strings,
-//! general iteration, list/dict comprehensions, closures/partial construction, statement `yield`, and `match`.
-//! Captures are explicit [`Operand`] reads on [`Rvalue::Closure`], not an implicit target-backend decision.
+//! general iteration, list/dict comprehensions, closures/partial construction and local invocation, statement
+//! `yield`, and `match`. Captures are explicit [`Operand`] reads on [`Rvalue::Closure`], and a stored callable is
+//! invoked through [`CallableTarget::Local`] rather than being approximated as a named function, so neither fact is
+//! an implicit target-backend decision.
 //!
 //! "Method body" includes `class`/`model`/`trait` methods (#1102). A `self`/`mut self` receiver is an ordinary
 //! [`LocalOrigin::Receiver`] local and is always reference-shaped at the emission boundary, so a bare receiver
@@ -598,16 +600,34 @@ impl Rvalue {
 }
 
 /// One parameter of a [`Rvalue::Closure`] (or a partial callable's synthesized forwarding closure).
+///
+/// `has_default` preserves whether an argument may be omitted for this callable value. A partial's preset parameter
+/// remains present as an overrideable default: [`Self::preset_capture`] identifies the value captured when the
+/// partial was constructed. A source-declared default has `has_default` set but no capture; its computation remains
+/// owned by the declaration/closure definition that introduced it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureParam {
     pub name: String,
     pub ty: IncanType,
+    pub has_default: bool,
+    /// The closure-body local holding this partial parameter's construction-time preset, if any.
+    ///
+    /// This is set only when `has_default` is true. It distinguishes the callable value's materialized preset from
+    /// an ordinary source default and ensures an executor can use the captured value exactly when the caller omits
+    /// this named parameter, while still accepting a caller-provided override.
+    pub preset_capture: Option<LocalId>,
 }
 
 impl ClosureParam {
     /// Render a deterministic maintainer-facing spelling for this parameter.
     fn render_snapshot(&self) -> String {
-        format!("{}: {}", self.name, self.ty)
+        let default = match (self.has_default, self.preset_capture) {
+            (true, Some(capture)) => format!(" = captured(_{})", capture.0),
+            (true, None) => " = default".to_string(),
+            (false, None) => String::new(),
+            (false, Some(capture)) => format!(" = invalid-capture(_{})", capture.0),
+        };
+        format!("{}: {}{default}", self.name, self.ty)
     }
 }
 
@@ -1005,12 +1025,12 @@ impl AggregateKind {
 /// Call target for a [`StatementKind::Call`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum Callee {
-    /// A direct call to a named Incan function, by its source-level spelling.
+    /// A direct named function or a locally held callable value.
     ///
     /// Full call-target resolution (which physical declaration binds through imports/traits/overloads) mirrors the
     /// typechecker/backend resolution passes and is deferred past v0; Body IR records the source-level callee
     /// spelling plus argument ownership facts, which is enough to prove the model end-to-end.
-    Function(String),
+    Function(CallableTarget),
     /// A method call `receiver.method(args)`. `args[0]` in the surrounding [`StatementKind::Call`] is the receiver.
     ///
     /// Also used for compiler-synthesized collection-growth calls a comprehension desugar introduces (`push`/
@@ -1026,9 +1046,83 @@ impl Callee {
     /// Render a deterministic maintainer-facing spelling for this callee.
     fn render_snapshot(&self) -> String {
         match self {
-            Self::Function(name) => format!("fn:{name}"),
+            Self::Function(target) => target.render_snapshot(),
             Self::Method(name) => format!("method:{name}"),
             Self::Helper(op) => format!("helper:{}", op.as_str()),
+        }
+    }
+}
+
+/// The source-authoritative target carried by [`Callee::Function`].
+///
+/// The outer `Callee::Function` spelling is retained as the established call statement category: both alternatives
+/// ultimately invoke a callable. The alternatives themselves are intentionally distinct. In particular, a stored
+/// closure/partial is never represented as [`Self::Named`] with a fabricated source name; it is a
+/// [`Self::Local`] operand, carrying the lexical-environment ownership decision the caller made.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallableTarget {
+    /// A direct call to a named Incan function, by its source-level spelling.
+    ///
+    /// Full call-target resolution (which physical declaration binds through imports/traits/overloads) mirrors the
+    /// typechecker/backend resolution passes and is deferred past v0; Body IR records the source-level callee
+    /// spelling plus argument ownership facts, which is enough to prove the model end-to-end.
+    Named(String),
+    /// Invoke a callable value held in one local place.
+    ///
+    /// The [`PlaceOperand`] records the read's Duckborrower ownership fact and last-use marker exactly once, at the
+    /// call target. Frontend lowering emits only an unprojected local place here: field/index call targets remain
+    /// unsupported until Body IR has an equally explicit representation for their receiver/projection evaluation.
+    /// Consumers must preserve this operand's ownership decision when invoking the value, because it can own a
+    /// closure's lexical environment.
+    Local(LocalCallableTarget),
+}
+
+/// A locally stored callable target and the declaration slots occupied by its call arguments.
+///
+/// `parameter_slots[i]` is the declared callable-parameter index supplied by the surrounding
+/// [`StatementKind::Call::args`]'s `i`-th operand. It makes a local partial's two source-level call conventions
+/// explicit: positional arguments skip preset-default slots, while named arguments may override them. Callers that
+/// lower an ordinary local closure use the identity mapping.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LocalCallableTarget {
+    /// The local read that owns the callable value and its lexical environment.
+    pub operand: PlaceOperand,
+    /// Declared parameter slot for each surrounding call argument, in the same order as `args`.
+    pub parameter_slots: Vec<usize>,
+}
+
+impl CallableTarget {
+    /// Render this callable target without collapsing local values into named functions.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Named(name) => format!("fn:{name}"),
+            Self::Local(target) => format!(
+                "local:{} slots={:?}",
+                Operand::Place(target.operand.clone()).render_snapshot(),
+                target.parameter_slots
+            ),
+        }
+    }
+}
+
+impl PartialEq<str> for CallableTarget {
+    /// A local callable can never compare equal to a direct function name. This compatibility implementation keeps
+    /// existing bounded consumers' direct-function checks conservative while they visibly reject `Local`.
+    fn eq(&self, other: &str) -> bool {
+        matches!(self, Self::Named(name) if name == other)
+    }
+}
+
+impl std::fmt::Display for CallableTarget {
+    /// Render a concise diagnostics label without exposing a local callable as a function name.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Named(name) => f.write_str(name),
+            Self::Local(target) => write!(
+                f,
+                "<local:{}>",
+                Operand::Place(target.operand.clone()).render_snapshot()
+            ),
         }
     }
 }
@@ -1245,7 +1339,7 @@ pub struct Statement {
 pub enum StatementKind {
     /// Assign an rvalue into a place.
     Assign { place: Place, rvalue: Rvalue },
-    /// Call a function, method, or runtime helper, optionally storing its result.
+    /// Call a function, method, locally stored callable value, or runtime helper, optionally storing its result.
     Call {
         destination: Option<Place>,
         callee: Callee,
@@ -1495,6 +1589,46 @@ mod tests {
     }
 
     #[test]
+    fn local_callable_target_and_defaulted_closure_parameter_render() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Call {
+                    destination: Some(Place::from_local(LocalId(2))),
+                    callee: Callee::Function(CallableTarget::Local(LocalCallableTarget {
+                        operand: PlaceOperand {
+                            place: Place::from_local(LocalId(0)),
+                            fact: OwnershipFact::Copy,
+                            last_use: false,
+                        },
+                        parameter_slots: vec![0],
+                    })),
+                    args: vec![Operand::Constant(Constant::Int(1))],
+                    may_panic: false,
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+
+        let snapshot = body.render_snapshot();
+        assert!(
+            snapshot.contains("call local:copy(_0) slots=[0](const(1))"),
+            "a local call target must retain its operand ownership fact: {snapshot}"
+        );
+        assert_eq!(
+            ClosureParam {
+                name: "suffix".to_string(),
+                ty: IncanType::Primitive(IncanPrimitiveType::Str),
+                has_default: true,
+                preset_capture: None,
+            }
+            .render_snapshot(),
+            "suffix: str = default"
+        );
+    }
+
+    #[test]
     fn dict_aggregate_renders_as_key_value_pairs() {
         let mut body = sample_body();
         body.block.stmts.insert(
@@ -1697,6 +1831,8 @@ mod tests {
                         params: vec![ClosureParam {
                             name: "z".to_string(),
                             ty: IncanType::Primitive(IncanPrimitiveType::Int),
+                            has_default: false,
+                            preset_capture: None,
                         }],
                         captured_operands: vec![Operand::place(
                             Place::from_local(LocalId(0)),
