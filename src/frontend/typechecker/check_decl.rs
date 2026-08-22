@@ -5338,9 +5338,7 @@ impl TypeChecker {
                 });
 
         // Check body
-        for stmt in &func.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&func.body);
 
         self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
         self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
@@ -5508,9 +5506,7 @@ impl TypeChecker {
         if let Some(body) = &property.body {
             let prev_in_async_body = self.in_async_body;
             self.in_async_body = false;
-            for stmt in body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(body);
             self.in_async_body = prev_in_async_body;
         }
 
@@ -5643,9 +5639,7 @@ impl TypeChecker {
             let previous_unbound_c_abi_span_constructors = std::mem::take(&mut self.unbound_c_abi_span_constructors);
             let previous_c_abi_span_bindings = std::mem::take(&mut self.c_abi_span_bindings);
             let previous_consumed_c_abi_span_bindings = std::mem::take(&mut self.consumed_c_abi_span_bindings);
-            for stmt in body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(body);
             self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
             self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
             self.unbound_c_abi_span_constructors = previous_unbound_c_abi_span_constructors;

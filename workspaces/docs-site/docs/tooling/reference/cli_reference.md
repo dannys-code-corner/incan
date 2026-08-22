@@ -107,7 +107,7 @@ Options:
 - `--workspace`: Check every selected workspace member.
 - `--member <NAME_OR_PATH>`: Check one or more selected workspace members.
 
-JSON output uses `schema_version: 1` and prints a deterministic report with `ok` and `diagnostics`. Each diagnostic includes a stable `code`, `severity`, compiler `phase` and `origin`, primary source span, message, notes, hints, labeled related spans, and an `incan explain <CODE>` hook. Diagnostics that compare two compiler-known values also include optional `expected` and `actual` fields, so consumers do not need to parse the message. The LSP and `incan inspect codegraph --allow-errors` project these same compiler-owned facts; codegraph uses byte offsets for source spans while the diagnostic JSON and LSP retain line and column positions. Human output remains the default and continues to use source-highlighted compiler diagnostics.
+JSON output uses `schema_version: 2` and prints a deterministic report with `ok` and `diagnostics`. Each diagnostic includes a stable `code`, `severity`, compiler `phase` and `origin`, primary source span, message, notes, hints, labeled related spans, and an `incan explain <CODE>` hook. `diagnostics` carries non-fatal warnings as well as errors, so `ok` reports whether any error-severity diagnostic was found rather than whether the array is empty: a successful check that produced warnings reports `ok: true`, a non-empty `diagnostics` array, and a success exit code. Filter on `severity` to separate the two. Warnings are ordered by source module, and by parser before typechecker within each module, so repeated runs over unchanged sources produce identical output. Diagnostics that compare two compiler-known values also include optional `expected` and `actual` fields, so consumers do not need to parse the message. The LSP and `incan inspect codegraph --allow-errors` project these same compiler-owned facts; codegraph uses byte offsets for source spans while the diagnostic JSON and LSP retain line and column positions. Human output remains the default and continues to use source-highlighted compiler diagnostics.
 
 Examples:
 
@@ -137,6 +137,7 @@ Seeded catalog codes:
 
 - `INCAN-P0001`: Syntax error.
 - `INCAN-T0001`: Type checking error.
+- `INCAN-T0101`: Unreachable code — statements that follow a `return` in the same block. Reported as a warning, so the program still compiles.
 - `INCAN-I0001`: Import or module resolution error.
 - `INCAN-I0101`: A known SDK provider module belongs to a component disabled by the project.
 - `INCAN-I0102`: The project enabled an SDK component that is unavailable in the active installation.

@@ -127,7 +127,8 @@ use super::common::{
     discover_effective_project_manifest, effective_project_manifest_for_exact_root,
     enforce_project_toolchain_constraint, extend_requirements_with_provider_plan, format_dependency_error,
     imported_module_deps_for_with_index, merge_project_requirement_dependencies, module_key_index,
-    resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
+    render_module_warnings, resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies,
+    validate_output_dir,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{collect_rust_inspect_query_paths, collect_rust_inspect_query_paths_from_programs};
@@ -9924,12 +9925,11 @@ fn prepare_library_project(
         };
         match check_result {
             Ok(()) => {
-                for warn in checker.warnings() {
-                    eprint!(
-                        "{}",
-                        diagnostics::format_error(module.file_path.to_string_lossy().as_ref(), &module.source, warn)
-                    );
-                }
+                render_module_warnings(
+                    module.file_path.to_string_lossy().as_ref(),
+                    &module.source,
+                    checker.warnings(),
+                );
                 let module_exports = collect_checked_public_exports(&module.ast, &checker);
                 api_metadata_modules.push(collect_checked_api_metadata(
                     &module.ast,

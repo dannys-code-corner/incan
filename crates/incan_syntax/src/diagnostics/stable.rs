@@ -197,6 +197,25 @@ const TYPECHECK: DiagnosticCatalogEntry = DiagnosticCatalogEntry {
     docs_url: Some("https://encero-systems.github.io/incan/language/reference/types/"),
 };
 
+const UNREACHABLE_CODE: DiagnosticCatalogEntry = DiagnosticCatalogEntry {
+    code: "INCAN-T0101",
+    title: "Unreachable code",
+    severity: "warning",
+    phase: "typecheck",
+    summary: "Statements in a block can never run because the block already returned.",
+    explanation: "The type checker found statements that follow a `return` in the same block, so nothing can reach them. This is a warning, not an error: the program still compiles and the unreachable statements are still type-checked, but they are dead code. The check is block-local — it follows a `return` statement within one block and does not try to prove divergence through `if`/`else`, `match`, or loops.",
+    examples: &["def f() -> int:\n    return 1\n    println(\"never runs\")"],
+    common_causes: &[
+        "An early `return` left behind during a refactor.",
+        "A debugging `return` added above code that was meant to keep running.",
+    ],
+    fixes: &[
+        "Delete the unreachable statements.",
+        "Move the statements above the `return` if they were meant to run.",
+    ],
+    docs_url: Some("https://encero-systems.github.io/incan/language/reference/functions/"),
+};
+
 const IMPORT: DiagnosticCatalogEntry = DiagnosticCatalogEntry {
     code: "INCAN-I0001",
     title: "Import or module resolution error",
@@ -310,6 +329,7 @@ const UNKNOWN: DiagnosticCatalogEntry = DiagnosticCatalogEntry {
 const CATALOG: &[DiagnosticCatalogEntry] = &[
     PARSER_SYNTAX,
     TYPECHECK,
+    UNREACHABLE_CODE,
     IMPORT,
     SDK_COMPONENT_DISABLED,
     SDK_COMPONENT_UNAVAILABLE,
@@ -445,7 +465,7 @@ fn spans_overlap(left: Span, right: Span) -> bool {
 #[cfg(test)]
 mod tests {
     use crate::ast::{ImportDecl, ImportKind, Spanned, Visibility};
-    use crate::diagnostics::errors;
+    use crate::diagnostics::{errors, lints};
 
     use super::*;
 
@@ -511,5 +531,31 @@ mod tests {
         for code in ["INCAN-I0101", "INCAN-I0102", "INCAN-I0103"] {
             assert!(explain(code).is_some(), "{code} must have a catalog explanation");
         }
+    }
+
+    #[test]
+    fn unreachable_code_warning_projects_as_an_explainable_typecheck_warning() {
+        let warning = lints::unreachable_code_after_return(Span::new(20, 40), Span::new(8, 16));
+        let diagnostic = stable_diagnostic(
+            "main.incn",
+            "def f() -> int:\n    return 1\n    println(\"dead\")\n",
+            &warning,
+            DiagnosticPhase::Typecheck,
+        );
+
+        assert_eq!(diagnostic.code, "INCAN-T0101");
+        assert_eq!(diagnostic.severity, "warning");
+        assert_eq!(diagnostic.phase, DiagnosticPhase::Typecheck);
+        assert_eq!(diagnostic.origin, DiagnosticOrigin::Typechecker);
+        assert_eq!(diagnostic.explain, "incan explain INCAN-T0101");
+        assert_eq!(
+            diagnostic.related_spans.len(),
+            1,
+            "the projection must keep the originating `return` location"
+        );
+        assert!(
+            explain("INCAN-T0101").is_some(),
+            "INCAN-T0101 must have a catalog explanation"
+        );
     }
 }

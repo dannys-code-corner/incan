@@ -72,6 +72,11 @@ pub(crate) enum BehaviorCategory {
     /// Accepted only because a parser/typechecker/lowering path happens to allow it without a documented contract.
     AccidentalAcceptedBehavior,
     /// Preserved only because current users may rely on a workaround, or fixing it needs a larger migration.
+    ///
+    /// No seed case carries this category right now: `parity-987-0006` entered the corpus under it and #1117
+    /// migrated it to [`BehaviorCategory::DiagnosticBehavior`]. Kept referenced so the taxonomy stays complete
+    /// against the #646 inventory, which still defines the bucket.
+    #[allow(dead_code)]
     BugCompatibleBehavior,
 }
 
@@ -120,10 +125,7 @@ pub(crate) enum Disposition {
     Preserved,
     /// The behavior will change deliberately during cutover; a real issue tracks the migration.
     ///
-    /// No seed case uses this variant yet — the seed corpus only needed `Preserved` and `Unsupported` so far.
-    /// Kept referenced so the three-state disposition contract (#987's own "Done when") stays visible in the type
-    /// even before a migration-flagged case is added.
-    #[allow(dead_code)]
+    /// Used by `parity-987-0006`, which #1117 migrated from a silent accept to an `INCAN-T0101` warning.
     IntentionalMigration {
         owning_issue: u32,
         migration_note: &'static str,

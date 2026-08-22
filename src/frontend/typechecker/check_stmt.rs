@@ -1128,9 +1128,7 @@ impl TypeChecker {
         if let Some(narrowing) = true_narrowing {
             self.define_narrowed_binding(narrowing.name, narrowing.true_ty, narrowing.is_mutable, narrowing.span);
         }
-        for stmt in body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(body);
         self.symbols.exit_scope();
         self.available_c_abi_output_slots = available_before;
 
@@ -1140,9 +1138,7 @@ impl TypeChecker {
     /// Check an acknowledgement body in its surrounding ordinary statement scope.
     fn check_unsafe_stmt(&mut self, unsafe_stmt: &UnsafeStmt) {
         self.unsafe_depth += 1;
-        for statement in &unsafe_stmt.body {
-            self.check_statement(statement);
-        }
+        self.check_statement_block(&unsafe_stmt.body);
         self.unsafe_depth = self.unsafe_depth.saturating_sub(1);
     }
 
@@ -1164,9 +1160,7 @@ impl TypeChecker {
         if let Some(else_body) = &if_stmt.else_body {
             self.symbols.enter_scope(ScopeKind::Block);
             self.apply_branch_refinements(&false_refinements);
-            for stmt in else_body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(else_body);
             self.symbols.exit_scope();
         }
     }
@@ -1181,9 +1175,7 @@ impl TypeChecker {
 
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.push_loop_context(LoopContextKind::Statement, None);
-                for stmt in &while_stmt.body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(&while_stmt.body);
                 let _ = self.pop_loop_context();
                 self.symbols.exit_scope();
             }
@@ -1193,9 +1185,7 @@ impl TypeChecker {
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.check_pattern(pattern, &value_ty);
                 self.push_loop_context(LoopContextKind::Statement, None);
-                for stmt in &while_stmt.body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(&while_stmt.body);
                 let _ = self.pop_loop_context();
                 self.symbols.exit_scope();
             }
@@ -1209,9 +1199,7 @@ impl TypeChecker {
     fn check_loop_stmt(&mut self, loop_stmt: &LoopStmt) {
         self.symbols.enter_scope(ScopeKind::Block);
         self.push_loop_context(LoopContextKind::Statement, None);
-        for stmt in &loop_stmt.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&loop_stmt.body);
         let _ = self.pop_loop_context();
         self.symbols.exit_scope();
     }
@@ -1254,9 +1242,7 @@ impl TypeChecker {
         self.define_for_pattern_bindings(&for_stmt.pattern, &elem_ty);
         self.push_loop_context(LoopContextKind::Statement, None);
 
-        for stmt in &for_stmt.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&for_stmt.body);
         let _ = self.pop_loop_context();
         self.symbols.exit_scope();
     }
@@ -1420,9 +1406,7 @@ impl TypeChecker {
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.apply_branch_refinements(incoming_refinements);
                 self.check_pattern(pattern, &value_ty);
-                for stmt in body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(body);
                 self.symbols.exit_scope();
                 None
             }

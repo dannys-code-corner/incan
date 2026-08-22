@@ -21580,3 +21580,253 @@ fn checked_c_resources_record_ownership_transfers_and_require_mutable_borrows() 
         mutable_borrow.errors
     );
 }
+
+// ========================================================================
+// Issue #1117: unreachable code after an unconditional `return`
+// ========================================================================
+
+/// Stable code carried by the unreachable-code warning, asserted here rather than message prose so these tests
+/// pin the machine-readable contract tooling consumes.
+const UNREACHABLE_CODE: &str = "INCAN-T0101";
+
+/// Collect only the unreachable-code warnings for `source`, ignoring any unrelated advisory diagnostics.
+///
+/// Uses [`check_str_warnings`], which panics if typechecking fails — so every caller also proves the diagnostic
+/// stays non-fatal.
+fn unreachable_warnings(source: &str, context: &str) -> Vec<CompileError> {
+    check_str_warnings(source, context)
+        .into_iter()
+        .filter(|warning| warning.stable_code() == Some(UNREACHABLE_CODE))
+        .collect()
+}
+
+/// Assert `source` produces exactly one unreachable-code warning and return it.
+fn single_unreachable_warning(source: &str, context: &str) -> CompileError {
+    match unreachable_warnings(source, context).as_slice() {
+        [warning] => warning.clone(),
+        other => panic!("{context}: expected exactly one unreachable-code warning, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_unreachable_code_after_direct_return_warns() {
+    let source = r#"
+def f() -> int:
+    return 1
+    println("dead code")
+    return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a direct `return`");
+
+    assert_eq!(warning.kind, ErrorKind::Warning);
+    assert!(
+        warning.message.contains("Unreachable code"),
+        "expected an unreachable-code message, got: {}",
+        warning.message
+    );
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead code\")\n    return 2",
+        "the span must cover the whole unreachable tail of the block"
+    );
+    assert_eq!(
+        warning.related_spans().len(),
+        1,
+        "expected the `return` that made the tail unreachable to be a related span, got: {:?}",
+        warning.related_spans()
+    );
+    assert_eq!(
+        &source[warning.related_spans()[0].span.start..warning.related_spans()[0].span.end],
+        "return 1",
+        "the related span must point at the `return` that ends the block"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_nested_if_body_warns() {
+    let source = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+        println("dead inside the if body")
+    return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a `return` inside an `if` body");
+
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead inside the if body\")",
+        "the span must cover only the nested block's unreachable tail"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_else_and_loop_bodies_warns() {
+    let else_body = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    else:
+        return 2
+        println("dead inside the else body")
+"#;
+    let _ = single_unreachable_warning(else_body, "statements after a `return` inside an `else` body");
+
+    let loop_body = r#"
+def f() -> int:
+    for value in [1, 2, 3]:
+        return value
+        println("dead inside the loop body")
+    return 0
+"#;
+    let _ = single_unreachable_warning(loop_body, "statements after a `return` inside a `for` body");
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_match_arm_block_warns() {
+    let source = r#"
+enum Color:
+    Red
+    Green
+
+def f(c: Color) -> int:
+    match c:
+        case Color.Red:
+            return 1
+            println("dead inside the match arm")
+        case Color.Green:
+            return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a `return` inside a match-arm block");
+
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead inside the match arm\")",
+        "the span must cover only the match arm's unreachable tail"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_method_body_warns() {
+    let source = r#"
+class Counter:
+    value: int
+
+    def get(self) -> int:
+        return self.value
+        println("dead inside the method body")
+"#;
+    let _ = single_unreachable_warning(source, "statements after a `return` inside a method body");
+}
+
+#[test]
+fn test_conditional_return_keeps_following_statements_reachable() {
+    let if_without_else = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    println("still reachable when flag is false")
+    return 2
+"#;
+    assert!(
+        unreachable_warnings(
+            if_without_else,
+            "a conditional `return` must not poison the outer block"
+        )
+        .is_empty(),
+        "statements after a conditional `return` are reachable and must not warn"
+    );
+
+    let both_branches_return = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    else:
+        return 2
+    println("conservatively treated as reachable")
+    return 3
+"#;
+    assert!(
+        unreachable_warnings(both_branches_return, "if/else divergence is out of scope for #1117").is_empty(),
+        "the narrow #1117 rule only follows a `return` in the same block, so if/else divergence must stay silent"
+    );
+
+    let loop_return = r#"
+def f() -> int:
+    for value in [1, 2, 3]:
+        return value
+    return 0
+"#;
+    assert!(
+        unreachable_warnings(
+            loop_return,
+            "a `return` inside a loop body must not poison the outer block"
+        )
+        .is_empty(),
+        "a loop body that returns does not make the statements after the loop unreachable"
+    );
+}
+
+#[test]
+fn test_trailing_return_and_return_free_bodies_do_not_warn() {
+    let trailing_return = r#"
+def f() -> int:
+    println("live")
+    return 1
+"#;
+    assert!(
+        unreachable_warnings(
+            trailing_return,
+            "a trailing `return` ends the block with nothing after it"
+        )
+        .is_empty(),
+        "a `return` as the last statement of a block must not warn"
+    );
+
+    let no_return = r#"
+def f() -> None:
+    println("live")
+    println("also live")
+"#;
+    assert!(
+        unreachable_warnings(no_return, "a body without `return` has nothing to make unreachable").is_empty(),
+        "a body without a `return` must not warn"
+    );
+}
+
+#[test]
+fn test_unreachable_statements_are_still_typechecked() {
+    let source = r#"
+def f() -> int:
+    return 1
+    println(undefined_name)
+"#;
+    let errors = check_str_err(source, "unreachable statements must still be typechecked");
+    assert!(
+        has_unknown_symbol_error(&errors, "undefined_name"),
+        "expected the unreachable statement's own type error to still be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_unreachable_code_in_a_trait_default_method_is_reported_once_per_definition() {
+    let source = r#"
+trait Greeter:
+    def greet(self) -> int:
+        return 1
+        println("dead in the trait default method")
+
+class Alpha with Greeter:
+    value: int
+
+class Beta with Greeter:
+    value: int
+
+def main() -> None:
+    alpha = Alpha(value=1)
+    beta = Beta(value=2)
+    println(f"{alpha.greet()} {beta.greet()}")
+"#;
+    // A default method body is one block of source, so it must warn once — not once per implementing type.
+    let _ = single_unreachable_warning(source, "a trait default method body with dead code");
+}
