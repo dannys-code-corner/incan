@@ -377,8 +377,8 @@ fn write_fixture_sdk_provider_seed(root: &Path, profile: &str) -> Result<PathBuf
     let inventory = serde_json::json!({
         "schema_version": 2,
         "sdk_id": "incan-fixture",
-        "sdk_version": "0.5.0",
-        "compiler_requirement": ">=0.5.0-dev.6,<0.6.0",
+        "sdk_version": "0.6.0",
+        "compiler_requirement": ">=0.6.0-dev.0,<0.7.0",
         "provider_codegen_revision": incan::version::SDK_PROVIDER_CODEGEN_REVISION,
         "components": inventory_components,
         "profiles": {

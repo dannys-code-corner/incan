@@ -5614,7 +5614,7 @@ fn requires_incan_allows_compatible_project_commands() -> Result<(), Box<dyn std
         r#"[project]
 name = "compatible_toolchain_guard"
 version = "0.1.0"
-requires-incan = ">=0.5.0-0,<0.6.0"
+requires-incan = ">=0.6.0-0,<0.7.0"
 
 [project.scripts]
 main = "src/main.incn"
