@@ -782,6 +782,19 @@ pub struct DeclarationArtifacts {
     pub function_bindings: HashMap<String, FunctionBindingInfo>,
     /// Module-local function declarations keyed by declaration span, preserving same-name overloads.
     pub function_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
+    /// Concrete class/model/trait method declarations keyed by declaration span (#1121).
+    ///
+    /// Method names are not unique the way top-level function names are: two owners can declare a method with the
+    /// same name, and one owner can declare same-name overloads. Declaration span is therefore the only key that
+    /// stays collision-safe without inventing a separate declaration-identity scheme, mirroring
+    /// `function_bindings_by_span`. Body IR lowering (`src/frontend/body_ir.rs`) consumes this instead of
+    /// re-resolving raw AST parameter annotations, so aliased and generic method parameter types match the checked
+    /// callable signature exactly rather than a local re-parse. Populated for every method checked through
+    /// `TypeChecker::check_method_with_self_ty` (trait defaults included, keyed by the trait method's own span), so
+    /// static methods (no receiver) are covered the same as instance methods. Newtype and enum methods are checked
+    /// through the same function and so also populate this table, even though Body IR does not lower their bodies
+    /// (#1102's own deliberate scope) — the fact simply goes unread for those owners.
+    pub method_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
     /// Function declaration emitted names keyed by source declaration span.
     ///
     /// Present when top-level overloads need Rust-level name disambiguation while preserving one source name.
@@ -1308,7 +1321,11 @@ pub struct StaticBindingInfo {
     pub is_imported: bool,
 }
 
-/// Lowering metadata for one source function declaration.
+/// Lowering metadata for one source function or method declaration.
+///
+/// Shared by [`DeclarationArtifacts::function_bindings`]/[`DeclarationArtifacts::function_bindings_by_span`] (top-
+/// level `def`) and [`DeclarationArtifacts::method_bindings_by_span`] (class/model/trait methods, #1121) rather than
+/// duplicating an equivalent struct per callable kind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionBindingInfo {
     /// Typechecker-resolved source parameters, including default-presence markers.

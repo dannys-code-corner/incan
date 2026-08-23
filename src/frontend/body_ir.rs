@@ -200,19 +200,22 @@ fn lower_function_body(
 /// Lower one method declaration's body into Body IR v0, or `None` for an abstract method (`body: None` — a trait
 /// requirement with no implementation, which has no body to lower).
 ///
-/// Unlike [`lower_function_body`], there is no [`TypeCheckInfo::declarations`] binding table for method parameter
-/// types (`function_bindings`/`function_bindings_by_span` are populated only for top-level `ast::FunctionDecl`
-/// items, never for `ast::MethodDecl`), so non-receiver method parameters declare with an explicit
-/// [`IncanType::Unknown`] rather than a resolved type — the same "no info available" fallback
-/// [`lower_function_body`] already falls back to when its own binding lookup misses. This does not affect the
-/// accuracy of ownership facts computed for actual *reads* of those parameters inside the body: those go through
-/// [`BodyBuilder::resolve_ty`] at each read's own span, which is populated uniformly for every checked expression
-/// regardless of whether it sits in a function or a method body.
+/// Ordinary (non-receiver) method parameters declare with the resolved type the typechecker recorded in
+/// [`DeclarationArtifacts::method_bindings_by_span`](
+/// crate::frontend::typechecker::type_info::DeclarationArtifacts::method_bindings_by_span), keyed by this method's
+/// own declaration span (#1121) — mirroring exactly how [`lower_function_body`] consumes `function_bindings` for
+/// top-level `def` parameters. This lookup can only miss (falling back to [`IncanType::Unknown`], matching
+/// `lower_function_body`'s own fallback) when the typechecker genuinely produced no fact for this declaration, such
+/// as a method belonging to a declaration kind excluded from `TypeChecker::check_method_with_self_ty`'s call sites;
+/// it is not the normal path for an ordinarily checked method. This does not change the accuracy of ownership facts
+/// computed for actual *reads* of those parameters inside the body: those go through [`BodyBuilder::resolve_ty`] at
+/// each read's own span, which is populated uniformly for every checked expression regardless of whether it sits in
+/// a function or a method body.
 ///
 /// The `self`/`mut self` receiver, when present, is declared as the body's first local (before ordinary
 /// parameters) via [`BodyBuilder::declare_receiver_local`], typed with the typechecker-equivalent `receiver_ty`.
 /// A method with `receiver: None` (a static/associated method) lowers with no receiver local at all, identically
-/// in shape to a free function's body.
+/// in shape to a free function's body; its ordinary parameters still resolve through the same binding lookup.
 fn lower_method_body(
     method: &ast::MethodDecl,
     decl_span: ast::Span,
@@ -227,6 +230,10 @@ fn lower_method_body(
     // declare a method named `new`), so the method's CompilerNodeId is scoped under its owning declaration's name
     // rather than reusing `CompilerNodeId::declaration(module_identity, &method.name)` directly.
     let decl_id = CompilerNodeId::declaration(module_identity, &format!("{owner_name}::{}", method.name));
+    let binding = type_info
+        .declarations
+        .method_bindings_by_span
+        .get(&(decl_span.start, decl_span.end));
 
     let mut builder = BodyBuilder::new(type_info);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
@@ -238,10 +245,14 @@ fn lower_method_body(
         param_locals.push(self_local);
     }
 
-    for param in &method.params {
+    for (index, param) in method.params.iter().enumerate() {
+        let ty = binding
+            .and_then(|b| b.params.get(index))
+            .map(|p| semantic_type_from_resolved(&p.ty))
+            .unwrap_or(IncanType::Unknown);
         let local = builder.declare_new_local(
             param.node.name.clone(),
-            IncanType::Unknown,
+            ty,
             root_scope,
             hir_span(param.span),
             body_stmts,
@@ -5177,6 +5188,137 @@ mod tests {
         assert!(
             !snapshot.contains("[receiver"),
             "a static/associated method (receiver: None) must not declare a receiver local: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn method_parameter_type_is_recorded_from_the_checked_callable_signature() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source =
+            "model Counter:\n  value: int\n\n  def add(self, amount: int) -> int:\n    return self.value + amount\n";
+        let module = build(source, &["m", "method_param"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body add decl:m::method_param::Counter::add"));
+        assert!(
+            snapshot.contains("local 1 amount : int [param]"),
+            "an ordinary method parameter must declare with its checked resolved type, not Unknown: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn aliased_method_parameter_type_retains_the_checked_callable_type() -> Result<(), Box<dyn std::error::Error>> {
+        // `UserId` is a type alias for `int` (RFC-style `type X = Y`). A naive re-parse of the raw `id: UserId`
+        // annotation inside Body IR (with no alias table of its own) could only produce `Named("UserId")`; the
+        // checked callable type resolves the alias all the way through, so the local must show `int`.
+        let source = "type UserId = int\n\nmodel Account:\n  balance: int\n\n  def credit(self, id: UserId, amount: int) -> int:\n    return self.balance + amount\n";
+        let module = build(source, &["m", "aliased_param"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("local 1 id : int [param]"),
+            "an aliased parameter type must resolve through the alias like any other checked expression, not stay \
+             the raw `UserId` annotation spelling: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn generic_method_parameter_type_retains_the_owner_type_variable() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "class Box[T]:\n  value: T\n\n  def replace(mut self, other: T) -> None:\n    self.value = other\n\n  def wrap(mut self, items: list[T]) -> None:\n    pass\n";
+        let module = build(source, &["m", "generic_param"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("local 1 other : T [param]"),
+            "a bare owner type-variable parameter must retain the checked type variable: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("local 1 items : List[T] [param]"),
+            "a generic collection parameter must retain its checked element type variable: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn static_method_parameter_types_are_recorded_like_ordinary_methods() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Counter:\n  value: int\n\n  def from_value(amount: int) -> Counter:\n    return Counter(value=amount)\n";
+        let module = build(source, &["m", "static_param"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(snapshot.contains("body from_value decl:m::static_param::Counter::from_value"));
+        assert!(
+            !snapshot.contains("[receiver"),
+            "a static/associated method (receiver: None) must not declare a receiver local: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("local 0 amount : int [param]"),
+            "a static method's ordinary parameters must resolve the same way an instance method's do: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn overloaded_method_declarations_retain_distinct_parameter_types_by_declaration_span()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Two `add` methods on the same owner, distinguished only by adopting two instantiations of the same
+        // generic trait (RFC 042 multi-instantiation) -- the language surface's one legitimate way to declare
+        // same-name, same-owner method overloads with genuinely different parameter types. If the checked binding
+        // table were keyed by `(owner, method_name)` alone (like `decorated_method_bindings`), the second
+        // declaration would silently overwrite the first and both bodies would report the same parameter type.
+        let source = "trait Adder[T]:\n  def add(self, x: T) -> T: ...\n\nmodel Calc with Adder[int], Adder[str]:\n  count: int\n\n  def add(self, x: int) -> int:\n    return x\n\n  def add(self, x: str) -> str:\n    return x\n";
+        let module = build(source, &["m", "overload_param"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("local 1 x : int [param]"),
+            "the int-instantiated overload must keep its own checked parameter type: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("local 1 x : str [param]"),
+            "the str-instantiated overload must keep its own distinct checked parameter type, not collide with the \
+             int overload recorded under the same method name: {snapshot}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn method_parameter_type_falls_back_to_unknown_only_when_the_typechecker_binding_is_absent()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A successful typecheck always populates `method_bindings_by_span` for every method Body IR actually
+        // lowers a body for (see `TypeChecker::check_method_with_self_ty`), so the only way to observe the
+        // fallback honestly is to simulate the checked fact genuinely being absent -- exercising the same
+        // defence-in-depth path `lower_method_body` falls back to, rather than asserting on a state ordinary
+        // typechecking can never produce.
+        let source =
+            "model Counter:\n  value: int\n\n  def add(self, amount: int) -> int:\n    return self.value + amount\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let module_path: Vec<String> = vec!["m".to_string(), "fallback_param".to_string()];
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+
+        let mut type_info = checker.type_info().clone();
+        type_info.declarations.method_bindings_by_span.clear();
+
+        let module = build_body_ir_module_v0(&program, &module_path, &type_info);
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("local 1 amount : ? [param]"),
+            "with no recorded checked binding for this declaration, the parameter must fall back to the explicit \
+             Unknown type rather than guessing from the raw annotation: {snapshot}"
         );
 
         Ok(())

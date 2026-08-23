@@ -16,7 +16,10 @@ use super::collect::decorators::resolve_decorator_id;
 use super::type_info::{
     RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
 };
-use super::{DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, TestingFixtureInfo, TypeChecker, YieldContext};
+use super::{
+    DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, TestingFixtureInfo, TypeChecker,
+    YieldContext,
+};
 use incan_core::interop::{RustItemKind, RustItemMetadata, RustTraitAssoc};
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives::{self, DeriveId};
@@ -3212,7 +3215,7 @@ impl TypeChecker {
 
         // Check methods
         for method in &model.methods {
-            self.check_method_with_owner_type_params(&method.node, &model.name, &model.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &model.name, &model.type_params);
         }
         self.check_method_partials(&model.name, &model.method_partials);
         for property in &model.properties {
@@ -3627,7 +3630,7 @@ impl TypeChecker {
 
         // Check methods
         for method in &class.methods {
-            self.check_method_with_owner_type_params(&method.node, &class.name, &class.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &class.name, &class.type_params);
         }
         self.check_method_partials(&class.name, &class.method_partials);
         for property in &class.properties {
@@ -3790,6 +3793,7 @@ impl TypeChecker {
             // their parameter, return, target, and generic-bound annotations still form part of the public trait API.
             self.check_method_with_self_ty(
                 &method.node,
+                method.span,
                 ResolvedType::SelfType,
                 &trait_type_params,
                 &tr.type_params,
@@ -4147,7 +4151,7 @@ impl TypeChecker {
         // Check methods (reuse the standard method-checking logic so parameters are in scope).
         for method in &nt.methods {
             if method.node.body.is_some() {
-                self.check_method_with_owner_type_params(&method.node, &nt.name, &nt.type_params);
+                self.check_method_with_owner_type_params(&method.node, method.span, &nt.name, &nt.type_params);
             }
         }
         self.check_method_partials(&nt.name, &nt.method_partials);
@@ -4376,7 +4380,7 @@ impl TypeChecker {
         }
 
         for method in &en.methods {
-            self.check_method_with_owner_type_params(&method.node, &en.name, &en.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &en.name, &en.type_params);
         }
         if let Some(TypeInfo::Enum(info)) = self.lookup_type_info(&en.name).cloned() {
             let method_spans = Self::method_decl_spans_by_name(&en.methods);
@@ -5399,7 +5403,16 @@ impl TypeChecker {
     }
 
     /// Validate a model, class, enum, or newtype method body using the concrete nominal owner as `self`.
-    fn check_method_with_owner_type_params(&mut self, method: &MethodDecl, owner: &str, owner_params: &[TypeParam]) {
+    ///
+    /// `method_span` is forwarded to [`Self::check_method_with_self_ty`] unchanged; see that method's docs for why
+    /// it is required (#1121 declaration-identity keying).
+    fn check_method_with_owner_type_params(
+        &mut self,
+        method: &MethodDecl,
+        method_span: Span,
+        owner: &str,
+        owner_params: &[TypeParam],
+    ) {
         self.validate_decorators_allowing_user_defined(&method.decorators);
         let declaration_name = format!("{owner}.{}", method.name);
         self.check_registry_description_decorators(
@@ -5438,7 +5451,7 @@ impl TypeChecker {
                     .collect(),
             )
         };
-        self.check_method_with_self_ty(method, owner_self_ty, &owner_type_params, owner_params);
+        self.check_method_with_self_ty(method, method_span, owner_self_ty, &owner_type_params, owner_params);
         self.current_method_owner = previous_owner;
         self.apply_user_defined_method_decorators(method, owner);
     }
@@ -5521,9 +5534,17 @@ impl TypeChecker {
     /// Generic owners pass `Owner[T, ...]` here so return checking and `cls(...)` constructor calls see the same
     /// generic surface that call sites use. Trait default methods may still pass bare `Self` because their eventual
     /// adopter is resolved later during trait conformance and method-call substitution.
+    ///
+    /// `method_span` is the declaration span of `method` itself (the `Spanned<MethodDecl>` this `&MethodDecl` was
+    /// unwrapped from). It keys [`DeclarationArtifacts::method_bindings_by_span`](
+    /// super::type_info::DeclarationArtifacts::method_bindings_by_span), recorded below once ordinary parameters are
+    /// resolved, so Body IR lowering (#1121) can retrieve the checked callable signature for this exact declaration
+    /// instead of re-resolving raw AST annotations. Span is the only key that stays collision-safe across same-name
+    /// methods on different owners and same-owner overloads, mirroring `function_bindings_by_span`.
     fn check_method_with_self_ty(
         &mut self,
         method: &MethodDecl,
+        method_span: Span,
         self_ty: ResolvedType,
         owner_type_params: &[String],
         owner_params: &[TypeParam],
@@ -5588,9 +5609,18 @@ impl TypeChecker {
             self.current_classmethod_self_ty = Some(self_ty.clone());
         }
 
-        // Define parameters
+        // Define parameters, capturing each checked callable-parameter fact once so it can be recorded for Body IR
+        // lowering below without re-resolving the annotation (and re-emitting any of its diagnostics) a second time.
+        let mut checked_params = Vec::with_capacity(method.params.len());
         for param in &method.params {
-            let ty = local_type_for_param(param.node.kind, self.resolve_type_checked(&param.node.ty));
+            let resolved_ty = self.resolve_type_checked(&param.node.ty);
+            checked_params.push(CallableParam::named_with_default(
+                param.node.name.clone(),
+                resolved_ty.clone(),
+                param.node.kind,
+                param.node.default.is_some(),
+            ));
+            let ty = local_type_for_param(param.node.kind, resolved_ty);
             self.symbols.define(Symbol {
                 name: param.node.name.clone(),
                 kind: SymbolKind::Variable(VariableInfo {
@@ -5604,6 +5634,13 @@ impl TypeChecker {
         }
 
         let return_type = self.resolve_type_checked(&method.return_type);
+        self.type_info.declarations.method_bindings_by_span.insert(
+            (method_span.start, method_span.end),
+            FunctionBindingInfo {
+                params: checked_params,
+                return_type: return_type.clone(),
+            },
+        );
         let effective_return_type = Self::concretize_self_type_in_annotation(&return_type, &self_ty);
         let body_has_yield = method
             .body
