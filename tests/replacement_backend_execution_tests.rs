@@ -171,6 +171,51 @@ def main() -> list[int]:
     Ok(())
 }
 
+/// Materialize a lazy generator expression in the replacement executor without evaluating its filter or element
+/// while constructing the Body-IR value. The selected profile admits only the explicit `.collect()` consumer and
+/// indexes its scalar result; it must not treat the generator rvalue itself as an eager list or use generated Rust.
+#[test]
+fn replacement_executes_a_lazy_generator_expression_only_when_collect_consumes_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  values = (value * 10 for value in range(1, 5) if value > 2).collect()
+  return values[0] + values[1]
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(70));
+    assert!(
+        execution.body_snapshot.contains("generator(source="),
+        "replacement execution must consume the explicit deferred generator rvalue"
+    );
+    assert!(
+        execution.body_snapshot.contains("yield"),
+        "the Body-IR proof must retain a yield rather than materializing an eager list"
+    );
+    Ok(())
+}
+
+/// Constructing a generator must not evaluate its deferred element body. The division would fail if the replacement
+/// executor accidentally treated the rvalue as an eager collection; dropping the unconsumed value must still return
+/// the surrounding scalar result.
+#[test]
+fn replacement_keeps_an_unconsumed_generator_expression_deferred() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  unused = (value // 0 for value in range(1, 2))
+  return 7
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(7));
+    assert!(
+        execution.body_snapshot.contains("yield ") && execution.body_snapshot.contains("const(0)"),
+        "the deferred body must remain represented even though it was never consumed"
+    );
+    Ok(())
+}
+
 /// Execute the selected plain builtin-collection loop over scalar tuple values.
 #[test]
 fn replacement_executes_plain_scalar_tuple_collection_loop() -> Result<(), Box<dyn std::error::Error>> {
