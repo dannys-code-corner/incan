@@ -670,10 +670,11 @@ pub(crate) struct CorpusSummary {
     pub(crate) cases: Vec<CaseReport>,
 }
 
-/// The current CI-summary schema version. Version `3` adds `ReceiptRef::ReplacementExecuted`, which binds the five
-/// #988 Body-IR cases to their own selection/execution identities and canonical body, ownership, and runtime
-/// evidence while retaining an explicit non-green unavailable comparison. Bump again whenever `CorpusSummary`'s or
-/// `CaseReport`'s field shape changes in a way a consumer (including #655) would need to notice.
+/// The current CI-summary schema version. Version `3` adds `ReceiptRef::ReplacementExecuted`, which binds direct
+/// Body-IR cases (initially #988's profile and subsequently #1123's lazy-generator case) to their own
+/// selection/execution identities and canonical body, ownership, and runtime evidence while retaining an explicit
+/// non-green unavailable comparison. Bump again whenever `CorpusSummary`'s or `CaseReport`'s field shape changes
+/// in a way a consumer (including #655) would need to notice.
 pub(crate) const SCHEMA_VERSION: u32 = 3;
 
 /// Evaluate every case in the corpus and assemble the CI-readable summary.

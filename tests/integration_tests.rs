@@ -6240,6 +6240,63 @@ def main() -> None:
         Ok(())
     }
 
+    /// #1123 regression: generator-expression construction evaluates the outer source once, but every filter and
+    /// element evaluation remains deferred until a consumer polls the generator. This is a generated-Rust
+    /// compile-and-run oracle for the established source contract; it does not claim replacement-executor support.
+    #[test]
+    fn test_generator_expression_defers_filter_and_element_evaluation() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+def source() -> list[int]:
+    println("outer source")
+    return [1, 2, 3]
+
+
+def keep(value: int) -> bool:
+    println("filter")
+    return value > 1
+
+
+def project(value: int) -> int:
+    println("element")
+    return value * 10
+
+
+def main() -> None:
+    values = (project(value) for value in source() if keep(value))
+    println("after construction")
+    collected = values.collect()
+    println(collected[0])
+    println(collected[1])
+"#;
+        let output = run_incan_source(source);
+        assert!(
+            output.status.success(),
+            "generator-expression laziness regression failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = strip_ansi_escapes(&String::from_utf8_lossy(&output.stdout));
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "outer source",
+                "after construction",
+                "filter",
+                "filter",
+                "element",
+                "filter",
+                "element",
+                "20",
+                "30",
+            ],
+            "generator-expression filters/elements must not run before construction completes:\n{stdout}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_clone_self_struct_field_reads_do_not_move_out_of_borrowed_self() -> Result<(), Box<dyn std::error::Error>> {
         let output = incan_command()

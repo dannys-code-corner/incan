@@ -6,8 +6,10 @@
 //! scalar local values, scalar tuple collections, arithmetic, compiler-owned string concatenation, branches,
 //! normalized loops, returns, and assertions. It admits only the one-level `.0`/`.1` tuple projections Body IR
 //! emits for `for a, b in pairs`, where `pairs` is `list[tuple[scalar, scalar]]`; packages, Rust interop, callable
-//! values, generators, general destructuring, and other projections remain visible refusals for later #988
-//! extensions.
+//! values, generator functions, generator adapters, general destructuring, and other projections remain visible
+//! refusals for later #988 extensions. A generator expression with the selected `range` source profile may be
+//! materialized by its `.collect()` consumer: construction records its source/captures without running the deferred
+//! body, and collection executes that body in this interpreter rather than falling back to generated Rust.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,8 +19,8 @@ use incan_core::{
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
-    AggregateKind, BinOp, Body, BodyIrModule, Callee, Constant, HelperOp, IterProtocol, LocalId, LocalOrigin, Operand,
-    OwnershipFact, Place, PlaceElem, Rvalue, Statement, StatementKind, UnOp,
+    AggregateKind, BinOp, Body, BodyIrModule, Callee, Constant, GeneratorBody, HelperOp, IterProtocol, LocalId,
+    LocalOrigin, Operand, OwnershipFact, Place, PlaceElem, Rvalue, Statement, StatementKind, UnOp,
 };
 use incan_semantics_core::{AbiV0RuntimeRequirement, HirSourceSpan, IncanPrimitiveType, IncanType};
 
@@ -31,8 +33,8 @@ use crate::backend::selection::digest_output;
 /// test or CLI invocation to hang without a receipt.
 const MAX_EXECUTION_STEPS: usize = 100_000;
 
-/// One scalar value supported by the first replacement-execution profile.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// One runtime value supported by the bounded replacement-execution profile.
+#[derive(Debug, Clone, PartialEq)]
 pub enum ReplacementValue {
     /// An Incan `int` value.
     Int(i64),
@@ -53,6 +55,30 @@ pub enum ReplacementValue {
     },
     /// A two-element scalar tuple, retained only as one element of an admitted replacement list value.
     Tuple(Vec<ReplacementValue>),
+    /// A generator expression whose source and lexical captures were evaluated at construction time, while its body
+    /// remains deferred until an admitted consumer asks for its values.
+    Generator(Box<ReplacementGenerator>),
+    /// Values materialized by the bounded generator-expression `.collect()` profile.
+    ///
+    /// This is deliberately distinct from [`Self::List`]: the latter remains the existing scalar-pair collection
+    /// profile, while this variant makes the narrow generator consumer explicit and lets its scalar results be
+    /// indexed without admitting general list execution.
+    CollectedGenerator {
+        elements: Vec<ReplacementValue>,
+        next: usize,
+    },
+}
+
+/// Deferred state for a bounded replacement generator expression.
+///
+/// `source` and `captures` hold the values observed when the surrounding body constructed the generator. `body`
+/// contains only compiler-owned Body-IR statements and is interpreted when `.collect()` consumes this value. The
+/// fields are private so callers cannot construct a replacement generator without the executor's ownership reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplacementGenerator {
+    source: ReplacementValue,
+    captures: Vec<(LocalId, ReplacementValue)>,
+    body: GeneratorBody,
 }
 
 impl ReplacementValue {
@@ -75,6 +101,15 @@ impl ReplacementValue {
             ),
             Self::Tuple(elements) => format!(
                 "({})",
+                elements
+                    .iter()
+                    .map(Self::observable_text)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::Generator(_) => "<generator>".to_string(),
+            Self::CollectedGenerator { elements, .. } => format!(
+                "[{}]",
                 elements
                     .iter()
                     .map(Self::observable_text)
@@ -122,7 +157,7 @@ pub struct RuntimeRequirementProjection {
 }
 
 /// Successful replacement execution evidence for one free function.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ReplacementExecution {
     /// The function's source-level return value.
     pub value: ReplacementValue,
@@ -835,7 +870,8 @@ fn validate_call_profile(
         // Body IR v0 has only this source spelling. The one-function, import-free CLI profile makes it unambiguous
         // for #988; canonical call-target identity belongs to #1042.
         Callee::Function(name) => name == "range",
-        Callee::Helper(_) | Callee::Method(_) => false,
+        Callee::Method(name) => name == "collect",
+        Callee::Helper(_) => false,
     };
     if !supported {
         return Err(unsupported(format!("call to {}", callee_label(callee)), span));
@@ -872,8 +908,75 @@ fn validate_rvalue_profile(
         ),
         Rvalue::Format(_) => Err(unsupported("f-string", span)),
         Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
+        Rvalue::Generator {
+            source,
+            captured_operands,
+            body,
+        } => {
+            validate_operand_profile(source, span, tuple_iteration_locals)?;
+            for operand in captured_operands {
+                validate_operand_profile(operand, span, tuple_iteration_locals)?;
+            }
+            validate_generator_body_profile(body, tuple_iteration_locals, scalar_tuple_collection_locals)
+        }
         Rvalue::Match { .. } => Err(unsupported("match expression", span)),
     }
+}
+
+/// Validate the deferred body carried by an admitted generator-expression rvalue.
+///
+/// A normal function body still refuses [`StatementKind::Yield`]. Within this explicitly stored generator body,
+/// however, `yield` is exactly the deferred result boundary and is interpreted only by `.collect()` below.
+fn validate_generator_body_profile(
+    body: &GeneratorBody,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    validate_generator_statements_profile(&body.stmts, tuple_iteration_locals, scalar_tuple_collection_locals)
+}
+
+/// Recurse through the generator's normalized control flow while admitting only its terminal yields.
+fn validate_generator_statements_profile(
+    statements: &[Statement],
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    for statement in statements {
+        match &statement.kind {
+            StatementKind::Yield { value } => {
+                validate_operand_profile(value, statement.span, tuple_iteration_locals)?;
+            }
+            StatementKind::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
+                validate_operand_profile(cond, statement.span, tuple_iteration_locals)?;
+                validate_generator_statements_profile(
+                    &then_block.stmts,
+                    tuple_iteration_locals,
+                    scalar_tuple_collection_locals,
+                )?;
+                if let Some(else_block) = else_block {
+                    validate_generator_statements_profile(
+                        &else_block.stmts,
+                        tuple_iteration_locals,
+                        scalar_tuple_collection_locals,
+                    )?;
+                }
+            }
+            StatementKind::Loop { body } => validate_generator_statements_profile(
+                &body.stmts,
+                tuple_iteration_locals,
+                scalar_tuple_collection_locals,
+            )?,
+            StatementKind::Return { .. } => {
+                return Err(unsupported("return from a generator expression", statement.span));
+            }
+            _ => validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?,
+        }
+    }
+    Ok(())
 }
 
 /// Validate the narrow aggregate vocabulary needed to materialize scalar tuple collections.
@@ -965,10 +1068,9 @@ fn validate_read_place(
             "non-numeric tuple field projection outside the scalar tuple collection profile",
             span,
         )),
-        [PlaceElem::Index(_)] => Err(unsupported(
-            "index projection outside the scalar tuple collection profile",
-            span,
-        )),
+        // The only admitted index target is a list created by the generator-expression `.collect()` consumer. The
+        // runtime check keeps ordinary list indexing outside the original scalar-pair collection profile.
+        [PlaceElem::Index(index)] => validate_operand_profile(index, span, tuple_iteration_locals),
         [PlaceElem::Slice { .. }] => Err(unsupported(
             "slice projection outside the scalar tuple collection profile",
             span,
@@ -1082,14 +1184,18 @@ impl BodyExecutor {
                 iterator,
                 protocol: IterProtocol::Builtin,
             } => self.execute_builtin_next(destination, iterator, statement.span),
-            StatementKind::Yield { .. } => Err(unsupported("generator yield", statement.span)),
+            StatementKind::Yield { .. } => Err(unsupported(
+                "generator yield outside a generator expression",
+                statement.span,
+            )),
             StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
             StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
             StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
         }
     }
 
-    /// Evaluate a supported helper or the profile's admitted `range` source-spelling call.
+    /// Evaluate a supported helper, the profile's admitted `range` source-spelling call, or a lazy generator
+    /// materialization. Generator construction itself is an rvalue; this call is the first supported consumer.
     fn execute_call(
         &mut self,
         destination: Option<&Place>,
@@ -1109,6 +1215,13 @@ impl BodyExecutor {
                 ReplacementValue::Str(format!("{left}{right}"))
             }
             Callee::Function(name) if name == "range" => self.evaluate_range(args, span)?,
+            Callee::Method(name) if name == "collect" => {
+                let [receiver] = args else {
+                    return Err(unsupported("generator collect call arity", span));
+                };
+                let generator = self.take_generator_receiver(receiver, span)?;
+                self.collect_generator(generator, span)?
+            }
             _ => return Err(unsupported(format!("call to {}", callee_label(callee)), span)),
         };
         self.assign_local(local, value);
@@ -1229,7 +1342,171 @@ impl BodyExecutor {
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
+            Rvalue::Generator {
+                source,
+                captured_operands,
+                body,
+            } => self.construct_generator(source, captured_operands, body, span),
             Rvalue::Match { .. } => Err(unsupported("match expression", span)),
+        }
+    }
+
+    /// Capture a generator expression's construction-time source and free values without executing its body.
+    fn construct_generator(
+        &mut self,
+        source: &Operand,
+        captured_operands: &[Operand],
+        body: &GeneratorBody,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if captured_operands.len() != body.capture_locals.len() {
+            return Err(unsupported("generator capture metadata mismatch", span));
+        }
+        let source = self.evaluate_operand(source, span)?;
+        let captures = captured_operands
+            .iter()
+            .zip(&body.capture_locals)
+            .map(|(operand, local)| self.evaluate_operand(operand, span).map(|value| (*local, value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ReplacementValue::Generator(Box::new(ReplacementGenerator {
+            source,
+            captures,
+            body: body.clone(),
+        })))
+    }
+
+    /// Consume an admitted generator expression by running only its deferred Body-IR body.
+    ///
+    /// The child executor receives the source and captures already observed at construction time. It intentionally
+    /// does not inherit any other outer locals, preventing deferred evaluation from reaching mutable construction
+    /// scope state by name. Its ownership evidence and bounded step count are merged back into the caller only after
+    /// the consumer has actually asked for collection.
+    fn collect_generator(
+        &mut self,
+        generator: ReplacementGenerator,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut locals = BTreeMap::new();
+        locals.insert(generator.body.source_local, generator.source);
+        for (local, value) in generator.captures {
+            if locals.insert(local, value).is_some() {
+                return Err(unsupported("generator capture aliases its source local", span));
+            }
+        }
+        let mut deferred = Self {
+            locals,
+            ownership_reads: Vec::new(),
+            steps: self.steps,
+        };
+        let mut elements = Vec::new();
+        match deferred.collect_generator_statements(&generator.body.stmts, &mut elements)? {
+            Flow::Next => {}
+            Flow::Break | Flow::Continue => {
+                return Err(unsupported("generator loop control outside a normalized loop", span));
+            }
+            Flow::Return(_) => return Err(unsupported("return from a generator expression", span)),
+        }
+        self.steps = deferred.steps;
+        self.ownership_reads.extend(deferred.ownership_reads);
+        Ok(ReplacementValue::CollectedGenerator { elements, next: 0 })
+    }
+
+    /// Take the generator receiver consumed by `.collect()` while retaining Body IR's recorded receiver read.
+    ///
+    /// Body-IR's generic method-lowering convention records receivers as borrows, but `Generator.collect` consumes
+    /// its iterator in the runtime contract. The bounded executor therefore removes precisely this bare local after
+    /// recording that compiler-owned read, so a second collection cannot manufacture a fresh deferred iterator.
+    fn take_generator_receiver(
+        &mut self,
+        receiver: &Operand,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementGenerator, ReplacementExecutionError> {
+        let Operand::Place(place_operand) = receiver else {
+            return Err(unsupported("non-place generator collect receiver", span));
+        };
+        let local = bare_local(&place_operand.place, span)?;
+        self.ownership_reads.push(OwnershipRead {
+            span,
+            fact: place_operand.fact,
+            last_use: place_operand.last_use,
+        });
+        let value = self
+            .locals
+            .remove(&local)
+            .ok_or_else(|| runtime_failure("read of an unavailable generator receiver".to_string(), span))?;
+        let ReplacementValue::Generator(generator) = value else {
+            return Err(unsupported(
+                format!(
+                    "collecting {} outside the generator-expression profile",
+                    value_kind(&value)
+                ),
+                span,
+            ));
+        };
+        Ok(*generator)
+    }
+
+    /// Execute deferred generator statements, appending each explicit Body-IR `yield` and continuing its loop.
+    fn collect_generator_statements(
+        &mut self,
+        statements: &[Statement],
+        elements: &mut Vec<ReplacementValue>,
+    ) -> Result<Flow, ReplacementExecutionError> {
+        for statement in statements {
+            self.record_step(statement.span)?;
+            let flow = match &statement.kind {
+                StatementKind::Yield { value } => {
+                    elements.push(self.evaluate_operand(value, statement.span)?);
+                    Flow::Next
+                }
+                StatementKind::If {
+                    cond,
+                    then_block,
+                    else_block,
+                } => {
+                    if self.evaluate_operand(cond, statement.span)?.into_bool(statement.span)? {
+                        self.collect_generator_statements(&then_block.stmts, elements)?
+                    } else if let Some(else_block) = else_block {
+                        self.collect_generator_statements(&else_block.stmts, elements)?
+                    } else {
+                        Flow::Next
+                    }
+                }
+                StatementKind::Loop { body } => self.collect_generator_loop(&body.stmts, elements, statement.span)?,
+                StatementKind::Return { .. } => {
+                    return Err(unsupported("return from a generator expression", statement.span));
+                }
+                _ => self.execute_statement(statement)?,
+            };
+            match flow {
+                Flow::Next => {}
+                flow => return Ok(flow),
+            }
+        }
+        Ok(Flow::Next)
+    }
+
+    /// Execute one normalized loop nested in a deferred generator body.
+    fn collect_generator_loop(
+        &mut self,
+        statements: &[Statement],
+        elements: &mut Vec<ReplacementValue>,
+        span: HirSourceSpan,
+    ) -> Result<Flow, ReplacementExecutionError> {
+        loop {
+            match self.collect_generator_statements(statements, elements)? {
+                Flow::Next | Flow::Continue => {}
+                Flow::Break => return Ok(Flow::Next),
+                Flow::Return(value) => return Ok(Flow::Return(value)),
+            }
+            if self.steps >= MAX_EXECUTION_STEPS {
+                return Err(runtime_failure(
+                    format!(
+                        "normalized generator loop exceeded the {MAX_EXECUTION_STEPS}-step replacement profile limit"
+                    ),
+                    span,
+                ));
+            }
         }
     }
 
@@ -1381,7 +1658,7 @@ impl BodyExecutor {
                         .ok_or_else(|| runtime_failure("read of an unavailable local".to_string(), span))?,
                     OwnershipFact::Unknown => return Err(unsupported("unknown ownership fact", span)),
                 };
-                let value = project_tuple_field(value, &place_operand.place, span)?;
+                let value = self.project_place(value, &place_operand.place, span)?;
                 if matches!(place_operand.fact, OwnershipFact::Copy) && !value.is_copy_shaped() {
                     return Err(unsupported("copy of a non-copy or unavailable local", span));
                 }
@@ -1405,6 +1682,43 @@ impl BodyExecutor {
         self.locals
             .remove(&place.local)
             .ok_or_else(|| runtime_failure("read of a moved or dropped local".to_string(), span))
+    }
+
+    /// Apply the one scalar-tuple field projection or collected-generator list index admitted by this profile.
+    fn project_place(
+        &mut self,
+        value: ReplacementValue,
+        place: &Place,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        match place.projection.as_slice() {
+            [] | [PlaceElem::Field(_)] => project_tuple_field(value, place, span),
+            [PlaceElem::Index(index)] => {
+                let index = self.evaluate_operand(index, span)?;
+                let ReplacementValue::Int(index) = index else {
+                    return Err(unsupported("collected generator index using a non-int value", span));
+                };
+                let index = usize::try_from(index)
+                    .map_err(|_| runtime_failure("collected generator index is negative".to_string(), span))?;
+                match value {
+                    ReplacementValue::CollectedGenerator { elements, .. } => elements
+                        .get(index)
+                        .cloned()
+                        .ok_or_else(|| runtime_failure("collected generator index is out of range".to_string(), span)),
+                    value => Err(unsupported(
+                        format!(
+                            "indexing {} outside the generator-expression collect profile",
+                            value_kind(&value)
+                        ),
+                        span,
+                    )),
+                }
+            }
+            _ => Err(unsupported(
+                "place projection outside the scalar tuple collection profile",
+                span,
+            )),
+        }
     }
 
     /// Record one executed statement and enforce the bounded-profile step limit.
@@ -1715,6 +2029,8 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Range { .. } => "range",
         ReplacementValue::List { .. } => "list",
         ReplacementValue::Tuple(_) => "tuple",
+        ReplacementValue::Generator(_) => "generator",
+        ReplacementValue::CollectedGenerator { .. } => "collected generator list",
     }
 }
 

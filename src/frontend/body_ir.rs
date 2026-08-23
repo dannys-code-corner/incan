@@ -18,11 +18,11 @@
 //! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
 //! binary/unary operators, calls, method calls, field access, indexing, slicing, parenthesization, tuples,
 //! list/dict/set literals (no spreads), constructors, expression-position `if`/`loop`, `try` (`?`), f-strings,
-//! list/dict comprehensions, closure literals, partial callables (see
+//! list/dict comprehensions, lazy generator expressions, closure literals, partial callables (see
 //! [`BodyBuilder::lower_closure`]/[`BodyBuilder::lower_partial`] for how captures
 //! are computed and represented explicitly rather than left implicit), and `match` (see [`BodyBuilder::lower_match`]
-//! for how patterns are lowered and their bindings scoped). Everything else -- generator expressions, a bare
-//! `yield` with no value, and expression-position `yield` (the two-way send/receive protocol) -- lowers to an explicit
+//! for how patterns are lowered and their bindings scoped). Everything else -- a bare `yield` with no value, and
+//! expression-position `yield` (the two-way send/receive protocol) -- lowers to an explicit
 //! `Statement::Unsupported` / `Operand::Unknown` node rather than panicking, so the model stays total over real
 //! programs. Expression-position `yield` is a stub even in the existing Rust-emission backend today, not real
 //! behavior this bucket needs to preserve.
@@ -1814,12 +1814,16 @@ impl<'a> BodyBuilder<'a> {
         self.temp_operand(dict_local, &ty)
     }
 
-    /// Record the current generator-expression boundary without misrepresenting its lazy semantics.
+    /// Lower a generator expression into a distinct, deferred [`bir::Rvalue::Generator`].
     ///
-    /// The established language behavior is a lazy iterator-adapter chain. Materializing its clauses into a `List`
-    /// while reporting `Generator[T]` changes source-visible evaluation order and cannot serve as replacement-backend
-    /// evidence. #1123 owns a suspension-aware representation; until then the Body IR must retain an explicit
-    /// unsupported marker for this expression.
+    /// The first `for` source is evaluated exactly once at construction, matching the established legacy
+    /// iterator-adapter emitter. Its value and every other needed outer lexical value are then captured into fresh
+    /// generator-local bindings. Clause polling, later `for` sources, filters, and element evaluation lower only
+    /// into the generator body, so the enclosing body neither materializes the sequence nor runs a deferred effect.
+    ///
+    /// Body IR currently accepts only plain binding patterns for generator clauses. It rejects a whole generator
+    /// expression before evaluating its source when another pattern shape would require a partially represented
+    /// deferred binding protocol; that keeps unsupported forms visible rather than approximating them as a list.
     fn lower_generator_expr(
         &mut self,
         generator: &ast::GeneratorExpr,
@@ -1827,11 +1831,196 @@ impl<'a> BodyBuilder<'a> {
         scope: bir::ScopeId,
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
-        let _ = generator;
-        self.unsupported_operand(
-            "generator expression requires lazy suspension semantics (#1123)".to_string(),
+        let hir_span_value = hir_span(span);
+        let Some((first_clause, remaining_clauses)) = generator.clauses.split_first() else {
+            return self.unsupported_operand(
+                "generator expression without a for clause".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        };
+        let ast::ComprehensionClause::For {
+            pattern: first_pattern,
+            iter: first_iter,
+        } = first_clause
+        else {
+            return self.unsupported_operand(
+                "generator expression whose first clause is not a for clause".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        };
+        let ast::Pattern::Binding(first_name) = &first_pattern.node else {
+            return self.unsupported_operand(
+                "generator for-clause pattern is not a simple binding".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        };
+        if generator.clauses.iter().any(|clause| {
+            matches!(clause, ast::ComprehensionClause::For { pattern, .. }
+                if !matches!(pattern.node, ast::Pattern::Binding(_)))
+        }) {
+            return self.unsupported_operand(
+                "generator for-clause pattern is not a simple binding".to_string(),
+                scope,
+                hir_span_value,
+                out,
+            );
+        }
+
+        // The first source is the legacy adapter chain's eager boundary. Lowering it before creating the rvalue
+        // preserves source-visible construction timing; all remaining expression lowering below writes only into
+        // `generator_stmts` and therefore happens at poll time.
+        let first_protocol = self.type_info.protocol_iteration(first_iter.span).cloned();
+        let first_is_fallible = first_protocol
+            .as_ref()
+            .is_some_and(|protocol| protocol.fallible_error_type.is_some());
+        let effective_first_iter: &ast::Spanned<ast::Expr> = match (&first_iter.node, first_is_fallible) {
+            (ast::Expr::Try(inner), true) => inner,
+            _ => first_iter,
+        };
+        let source = self.lower_expr_to_operand(effective_first_iter, scope, out);
+
+        let generator_scope = self.new_scope(Some(scope), hir_span_value);
+        let source_local = self.new_temp(
+            self.resolve_ty(effective_first_iter.span),
+            generator_scope,
+            hir_span_value,
+        );
+        self.locals[source_local.index()].origin = bir::LocalOrigin::Captured;
+
+        // Capture every lexical value used after the first source once, at construction. The body cannot read the
+        // enclosing place directly after this point, and restoring the full binding map below prevents generator
+        // clause/capture names from leaking into the following enclosing statement.
+        let enclosing_bindings = self.bindings.clone();
+        let free_names = free_vars_in_generator_deferred_body(generator);
+        let mut captured_operands = Vec::with_capacity(free_names.len());
+        let mut capture_locals = Vec::with_capacity(free_names.len());
+        for name in &free_names {
+            let Some(&outer_local) = self.bindings.get(name) else {
+                // Module/external names remain explicit `External` references when the deferred body is lowered;
+                // there is no local value available to capture and rebind here.
+                continue;
+            };
+            let outer_ty = self.locals[outer_local.index()].ty.clone();
+            let outer_place = bir::Place::from_local(outer_local);
+            let (fact, last_use) = self.ownership_fact_for_place(&outer_place, &outer_ty);
+            captured_operands.push(bir::Operand::place(outer_place, fact, last_use));
+
+            let total_reads = count_reads_in_generator_deferred_body(name, generator);
+            let capture_local =
+                self.declare_new_local_with_reads(name.clone(), outer_ty, generator_scope, hir_span_value, total_reads);
+            self.locals[capture_local.index()].origin = bir::LocalOrigin::Captured;
+            capture_locals.push(capture_local);
+        }
+
+        let first_loop_scope = self.new_scope(Some(generator_scope), hir_span_value);
+        let first_total_reads = count_reads_in_expr(first_name, &generator.expr.node)
+            + count_reads_in_comprehension_clauses(first_name, remaining_clauses);
+        let first_local = self.declare_new_local_with_reads(
+            first_name.clone(),
+            self.resolve_ty(first_pattern.span),
+            first_loop_scope,
+            hir_span(first_pattern.span),
+            first_total_reads,
+        );
+
+        let mut generator_stmts = Vec::new();
+        let iterator_ty = match &first_protocol {
+            Some(protocol) => semantic_type_from_resolved(&protocol.iterator_type),
+            None => self.resolve_ty(effective_first_iter.span),
+        };
+        let iterator_local = self.new_temp(iterator_ty, generator_scope, hir_span_value);
+        match &first_protocol {
+            Some(protocol) => generator_stmts.push(bir::Statement {
+                kind: bir::StatementKind::Call {
+                    destination: Some(bir::Place::from_local(iterator_local)),
+                    callee: bir::Callee::Method(protocol.iter_method.clone()),
+                    args: vec![bir::Operand::place(
+                        bir::Place::from_local(source_local),
+                        bir::OwnershipFact::Borrow,
+                        false,
+                    )],
+                    may_panic: false,
+                },
+                span: hir_span_value,
+            }),
+            None => generator_stmts.push(bir::Statement {
+                kind: bir::StatementKind::Assign {
+                    place: bir::Place::from_local(iterator_local),
+                    rvalue: bir::Rvalue::Use(bir::Operand::place(
+                        bir::Place::from_local(source_local),
+                        bir::OwnershipFact::Borrow,
+                        false,
+                    )),
+                },
+                span: hir_span_value,
+            }),
+        }
+
+        self.loop_break_targets.push(None);
+        let mut first_loop_stmts = vec![bir::Statement {
+            kind: bir::StatementKind::IterNext {
+                destination: bir::Place::from_local(first_local),
+                iterator: bir::Operand::place(
+                    bir::Place::from_local(iterator_local),
+                    bir::OwnershipFact::MutBorrow,
+                    false,
+                ),
+                protocol: match &first_protocol {
+                    Some(protocol) => bir::IterProtocol::UserDefined {
+                        next_method: protocol.next_method.clone(),
+                        fallible: first_is_fallible,
+                    },
+                    None => bir::IterProtocol::Builtin,
+                },
+            },
+            span: hir_span_value,
+        }];
+        let terminal = ComprehensionTerminal::GeneratorYield {
+            element: &generator.expr,
+        };
+        self.lower_comprehension_clauses(
+            remaining_clauses,
+            &terminal,
+            first_loop_scope,
+            hir_span_value,
+            &mut first_loop_stmts,
+        );
+        self.insert_scope_drops(&mut first_loop_stmts, first_loop_scope);
+        self.loop_break_targets.pop();
+        generator_stmts.push(bir::Statement {
+            kind: bir::StatementKind::Loop {
+                body: bir::Block {
+                    scope: first_loop_scope,
+                    stmts: first_loop_stmts,
+                },
+            },
+            span: hir_span_value,
+        });
+        self.bindings = enclosing_bindings;
+
+        // `Generator::new` owns a boxed iterator in the legacy runtime, even when every captured source value is
+        // Copy-shaped. Record that allocation fact directly rather than relying on incidental temporary locals.
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+        let ty = self.resolve_ty(span);
+        self.push_assign_temp(
+            bir::Rvalue::Generator {
+                source,
+                captured_operands,
+                body: Box::new(bir::GeneratorBody {
+                    source_local,
+                    capture_locals,
+                    stmts: generator_stmts,
+                }),
+            },
+            ty,
             scope,
-            hir_span(span),
+            hir_span_value,
             out,
         )
     }
@@ -1973,6 +2162,13 @@ impl<'a> BodyBuilder<'a> {
                         may_panic: false,
                     },
                     span,
+                });
+            }
+            ComprehensionTerminal::GeneratorYield { element } => {
+                let value = self.lower_expr_to_operand(element, scope, out);
+                out.push(bir::Statement {
+                    kind: bir::StatementKind::Yield { value },
+                    span: hir_span(element.span),
                 });
             }
         }
@@ -3244,6 +3440,8 @@ enum ComprehensionTerminal<'a> {
         key: &'a ast::Spanned<ast::Expr>,
         value: &'a ast::Spanned<ast::Expr>,
     },
+    /// Suspend the surrounding generator body with `element` for one accepted binding combination.
+    GeneratorYield { element: &'a ast::Spanned<ast::Expr> },
 }
 
 impl ComprehensionTerminal<'_> {
@@ -3256,6 +3454,7 @@ impl ComprehensionTerminal<'_> {
             Self::DictInsert { key, value, .. } => {
                 count_reads_in_expr(name, &key.node) + count_reads_in_expr(name, &value.node)
             }
+            Self::GeneratorYield { element } => count_reads_in_expr(name, &element.node),
         }
     }
 }
@@ -3862,6 +4061,44 @@ fn unsupported_for_pattern(pattern: &ast::Pattern, item_ty: &IncanType) -> Optio
     }
 }
 
+/// Determine every lexical free variable used after a generator expression's first source, in first-occurrence
+/// order. The initial source is evaluated before constructing [`bir::Rvalue::Generator`] and therefore is not a
+/// deferred capture. Each `for` pattern becomes bound only after its own source expression has been visited, so a
+/// later source/filter/element sees every preceding clause binding but not a name it introduces itself.
+fn free_vars_in_generator_deferred_body(generator: &ast::GeneratorExpr) -> Vec<String> {
+    let Some((first, remaining)) = generator.clauses.split_first() else {
+        return Vec::new();
+    };
+    let mut bound = HashSet::new();
+    if let ast::ComprehensionClause::For { pattern, .. } = first {
+        bind_pattern_names(&pattern.node, &mut bound);
+    }
+    let mut free = Vec::new();
+    for clause in remaining {
+        match clause {
+            ast::ComprehensionClause::For { pattern, iter } => {
+                collect_free_vars_in_expr(&iter.node, &mut bound, &mut free);
+                bind_pattern_names(&pattern.node, &mut bound);
+            }
+            ast::ComprehensionClause::If(condition) => {
+                collect_free_vars_in_expr(&condition.node, &mut bound, &mut free);
+            }
+        }
+    }
+    collect_free_vars_in_expr(&generator.expr.node, &mut bound, &mut free);
+    free
+}
+
+/// Count a generator capture's deferred reads after the first source. This intentionally remains a conservative
+/// source-order over-approximation, like [`count_reads_in_expr`]: a later pattern can shadow the same spelling and
+/// leave this count high, which selects a clone rather than an unsound move in the generator-local body.
+fn count_reads_in_generator_deferred_body(name: &str, generator: &ast::GeneratorExpr) -> usize {
+    let Some((_, remaining)) = generator.clauses.split_first() else {
+        return 0;
+    };
+    count_reads_in_comprehension_clauses(name, remaining) + count_reads_in_expr(name, &generator.expr.node)
+}
+
 /// Determine every free variable a closure literal's body reads from its enclosing scope, in first-occurrence
 /// source order, given the closure's own declared parameters as the initial bound set. A "free variable" is any
 /// `Ident` read the closure body itself does not bind -- exactly the set [`BodyBuilder::lower_closure`] must
@@ -4458,15 +4695,15 @@ mod tests {
     #[test]
     fn unsupported_constructs_lower_to_an_explicit_placeholder_instead_of_panicking()
     -> Result<(), Box<dyn std::error::Error>> {
-        // v0 does not lower generator expressions (see this module's docs); a generator expression is valid Incan
-        // but hits the explicit `Unsupported` placeholder rather than being silently dropped or panicking. This
-        // used to use a destructuring `for` pattern as its example, which #1125 made a lowered construct.
-        let source = "def pick(x: int) -> int:\n  gen = (v for v in [1, 2])\n  return x\n";
+        // #1123 supports lazy generator expressions with simple binding clauses. A destructuring clause still needs
+        // a generator-specific binding/poll representation, so it must refuse the complete expression rather than
+        // partly lowering it as an eager list or silently dropping the pattern.
+        let source = "def pick(x: int) -> int:\n  gen = (left + right for left, right in [(1, 2)])\n  return x\n";
         let module = build(source, &["m", "unsupported"])?;
         let snapshot = module.render_snapshot();
 
         assert!(
-            snapshot.contains("unsupported("),
+            snapshot.contains("unsupported(generator for-clause pattern is not a simple binding)"),
             "should record an explicit placeholder rather than panicking: {snapshot}"
         );
         Ok(())
@@ -4639,21 +4876,154 @@ mod tests {
     }
 
     #[test]
-    fn generator_expression_is_explicitly_unsupported_pending_1123() -> Result<(), Box<dyn std::error::Error>> {
+    fn generator_expression_keeps_its_multi_clause_body_lazy_and_captures_its_environment()
+    -> Result<(), Box<dyn std::error::Error>> {
         // Mirrors the multi-clause fixture from `test_rfc006_generator_expression_infers_element_type` in
-        // `src/frontend/typechecker/tests.rs`, which is real, delivered RFC 006 behavior: two `for` clauses and two
-        // `if` filters chained in source order.
-        let source = "def positives(xs: list[int], ys: list[int]) -> Generator[int]:\n  return (x * y for x in xs if x > 0 for y in ys if y > x)\n";
+        // `src/frontend/typechecker/tests.rs`, but also reads `offset` from both the filter and element. The Body IR
+        // value must capture that enclosing local once at construction; it must not materialize the chain or run
+        // either filter/element in the enclosing body.
+        let source = "def positives(offset: int, xs: list[int], ys: list[int]) -> Generator[int]:\n  return (x * offset for x in xs if x > offset for y in ys if y > x)\n";
         let module = build(source, &["m", "generator_expr"])?;
         let snapshot = module.render_snapshot();
 
         assert!(
-            snapshot.contains("unsupported(generator expression requires lazy suspension semantics (#1123))"),
-            "generator expressions must stay explicit until Body IR models lazy suspension: {snapshot}"
+            snapshot.contains("generator(source="),
+            "generator construction must be represented as a distinct lazy rvalue: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("captures=["),
+            "the deferred body must receive explicit construction-time captures: {snapshot}"
         );
         assert!(
             !snapshot.contains("list[]"),
             "a generator expression must not materialize an eager list while claiming Generator[T]: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("yield "),
+            "the element must be suspended in the generator body: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("iter_next("),
+            "for clauses must remain deferred iteration operations: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("if "),
+            "filters must remain deferred guard operations: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a valid generator expression must not leave an unsupported placeholder: {snapshot}"
+        );
+        let body = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "positives")
+            .ok_or("generator fixture must lower its function body")?;
+        assert!(
+            body.block.stmts.iter().all(|statement| !matches!(
+                statement.kind,
+                bir::StatementKind::IterNext { .. } | bir::StatementKind::Yield { .. }
+            )),
+            "polling and yield must stay inside the generator rvalue, not the enclosing body: {snapshot}"
+        );
+        let (source, captured_operands, generator_body) = body
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                bir::StatementKind::Assign {
+                    rvalue:
+                        bir::Rvalue::Generator {
+                            source,
+                            captured_operands,
+                            body,
+                        },
+                    ..
+                } => Some((source, captured_operands, body)),
+                _ => None,
+            })
+            .ok_or("generator fixture must assign a Generator rvalue")?;
+        assert!(
+            matches!(source, bir::Operand::Place(_)),
+            "the first for source must be captured as a construction-time operand: {source:?}"
+        );
+        assert_eq!(
+            captured_operands.len(),
+            2,
+            "offset and ys are the deferred free captures"
+        );
+        let capture_names: Vec<_> = generator_body
+            .capture_locals
+            .iter()
+            .map(|local| body.locals[local.index()].name.as_deref())
+            .collect();
+        assert_eq!(capture_names, vec![Some("offset"), Some("ys")]);
+        assert!(
+            matches!(
+                body.locals[generator_body.source_local.index()].origin,
+                bir::LocalOrigin::Captured
+            ),
+            "the construction-time source needs a generator-owned local"
+        );
+        assert!(
+            generator_body
+                .capture_locals
+                .iter()
+                .all(|local| matches!(body.locals[local.index()].origin, bir::LocalOrigin::Captured)),
+            "each deferred free value must bind through an explicit captured local"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generator_expression_evaluates_only_its_outer_source_before_construction()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def source() -> list[int]:\n",
+            "  return [1, 2]\n\n",
+            "def lazy() -> Generator[int]:\n",
+            "  return (item for item in source())\n"
+        );
+        let module = build(source, &["m", "generator_source_timing"])?;
+        let snapshot = module.render_snapshot();
+        let source_call = snapshot
+            .find("call fn:source()")
+            .ok_or("outer generator source call must lower at construction")?;
+        let generator = snapshot
+            .find("generator(source=")
+            .ok_or("generator construction must have a distinct rvalue")?;
+        assert!(
+            source_call < generator,
+            "the first for source must be evaluated before generator construction: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a supported outer source must not leave an unsupported marker: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generator_expression_captures_an_outer_value_without_leaking_its_clause_binding()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "def preserve(prefix: str, values: list[str]) -> str:\n",
+            "  generated = (prefix + value for value in values)\n",
+            "  return prefix\n"
+        );
+        let module = build(source, &["m", "generator_capture_scope"])?;
+        let snapshot = module.render_snapshot();
+        assert!(
+            snapshot.contains("captures=[clone(_0)"),
+            "the generator must own a construction-time clone while the enclosing binding remains live: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("return move(_0, last_use)"),
+            "the trailing source read must resolve the outer prefix, not a generator-local capture: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("unsupported("),
+            "captured generator values must lower without an unsupported placeholder: {snapshot}"
         );
         Ok(())
     }

@@ -14,14 +14,16 @@
 //!
 //! Unsupported source constructs lower to an explicit [`StatementKind::Unsupported`] node rather than panicking or
 //! being silently dropped, so the model stays total over real programs while being honest about v0's coverage.
-//! Generator expressions remain explicitly unsupported pending #1123: an eager list cannot stand in for their lazy
-//! `Generator[T]` behavior. Expression-position `yield` remains a stub in the existing Rust-emission backend too.
+//! Generator expressions lower to [`Rvalue::Generator`], preserving their established iterator-adapter timing: the
+//! outer source expression is evaluated at construction, while polling, later clause sources, filters, and elements
+//! remain inside the owned [`GeneratorBody`]. Expression-position `yield` remains a stub in the existing
+//! Rust-emission backend too.
 //!
 //! #1101 adds dict/set aggregates, slices, assignment variants, expression-position `if`/`loop`/`try`, f-strings,
 //! general iteration, list/dict comprehensions, closures/partial construction and local invocation, statement
-//! `yield`, and `match`. Captures are explicit [`Operand`] reads on [`Rvalue::Closure`], and a stored callable is
-//! invoked through [`CallableTarget::Local`] rather than being approximated as a named function, so neither fact is
-//! an implicit target-backend decision.
+//! `yield`, generator expressions, and `match`. Captures are explicit [`Operand`] reads on
+//! [`Rvalue::Closure`]/[`Rvalue::Generator`], and a stored callable is invoked through [`CallableTarget::Local`]
+//! rather than being approximated as a named function, so neither fact is an implicit target-backend decision.
 //!
 //! "Method body" includes `class`/`model`/`trait` methods (#1102). A `self`/`mut self` receiver is an ordinary
 //! [`LocalOrigin::Receiver`] local and is always reference-shaped at the emission boundary, so a bare receiver
@@ -120,10 +122,10 @@ impl Body {
     /// enforces this), so this alone is already a reliable generator signal for a `Body` in isolation.
     ///
     /// The walk recurses into nested [`StatementKind::If`]/[`StatementKind::Loop`] blocks (the only statement kinds
-    /// that themselves carry a nested [`Block`]) but does not recurse into a [`Rvalue::Closure`]'s own
-    /// [`ClosureBody`] -- a `yield` nested inside a closure literal does not make the *enclosing* function body a
-    /// generator, matching how the existing backend's own `body_contains_yield` walker also never descends into
-    /// nested closure/function literals.
+    /// that themselves carry a nested [`Block`]) but does not recurse into a [`Rvalue::Closure`]'s
+    /// [`ClosureBody`] or a [`Rvalue::Generator`]'s [`GeneratorBody`]. A yield nested in either value does not make
+    /// the *enclosing* function body a generator, matching how the existing backend's own `body_contains_yield`
+    /// walker never descends into nested closure/function literals.
     pub fn is_generator(&self) -> bool {
         block_contains_yield(&self.block)
     }
@@ -261,12 +263,12 @@ pub enum LocalOrigin {
         /// Whether the receiver was declared `mut self` (`true`) rather than plain `self` (`false`).
         mutable: bool,
     },
-    /// Bound to a free variable a [`Rvalue::Closure`] captured from its enclosing scope, or to a preset value a
-    /// partial callable's synthesized closure captured from its own preset expression. The initial value comes from
-    /// a single [`Operand`] read recorded on [`Rvalue::Closure::captured_operands`] at the point the closure was
-    /// constructed, not from a caller-supplied argument the way [`Self::Parameter`] locals are -- kept as its own
-    /// origin rather than folded into [`Self::Parameter`] so a later consumer can tell "the caller supplied this"
-    /// apart from "the closure's environment supplied this."
+    /// Bound to a free variable a [`Rvalue::Closure`] or [`Rvalue::Generator`] captured from its enclosing scope,
+    /// to a generator expression's construction-time first-clause source, or to a preset value a partial callable's
+    /// synthesized closure captured from its own preset expression. The initial value comes from one explicit
+    /// [`Operand`] read recorded on the owning rvalue at construction, not from a caller-supplied argument the way
+    /// [`Self::Parameter`] locals are -- kept as its own origin rather than folded into [`Self::Parameter`] so a
+    /// later consumer can tell "the caller supplied this" apart from "the value's environment supplied this."
     Captured,
 }
 
@@ -510,6 +512,26 @@ pub enum Rvalue {
         /// The closure's own body.
         body: Box<ClosureBody>,
     },
+    /// A lazy generator expression (`(element for ... if ...)`).
+    ///
+    /// `source` is the first `for` clause's source value, evaluated exactly once before this rvalue is constructed.
+    /// Every later clause source, filter, and element evaluation belongs to `body` and runs only when a consumer
+    /// polls the generator. `captured_operands` snapshots the remaining free variables needed by that deferred body
+    /// at construction time, in the same first-occurrence order as [`GeneratorBody::capture_locals`]; a consumer
+    /// must bind each captured value to that local before executing `body`. The initial `source` binds separately to
+    /// [`GeneratorBody::source_local`] because it is an eagerly evaluated source value rather than a lexical name.
+    ///
+    /// This is deliberately neither an eager [`AggregateKind::List`] nor a named function call. It makes the
+    /// construction-versus-poll boundary, source-order clause evaluation, and capture ownership visible to every
+    /// backend instead of asking a target language's closure inference to reconstruct them.
+    Generator {
+        /// The first `for` clause's source, evaluated once at generator construction.
+        source: Operand,
+        /// Values captured for deferred clauses, filters, and the element expression.
+        captured_operands: Vec<Operand>,
+        /// The suspendable body that consumes `source` and yields accepted elements.
+        body: Box<GeneratorBody>,
+    },
     /// A `match` expression, evaluated by testing the scrutinee against each arm's [`Pattern`] in order and running
     /// the first arm whose pattern matches (and whose optional [`MatchArm::guard`], if present, evaluates truthy).
     ///
@@ -587,6 +609,19 @@ impl Rvalue {
                 format!(
                     "closure(params=[{}], captures=[{}]) {{ {} }}",
                     params_str.join(", "),
+                    captures_str.join(", "),
+                    body.render_snapshot()
+                )
+            }
+            Self::Generator {
+                source,
+                captured_operands,
+                body,
+            } => {
+                let captures_str: Vec<String> = captured_operands.iter().map(Operand::render_snapshot).collect();
+                format!(
+                    "generator(source={}, captures=[{}]) {{ {} }}",
+                    source.render_snapshot(),
                     captures_str.join(", "),
                     body.render_snapshot()
                 )
@@ -675,10 +710,39 @@ impl ClosureBody {
     }
 }
 
+/// The deferred, suspendable body of one [`Rvalue::Generator`].
+///
+/// Like [`ClosureBody`], this reuses its owning [`Body`]'s flat local-id namespace. `source_local` receives the
+/// rvalue's construction-time [`Rvalue::Generator::source`] value. `capture_locals[i]` receives the matching
+/// `captured_operands[i]` value, so no statement in `stmts` reaches back into the enclosing body's places when the
+/// generator is later polled. Clause bindings and iterator temporaries are ordinary locals in `stmts`; they become
+/// live only while the corresponding deferred loops execute.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneratorBody {
+    /// Local holding the eagerly evaluated first-clause source value.
+    pub source_local: LocalId,
+    /// Locals holding the rvalue's construction-time lexical captures, in operand order.
+    pub capture_locals: Vec<LocalId>,
+    /// Deferred iteration, filtering, and [`StatementKind::Yield`] operations.
+    pub stmts: Vec<Statement>,
+}
+
+impl GeneratorBody {
+    /// Render a deterministic maintainer-facing spelling of the deferred body for nested rvalue snapshots.
+    fn render_snapshot(&self) -> String {
+        let flattened = render_flattened_stmts(&self.stmts);
+        if flattened.is_empty() {
+            "deferred: <empty>".to_string()
+        } else {
+            format!("deferred: {}", flattened.join("; "))
+        }
+    }
+}
+
 /// Render `stmts` at zero indentation and split into trimmed, non-empty lines, for embedding a (possibly
 /// multi-statement) nested block into a single-line snapshot alongside a trailing `result: ...`/`if ...` segment.
-/// Shared by [`ClosureBody::render_snapshot`] and [`MatchArm::render_snapshot`], which both need to flatten a
-/// nested [`Block`]-shaped computation the same way.
+/// Shared by [`ClosureBody::render_snapshot`], [`GeneratorBody::render_snapshot`], and
+/// [`MatchArm::render_snapshot`], which all need to flatten a nested [`Block`]-shaped computation the same way.
 fn render_flattened_stmts(stmts: &[Statement]) -> Vec<String> {
     let mut body = String::new();
     for stmt in stmts {
@@ -1372,10 +1436,12 @@ pub enum StatementKind {
     /// protocol, e.g. `x = yield val`) are out of scope for v0: both are stubs even in the existing Rust-emission
     /// backend today (`ast::Expr::Yield(_) => (IrExprKind::Unit, IrType::Unknown)` in
     /// `src/backend/ir/lower/expr/mod.rs`), so there is no real, delivered behavior for this variant to preserve.
-    /// A generator function's body needs no distinct suspendable-state-machine representation of its own: it
-    /// lowers through the exact same statement vocabulary as any other body, and the actual state-machine
-    /// transformation is left entirely to the target backend (the existing Rust-emission backend defers to Rust's
-    /// own native generator/coroutine support rather than the compiler modeling suspension points itself).
+    /// A generator function's body needs no separate top-level state-machine node: it lowers through this same
+    /// statement vocabulary, while the target runtime owns the concrete suspension mechanism. The existing
+    /// generated-Rust path uses `incan_stdlib::iter::Generator`'s channel-backed spawn bridge for `yield`-based
+    /// functions; generator expressions instead carry their own deferred [`Rvalue::Generator`] body and use the
+    /// iterator-adapter runtime path. Neither representation asks a consumer to infer a suspension point from a
+    /// target-language closure shape.
     Yield { value: Operand },
     /// `assert cond[, message]`.
     Assert {
@@ -1553,6 +1619,51 @@ mod tests {
         assert!(snapshot.contains("local 2 <tmp> : int [temp]"));
         assert!(snapshot.contains("_2 = copy(_0) + copy(_1, last_use)"));
         assert!(snapshot.contains("return move(_2, last_use)"));
+    }
+
+    #[test]
+    fn generator_rvalue_keeps_construction_inputs_separate_from_its_deferred_body() {
+        let source_local = LocalId(2);
+        let capture_local = LocalId(1);
+        let generator = Rvalue::Generator {
+            source: Operand::Constant(Constant::Int(1)),
+            captured_operands: vec![Operand::place(
+                Place::from_local(capture_local),
+                OwnershipFact::Copy,
+                false,
+            )],
+            body: Box::new(GeneratorBody {
+                source_local,
+                capture_locals: vec![capture_local],
+                stmts: vec![Statement {
+                    kind: StatementKind::Yield {
+                        value: Operand::Constant(Constant::Int(2)),
+                    },
+                    span: HirSourceSpan::new(10, 15),
+                }],
+            }),
+        };
+        let snapshot = generator.render_snapshot();
+        assert_eq!(
+            snapshot,
+            "generator(source=const(1), captures=[copy(_1)]) { deferred: yield const(2) }"
+        );
+
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(source_local),
+                    rvalue: generator,
+                },
+                span: HirSourceSpan::new(0, 15),
+            },
+        );
+        assert!(
+            !body.is_generator(),
+            "a yielded generator expression is a value; it must not turn its enclosing function into a generator"
+        );
     }
 
     #[test]

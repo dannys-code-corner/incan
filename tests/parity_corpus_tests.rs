@@ -316,6 +316,12 @@ def select_second_pair() -> int:
     return 0
 "#;
 
+const REPLACEMENT_BODY_V0_007_SRC: &str = r#"
+def collect_lazy_values() -> int:
+    values = (value * 10 for value in range(1, 5) if value > 2).collect()
+    return values[0] + values[1]
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -362,6 +368,14 @@ fn replacement_body_v0_006_arguments() -> Vec<ReplacementValue> {
 
 fn replacement_body_v0_006_expected() -> ReplacementValue {
     ReplacementValue::Int(45)
+}
+
+fn replacement_body_v0_007_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_007_expected() -> ReplacementValue {
+    ReplacementValue::Int(70)
 }
 
 // ============================================================================
@@ -588,6 +602,21 @@ fn seed_corpus() -> Vec<ParityCase> {
                 expected: replacement_body_v0_006_expected,
             }),
         },
+        ParityCase {
+            id: "replacement-body-v0-007",
+            title: "Lazy generator expressions materialize through Body IR only when collected",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1123; tests/replacement_backend_execution_tests.rs::replacement_executes_a_lazy_generator_expression_only_when_collect_consumes_it",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_007_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "collect_lazy_values",
+                arguments: replacement_body_v0_007_arguments,
+                expected: replacement_body_v0_007_expected,
+            }),
+        },
     ]
 }
 
@@ -762,7 +791,7 @@ fn seed_cases_and_direct_replacement_cases_remain_non_green_without_a_legacy_run
     assert_eq!(summary.non_green_behavior, 0);
 }
 
-/// Bind each selected #988 source case to its own replacement receipt and complete Body-IR proof evidence.
+/// Bind each selected direct-replacement source case to its own receipt and complete Body-IR proof evidence.
 #[test]
 fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -774,8 +803,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        6,
-        "the six agreed #988 cases must stay stable in #987"
+        7,
+        "the six #988 cases plus #1123's lazy-generator case must stay stable in #987"
     );
 
     for row in replacement_rows {
