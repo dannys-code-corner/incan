@@ -14,6 +14,7 @@
     - #1116 (builtin-function shadowing contract)
     - #1125 (destructuring `for` patterns in Body IR)
     - #1132 (statement-level tuple unpack of a non-tuple value)
+    - #1174 (recoverable emitted-name projection)
 - **Issue:** [#1042](https://github.com/encero-systems/incan/issues/1042)
 - **RFC PR:** —
 - **Written against:** v0.5
@@ -21,7 +22,7 @@
 
 ## Summary
 
-Every named source object — a local declaration, an import, an alias, a re-export, a generic binder, or a member — gets one canonical symbol identity, established once at its declaration site. A resolved reference carries that identity through every later stage: HIR, Body IR, diagnostics, the LSP, Oven inspection, codegraph export, and backend emission. Source spelling and any emitted Rust name are projections of that identity for a given consumer; neither is ever the source of truth for what a reference means.
+Every named source object — a local declaration, an import, an alias, a re-export, a generic binder, or a member — gets one canonical symbol identity, established once at its declaration site. A resolved reference carries that identity through every later stage: HIR, Body IR, diagnostics, the LSP, Oven inspection, codegraph export, and backend emission. Source spelling and any emitted Rust name are projections of that identity for a given consumer; neither is ever the source of truth for what a reference means. Where backend emission creates a linker-visible symbol for an Incan-origin declaration, that projection must also be recoverable to the canonical identity it represents without a separate side-car artifact.
 
 ## Motivation
 
@@ -122,7 +123,20 @@ Two properties are load-bearing. Identity equality must be decidable without str
 
 The `scope_discriminant` is the piece today's model is missing most concretely. A local's identity is currently built from module path plus spelling, so two `x` bindings in sibling blocks of one module collapse to the same identity — while a declaration's identity is built from the *referencing* module plus spelling, so an alias splits away from the declaration it names. Those are the two halves of one defect: identities that should differ collapse, and identities that should coincide split.
 
-Emitted names are projections in the direction identity → name, never the reverse. The compiler already has a working precedent in overload emission, where a source binding plus its signature derives a deterministic suffixed Rust name and no stage recovers the binding by parsing that name back. Every backend projection should keep that shape.
+### Recoverable emitted-name projection
+
+Emission has two deliberately separate contracts:
+
+1. **Semantic resolution is one-way.** No compiler phase may determine what source binding a reference means by parsing an emitted Rust name. The resolver, HIR, Body IR, diagnostics, LSP, Oven facts, and codegraph use compiler-owned canonical identity facts. An emitted name never becomes semantic authority.
+2. **Artifact observation is recoverable.** When an Incan-origin declaration becomes a linker-visible emitted symbol, its emitted identifier carries a versioned, reversible encoding of its canonical identity. A backtrace or artifact inspector can decode that payload to the declaration identity without loading generated Rust, re-resolving source, or consulting a source-map sidecar that could drift from the artifact.
+
+The initial projection format is an Incan-owned `incan-v1` payload, encoded with a Rust-identifier-safe reversible alphabet and carried in the emitted item's unmangled identifier. It contains the complete canonical identity payload — namespace, origin, declaration name, kind, scope discriminant, and declaration span — plus a format version. A decoded payload is therefore the identity for the artifact that carries it, rather than a lookup key that needs a source map or another companion artifact. Generic specialization data is included whenever it is necessary to distinguish linker-visible instantiations of one declaration.
+
+The implementation must prove that the selected Rust toolchain's v0 mangling and demangling preserve the complete `incan-v1` payload. #1174 records the intended toolchain dependency and must add the missing DD-0002 toolchain decision before implementation relies on a particular compiler version. Until that record and its fixture exist, this RFC states the requirement, not an unverified claim about a Rust release.
+
+This applies only to Incan-origin declarations that materialize as linker-visible symbols. Locals and other source declarations that do not materialize as an emitted symbol are not counterexamples; a future backtrace locates them through their nearest recoverable Incan-origin frame. A frame with no Incan origin is classified as runtime, host, or interop and may be collapsed at normal verbosity or shown at an explicit verbose setting. It is never guessed to be an Incan declaration.
+
+The payload may be compacted only through another reversible encoding that passes the same independent decoding fixture. There is no release-mode setting that silently removes recoverability. The binary-size and emitted-name-length impact must be measured on a representative release artifact before the cutover gate is declared complete.
 
 ### Propagation through the pipeline
 
@@ -132,7 +146,7 @@ A resolved reference's canonical identity must be preserved, not recomputed from
 - **Diagnostics** — an error or warning naming a symbol names its canonical identity's declaration site, regardless of which binding (local, import, alias, re-export) the offending reference used.
 - **LSP** — "go to definition," "find references," and hover all resolve through canonical identity, so every binding to one declaration reports the same definition site.
 - **Oven inspection / codegraph export** — an edge or fact referencing a symbol identifies it by canonical identity, so tooling can determine that two differently-spelled references mean the same thing without string comparison.
-- **Backend emission** — the emitted Rust name for a canonical identity is a projection for that backend; it must not become a second identity another stage compares against.
+- **Backend emission** — the emitted Rust name for a canonical identity is a projection for that backend; it must not become a second identity another stage compares against, and every linker-visible Incan-origin projection must carry the recoverable `incan-v1` payload.
 
 Every one of those stages recomputes from spelling today, which is what makes this a sequence of real slices rather than a threading exercise. Declaration-level HIR derives its ids from module path plus name, and gives an import declaration no name at all. Body IR resolves identifiers through a flat name-to-local map and synthesizes an opaque external local, with unknown ownership, for any name it cannot find — so a name the resolver resolved perfectly can still arrive at lowering unresolved. The LSP answers "go to definition" with a first-match scan over the current module's declarations, consulting no typechecker output, and therefore cannot follow an import at all. Codegraph keys its records on a `(module path, name, kind)` string triple and silently drops an edge whose triple is unregistered.
 
@@ -173,7 +187,7 @@ The identity model as *specified* is independent of that fix: it applies equally
 - **Imports and modules** — RFC 022's stdlib namespacing and canonical `std` root are unaffected; this RFC's identity model applies to `std` symbols the same as any other declaration.
 - **Aliases** — RFC 083 already establishes that an alias preserves its target's semantic identity for imports, diagnostics, documentation, and metadata rather than acting as a copy or wrapper. This RFC generalizes that same principle to the full identity model rather than introducing a competing one.
 - **Generic binders** — RFC 025's multi-instantiation trait dispatch resolves a call to one of several adopted instantiations by argument/return type; this RFC's canonical identity for a generic binder is what that dispatch resolves against, not a per-instantiation identity.
-- **Rust interop** — an emitted Rust name remains a backend-specific projection of a canonical identity; this RFC does not change what interop code can call, only how the compiler tracks what a reference means before emission.
+- **Rust interop** — an emitted Rust name remains a backend-specific projection of a canonical identity; this RFC does not change what interop code can call, only how the compiler tracks what a reference means before emission. Native runtime, host, and third-party Rust frames have no Incan identity unless the compiler emitted an Incan-origin projection for them; inspection classifies those frames rather than inventing source provenance.
 
 ### Compatibility / migration
 
@@ -193,10 +207,15 @@ Rejected. That pass was completed and explicitly excluded new namespace syntax; 
 
 Rejected because it introduces a second mental model that does not match Incan's Python-like ordinary lexical lookup, and nothing about the canonical-identity problem requires splitting the namespace to solve.
 
+### Emit a side-car artifact-to-identity map instead
+
+Rejected as the primary recovery mechanism. A side-car can be missing or describe a different artifact, reintroducing a second source of truth precisely where user-facing artifact inspection needs an answer. Compiler facts may enrich a decoded identity with spans or source context, but decoding the emitted symbol itself must establish its identity.
+
 ## Drawbacks
 
 - Threading one canonical identity through every pipeline stage (HIR, Body IR, diagnostics, LSP, codegraph, backend) is real engineering work across most of the compiler, not confined to one layer.
 - Conformance fixtures for the full matrix of local/import/alias/re-export/generic-binder/member combinations add meaningful test surface.
+- A reversible emitted-name payload lengthens symbol names and can increase artifact size. v0.6 accepts that cost only with a recorded measurement and a fixture proving that mangling and demangling preserve recovery.
 
 ## Layers affected
 
@@ -206,11 +225,11 @@ Rejected because it introduces a second mental model that does not match Incan's
 - **Diagnostics** — must report a symbol's canonical declaration site regardless of which binding a reference used to reach it.
 - **LSP** — must resolve "go to definition," "find references," and hover through canonical identity.
 - **Codegraph / Oven inspection** — must key symbol edges and facts by canonical identity, not string spelling.
-- **Backend emission** — must treat an emitted Rust name as a projection of canonical identity, never a second identity another stage compares against.
+- **Backend emission** — must treat an emitted Rust name as a projection of canonical identity, never a second identity another stage compares against; must encode the versioned, reversible `incan-v1` identity payload in every linker-visible Incan-origin symbol; and must prove the selected Rust toolchain preserves it through v0 mangling and demangling.
 
 ## Inspectability and tooling surface
 
-- **Artifact or metadata:** codegraph export already reports declarations, references, and calls; this RFC requires those records to carry canonical identity so two differently-spelled references to one declaration are visibly the same fact, not two.
+- **Artifact or metadata:** codegraph export already reports declarations, references, and calls; this RFC requires those records to carry canonical identity so two differently-spelled references to one declaration are visibly the same fact, not two. A linker-visible Incan-origin symbol independently carries a recoverable `incan-v1` projection, so an artifact observer can establish its identity even when no codegraph or source-map side-car is present.
 - **Inspection command:** `incan inspect codegraph --format jsonl` is the existing surface; no new command is introduced.
 - **Diagnostics:** duplicate-binding and ambiguous-import diagnostics name the conflicting declarations by canonical identity and source span.
 - **Provenance:** every canonical identity anchors to the source span of its one declaration site.
@@ -255,13 +274,17 @@ Make a diagnostic that names a symbol report its canonical declaration site rega
 
 Retain the checked fact snapshot on the LSP document state and answer definition, references, and hover from it, instead of the current first-match declaration scan that consults no typechecker output. Owning module: `src/lsp/backend.rs`. Conformance: definition from each of the three spellings in the re-export example landing on one declaration.
 
-### Slice 8: Codegraph and backend projection
+### Slice 8: Codegraph and one-way backend projection
 
-Key codegraph records on identity rather than the `(module path, name, kind)` string triple, and add a guard that no stage recovers a source binding by reading an emitted name. Owning modules: `src/cli/commands/codegraph.rs`, plus the emission path for the projection guard. Conformance: a `jsonl` export in which two differently-spelled references to one declaration are visibly one fact, and a case proving an edge is no longer dropped when its triple is unregistered.
+Key codegraph records on identity rather than the `(module path, name, kind)` string triple, and add a guard that no compiler phase recovers a source binding by reading an emitted name. Owning modules: `src/cli/commands/codegraph.rs`, plus the emission path for the projection guard. Conformance: a `jsonl` export in which two differently-spelled references to one declaration are visibly one fact, and a case proving an edge is no longer dropped when its triple is unregistered.
+
+### Slice 9: Recoverable emitted-name projection (#1174)
+
+Define and emit the versioned `incan-v1` payload for every linker-visible Incan-origin declaration, then add the independent artifact decoder that an inspector and a future user-facing backtrace consume. Owning modules: the direct-HIR emission path and the artifact-inspection boundary; the exact toolchain version and v0-mangling guarantee must be recorded in DD-0002 before this slice relies on them. Conformance: a release-mode artifact fixture covering an ordinary declaration and a generic specialization, decode after v0 mangling and demangling, classify native runtime and interop frames as non-Incan, and record the release-artifact size delta. This slice does not implement the backtrace UX itself; it provides the contract that consumer needs.
 
 ### Cutover conformance
 
-The identity guarantees that must not regress at the v0.6 backend cutover belong in the backend-parity corpus rather than only in frontend unit tests, so a replacement backend cannot silently lose them. The matrix worth pinning is the cross-product of binding entry (local, import, alias, re-export), namespace (lexical, member, path), and scope nesting (module, function, block), plus explicit shadowing with `let` and with `mut`, one generic-binder case, and #1116's builtin contract: a rebound builtin-function spelling and the same name reached through `std.builtins.<name>` must carry two different canonical identities across the cutover.
+The identity guarantees that must not regress at the v0.6 backend cutover belong in the backend-parity corpus rather than only in frontend unit tests, so a replacement backend cannot silently lose them. The matrix worth pinning is the cross-product of binding entry (local, import, alias, re-export), namespace (lexical, member, path), and scope nesting (module, function, block), plus explicit shadowing with `let` and with `mut`, one generic-binder case, and #1116's builtin contract: a rebound builtin-function spelling and the same name reached through `std.builtins.<name>` must carry two different canonical identities across the cutover. It also includes a release-artifact decode of the `incan-v1` payload after v0 mangling and demangling, plus classification fixtures proving non-Incan frames are never reported as source declarations.
 
 ## Design decisions
 
@@ -273,3 +296,4 @@ The identity guarantees that must not regress at the v0.6 backend cutover belong
 - **The duplicate-`rust`-module check stays in the parser.** It is raised before any resolver has run and cannot consult a shared binding mechanism without inverting the pipeline. It keeps its own narrow check, and the consolidation decision above is amended to exclude it rather than pretending it can migrate.
 - **The duplicate-library-export check moves out of the CLI.** It is a namespace collision decided today in the build command rather than the frontend, which is why it can disagree with frontend checks. Migrating it to the shared mechanism is a layering correction, not only a deduplication.
 - **Canonical identity is stable within one compilation, not across source edits.** Every identity anchors to its declaration span, so an edit that moves a declaration changes its identity. Consumers that need cross-edit continuity, such as an editor session, must re-resolve rather than cache an identity across versions.
+- **Recoverable projection serves artifact observation, never source semantics.** A compiler phase never parses an emitted name to resolve a source reference. An artifact observer may decode the versioned `incan-v1` payload because that operation answers the distinct question of which compiler-owned identity a completed artifact exposes. A side-car may enrich that decoded answer, but cannot be necessary to establish it.
