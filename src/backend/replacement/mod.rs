@@ -1108,7 +1108,7 @@ fn validate_rvalue_profile(
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
         }
-        Rvalue::Dict(_) => Err(unsupported("dict literal", span)),
+        Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
         Rvalue::Aggregate(kind, operands) => validate_aggregate_profile(
             kind,
             operands,
@@ -1920,7 +1920,7 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
-            Rvalue::Dict(_) => Err(unsupported("dict literal", span)),
+            Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure {
@@ -2632,7 +2632,6 @@ fn project_tuple_field(
     }
 }
 
-/// Construct a source-span-preserving unsupported-profile error.
 /// Return the fixed operands of an element list, or `None` when any element splices.
 ///
 /// #1159 made Body IR's aggregate and call element lists variable-arity: an element may splice a source whose
@@ -2644,6 +2643,7 @@ fn fixed_operands(elements: &[ArgumentElement]) -> Option<Vec<&Operand>> {
     elements.iter().map(ArgumentElement::as_one).collect()
 }
 
+/// Construct a source-span-preserving unsupported-profile error.
 fn unsupported(description: impl Into<String>, span: HirSourceSpan) -> ReplacementExecutionError {
     ReplacementExecutionError::Unsupported {
         description: description.into(),

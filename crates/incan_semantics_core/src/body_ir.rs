@@ -1210,6 +1210,9 @@ pub enum ArgumentElement {
     One(Operand),
     /// A value written with an argument name, at a call whose declared parameters were not statically resolved.
     ///
+    /// Only meaningful in a *call* element list. Nothing in the type prevents one appearing in an aggregate, where
+    /// it would be meaningless; lowering never constructs one there.
+    ///
     /// A call with a resolved signature never produces this: its named arguments are bound to declared slots and
     /// recorded in [`ArgumentBinding::Resolved`], so they appear as [`Self::One`] in slot order. This form exists
     /// for the case where a spread makes the arity a runtime fact — a callee with a rest parameter — so the name
@@ -1230,11 +1233,6 @@ impl ArgumentElement {
         }
     }
 
-    /// Whether this element splices a source of runtime-determined length.
-    pub fn is_spread(&self) -> bool {
-        matches!(self, Self::Spread(_))
-    }
-
     /// Render a deterministic maintainer-facing spelling.
     ///
     /// A non-spread element renders exactly as its operand did before #1159, so every existing snapshot is
@@ -1248,11 +1246,12 @@ impl ArgumentElement {
     }
 }
 
-/// A spliced source and the ownership decision made for reading it.
+/// A source whose elements are spliced into the surrounding element list at this position.
 ///
-/// The source is consumed differently from a single element — its elements are distributed into the surrounding
-/// list — so its [`OwnershipFact`] is recorded here explicitly rather than being inferred from the surrounding
-/// aggregate or call.
+/// The ownership decision for reading the source lives on `source` itself, like any other operand read — a
+/// [`Operand::Place`] carries its own [`OwnershipFact`] and last-use marker. This type adds no separate ownership
+/// field; what it adds is that the read is *identified as a splice*, so a consumer distributing the source's
+/// elements can see that its length is a runtime fact rather than one value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpreadElement {
     /// The sequence or mapping being spliced.
@@ -1355,13 +1354,17 @@ impl AggregateKind {
 /// their binding here, so a consumer learns the same fact the same way regardless of how the call was spelled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgumentBinding {
-    /// Arguments were supplied positionally and this stage resolved no declared parameter slots for them.
+    /// No declared parameter slots were resolved for this call's arguments.
     ///
-    /// Operand `i` is simply the `i`-th written argument; **no declared-slot claim is made**. This is the honest
-    /// representation for a callee whose declared surface Body IR did not resolve — a builtin, a compiler-
-    /// synthesized collection-growth call, or a signature with a `*args`/`**kwargs` rest parameter, where a written
-    /// argument does not correspond one-to-one with a declared slot. Recording an identity slot map for those would
-    /// assert a binding nobody checked.
+    /// **No declared-slot claim is made, and elements are in written source order — not slot order.** A consumer
+    /// must inspect each [`ArgumentElement`] rather than assume element `i` fills parameter `i`: an element may be
+    /// a single value, a value written with a name, or a spread whose length is only known at runtime. Reading this
+    /// as a positional argument vector is the mistake this variant exists to prevent.
+    ///
+    /// This is the honest representation for a callee whose declared surface Body IR did not resolve — a builtin, a
+    /// compiler-synthesized collection-growth call, or a signature with a `*args`/`**kwargs` rest parameter — and
+    /// for any call carrying a spread, where a written argument does not correspond one-to-one with a declared
+    /// slot. Recording an identity slot map for those would assert a binding nobody checked.
     UnresolvedPositional,
     /// Arguments were resolved against the callee's declared parameters or the type's declared fields.
     Resolved {

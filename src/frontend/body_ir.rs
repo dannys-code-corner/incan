@@ -29,8 +29,10 @@
 //!
 //! Everything else lowers to an explicit `Statement::Unsupported` / `Operand::Unknown` node rather than panicking,
 //! so the model stays total over real programs. That residue is not a short tail, and #1101 tracks it as named
-//! remaining work rather than as an implied "almost everything" claim: a keyword spread in a `model`/`class`
-//! construction (`Ctor(**kw)`); the `**`, bitwise, shift, `in`/`not
+//! remaining work rather than as an implied "almost everything" claim: a spread in a `model`/`class` construction,
+//! which refuses as an unresolved field layout because the typechecker records no field binding for it; a spread
+//! against a callee whose fixed signature *is* resolvable, which the shaped-unpack plan could expand but does not
+//! yet; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
 //! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
 //! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
 //! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
@@ -2796,10 +2798,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     ///
     /// Shared by the direct-call and method paths so both treat an unresolved or rest-bearing signature the same
     /// way. A rest (`*args`/`**kwargs`) parameter means a written argument no longer corresponds one-to-one with a
-    /// declared slot, so those calls keep lowering their positional arguments — refusing them would drop a delivered
-    /// language capability — but record [`bir::ArgumentBinding::UnresolvedPositional`] rather than a slot map this
-    /// stage did not compute. A named or spread argument against such a signature is still refused: binding a name
-    /// into a rest parameter is variadic-binding work this issue does not own.
+    /// declared slot, so those calls keep lowering their arguments — refusing them would drop a delivered language
+    /// capability — but record [`bir::ArgumentBinding::UnresolvedPositional`] rather than a slot map this stage did
+    /// not compute. Spread arguments lower there, because a spread genuinely has no slot to bind to. A *named*
+    /// argument with no spread beside it is still refused: its arity is perfectly well known, so binding it into a
+    /// rest parameter is variadic-binding work this issue does not own.
     fn bind_declared_args(
         &mut self,
         callee: &str,
@@ -2991,9 +2994,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Every one of those paths binds its arguments through the same [`plan_declared_args`] planner and records the
     /// result as a [`bir::ArgumentBinding`], so named, out-of-order, and defaulted spellings resolve identically
     /// regardless of how the callee was reached. A direct call whose signature the typechecker did not resolve
-    /// (notably a builtin) still lowers its positional arguments faithfully, and refuses only the named or spread
-    /// spellings it cannot bind without one. Non-identifier callees and argument spreads remain explicit unsupported
-    /// forms; v0 has no dynamic-call-target or variable-arity argument node for them yet (#1159 owns spreads).
+    /// (notably a builtin) still lowers its arguments faithfully, recording
+    /// [`bir::ArgumentBinding::UnresolvedPositional`], and refuses only a named spelling it cannot bind without one.
+    /// Argument spreads lower as [`bir::ArgumentElement::Spread`] elements, since a spread has no declared slot to
+    /// bind to by construction. A non-identifier callee remains an explicit unsupported form; v0 has no
+    /// dynamic-call-target node for it yet.
     fn lower_call(
         &mut self,
         callee: &ast::Spanned<ast::Expr>,
@@ -3128,7 +3133,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// outside the recorded binding: its slots index the method's declared parameters, so a consumer reads
     /// `args[0]` as the receiver and `args[1..]` as the bound arguments. A method call whose signature the
     /// typechecker did not record still lowers positional arguments faithfully and refuses only the spellings it
-    /// cannot bind, matching [`Self::lower_call`]'s treatment of an unresolved direct callee.
+    /// cannot bind — a named spelling with no spread beside it — matching [`Self::lower_call`]'s treatment of an
+    /// unresolved direct callee. Spread arguments lower here too, after the receiver.
     #[allow(clippy::too_many_arguments)]
     fn lower_method_call(
         &mut self,
@@ -3245,7 +3251,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         bir::ArgumentElement::Spread(bir::SpreadElement { source: operand, kind })
     }
 
-    /// Lower a tuple, (non-spread) list literal, or set literal to a [`bir::Rvalue::Aggregate`], recording an
+    /// Lower a tuple or set literal to a [`bir::Rvalue::Aggregate`], recording an
     /// [`AbiV0RuntimeRequirement::Allocator`] requirement for lists and sets specifically (list/set construction
     /// always allocates; tuples do not).
     fn lower_aggregate(
@@ -3297,11 +3303,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     lowered.push(bir::DictEntry::Pair(key_operand, value_operand));
                 }
                 ast::DictEntry::Spread(source) => {
-                    let operand = self.lower_expr_to_operand(source, scope, out);
-                    lowered.push(bir::DictEntry::Spread(bir::SpreadElement {
-                        source: operand,
-                        kind: bir::SpreadKind::Mapping,
-                    }));
+                    // Reuse the shared spread lowering so the two construction sites cannot drift.
+                    let bir::ArgumentElement::Spread(spread) =
+                        self.lower_spread_element(source, bir::SpreadKind::Mapping, scope, out)
+                    else {
+                        return self.unsupported_operand("dict spread entry".to_string(), scope, hir_span_value, out);
+                    };
+                    lowered.push(bir::DictEntry::Spread(spread));
                 }
             }
         }
@@ -8879,7 +8887,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn a_trailing_spread_splices_before_its_fixed_elements() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_leading_spread_splices_before_its_fixed_elements() -> Result<(), Box<dyn std::error::Error>> {
         let source = "def m(xs: list[int]) -> None:\n  out = [*xs, 1]\n  return\n";
         let module = build(source, &["m", "spread_trailing"])?;
         let snapshot = module.render_snapshot();
@@ -8896,6 +8904,41 @@ mod tests {
         assert!(
             snapshot.contains("list[*move(_0, last_use), const(1)]"),
             "the spread must keep its written position and carry its own ownership fact: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_trailing_spread_splices_after_its_fixed_elements() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def m(xs: list[int]) -> None:\n  out = [1, *xs]\n  return\n";
+        let module = build(source, &["m", "spread_after"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a trailing spread must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("list[const(1), *move(_0, last_use)]"),
+            "a spread written last must stay last: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_standalone_keyword_spread_call_lowers() -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            "def log(**fields: int) -> None:\n  return\n\ndef m(kw: dict[str, int]) -> None:\n  log(**kw)\n  return\n";
+        let module = build(source, &["m", "kw_spread"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a keyword spread call must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call fn:log unbound(**move(_0, last_use))"),
+            "a keyword spread must render with its own marker and ownership fact: {snapshot}"
         );
         Ok(())
     }
@@ -8923,11 +8966,12 @@ mod tests {
             !snapshot.contains("unsupported("),
             "multiple spreads must lower: {snapshot}"
         );
-        assert_eq!(snapshot.matches("list[*").count(), 1, "one aggregate: {snapshot}");
-        assert_eq!(
-            snapshot.lines().filter(|line| line.contains("list[")).count(),
-            1,
-            "both spreads belong to the same aggregate: {snapshot}"
+        // Counting `list[*` would pass against an implementation that silently dropped the second spread, since it
+        // only observes that the aggregate *begins* with one. Assert the whole rendering so a dropped, reordered,
+        // or differently-owned second spread all fail.
+        assert!(
+            snapshot.contains("list[*move(_0, last_use), *move(_1, last_use)]"),
+            "both spreads must survive, in written order, each with its own ownership fact: {snapshot}"
         );
         Ok(())
     }
@@ -9028,9 +9072,15 @@ mod tests {
             "def m(xs: list[int]) -> None:\n  out = {1, *xs}\n  return\n",
         ] {
             let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+            let errors = parser::parse(&tokens)
+                .err()
+                .ok_or("the parser must reject set spread rather than Body IR having to refuse it")?;
+            // `is_err()` alone would pass for any unrelated parse failure, including one this fixture introduced.
             assert!(
-                parser::parse(&tokens).is_err(),
-                "the parser must reject set spread rather than Body IR having to refuse it: {source}"
+                errors
+                    .iter()
+                    .any(|error| error.message.to_lowercase().contains("spread")),
+                "the rejection must name spread rather than being any parse failure: {errors:?}"
             );
         }
         Ok(())

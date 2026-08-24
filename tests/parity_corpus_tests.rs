@@ -8,7 +8,7 @@
 //!
 //! Run with: `cargo test --test parity_corpus_tests`
 //!
-//! ## Why these twelve cases
+//! ## Why these cases
 //!
 //! Per #987's own plan step 3 ("add a narrow source-only seed corpus before public package or Rust-interop
 //! rows"), every seed case here uses a direct-parser/typechecker, generated-project-run, or codegen-snapshot
