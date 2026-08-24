@@ -16,16 +16,30 @@
 //! iterable?:` form), expression statements, statement-position `yield value` (see [`BodyBuilder::lower_stmt_into`]
 //! and [`bir::Body::is_generator`]), `assert`, `pass`, `break` (including a value-producing `break` inside a `loop`
 //! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
-//! binary/unary operators, calls, method calls, field access, indexing, slicing, parenthesization, tuples,
-//! list/dict/set literals (no spreads), constructors, expression-position `if`/`loop`, `try` (`?`), f-strings,
-//! list/dict comprehensions, lazy generator expressions, closure literals, partial callables (see
+//! arithmetic/comparison/boolean binary operators and all three unary operators, positional calls, positional
+//! method calls, field access, indexing, slicing, parenthesization, tuples, list/dict/set literals (no spreads),
+//! constructors, expression-position `if`/`loop`, `try` (`?`), f-strings, list/dict comprehensions, lazy generator
+//! expressions, closure literals, partial callables (see
 //! [`BodyBuilder::lower_closure`]/[`BodyBuilder::lower_partial`] for how captures
 //! are computed and represented explicitly rather than left implicit), and `match` (see [`BodyBuilder::lower_match`]
-//! for how patterns are lowered and their bindings scoped). Everything else -- a bare `yield` with no value, and
-//! expression-position `yield` (the two-way send/receive protocol) -- lowers to an explicit
-//! `Statement::Unsupported` / `Operand::Unknown` node rather than panicking, so the model stays total over real
-//! programs. Expression-position `yield` is a stub even in the existing Rust-emission backend today, not real
-//! behavior this bucket needs to preserve.
+//! for how patterns are lowered and their bindings scoped).
+//!
+//! Everything else lowers to an explicit `Statement::Unsupported` / `Operand::Unknown` node rather than panicking,
+//! so the model stays total over real programs. That residue is not a short tail, and #1101 tracks it as named
+//! remaining work rather than as an implied "almost everything" claim: named/keyword and spread call arguments
+//! (which is every `model`/`class` construction, because the typechecker refuses the positional spelling) and
+//! explicit call-site type arguments; spread entries in list/dict literals; the `**`, bitwise, shift, `in`/`not
+//! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
+//! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
+//! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
+//! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
+//! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
+//!
+//! Two coverage limits are silent rather than marked, and both are deliberate. Expression-position `yield` (the
+//! two-way send/receive protocol) is a stub in the existing Rust-emission backend too, so there is no behavior to
+//! preserve; the typechecker rejects a bare `yield` with no value before lowering runs. Newtype and enum method
+//! bodies produce no [`bir::Body`] at all rather than an `Unsupported` one (#1163) -- see
+//! [`lower_owner_method_bodies`].
 
 use std::collections::{HashMap, HashSet};
 
@@ -100,8 +114,10 @@ pub fn build_body_ir_module_v0(
 ///
 /// Newtype and enum declarations also carry a `methods` field in the AST (see `crates/incan_syntax/src/ast/
 /// decls.rs`), but #1102's own scope names only class/model/trait bodies, so this function is deliberately not
-/// called for those two declaration kinds — extending method lowering to them is left for a future slice to decide
-/// explicitly rather than folded in here as an unannounced scope expansion.
+/// called for those two declaration kinds. #1163 owns extending it. Until then this is the module's only *silent*
+/// coverage gap: every other unsupported construct leaves a `StatementKind::Unsupported` or `Operand::Unknown`
+/// marker behind, while a newtype or enum method produces no [`bir::Body`] at all, so a consumer counting bodies
+/// reads a program using one as fully represented.
 fn lower_owner_method_bodies(
     methods: &[ast::Spanned<ast::MethodDecl>],
     owner_name: &str,
@@ -2186,8 +2202,11 @@ impl<'a> BodyBuilder<'a> {
     }
 
     /// Lower `assert cond[, message]`, recording an [`bir::PanicReason::AssertFailure`] panic fact and a
-    /// [`AbiV0RuntimeRequirement::PanicStrategy`] runtime requirement since every assert can panic. The `raises`
-    /// form of `assert` — not yet modeled by v0 — lowers to an explicit unsupported placeholder instead.
+    /// [`AbiV0RuntimeRequirement::PanicStrategy`] runtime requirement since every assert can panic. The pattern
+    /// (`assert value is Some(name)`) and `raises` (`assert call() raises E`) forms are not modeled by v0 and lower
+    /// to an explicit unsupported placeholder instead (#1167). The pattern form's placeholder is lossy rather than
+    /// merely incomplete: it discards the names the pattern would bind, so a later read of one lowers against a
+    /// local this body never declared.
     fn lower_assert(
         &mut self,
         assert_stmt: &ast::AssertStmt,
@@ -3620,7 +3639,13 @@ fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp> {
 }
 
 /// Map a surface binary operator to Body IR's canonical arithmetic/comparison/boolean operator set, or `None` for
-/// operators v0 does not model (`MatMul`, pipes, `in`/`not in`, `is`/`is not`).
+/// operators v0 does not model.
+///
+/// The unmapped set is `Pow`, `MatMul`, both pipes, the bitwise `BitAnd`/`BitOr`/`BitXor`, the `Shl`/`Shr` shifts,
+/// `In`/`NotIn`, and `Is`/`IsNot`. Membership is the notable one: `parity-987-0003` records string `in` as a
+/// `Preserved` behavior, so refusing it here is a tracked #1101 gap rather than a settled boundary. Adding any of
+/// these needs a matching [`bir::BinOp`] variant, or a compiler-owned [`bir::HelperOp`] where the operation is a
+/// runtime call rather than a primitive -- the same split [`string_helper_for_binop`] already makes.
 fn lower_binary_op(op: ast::BinaryOp) -> Option<bir::BinOp> {
     match op {
         ast::BinaryOp::Add => Some(bir::BinOp::Add),
@@ -3665,8 +3690,14 @@ fn lower_literal(lit: &ast::Literal) -> Option<bir::Constant> {
 }
 
 /// Short diagnostic label for a statement kind v0 does not lower.
+///
+/// Statement-position `loop:` is named explicitly because it is the one entry here whose Body IR vocabulary
+/// already exists: [`BodyBuilder::lower_loop_expr`] emits [`bir::StatementKind::Loop`] for the expression
+/// spelling, and only [`BodyBuilder::lower_stmt_into`]'s dispatch is missing (#1101). Leaving it under the
+/// generic "statement" label made a five-line dispatch gap read like an unmodeled construct.
 fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
     match stmt {
+        ast::Statement::Loop(_) => "statement-position `loop:`".to_string(),
         ast::Statement::Unsafe(_) => "unsafe block".to_string(),
         ast::Statement::VocabExpressionItem(_) => "vocab expression item".to_string(),
         ast::Statement::Surface(_) => "surface statement".to_string(),
@@ -3676,13 +3707,36 @@ fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
 }
 
 /// Short diagnostic label for an expression kind v0 does not lower.
+///
+/// Only reached from [`BodyBuilder::lower_expr_to_operand`]'s fallback arm, so every expression kind that arm
+/// dispatches by name -- closures and partial callables included, since #1124 gave both a real lowering -- is
+/// deliberately absent here. Async surface (`await`, `race for`) and vocab/scoped-DSL surface are named rather
+/// than left to the generic label, because both are tracked remaining work under #1101 (#1164 and #1166
+/// respectively) and a diagnostic reading only "expression" hides which one a program actually hit.
 fn unsupported_expr_label(expr: &ast::Expr) -> String {
     match expr {
-        ast::Expr::Partial(_) => "partial callable preset".to_string(),
-        ast::Expr::Closure(..) => "closure".to_string(),
         ast::Expr::Yield(_) => "yield expression".to_string(),
         ast::Expr::Range { .. } => "range expression outside a for-loop".to_string(),
+        ast::Expr::Surface(surface) => surface_expr_label(&surface.payload),
+        ast::Expr::VocabBlock(_) => "vocab block expression".to_string(),
         _ => "expression".to_string(),
+    }
+}
+
+/// Name the specific surface-expression payload behind an [`ast::Expr::Surface`] refusal.
+///
+/// The payloads split into two very different buckets: `await`/`race for` are the async surface #1164 represents,
+/// which #1155 needs before it can execute task state, while the remaining payloads are vocab/DSL nodes that the
+/// legacy pipeline desugars away before lowering and that only reach here when a caller skips that pass (#1166).
+fn surface_expr_label(payload: &ast::SurfaceExprPayload) -> String {
+    match payload {
+        ast::SurfaceExprPayload::PrefixUnary(_) => {
+            "prefix-keyword surface expression (for example `await`)".to_string()
+        }
+        ast::SurfaceExprPayload::RaceFor(_) => "`race for` expression".to_string(),
+        ast::SurfaceExprPayload::LeadingDotPath { .. } => "scoped DSL leading-dot path".to_string(),
+        ast::SurfaceExprPayload::ScopedGlyph { .. } => "scoped DSL glyph operator".to_string(),
+        ast::SurfaceExprPayload::ScopedSymbolCall { .. } => "scoped DSL symbol call".to_string(),
     }
 }
 
