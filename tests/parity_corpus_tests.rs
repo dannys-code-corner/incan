@@ -27,6 +27,14 @@ use std::path::PathBuf;
 
 #[path = "support/parity_corpus.rs"]
 mod parity_corpus;
+#[path = "support/shadow_capability.rs"]
+mod shadow_capability;
+
+/// The one corpus row that declares the bounded #1146 source-observable comparison profile.
+///
+/// Named once so the "exactly one green row" contract is stated in a single place; widening it is a deliberate
+/// edit here, not a side effect of adding another direct-execution row.
+const SHADOW_COMPARED_CASE_ID: &str = "replacement-body-v0-001";
 
 use parity_corpus::{
     BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, ReceiptRef,
@@ -517,7 +525,8 @@ fn seed_corpus() -> Vec<ParityCase> {
             title: "Parameterized integer addition executes through Body IR",
             category: BehaviorCategory::SupportedLanguageContract,
             lane: EvidenceLane::DirectReplacementBodyIr,
-            evidence: "#988 replacement-body-v0-001; tests/parity_corpus_tests.rs::seed_corpus",
+            evidence: "#988 replacement-body-v0-001 executed directly; #1146 two-route comparison in \
+                       tests/shadow_comparison_tests.rs and tests/parity_corpus_tests.rs::seed_corpus",
             disposition: Disposition::Preserved,
             source: REPLACEMENT_BODY_V0_001_SRC,
             evaluate: None,
@@ -525,6 +534,9 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "add",
                 arguments: replacement_body_v0_001_arguments,
                 expected: replacement_body_v0_001_expected,
+                // The one row #1146 proves end to end: its module holds a single named free function with scalar
+                // parameters, so the legacy route can call it from a generated entrypoint and print the result.
+                shadow_comparison: true,
             }),
         },
         ParityCase {
@@ -540,6 +552,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "greet",
                 arguments: replacement_body_v0_002_arguments,
                 expected: replacement_body_v0_002_expected,
+                shadow_comparison: false,
             }),
         },
         ParityCase {
@@ -555,6 +568,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "return_owned",
                 arguments: replacement_body_v0_003_arguments,
                 expected: replacement_body_v0_003_expected,
+                shadow_comparison: false,
             }),
         },
         ParityCase {
@@ -570,6 +584,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "control_flow",
                 arguments: replacement_body_v0_004_arguments,
                 expected: replacement_body_v0_004_expected,
+                shadow_comparison: false,
             }),
         },
         ParityCase {
@@ -585,6 +600,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "guarded_floor_div",
                 arguments: replacement_body_v0_005_arguments,
                 expected: replacement_body_v0_005_expected,
+                shadow_comparison: false,
             }),
         },
         ParityCase {
@@ -600,6 +616,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "select_second_pair",
                 arguments: replacement_body_v0_006_arguments,
                 expected: replacement_body_v0_006_expected,
+                shadow_comparison: false,
             }),
         },
         ParityCase {
@@ -615,6 +632,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "collect_lazy_values",
                 arguments: replacement_body_v0_007_arguments,
                 expected: replacement_body_v0_007_expected,
+                shadow_comparison: false,
             }),
         },
     ]
@@ -765,30 +783,157 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 }
 
 #[test]
-fn seed_cases_and_direct_replacement_cases_remain_non_green_without_a_legacy_runtime_comparator() {
+fn only_a_row_with_a_real_two_route_comparison_can_be_green() -> Result<(), Box<dyn std::error::Error>> {
     // This is the corpus's core promise: direct replacement execution does not become green parity merely because
-    // it has a receipt. The older seed rows and the new #988 rows both stay explicitly shadow-unavailable until a
-    // source-observable legacy comparison is available for the same source profile.
+    // it has a receipt, and generated Rust never counts as proof. Exactly one row declares the bounded #1146
+    // comparison profile; it is green only when that comparison actually ran through Oven and agreed.
+    //
+    // The branch is taken on what the summary reports, not on whether a capability could be *resolved*: a staged
+    // capability whose Oven build then fails has run no comparison, and must not be treated as if it had.
     let summary = parity_corpus::summarize(&seed_corpus());
     assert!(
         summary.receipt_schema_available,
         "the summary must say the #986 receipt schema is available now that PR #1120 landed it"
     );
-    let falsely_green: Vec<&parity_corpus::CaseReport> = summary
+    assert_eq!(summary.non_green_shadow_diverged, 0);
+    assert_eq!(summary.non_green_behavior, 0);
+
+    let green: Vec<&str> = summary
         .cases
         .iter()
-        .filter(|c| c.overall_state == OverallState::Green)
+        .filter(|case| case.overall_state == OverallState::Green)
+        .map(|case| case.id)
         .collect();
+
+    if summary.source_observable_comparison_available {
+        assert_eq!(
+            green,
+            vec![SHADOW_COMPARED_CASE_ID],
+            "exactly the one row with a proven two-route comparison may be green"
+        );
+        assert_eq!(summary.green, 1);
+        assert_eq!(summary.non_green_shadow_unavailable, summary.total_cases - 1);
+    } else {
+        // No comparison ran, so nothing may be green — including the row that declares one.
+        require_staging_when_demanded(&summary)?;
+        assert!(
+            green.is_empty(),
+            "no row may be green without a real comparison: {green:?}"
+        );
+        assert_eq!(summary.green, 0);
+        assert_eq!(summary.non_green_shadow_unavailable, summary.total_cases);
+    }
+    Ok(())
+}
+
+/// Fail rather than report a skip when this environment declares that a comparison must have run.
+///
+/// Reads the reason straight off the compared row, so the failure says what actually stopped the comparison.
+fn require_staging_when_demanded(summary: &parity_corpus::CorpusSummary) -> Result<(), Box<dyn std::error::Error>> {
+    let reason = compared_row(summary)
+        .map(|row| match &row.receipt {
+            ReceiptRef::ReplacementExecuted { comparison_reason, .. } => comparison_reason.clone(),
+            receipt => format!("{receipt:?}"),
+        })
+        .unwrap_or_else(|| "the compared row is missing from the corpus".to_string());
     assert!(
-        falsely_green.is_empty(),
-        "no existing seed case should reach OverallState::Green without its own replacement execution: {falsely_green:#?}"
+        !shadow_capability::legacy_route_is_required(),
+        "{} is set but no source-observable comparison ran: {reason}",
+        shadow_capability::REQUIRE_LEGACY_ROUTE_ENV
     );
-    assert_eq!(summary.green, 0);
-    assert_eq!(
-        summary.non_green_shadow_unavailable, summary.total_cases,
-        "every corpus row must report shadow-unavailable, not green, until it has a source-observable legacy comparison"
+    eprintln!("no source-observable comparison ran: {reason}");
+    Ok(())
+}
+
+/// The one row that declares the bounded #1146 comparison profile.
+fn compared_row(summary: &parity_corpus::CorpusSummary) -> Option<&parity_corpus::CaseReport> {
+    summary.cases.iter().find(|case| case.id == SHADOW_COMPARED_CASE_ID)
+}
+
+/// The compared row's evidence must name both routes' receipts and the Oven authority behind the legacy one.
+#[test]
+fn the_compared_row_carries_two_route_receipts_and_its_oven_authority() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = compared_row(&summary).ok_or("the compared row must be present in the corpus")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+
+    let ReceiptRef::ShadowMatched {
+        profile_kind,
+        profile_identity,
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "{} must carry matched two-route evidence, got {:?}",
+            row.id, row.receipt
+        )
+        .into());
+    };
+    // #1153 links on the stable kind and cites the instance identity; a receipt must carry both.
+    assert_eq!(profile_kind, incan::backend::shadow::SHADOW_COMPARISON_PROFILE_ID);
+    assert!(profile_identity.starts_with("sha256:"));
+    assert_eq!(observable, "completed(\"42\")");
+    assert!(legacy_receipt_identity.starts_with("sha256:"));
+    assert!(replacement_receipt_identity.starts_with("sha256:"));
+    assert_ne!(
+        legacy_receipt_identity, replacement_receipt_identity,
+        "the two routes' receipts differ by selected and executed backend and must not be conflated"
     );
-    assert_eq!(summary.non_green_behavior, 0);
+    assert_ne!(
+        legacy_output_identity, replacement_output_identity,
+        "each route's output identity must cover what that route actually produced"
+    );
+
+    // The legacy answer is attributable to a real Oven build, not an ad-hoc compiler invocation.
+    assert!(legacy_authority.oven_receipt_identity.starts_with("sha256:"));
+    assert!(legacy_authority.oven_build_unit_identity.starts_with("sha256:"));
+    assert!(legacy_authority.direct_rustc_plan_identity.starts_with("sha256:"));
+    assert!(
+        !legacy_authority.cargo_process_started,
+        "Oven-owned legacy execution must not start a Cargo process"
+    );
+    Ok(())
+}
+
+/// A comparison that could not run still leaves the row the replacement execution it really performed.
+#[test]
+fn an_unavailable_comparison_keeps_the_rows_replacement_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if summary.source_observable_comparison_available {
+        eprintln!("skipping: the comparison ran, so this row reports agreement rather than degraded evidence");
+        return Ok(());
+    }
+    let row = compared_row(&summary).ok_or("the compared row must be present in the corpus")?;
+
+    assert_eq!(row.overall_state, OverallState::NonGreenShadowUnavailable);
+    let ReceiptRef::ReplacementExecuted {
+        receipt_identity,
+        body_snapshot,
+        comparison_reason,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "an unavailable comparison must still report the replacement execution that ran, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    assert!(receipt_identity.starts_with("sha256:"));
+    assert!(
+        body_snapshot.contains("body add"),
+        "the retained evidence must be the real Body-IR execution: {body_snapshot}"
+    );
+    assert!(!comparison_reason.is_empty(), "the row must say why no comparison ran");
+    Ok(())
 }
 
 /// Bind each selected direct-replacement source case to its own receipt and complete Body-IR proof evidence.
@@ -809,6 +954,11 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
 
     for row in replacement_rows {
         assert_eq!(row.lane, EvidenceLane::DirectReplacementBodyIr);
+        if row.id == SHADOW_COMPARED_CASE_ID && summary.source_observable_comparison_available {
+            // When the comparison ran, this row's evidence is the comparison itself, covered by
+            // `the_compared_row_carries_two_route_receipts_and_its_oven_authority`.
+            continue;
+        }
         assert_eq!(row.overall_state, OverallState::NonGreenShadowUnavailable);
         match &row.receipt {
             ReceiptRef::ReplacementExecuted {
@@ -838,10 +988,18 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
                     "{} emitted an invalid runtime-requirement projection: {runtime_requirements:?}",
                     row.id
                 );
-                assert_eq!(
-                    comparison_reason,
-                    incan::backend::selection::SHADOW_COMPARISON_UNAVAILABLE_REASON,
-                    "{} must report the actual missing legacy comparator rather than generated-Rust evidence",
+                // Rows that never declared a comparison say so; the declaring row, when its comparison could
+                // not run, names the boundary that stopped it instead. Neither may imply generated Rust proved
+                // anything.
+                let expected_reason = if row.id == SHADOW_COMPARED_CASE_ID {
+                    "the legacy route did not execute"
+                } else {
+                    "does not declare the bounded #1146 source-observable"
+                };
+                assert!(
+                    comparison_reason.contains(expected_reason) || comparison_reason.contains("not staged"),
+                    "{} must state why no comparison was made rather than implying generated-Rust evidence: \
+                     {comparison_reason}",
                     row.id
                 );
             }
@@ -884,8 +1042,10 @@ fn ci_summary_serializes_with_the_fields_655_needs_and_is_written_to_a_stable_pa
         "total_cases",
         "green",
         "non_green_shadow_unavailable",
+        "non_green_shadow_diverged",
         "non_green_behavior",
         "receipt_schema_available",
+        "source_observable_comparison_available",
         "cases",
     ] {
         assert!(

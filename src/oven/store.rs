@@ -56,6 +56,15 @@ pub struct OvenStoreLimits {
     pub max_domain_logical_bytes: u64,
 }
 
+/// Resolve the bounded store directory that belongs to one Incan home.
+///
+/// The `oven/store/v2` layout is the store's own, so every caller that has a home directory and needs the store
+/// derives the path here instead of restating the segments and drifting when the layout version moves.
+#[must_use]
+pub fn store_root_for_home(home: &Path) -> PathBuf {
+    home.join("oven").join("store").join("v2")
+}
+
 impl OvenStoreLimits {
     /// Construct an explicit capacity policy; zero values intentionally reject every non-empty artifact.
     #[must_use]

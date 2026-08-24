@@ -5726,7 +5726,7 @@ fn default_store_root(incan_home: Option<OsString>, home: Option<OsString>) -> O
             home.filter(|path| !path.is_empty())
                 .map(|path| PathBuf::from(path).join(".incan"))
         })
-        .map(|root| root.join("oven").join("store").join("v2"))
+        .map(|root| crate::oven::store::store_root_for_home(&root))
 }
 
 /// Return the platform home environment used by installed Incan binaries.

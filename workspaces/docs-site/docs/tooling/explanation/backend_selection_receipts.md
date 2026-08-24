@@ -22,9 +22,54 @@ The first #988 replacement profile produces a visible outcome, never a silent le
 - The supported profile is deliberately partial: scalar arithmetic, scalar local bindings with no repeated user-binding name, returns, compiler-owned string concatenation, normalized range/while branches and loops, assertions, and builtin iteration over a source-local `list[tuple[scalar, scalar]]`. Admission checks the authoritative Body-IR declared types of both the aggregate and iteration locals, rather than inferring shape from runtime operands: an empty list executes only when it is declared as that pair-list shape. The current one-function, import-free CLI profile also admits the `range` source spelling for its normalized loop case; Body IR v0 does not yet carry a resolved builtin call-target identity. That collection shape may use a plain loop binding or the one-level `for a, b in pairs` destructuring lowering; its two tuple fields are the only admitted projections. Packages, imports, Rust interop, additional free functions, callable values, generators, general destructuring, non-pair or non-scalar collections, index/slice/named/nested projections, and any repeated user-binding spelling (lexical shadowing or reassignment) are refused visibly with the original Incan source span. A refusal emits no new receipt; it does not remove a receipt written by an earlier successful build.
 - The #988 CLI surface accepts only `--backend-fallback refuse`. It has no receipt-bound legacy execution path for an unavailable source profile, so users must choose `--backend legacy` explicitly when the source is outside the profile.
 
-A `--shadow` request without a source-observable legacy entrypoint remains `{"unavailable": {"reason": "..."}}`, never `"matched"`. It is deliberately non-green: generated-Rust token shape is not a semantic comparison.
+A `--shadow` request on a build remains `{"unavailable": {"reason": "..."}}`, never `"matched"`. The reason names the boundary: a build executes the module's `main`, and a program entrypoint's return value is not observable from the produced legacy process, so there is nothing for the two routes to agree or disagree about. It is deliberately non-green — generated-Rust token shape is not a semantic comparison. The comparison that *does* run is described in [Source-observable shadow comparison](#source-observable-shadow-comparison) below.
 
 Any explicit backend request, fallback policy, or shadow request bypasses completed-output reuse and takes the source-based path appropriate to the declared backend. This prevents a cached default result from being presented as the outcome of a different declared selection.
+
+## Source-observable shadow comparison
+
+[#1146](https://github.com/encero-systems/incan/issues/1146) adds the first shadow comparison that actually runs, for one deliberately narrow profile (`incan.shadow_comparison.direct_scalar_free_function.v0`, `src/backend/shadow/`): one source-only module holding exactly one free function, whose name is not `main`, called with concrete `int`, `bool`, or `str` arguments.
+
+Both routes observe that same source, independently:
+
+- The **replacement route** typechecks the module, lowers it to Body IR, and executes the named function directly. It generates nothing and spawns nothing.
+- The **legacy route** runs the module plus a generated Incan entrypoint that calls the same function with the same arguments and prints the result. That program goes through Oven, the adopted build and execution authority: `IrCodegen` emits Rust, an Oven receipt authorizes those exact bytes, an immutable direct-`rustc` plan selected from the bounded Oven store compiles them with no Cargo process, and the produced binary runs as a separate process.
+
+What is compared is what the two routes *did*, never the Rust one of them was built from.
+
+### The result is transported losslessly
+
+The legacy route reads its answer out of a real process's standard output, so the transport has to be exact. Trimming whitespace would silently equate `"x"` with `"x\n"`, and `""` with `"\n"`, turning a genuine divergence into a match. The generated entrypoint therefore frames the result between two marker lines, and the payload is recovered by anchoring on the exact leading and trailing byte sequences — never by searching, trimming, or lossy UTF-8 conversion. Output that does not carry the frame exactly is unavailable, because a result that cannot be read back byte-for-byte has not been observed.
+
+### What agreement is allowed to mean
+
+The compared observable is small on purpose: either the function returned normally — and both routes must agree on the exact spelling of that scalar — or it stopped on a runtime failure the profile recognizes identically on both sides. The recognized failures are a failed `assert`, an integer division or modulo by zero, and an arithmetic overflow; those stay distinct classes, because an overflow is not a division by zero and collapsing them would let a real divergence report as agreement. A failure neither route can classify is unavailable, not agreement: "both stopped somehow" does not show they stopped the same way.
+
+Every comparison records exactly one of three outcomes, and only the first is green:
+
+- `matched` — both routes ran and produced the same observable. It carries the compared observable itself, so a reader can see what agreement was claimed over, plus two profile facts described below.
+- `diverged` — both routes ran and produced different observables, with both sides named. This is a regression signal on the backend-selection axis, never a reason to prefer one route's answer.
+- `unavailable` — no comparison was made, with the concrete boundary that stopped it. A legacy program that fails to build lands here rather than in `diverged`: a comparison that could not run has proven nothing, so build success is never allowed to stand in for a semantic verdict.
+
+Both ran states record two profile facts, and both are needed. `profile_kind` is the stable kind of comparison that ran — `incan.shadow_comparison.direct_scalar_free_function.v0` today — so a registry keyed on comparison capability can link against it without decoding a hash, and the link survives every change to the compared source. `profile_identity` is the content identity of the exact instance: this source, this observed function, these arguments. Recording only the hash would leave a consumer unable to say what kind of comparison it is looking at; recording only the kind would let two different comparisons claim the same evidence.
+
+### Receipts, and what survives an unavailable comparison
+
+Each route that executed is selected and finalized through the same `select_backend` / `resolve_execution` / `finalize_receipt` sequence a build uses, and both are declared `FallbackPolicy::Refuse`, so neither route can quietly become the other. Both receipts carry the same `source_identity` and the same comparison outcome; they differ, correctly, in `selected_backend`, `executed_backend`, and `output_identity`, because each route's output identity covers what that route actually produced. Treating the two receipts as interchangeable would erase the independence the comparison depends on.
+
+The legacy route's output identity additionally covers the Oven authority that permitted the run — the project receipt identity, the reusable build-unit identity, the direct-`rustc` plan identity, and the produced output digest — so "which authority produced this legacy answer" is recorded rather than assumed.
+
+An unavailable comparison does not discard work that really happened. When the replacement route executed and only the legacy route could not, the replacement route keeps its own receipt and Body-IR evidence alongside the unavailable state. Throwing that away would lose a real execution and make a staging gap look identical to a source the replacement backend cannot run at all. A `main`-observing profile is the clearest case: the replacement backend executes a zero-argument `main` perfectly well, and only the legacy route has no way to observe an entrypoint's return value.
+
+The same rule covers receipt finalization. If a route executed but its receipt could not be finalized, the comparison is no longer verifiable and the verdict is withdrawn to `unavailable` naming the failure — but the route's observation is still reported, because an execution that really happened must not disappear because its record could not be written.
+
+Receipts recording a comparison use selection/receipt `schema_version: 2`. Version 1 could only ever record `not_requested` or `unavailable`, so no version-1 receipt carries a comparison payload.
+
+### Staging the legacy route
+
+An Oven receipt's reusable build unit comes from build intent and build-unit inputs, never from generated source, so a comparison adopts the intent and build-unit inputs of a project whose direct-`rustc` plan was already published by an explicit `incan oven bake`, and replaces only the generated-source evidence with its own program. Where no such capability is staged, the comparison is `unavailable` with that reason — it is never approximated by invoking a compiler directly, because an unauthorized build produces a result no receipt can account for.
+
+Because an unstaged run is honestly non-green everywhere, a default test run cannot tell a comparison that was never staged from one that was never implemented. `make shadow-comparison-evidence` closes that gap: it bakes a throwaway project to publish a plan, then runs the comparison and parity-corpus suites with `INCAN_SHADOW_REQUIRE_LEGACY_ROUTE=1`, so a missing or failing comparison is a hard failure rather than a reported skip. CI runs it as the `Shadow comparison evidence (#1146)` job and uploads the resulting parity summary.
 
 ## CLI surface
 

@@ -21,11 +21,23 @@
 //! #987's own scope calls for "receipt-aware reference/replacement or shadow comparisons where both paths are
 //! available." #986 landed [`incan::backend::selection`], so [`evaluate_case`] declares a real
 //! [`BackendSelection`], resolves it, and finalizes a real [`BackendExecutionReceipt`] for every case's source —
-//! the same three-call sequence `src/cli/commands/build.rs` uses for an actual build. The first #988 Body-IR cases
+//! the same three-call sequence `src/cli/commands/build.rs` uses for an actual build. The #988 Body-IR cases
 //! additionally execute the replacement backend and carry their own selection/execution receipt, Body-IR snapshot,
-//! ownership evidence, and runtime requirements. Their requested shadow comparison remains genuinely
-//! [`ShadowComparisonState::Unavailable`] because no source-observable legacy comparator exists; generated Rust is
-//! never substituted as semantic proof.
+//! ownership evidence, and runtime requirements.
+//!
+//! ## Source-observable comparison (#1146)
+//!
+//! A row may additionally declare the bounded comparison profile in [`incan::backend::shadow`]. That row is then
+//! observed twice, independently: once by direct Body-IR execution, and once by building the emitted Rust with a
+//! real native compiler and running the produced program as a separate process. Only such a row can reach
+//! [`OverallState::Green`], and only when the comparison actually ran and both routes produced the same
+//! source-level observable. Every other row stays non-green with the concrete reason no comparison was made —
+//! generated Rust is never substituted as semantic proof.
+//!
+//! The legacy route is Oven-owned, so a row that declares a comparison needs a staged Oven capability. The
+//! including test crate supplies it as a `shadow_capability` module (`tests/support/shadow_capability.rs`); when
+//! nothing is staged, the row degrades to direct-execution-only evidence with that reason recorded — never to a
+//! green result, and never losing the replacement execution that did happen.
 
 use incan::backend::replacement::{
     OwnershipReadProjection, ReplacementValue, RuntimeRequirementProjection, execute_prevalidated_free_function,
@@ -35,6 +47,9 @@ use incan::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, BackendSelectionError, FallbackPolicy,
     ShadowComparisonState, digest_output, finalize_receipt, resolve_execution, select_backend,
     unavailable_shadow_comparison,
+};
+use incan::backend::shadow::{
+    LegacyExecutionAuthority, ShadowComparison, ShadowComparisonProfile, compare_source_observable,
 };
 use incan::frontend::body_ir::build_body_ir_module_v0;
 use incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
@@ -180,22 +195,66 @@ pub(crate) enum ReceiptRef {
         /// Concrete reason the intentionally requested semantic comparison is non-green.
         comparison_reason: String,
     },
-    /// A real receipt's source-observable shadow comparison against the replacement backend matched. Not reachable
-    /// until a paired legacy runtime comparator is implemented; kept so the schema does not need another shape
-    /// change when it does.
-    #[allow(dead_code)]
-    ShadowMatched { receipt_identity: String },
-    /// A real receipt's shadow comparison against the replacement backend diverged — a genuine regression signal
-    /// on the backend-selection axis itself, not a schema gap. Not reachable until a paired legacy runtime
-    /// comparator exists.
-    #[allow(dead_code)]
-    ShadowDiverged { receipt_identity: String, detail: String },
-    /// The backend-selection API itself returned an error while declaring or resolving a selection for this
-    /// case's source. Defensive: with today's fixed `(Legacy, FallbackPolicy::Refuse)` inputs this cannot actually
-    /// happen, but the corpus must not silently treat an API error as an available, green-eligible receipt.
-    #[allow(dead_code)]
+    /// Two independent executions of the same source under a #1146 comparison profile agreed.
+    ///
+    /// This is the only receipt state that may promote a row to [`OverallState::Green`]. It records both routes'
+    /// receipt identities separately, because the two receipts are deliberately not interchangeable: they differ
+    /// by selected and executed backend and by what each route actually produced.
+    ShadowMatched {
+        /// Stable kind of comparison profile that ran, for consumers keyed on comparison capability (#1153).
+        profile_kind: String,
+        /// Content identity of the exact comparison profile instance both routes were bound to.
+        profile_identity: String,
+        /// The source-level observable both routes produced.
+        observable: String,
+        /// Identity of the finalized legacy-route receipt.
+        legacy_receipt_identity: String,
+        /// Identity of the finalized replacement-route receipt.
+        replacement_receipt_identity: String,
+        /// Identity of the legacy process observation bound into the legacy receipt.
+        legacy_output_identity: String,
+        /// Identity of the direct Body-IR output bound into the replacement receipt.
+        replacement_output_identity: String,
+        /// The Oven receipt, build unit, and direct-rustc plan that authorized the legacy execution.
+        ///
+        /// Present so a green row names the build authority behind its legacy answer rather than leaving it an
+        /// unattributed process result.
+        legacy_authority: LegacyExecutionAuthority,
+    },
+    /// Two independent executions of the same source under a #1146 comparison profile disagreed.
+    ///
+    /// A genuine regression signal on the backend-selection axis itself, never a reason to prefer one route's
+    /// answer over the other's.
+    ShadowDiverged {
+        /// Stable kind of comparison profile that ran, for consumers keyed on comparison capability (#1153).
+        profile_kind: String,
+        /// Content identity of the exact comparison profile instance both routes were bound to.
+        profile_identity: String,
+        /// Factual account of what each route observed.
+        detail: String,
+        /// Identity of the finalized legacy-route receipt.
+        legacy_receipt_identity: String,
+        /// Identity of the finalized replacement-route receipt.
+        replacement_receipt_identity: String,
+    },
+    /// A route's selection or receipt evidence could not be produced or verified, so this row reports no
+    /// comparison at all.
+    ///
+    /// Reached when the backend-selection API errors while declaring a selection, and when a comparison's routes
+    /// executed but their receipts could not be finalized or verified. Both are defensive with today's fixed
+    /// `FallbackPolicy::Refuse` inputs, and both must stay visible: the corpus must never treat unverifiable
+    /// evidence as an available, green-eligible receipt, and must never answer it by re-running the row, which
+    /// would report a different execution than the one that was observed.
     SelectionError { detail: String },
 }
+
+/// Reason a row with no direct replacement execution cannot have a source-observable comparison.
+const NO_REPLACEMENT_ROUTE_REASON: &str = "this row observes the legacy backend only; it has no direct replacement execution to compare against, so no \
+     source-observable comparison was made";
+
+/// Reason a direct-execution row that has not opted into the bounded #1146 profile stays non-green.
+const NO_DECLARED_COMPARISON_REASON: &str = "this row executes the replacement backend directly but does not declare the bounded #1146 source-observable \
+     comparison profile, so no legacy route was run to compare it against";
 
 /// Declare, resolve, and finalize the legacy-side #986 receipt retained by the pre-#988 seed rows.
 fn compute_legacy_receipt(source: &str) -> ReceiptRef {
@@ -235,8 +294,241 @@ struct ReplacementPlanEvidence {
     receipt: ReceiptRef,
 }
 
-/// Execute one #988 plan once, through #986 selection, and bind the observed Body-IR result to its receipt.
+/// Produce one #988 row's evidence, running the bounded #1146 comparison first when the row declares it.
+///
+/// A declared comparison that cannot run — no staged Oven capability, an unbuildable legacy program, a profile
+/// the comparator refuses — degrades to direct-execution-only evidence carrying that concrete reason. The row
+/// stays non-green either way; what changes is whether the reason is honest about *why*.
 fn execute_replacement_plan(source: &str, plan: ReplacementExecutionPlan) -> ReplacementPlanEvidence {
+    if !plan.shadow_comparison {
+        return execute_direct_replacement_plan(source, plan, NO_DECLARED_COMPARISON_REASON.to_string());
+    }
+    match compare_replacement_plan(source, plan) {
+        Ok(evidence) => evidence,
+        Err(reason) => execute_direct_replacement_plan(source, plan, reason),
+    }
+}
+
+/// Observe one row through both routes and bind the result to the receipts the comparison produced.
+///
+/// When both routes ran, this reports the comparison itself. When only the replacement route ran, it reports
+/// *that* execution's own receipt and Body-IR evidence rather than re-running it: the comparison already
+/// retained everything the row needs, and executing twice would make the reported receipt describe a different
+/// run than the one the comparison observed.
+///
+/// `Err` is reserved for the one case where there is genuinely nothing to report — no staged capability, or a
+/// comparison that retained no executed route at all — because the caller answers `Err` by running the row
+/// directly. A route that executed but whose receipt could not be finalized must never take that path: it would
+/// re-execute and publish a receipt describing a *different* run than the one that was observed. That case
+/// reports [`ReceiptRef::SelectionError`] instead, which is non-green and names what happened.
+fn compare_replacement_plan(source: &str, plan: ReplacementExecutionPlan) -> Result<ReplacementPlanEvidence, String> {
+    let capability = crate::shadow_capability::legacy_capability().map_err(|error| error.reason)?;
+    let workspace = tempfile::tempdir()
+        .map_err(|error| format!("the legacy comparison route could not create a workspace: {error}"))?;
+    let profile = ShadowComparisonProfile::new(source, plan.function, (plan.arguments)());
+    let comparison = compare_source_observable(&profile, &capability, workspace.path());
+    let (legacy, replacement) = match (&comparison.legacy, &comparison.replacement) {
+        (Some(legacy), Some(replacement)) => (legacy, replacement),
+        (_, Some(replacement)) => return retained_replacement_evidence(&comparison, replacement, plan),
+        _ => return Err(unavailable_reason(&comparison)),
+    };
+
+    let behavior_outcome = comparison_behavior_outcome(&comparison, plan);
+    let (legacy_receipt, replacement_receipt) = match (legacy.receipt(), replacement.receipt()) {
+        (Ok(legacy_receipt), Ok(replacement_receipt)) => (legacy_receipt, replacement_receipt),
+        (legacy_receipt, replacement_receipt) => {
+            return Ok(unverifiable_comparison_evidence(
+                behavior_outcome,
+                [legacy_receipt.err(), replacement_receipt.err()],
+            ));
+        }
+    };
+    for receipt in [legacy_receipt, replacement_receipt] {
+        if let Err(error) = receipt.verify_identity() {
+            return Ok(unverifiable_comparison_evidence(
+                behavior_outcome,
+                [
+                    Some(format!("a comparison receipt failed identity verification: {error}")),
+                    None,
+                ],
+            ));
+        }
+    }
+    let receipt = match &comparison.state {
+        ShadowComparisonState::Matched {
+            profile_kind,
+            profile_identity,
+            observable,
+        } => ReceiptRef::ShadowMatched {
+            profile_kind: profile_kind.clone(),
+            profile_identity: profile_identity.clone(),
+            observable: observable.clone(),
+            legacy_receipt_identity: legacy_receipt.identity.clone(),
+            replacement_receipt_identity: replacement_receipt.identity.clone(),
+            legacy_output_identity: legacy_receipt.output_identity.clone(),
+            replacement_output_identity: replacement_receipt.output_identity.clone(),
+            legacy_authority: match comparison.legacy_authority.clone() {
+                Some(authority) => authority,
+                None => {
+                    return Ok(unverifiable_comparison_evidence(
+                        behavior_outcome,
+                        [
+                            Some("an executed legacy route recorded no Oven authority".to_string()),
+                            None,
+                        ],
+                    ));
+                }
+            },
+        },
+        ShadowComparisonState::Diverged {
+            profile_kind,
+            profile_identity,
+            detail,
+        } => ReceiptRef::ShadowDiverged {
+            profile_kind: profile_kind.clone(),
+            profile_identity: profile_identity.clone(),
+            detail: detail.clone(),
+            legacy_receipt_identity: legacy_receipt.identity.clone(),
+            replacement_receipt_identity: replacement_receipt.identity.clone(),
+        },
+        state => {
+            return Ok(unverifiable_comparison_evidence(
+                behavior_outcome,
+                [
+                    Some(format!(
+                        "a comparison whose routes both executed must record agreement or divergence, got {state:?}"
+                    )),
+                    None,
+                ],
+            ));
+        }
+    };
+    Ok(ReplacementPlanEvidence {
+        behavior_outcome,
+        receipt,
+    })
+}
+
+/// Report the replacement execution a partially unavailable comparison already performed.
+///
+/// This is the corpus side of #1146's partial-evidence contract: the legacy route did not run, so no comparison
+/// verdict exists, but the replacement route really executed and its receipt must be the one reported. Every
+/// branch here reports what was observed; none hands the row back for a second execution, which would publish
+/// evidence describing a different run than the one the comparison made.
+fn retained_replacement_evidence(
+    comparison: &ShadowComparison,
+    replacement: &incan::backend::shadow::RouteEvidence,
+    plan: ReplacementExecutionPlan,
+) -> Result<ReplacementPlanEvidence, String> {
+    let behavior_outcome = comparison_behavior_outcome(comparison, plan);
+    // A retained route that has no usable receipt is reported as an explicit non-green error, never handed back
+    // for re-execution: rerunning would replace observed evidence with a second, different run.
+    let replacement_receipt = match replacement.receipt() {
+        Ok(receipt) => receipt,
+        Err(error) => return Ok(unverifiable_comparison_evidence(behavior_outcome, [Some(error), None])),
+    };
+    if let Err(error) = replacement_receipt.verify_identity() {
+        return Ok(unverifiable_comparison_evidence(
+            behavior_outcome,
+            [
+                Some(format!(
+                    "a retained replacement receipt failed identity verification: {error}"
+                )),
+                None,
+            ],
+        ));
+    }
+    // A replacement route that stopped on a classified runtime failure executed, but produced no Body IR result
+    // to project. Re-running the row would observe that same failure a second time and report *that* run, so the
+    // observed outcome is kept and the missing projection is stated instead.
+    let Some(execution) = comparison.replacement_execution.as_ref() else {
+        return Ok(unverifiable_comparison_evidence(
+            behavior_outcome,
+            [
+                Some(format!(
+                    "the replacement route executed and observed {} rather than returning a value, so there is no \
+                     Body-IR projection to report",
+                    replacement.observation.observable.describe()
+                )),
+                None,
+            ],
+        ));
+    };
+    Ok(ReplacementPlanEvidence {
+        behavior_outcome,
+        receipt: ReceiptRef::ReplacementExecuted {
+            selection_identity: replacement_receipt.selection.identity.clone(),
+            receipt_identity: replacement_receipt.identity.clone(),
+            output_identity: replacement_receipt.output_identity.clone(),
+            body_snapshot: execution.body_snapshot.clone(),
+            ownership_reads: execution.ownership_evidence(),
+            runtime_requirements: execution.runtime_requirement_evidence(),
+            comparison_reason: unavailable_reason(comparison),
+        },
+    })
+}
+
+/// Report a comparison whose routes executed but whose evidence cannot be verified.
+///
+/// This keeps the observed behavior outcome — the routes really did run — while refusing to publish a receipt
+/// reference the corpus could mistake for verified parity. The result is always non-green, and the caller must
+/// not respond by re-running the row: a second execution would describe a different run than the one observed.
+fn unverifiable_comparison_evidence(
+    behavior_outcome: ComparisonOutcome,
+    problems: [Option<String>; 2],
+) -> ReplacementPlanEvidence {
+    let detail = problems.into_iter().flatten().collect::<Vec<_>>().join("; ");
+    ReplacementPlanEvidence {
+        behavior_outcome,
+        receipt: ReceiptRef::SelectionError {
+            detail: format!(
+                "the comparison's routes executed but their evidence could not be verified, so this row reports \
+                 no comparison: {detail}"
+            ),
+        },
+    }
+}
+
+/// Read the recorded reason a comparison did not run.
+fn unavailable_reason(comparison: &ShadowComparison) -> String {
+    match &comparison.state {
+        ShadowComparisonState::Unavailable { reason } => reason.clone(),
+        state => format!("the comparison produced no receipts while recording {state:?}"),
+    }
+}
+
+/// Confirm the compared row still produces the value its case documents.
+///
+/// The comparison proves the two routes agree; this proves they agree on the *expected* answer, so a shared
+/// regression in both routes cannot pass as parity.
+fn comparison_behavior_outcome(comparison: &ShadowComparison, plan: ReplacementExecutionPlan) -> ComparisonOutcome {
+    let expected = (plan.expected)();
+    match &comparison.replacement_execution {
+        Some(execution) if execution.value == expected => ComparisonOutcome::Match,
+        Some(execution) => ComparisonOutcome::Mismatch {
+            detail: format!(
+                "replacement `{}` returned {:?}, expected {:?}",
+                plan.function, execution.value, expected
+            ),
+        },
+        None => ComparisonOutcome::Mismatch {
+            detail: format!(
+                "replacement `{}` did not complete normally, so it cannot have produced {expected:?}",
+                plan.function
+            ),
+        },
+    }
+}
+
+/// Execute one #988 plan once, through #986 selection, and bind the observed Body-IR result to its receipt.
+///
+/// `comparison_reason` states why this row carries no source-observable comparison, so its non-green state is
+/// explained rather than merely asserted.
+fn execute_direct_replacement_plan(
+    source: &str,
+    plan: ReplacementExecutionPlan,
+    comparison_reason: String,
+) -> ReplacementPlanEvidence {
     let arguments = (plan.arguments)();
     let expected = (plan.expected)();
     let selection = select_backend(
@@ -288,18 +580,17 @@ fn execute_replacement_plan(source: &str, plan: ReplacementExecutionPlan) -> Rep
             ),
         }
     };
-    let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
-    let comparison_reason = match &shadow_comparison {
-        ShadowComparisonState::Unavailable { reason } => reason.clone(),
-        state => {
-            return ReplacementPlanEvidence {
-                behavior_outcome,
-                receipt: ReceiptRef::SelectionError {
-                    detail: format!("replacement corpus expected unavailable shadow comparison, got {state:?}"),
-                },
-            };
-        }
-    };
+    let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested, &comparison_reason);
+    if !matches!(shadow_comparison, ShadowComparisonState::Unavailable { .. }) {
+        return ReplacementPlanEvidence {
+            behavior_outcome,
+            receipt: ReceiptRef::SelectionError {
+                detail: format!(
+                    "replacement corpus expected an unavailable shadow comparison, got {shadow_comparison:?}"
+                ),
+            },
+        };
+    }
     let receipt = match finalize_receipt(
         &selection,
         executed,
@@ -366,23 +657,21 @@ fn replacement_profile_refusal(selection: &BackendSelection, detail: String) -> 
     }
 }
 
-/// Decide the shadow-comparison state for a selection, matching `build.rs`'s own `backend_shadow_comparison`
-/// helper exactly (same condition, same reason string) so the two do not drift into disagreeing explanations for
-/// the same unavailability.
+/// Decide the shadow-comparison state for a legacy-only row's selection.
+///
+/// Routed through the same [`unavailable_shadow_comparison`] helper `build.rs` uses, so an unavailable comparison
+/// is recorded the one canonical way rather than hand-assembled here; only the reason is row-specific.
 fn shadow_comparison_for(selection: &BackendSelection) -> ShadowComparisonState {
-    unavailable_shadow_comparison(selection.shadow_requested)
+    unavailable_shadow_comparison(selection.shadow_requested, NO_REPLACEMENT_ROUTE_REASON)
 }
 
-/// Fold a finalized receipt's shadow-comparison outcome into the [`ReceiptRef`] a [`CaseReport`] carries.
+/// Fold one single-route receipt's shadow-comparison outcome into the [`ReceiptRef`] a [`CaseReport`] carries.
+///
+/// A comparison outcome is a claim about *two* routes, so it can only be assembled from both routes' receipts by
+/// [`compare_replacement_plan`]. Seeing one here would mean a single-route receipt had been handed a verdict it
+/// cannot support, which is recorded as a selection error rather than passed through as evidence.
 fn receipt_ref_from_receipt(receipt: BackendExecutionReceipt) -> ReceiptRef {
     match receipt.shadow_comparison {
-        ShadowComparisonState::Matched => ReceiptRef::ShadowMatched {
-            receipt_identity: receipt.identity,
-        },
-        ShadowComparisonState::Diverged { detail } => ReceiptRef::ShadowDiverged {
-            receipt_identity: receipt.identity,
-            detail,
-        },
         ShadowComparisonState::Unavailable { reason } => ReceiptRef::ShadowUnavailable {
             receipt_identity: receipt.identity,
             reason,
@@ -390,6 +679,12 @@ fn receipt_ref_from_receipt(receipt: BackendExecutionReceipt) -> ReceiptRef {
         ShadowComparisonState::NotRequested => ReceiptRef::ShadowUnavailable {
             receipt_identity: receipt.identity,
             reason: "no shadow comparison was requested for this case".to_string(),
+        },
+        state => ReceiptRef::SelectionError {
+            detail: format!(
+                "a single-route receipt cannot carry the two-route comparison outcome {state:?}; only a real \
+                 comparison over both routes may record one"
+            ),
         },
     }
 }
@@ -475,6 +770,11 @@ pub(crate) struct ReplacementExecutionPlan {
     pub(crate) arguments: fn() -> Vec<ReplacementValue>,
     /// The source-observable value the direct execution must produce.
     pub(crate) expected: fn() -> ReplacementValue,
+    /// Whether this row also runs the bounded #1146 source-observable comparison against the legacy backend.
+    ///
+    /// Opt-in per row rather than implied by the lane: a row without a proven two-route comparison must stay
+    /// non-green, and silently comparing every direct-execution row would make that distinction invisible.
+    pub(crate) shadow_comparison: bool,
 }
 
 /// Typecheck and lower source into the Body IR that replacement selection validates before execution.
@@ -593,19 +893,18 @@ pub(crate) struct CaseReport {
 
 /// The final, honest per-case state a CI consumer or #655 should read.
 ///
-/// There is deliberately no plain `Green` reachable today: reaching it requires both a [`ComparisonOutcome::Match`]
-/// behavior outcome *and* a matched source-observable shadow comparison against the replacement backend. #988's
-/// direct executions remain non-green until the same source profile has a paired legacy runtime comparator, even
-/// though every case already consults a real receipt.
+/// `Green` requires two independent things: a [`ComparisonOutcome::Match`] behavior outcome *and* a
+/// source-observable comparison (#1146) that actually ran and agreed. A row that only executes one backend — even
+/// with a valid receipt — cannot reach it, because a single route cannot demonstrate parity with the other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum OverallState {
-    /// Behavior matched and a real source-observable shadow comparison against the replacement backend also
-    /// matched. Not reachable until a paired legacy runtime comparator exists.
+    /// Behavior matched, and two independent executions of the same source agreed on the compared observable.
     Green,
-    /// Behavior matched and a real receipt was produced, but its shadow comparison against the replacement
-    /// backend is unavailable because the active source profile has no paired legacy runtime comparator.
+    /// Behavior matched and a real receipt was produced, but no source-observable comparison ran for this row.
     NonGreenShadowUnavailable,
+    /// Behavior matched, but the two routes observed different results — a regression signal, not a gap.
+    NonGreenShadowDiverged,
     /// The case's own behavior evaluation did not match (mismatch, skip, or incompatible) — a real signal.
     NonGreenBehavior,
 }
@@ -632,15 +931,16 @@ pub(crate) fn evaluate_case(case: &ParityCase) -> CaseReport {
             ),
         },
     };
-    // `shadow_matched` is its own match (rather than folded into one match on `(outcome, receipt)`) so that adding
-    // a future reachable `ReceiptRef` variant only requires updating this one arm.
-    let shadow_matched = matches!(receipt, ReceiptRef::ShadowMatched { .. });
+    // A failed behavior probe outranks the comparison axis: a row whose documented behavior drifted is a
+    // regression regardless of whether the two routes happened to agree on the drifted answer.
     let overall_state = if !behavior_outcome.is_green() {
         OverallState::NonGreenBehavior
-    } else if shadow_matched {
-        OverallState::Green
     } else {
-        OverallState::NonGreenShadowUnavailable
+        match receipt {
+            ReceiptRef::ShadowMatched { .. } => OverallState::Green,
+            ReceiptRef::ShadowDiverged { .. } => OverallState::NonGreenShadowDiverged,
+            _ => OverallState::NonGreenShadowUnavailable,
+        }
     };
     CaseReport {
         id: case.id,
@@ -665,17 +965,27 @@ pub(crate) struct CorpusSummary {
     pub(crate) total_cases: usize,
     pub(crate) green: usize,
     pub(crate) non_green_shadow_unavailable: usize,
+    pub(crate) non_green_shadow_diverged: usize,
     pub(crate) non_green_behavior: usize,
     pub(crate) receipt_schema_available: bool,
+    /// Whether at least one row proved its result through two independent executions of the same source (#1146).
+    ///
+    /// A top-level flag rather than something a consumer must infer from per-case state, matching
+    /// `receipt_schema_available`: it reports whether the comparison contract is exercised at all, not whether
+    /// every row exercises it.
+    pub(crate) source_observable_comparison_available: bool,
     pub(crate) cases: Vec<CaseReport>,
 }
 
-/// The current CI-summary schema version. Version `3` adds `ReceiptRef::ReplacementExecuted`, which binds direct
+/// The current CI-summary schema version. Version `3` added `ReceiptRef::ReplacementExecuted`, which binds direct
 /// Body-IR cases (initially #988's profile and subsequently #1123's lazy-generator case) to their own
-/// selection/execution identities and canonical body, ownership, and runtime evidence while retaining an explicit
-/// non-green unavailable comparison. Bump again whenever `CorpusSummary`'s or `CaseReport`'s field shape changes
-/// in a way a consumer (including #655) would need to notice.
-pub(crate) const SCHEMA_VERSION: u32 = 3;
+/// selection/execution identities and canonical body, ownership, and runtime evidence. Version `4` makes
+/// `OverallState::Green` reachable through the bounded #1146 source-observable comparison, adds the
+/// `non_green_shadow_diverged` count and the `source_observable_comparison_available` flag, and gives
+/// `ReceiptRef::ShadowMatched`/`ShadowDiverged` both routes' receipt identities. Bump again whenever
+/// `CorpusSummary`'s or `CaseReport`'s field shape changes in a way a consumer (including #655) would need to
+/// notice.
+pub(crate) const SCHEMA_VERSION: u32 = 4;
 
 /// Evaluate every case in the corpus and assemble the CI-readable summary.
 ///
@@ -692,20 +1002,32 @@ pub(crate) fn summarize(cases: &[ParityCase]) -> CorpusSummary {
         .iter()
         .filter(|r| r.overall_state == OverallState::NonGreenShadowUnavailable)
         .count();
+    let non_green_shadow_diverged = reports
+        .iter()
+        .filter(|r| r.overall_state == OverallState::NonGreenShadowDiverged)
+        .count();
     let non_green_behavior = reports
         .iter()
         .filter(|r| r.overall_state == OverallState::NonGreenBehavior)
         .count();
+    let source_observable_comparison_available = reports.iter().any(|r| {
+        matches!(
+            r.receipt,
+            ReceiptRef::ShadowMatched { .. } | ReceiptRef::ShadowDiverged { .. }
+        )
+    });
     CorpusSummary {
         schema_version: SCHEMA_VERSION,
         total_cases: reports.len(),
         green,
         non_green_shadow_unavailable,
+        non_green_shadow_diverged,
         non_green_behavior,
         // #986 landed: every case above consulted a real `BackendExecutionReceipt`, not a placeholder. This is
         // `true` regardless of how many cases reach `Green`, because it reports whether the receipt contract
         // itself is available, not whether every comparison succeeded.
         receipt_schema_available: true,
+        source_observable_comparison_available,
         cases: reports,
     }
 }
