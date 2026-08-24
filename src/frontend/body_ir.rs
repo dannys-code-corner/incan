@@ -4145,17 +4145,19 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
 /// Return the first explicitly unsupported default statement, preserving the source span a direct consumer must
 /// show when it refuses an omitted argument.
 ///
-/// Expression lowering represents an unsupported expression as an assignment with
-/// [`bir::Rvalue::Unsupported`], while unsupported statement forms use
-/// [`bir::StatementKind::Unsupported`] directly. Defaults can nest ordinary control-flow blocks, so both
-/// representations are searched recursively before the deferred computation becomes callable metadata.
+/// [`BodyBuilder::unsupported_operand`] records every unsupported expression as a
+/// [`bir::StatementKind::Unsupported`] statement. Defaults can also nest executable statement sequences inside
+/// control-flow, race arms, closures, generators, and match arms, so the scan walks each such sequence before the
+/// deferred computation becomes callable metadata.
 fn first_unsupported_default_statement(stmts: &[bir::Statement]) -> Option<(HirSourceSpan, String)> {
-    stmts.iter().find_map(|statement| match &statement.kind {
+    stmts.iter().find_map(first_unsupported_default_statement_inner)
+}
+
+/// Inspect one statement and each rvalue shape that owns a nested executable statement sequence.
+fn first_unsupported_default_statement_inner(statement: &bir::Statement) -> Option<(HirSourceSpan, String)> {
+    match &statement.kind {
         bir::StatementKind::Unsupported { description } => Some((statement.span, description.clone())),
-        bir::StatementKind::Assign {
-            rvalue: bir::Rvalue::Unsupported { description },
-            ..
-        } => Some((statement.span, description.clone())),
+        bir::StatementKind::Assign { rvalue, .. } => first_unsupported_default_rvalue(rvalue),
         bir::StatementKind::If {
             then_block, else_block, ..
         } => first_unsupported_default_statement(&then_block.stmts).or_else(|| {
@@ -4164,8 +4166,24 @@ fn first_unsupported_default_statement(stmts: &[bir::Statement]) -> Option<(HirS
                 .and_then(|block| first_unsupported_default_statement(&block.stmts))
         }),
         bir::StatementKind::Loop { body } => first_unsupported_default_statement(&body.stmts),
+        bir::StatementKind::Race { arms, .. } => arms
+            .iter()
+            .find_map(|arm| first_unsupported_default_statement(&arm.body.stmts)),
         _ => None,
-    })
+    }
+}
+
+/// Inspect an rvalue's deferred executable parts without treating its explicit operands as source syntax to rebuild.
+fn first_unsupported_default_rvalue(rvalue: &bir::Rvalue) -> Option<(HirSourceSpan, String)> {
+    match rvalue {
+        bir::Rvalue::Closure { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Generator { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Match { arms, .. } => arms.iter().find_map(|arm| {
+            first_unsupported_default_statement(&arm.guard_stmts)
+                .or_else(|| first_unsupported_default_statement(&arm.body_stmts))
+        }),
+        _ => None,
+    }
 }
 
 // ============================================================================
@@ -6302,6 +6320,129 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn unsupported_race_arm_in_a_default_is_found_at_its_nested_source_span() {
+        // A race remains a structured Body-IR node even when one arm has an unsupported construct. Callable
+        // defaults have the stricter contract: the whole deferred computation must be executable, so the default
+        // boundary must find that nested refusal and retain the nested construct's span for direct consumers.
+        let unsupported_span = HirSourceSpan::new(24, 34);
+        let statements = vec![bir::Statement {
+            kind: bir::StatementKind::Race {
+                destination: None,
+                arms: vec![bir::RaceArm {
+                    awaitable: bir::Operand::Constant(bir::Constant::Int(1)),
+                    binding: bir::LocalId(0),
+                    body: bir::Block {
+                        scope: bir::ScopeId(1),
+                        stmts: vec![bir::Statement {
+                            kind: bir::StatementKind::Unsupported {
+                                description: "power operator".to_string(),
+                            },
+                            span: unsupported_span,
+                        }],
+                    },
+                    result: bir::Operand::Constant(bir::Constant::Int(0)),
+                }],
+            },
+            span: HirSourceSpan::new(10, 40),
+        }];
+
+        assert_eq!(
+            first_unsupported_default_statement(&statements),
+            Some((unsupported_span, "power operator".to_string())),
+            "a direct consumer must refuse the nested construct rather than accept a partially unsupported default"
+        );
+    }
+
+    #[test]
+    fn unsupported_rvalue_bodies_in_a_default_are_found_at_their_nested_source_spans() {
+        // A source default can construct a closure or generator, or evaluate a match, whose structured Body IR owns
+        // more statements than the outer assignment exposes. Those statement sequences are still part of the direct
+        // default contract: a consumer must receive their original refusal span instead of a misleading `Source`.
+        let unsupported = |span, description| bir::Statement {
+            kind: bir::StatementKind::Unsupported {
+                description: description.to_string(),
+            },
+            span,
+        };
+        let assignment = |rvalue| bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(bir::LocalId(0)),
+                rvalue,
+            },
+            span: HirSourceSpan::new(0, 80),
+        };
+        let result = bir::Operand::Constant(bir::Constant::Int(0));
+        let closure_span = HirSourceSpan::new(10, 20);
+        let generator_span = HirSourceSpan::new(21, 31);
+        let guard_span = HirSourceSpan::new(32, 42);
+        let body_span = HirSourceSpan::new(43, 53);
+        let cases = vec![
+            (
+                vec![assignment(bir::Rvalue::Closure {
+                    params: Vec::new(),
+                    captured_operands: Vec::new(),
+                    body: Box::new(bir::ClosureBody {
+                        capture_locals: Vec::new(),
+                        stmts: vec![unsupported(closure_span, "closure body")],
+                        result: result.clone(),
+                    }),
+                })],
+                closure_span,
+                "closure body",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Generator {
+                    source: bir::Operand::Constant(bir::Constant::Int(1)),
+                    captured_operands: Vec::new(),
+                    body: Box::new(bir::GeneratorBody {
+                        source_local: bir::LocalId(1),
+                        capture_locals: Vec::new(),
+                        stmts: vec![unsupported(generator_span, "generator body")],
+                    }),
+                })],
+                generator_span,
+                "generator body",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Match {
+                    scrutinee: bir::Operand::Constant(bir::Constant::Int(1)),
+                    arms: vec![bir::MatchArm {
+                        pattern: bir::Pattern::Wildcard,
+                        guard_stmts: vec![unsupported(guard_span, "match guard")],
+                        guard: Some(bir::Operand::Constant(bir::Constant::Bool(true))),
+                        body_stmts: Vec::new(),
+                        result: result.clone(),
+                    }],
+                })],
+                guard_span,
+                "match guard",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Match {
+                    scrutinee: bir::Operand::Constant(bir::Constant::Int(1)),
+                    arms: vec![bir::MatchArm {
+                        pattern: bir::Pattern::Wildcard,
+                        guard_stmts: Vec::new(),
+                        guard: None,
+                        body_stmts: vec![unsupported(body_span, "match body")],
+                        result,
+                    }],
+                })],
+                body_span,
+                "match body",
+            ),
+        ];
+
+        for (statements, span, description) in cases {
+            assert_eq!(
+                first_unsupported_default_statement(&statements),
+                Some((span, description.to_string())),
+                "a nested {description} refusal must prevent an incomplete default computation from becoming Source"
+            );
+        }
     }
 
     #[test]
