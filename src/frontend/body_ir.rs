@@ -33,7 +33,7 @@
 //! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
 //! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
 //! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
-//! pipeline runs first. The sub-issues are #1158 through #1167.
+//! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
 //!
 //! Two coverage limits are silent rather than marked, and both are deliberate. Expression-position `yield` (the
 //! two-way send/receive protocol) is a stub in the existing Rust-emission backend too, so there is no behavior to
