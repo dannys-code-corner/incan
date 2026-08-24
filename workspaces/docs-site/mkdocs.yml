@@ -347,6 +347,7 @@ nav:
           - Overview: design_records/index.md
           - Template: design_records/TEMPLATE.md
           - "DD-0001: GPU capability deferral": design_records/0001_gpu_target_capability_deferred.md
+          - "DD-0002: Single pinned Rust version": design_records/0002_single_pinned_rust_version.md
       - Whitepapers:
           - Overview: whitepapers/index.md
           - Incan ecosystem north star: whitepapers/incan_ecosystem_north_star.md
