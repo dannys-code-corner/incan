@@ -1,12 +1,14 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "baseline": {
     "release": {
+      "role": "MigrationCompatibilityTarget",
       "tag": "v0.5.0",
       "revision": "f6c17e0f8948c032f8b308236d57d9dee6ab1e9f",
       "source_blob": "42f718a9c35f816a68bb3ff13578eaf6725e3d0b",
-      "source_snapshot_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-      "expected_descriptor_count": 67
+      "source_snapshot_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+      "expected_descriptor_count": 67,
+      "retirement_condition": "Retire this active baseline when the v0.5 replacement migration closes; retain the source only as an explicitly historical regression fixture if a later migration needs it."
     },
     "capabilities": [
       {
@@ -43,7 +45,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "NamespacedStdlib",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -86,7 +88,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "RustInteropBoundary",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -130,7 +132,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CheckedCBindingFoundation",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -177,7 +179,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "OvenInteropRequirements",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -220,7 +222,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "IncanLibraries",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -262,7 +264,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StaticStorage",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -309,7 +311,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "FirstClassFunctions",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -351,7 +353,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CallSiteGenerics",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -389,7 +391,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "AbstractTraits",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -432,7 +434,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "SourceDefinedDerivesTraits",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -474,7 +476,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ModelFieldMetadata",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -522,7 +524,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "TypeTokensReflection",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -565,7 +567,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ValueEnums",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -604,7 +606,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "UnionTypes",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -647,7 +649,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ValidatedNewtypes",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -690,7 +692,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "NumericTypeSystem",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -732,7 +734,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "LoopExpressions",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -770,7 +772,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "IfWhileLet",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -807,7 +809,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "PatternAlternation",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -849,7 +851,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "EnumMethodsTraits",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -891,7 +893,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ComputedProperties",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -934,7 +936,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "SymbolAliases",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -976,7 +978,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CallablePresets",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1016,7 +1018,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "VariadicAndSpreadCalls",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1060,7 +1062,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "UserDefinedDecorators",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1103,7 +1105,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "Generators",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1142,7 +1144,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "IteratorAdapters",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1189,7 +1191,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "FallibleIteration",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1232,7 +1234,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ResultCombinators",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1275,7 +1277,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ProtocolHooks",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1318,7 +1320,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "RustTraitAdoption",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1356,7 +1358,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "RustAllow",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1396,7 +1398,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ScopedDslSurfaces",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1439,7 +1441,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdWeb",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1479,7 +1481,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdMath",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1521,7 +1523,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdCollections",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1559,7 +1561,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdGraph",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1609,7 +1611,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdFs",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1648,7 +1650,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdIo",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1695,7 +1697,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdRegex",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1742,7 +1744,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdUuid",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1789,7 +1791,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdCompression",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1836,7 +1838,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdEncoding",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1888,7 +1890,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdHash",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1931,7 +1933,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdEnviron",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -1975,7 +1977,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdJson",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2014,7 +2016,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdTempfile",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2057,7 +2059,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdDatetime",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2096,7 +2098,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdTelemetryCore",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2134,7 +2136,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdLogging",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2182,7 +2184,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdChecksum",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2225,7 +2227,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "TestingAssertions",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2268,7 +2270,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "TestRunner",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2311,7 +2313,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "AsyncAwait",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2354,7 +2356,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "AsyncRace",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2397,7 +2399,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ProjectLifecycle",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2440,7 +2442,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "WorkspaceMultiPackageProjects",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2480,7 +2482,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ToolchainInstallerManifest",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2525,7 +2527,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "ZeroCloneStarterFlow",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2563,7 +2565,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StableDiagnostics",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2602,7 +2604,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "BuildReportsAndRustInspection",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2641,7 +2643,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "BuildTestOvenObservability",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2683,7 +2685,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CodegraphInspection",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2721,7 +2723,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CheckedApiMetadata",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2769,7 +2771,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "CompiledProvidersSdkComponentsPackageFeatures",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2811,7 +2813,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "FormatterContract",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2854,7 +2856,7 @@
           "anchor": {
             "surface": "SourceAst",
             "status": "Observed",
-            "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+            "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
             "selector": "StdRegistry",
             "owner_issue": null,
             "note": "The frozen release-era descriptor is the audited public-contract source."
@@ -2866,233 +2868,90 @@
     ]
   },
   "registry": {
+    "registration_sources": [
+      {
+        "id": "frontend.body-ir.callable-values",
+        "lifecycle": "LocalImplementation",
+        "repository_path": "src/frontend/body_ir.rs",
+        "selector": "fn replacement_compatibility_body_ir_contribution",
+        "retirement_condition": null,
+        "feature_ids": [
+          "call.partial-binding",
+          "call.stored-callables"
+        ],
+        "requirement_ids": [
+          "call.argument-binder",
+          "captures.lexical-environments"
+        ]
+      },
+      {
+        "id": "backend.replacement.bounded-scalar-control",
+        "lifecycle": "LocalImplementation",
+        "repository_path": "src/backend/replacement/mod.rs",
+        "selector": "fn replacement_compatibility_direct_execution_contribution",
+        "retirement_condition": null,
+        "feature_ids": [
+          "language.control-flow",
+          "language.numeric-and-scalar"
+        ],
+        "requirement_ids": [
+          "control.normalized-flow",
+          "runtime.scalar-values"
+        ]
+      },
+      {
+        "id": "replacement-compatibility.migration-bootstrap",
+        "lifecycle": "MigrationBootstrap",
+        "repository_path": "src/replacement_compatibility.rs",
+        "selector": "fn migration_bootstrap_compatibility_contribution",
+        "retirement_condition": "Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it.",
+        "feature_ids": [
+          "async.tasks",
+          "call.named-and-variadic",
+          "decorators.dsl-surfaces",
+          "diagnostics.stable",
+          "error.result-and-try",
+          "generator.expressions",
+          "generator.functions",
+          "iteration.protocol-and-adapters",
+          "iteration.user-and-fallible",
+          "language.aggregates-and-projections",
+          "language.control-flow-complete",
+          "language.match-and-patterns",
+          "language.numeric-complete",
+          "language.strings-and-format",
+          "module.identity-and-aliases",
+          "nominal.models-unions-enums",
+          "package.public-boundaries",
+          "runtime.std-data-services",
+          "runtime.std-hosted-services",
+          "runtime.std-observability",
+          "testing-and-tooling",
+          "types.traits-generics-reflection",
+          "interop.rust-and-c"
+        ],
+        "requirement_ids": [
+          "async.runtime",
+          "call.frames",
+          "diagnostics.source-authority",
+          "error.result-routing",
+          "iteration.protocol-dispatch",
+          "modules.canonical-identity",
+          "nominal.value-model",
+          "packages.public-contract",
+          "patterns.dispatch",
+          "providers.runtime-services",
+          "receipts.comparison",
+          "runtime.aggregate-store",
+          "suspension.continuations",
+          "surface.decorator-dispatch",
+          "testing.tooling-control-plane",
+          "types.resolved-dispatch",
+          "unsafe.interop-boundary"
+        ]
+      }
+    ],
     "features": [
-      {
-        "id": "async.tasks",
-        "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
-        "probes": [
-          {
-            "id": "probe:async.tasks:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "AsyncAwait",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-                "selector": "fn check_await",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "AsyncAwait",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-              "selector": "fn check_await",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_yield",
-              "owner_issue": 1155,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "ReplacementGenerator",
-              "owner_issue": 1155,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-async.tasks",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1155,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1155,
-        "migration_or_blocker": "Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state."
-      },
-      {
-        "id": "call.named-and-variadic",
-        "contract": "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
-        "probes": [
-          {
-            "id": "probe:call.named-and-variadic:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "CallSiteGenerics",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-                "selector": "fn check_call",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "CallSiteGenerics",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-              "selector": "fn check_call",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_call",
-              "owner_issue": 1152,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_call",
-              "owner_issue": 1152,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-call.named-and-variadic",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1152,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1152,
-        "migration_or_blocker": "Call-frame and binder execution beyond the bounded scalar profile is owned by the callable runtime slice."
-      },
       {
         "id": "call.partial-binding",
         "contract": "Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.",
@@ -3105,7 +2964,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "CallablePresets",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -3135,7 +2994,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "CallablePresets",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -3218,7 +3077,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "FirstClassFunctions",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -3248,7 +3107,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "FirstClassFunctions",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -3320,910 +3179,6 @@
         "migration_or_blocker": "Direct execution deliberately refuses local callable targets; this is the coherent callable-frame profile."
       },
       {
-        "id": "decorators.dsl-surfaces",
-        "contract": "Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.",
-        "probes": [
-          {
-            "id": "probe:decorators.dsl-surfaces:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "ScopedDslSurfaces",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/collect/decorators.rs",
-                "selector": "fn validate_decorators_allowing_user_defined",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "ScopedDslSurfaces",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/collect/decorators.rs",
-              "selector": "fn validate_decorators_allowing_user_defined",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_function_body",
-              "owner_issue": 555,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_call",
-              "owner_issue": 555,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-decorators.dsl-surfaces",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 555,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 555,
-        "migration_or_blocker": "Surface packs and decorators require a source-to-runtime dispatch boundary before direct execution can classify them."
-      },
-      {
-        "id": "diagnostics.stable",
-        "contract": "Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.",
-        "probes": [
-          {
-            "id": "probe:diagnostics.stable:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "StableDiagnostics",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_stmt.rs",
-                "selector": "fn check_statement",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "StableDiagnostics",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_stmt.rs",
-              "selector": "fn check_statement",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_function_body",
-              "owner_issue": 655,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_free_function",
-              "owner_issue": 655,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-diagnostics.stable",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 655,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 655,
-        "migration_or_blocker": "The compatibility report and corpus need receipt-bound diagnostic evidence; generated Rust diagnostics are not a substitute."
-      },
-      {
-        "id": "error.result-and-try",
-        "contract": "Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.",
-        "probes": [
-          {
-            "id": "probe:error.result-and-try:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "ResultCombinators",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-                "selector": "fn check_try",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "ResultCombinators",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-              "selector": "fn check_try",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_try",
-              "owner_issue": 1154,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_call",
-              "owner_issue": 1154,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-error.result-and-try",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1154,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "Depends on #1101 for complete Body IR vocabulary; #1154 owns Result/error value routing."
-      },
-      {
-        "id": "generator.expressions",
-        "contract": "Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.",
-        "probes": [
-          {
-            "id": "probe:generator.expressions:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "Generators",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-                "selector": "fn check_call",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "Generators",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-              "selector": "fn check_call",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_generator_expr",
-              "owner_issue": 1152,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "ReplacementGenerator",
-              "owner_issue": 1152,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-generator.expressions",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1152,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1152,
-        "migration_or_blocker": "The bounded generator-expression collect path exists, but broader consumption and comparison remain non-green."
-      },
-      {
-        "id": "generator.functions",
-        "contract": "Generator functions suspend and resume without replaying prior effects or losing local state.",
-        "probes": [
-          {
-            "id": "probe:generator.functions:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Generator functions suspend and resume without replaying prior effects or losing local state.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "Generators",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-                "selector": "fn check_call",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "Generators",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
-              "selector": "fn check_call",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_generator_expr",
-              "owner_issue": 1152,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "ReplacementGenerator",
-              "owner_issue": 1152,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-generator.functions",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1152,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1152,
-        "migration_or_blocker": "Generator-function frames and resumption remain explicit replacement refusals."
-      },
-      {
-        "id": "iteration.protocol-and-adapters",
-        "contract": "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
-        "probes": [
-          {
-            "id": "probe:iteration.protocol-and-adapters:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "IteratorAdapters",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
-                "selector": "fn resolve_iteration_protocol",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "IteratorAdapters",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
-              "selector": "fn resolve_iteration_protocol",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_general_iteration",
-              "owner_issue": 1152,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_loop",
-              "owner_issue": 1152,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-iteration.protocol-and-adapters",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1152,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1152,
-        "migration_or_blocker": "The callable/lazy-generator runtime slice owns the first admitted adapter profile; general protocol dispatch remains blocked."
-      },
-      {
-        "id": "iteration.user-and-fallible",
-        "contract": "User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.",
-        "probes": [
-          {
-            "id": "probe:iteration.user-and-fallible:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "FallibleIteration",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
-                "selector": "fn resolve_iteration_protocol",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "FallibleIteration",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
-              "selector": "fn resolve_iteration_protocol",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_general_iteration",
-              "owner_issue": 1101,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_loop",
-              "owner_issue": 1101,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-iteration.user-and-fallible",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1101,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1101,
-        "migration_or_blocker": "Body IR protocol facts need a runtime dispatch and error-routing owner before the direct profile can admit these forms."
-      },
-      {
-        "id": "language.aggregates-and-projections",
-        "contract": "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
-        "probes": [
-          {
-            "id": "probe:language.aggregates-and-projections:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "StdCollections",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/collections.rs",
-                "selector": "fn check_list",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "StdCollections",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/collections.rs",
-              "selector": "fn check_list",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_aggregate",
-              "owner_issue": 1154,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn evaluate_aggregate",
-              "owner_issue": 1154,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-language.aggregates-and-projections",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1154,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation."
-      },
-      {
         "id": "language.control-flow",
         "contract": "Bounded scalar conditionals, loops, returns, assertions, and range iteration execute directly with explicit receipts.",
         "probes": [
@@ -4235,7 +3190,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "IfWhileLet",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4265,7 +3220,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "IfWhileLet",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4339,232 +3294,6 @@
         "migration_or_blocker": null
       },
       {
-        "id": "language.control-flow-complete",
-        "contract": "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
-        "probes": [
-          {
-            "id": "probe:language.control-flow-complete:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "IfWhileLet",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-                "selector": "fn check_if_expr",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "IfWhileLet",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
-              "selector": "fn check_if_expr",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_if_expr",
-              "owner_issue": 1154,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_loop",
-              "owner_issue": 1154,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-language.control-flow-complete",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1154,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "The current direct profile covers only the bounded scalar subset; #1154 owns the required value and pattern runtime."
-      },
-      {
-        "id": "language.match-and-patterns",
-        "contract": "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
-        "probes": [
-          {
-            "id": "probe:language.match-and-patterns:binding-and-refusal",
-            "positive": {
-              "outcome": "AcceptedBehavior",
-              "contract": "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
-              "anchor": {
-                "surface": "SourceAst",
-                "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-                "selector": "PatternAlternation",
-                "owner_issue": null,
-                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-              }
-            },
-            "negative": {
-              "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
-              "anchor": {
-                "surface": "Typechecker",
-                "status": "Observed",
-                "repository_path": "src/frontend/typechecker/check_expr/match_.rs",
-                "selector": "fn check_match",
-                "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-              }
-            }
-          }
-        ],
-        "evidence": {
-          "source_contract": "Checked",
-          "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
-          "independent_comparison": "NonGreenShadowUnavailable",
-          "surfaces": {
-            "source_ast": {
-              "surface": "SourceAst",
-              "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
-              "selector": "PatternAlternation",
-              "owner_issue": null,
-              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
-            },
-            "typechecker": {
-              "surface": "Typechecker",
-              "status": "Observed",
-              "repository_path": "src/frontend/typechecker/check_expr/match_.rs",
-              "selector": "fn check_match",
-              "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
-            },
-            "body_ir": {
-              "surface": "BodyIr",
-              "status": "Planned",
-              "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_match",
-              "owner_issue": 1154,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
-            },
-            "replacement_executor": {
-              "surface": "ReplacementExecutor",
-              "status": "Planned",
-              "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "fn execute_call",
-              "owner_issue": 1154,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
-            },
-            "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-language.match-and-patterns",
-                "owner_issue": 987,
-                "anchor": {
-                  "surface": "ParityCorpus",
-                  "status": "Planned",
-                  "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
-                }
-              }
-            },
-            "independent_comparison": {
-              "Unavailable": {
-                "comparison_infrastructure": {
-                  "issue": 1146,
-                  "anchor": {
-                    "surface": "IndependentComparison",
-                    "status": "Observed",
-                    "repository_path": "tests/support/parity_corpus.rs",
-                    "selector": "NonGreenShadowUnavailable",
-                    "owner_issue": null,
-                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
-                  }
-                },
-                "outstanding_evidence": {
-                  "Scheduled": {
-                    "owner_issue": 1154,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
-                  }
-                }
-              }
-            },
-            "scoped_comparisons": []
-          }
-        },
-        "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "Depends on #1101 for complete Body IR vocabulary; #1154 owns pattern dispatch over direct values."
-      },
-      {
         "id": "language.numeric-and-scalar",
         "contract": "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
         "probes": [
@@ -4576,7 +3305,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "NumericTypeSystem",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4606,7 +3335,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "NumericTypeSystem",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4714,6 +3443,1362 @@
         "migration_or_blocker": null
       },
       {
+        "id": "async.tasks",
+        "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
+        "probes": [
+          {
+            "id": "probe:async.tasks:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "AsyncAwait",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+                "selector": "fn check_await",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "AsyncAwait",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+              "selector": "fn check_await",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_yield",
+              "owner_issue": 1155,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "ReplacementGenerator",
+              "owner_issue": 1155,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-async.tasks",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1155,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1155,
+        "migration_or_blocker": "Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state."
+      },
+      {
+        "id": "call.named-and-variadic",
+        "contract": "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
+        "probes": [
+          {
+            "id": "probe:call.named-and-variadic:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "CallSiteGenerics",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+                "selector": "fn check_call",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "CallSiteGenerics",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+              "selector": "fn check_call",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_call",
+              "owner_issue": 1152,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_call",
+              "owner_issue": 1152,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-call.named-and-variadic",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1152,
+        "migration_or_blocker": "Call-frame and binder execution beyond the bounded scalar profile is owned by the callable runtime slice."
+      },
+      {
+        "id": "decorators.dsl-surfaces",
+        "contract": "Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.",
+        "probes": [
+          {
+            "id": "probe:decorators.dsl-surfaces:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "ScopedDslSurfaces",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/collect/decorators.rs",
+                "selector": "fn validate_decorators_allowing_user_defined",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "ScopedDslSurfaces",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/collect/decorators.rs",
+              "selector": "fn validate_decorators_allowing_user_defined",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_function_body",
+              "owner_issue": 555,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_call",
+              "owner_issue": 555,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-decorators.dsl-surfaces",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 555,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 555,
+        "migration_or_blocker": "Surface packs and decorators require a source-to-runtime dispatch boundary before direct execution can classify them."
+      },
+      {
+        "id": "diagnostics.stable",
+        "contract": "Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.",
+        "probes": [
+          {
+            "id": "probe:diagnostics.stable:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "StableDiagnostics",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_stmt.rs",
+                "selector": "fn check_statement",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "StableDiagnostics",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_stmt.rs",
+              "selector": "fn check_statement",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_function_body",
+              "owner_issue": 655,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_free_function",
+              "owner_issue": 655,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-diagnostics.stable",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 655,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 655,
+        "migration_or_blocker": "The compatibility report and corpus need receipt-bound diagnostic evidence; generated Rust diagnostics are not a substitute."
+      },
+      {
+        "id": "error.result-and-try",
+        "contract": "Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.",
+        "probes": [
+          {
+            "id": "probe:error.result-and-try:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "ResultCombinators",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+                "selector": "fn check_try",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "ResultCombinators",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+              "selector": "fn check_try",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_try",
+              "owner_issue": 1154,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_call",
+              "owner_issue": 1154,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-error.result-and-try",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1154,
+        "migration_or_blocker": "Depends on #1101 for complete Body IR vocabulary; #1154 owns Result/error value routing."
+      },
+      {
+        "id": "generator.expressions",
+        "contract": "Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.",
+        "probes": [
+          {
+            "id": "probe:generator.expressions:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "Generators",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+                "selector": "fn check_call",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "Generators",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+              "selector": "fn check_call",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_generator_expr",
+              "owner_issue": 1152,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "ReplacementGenerator",
+              "owner_issue": 1152,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-generator.expressions",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1152,
+        "migration_or_blocker": "The bounded generator-expression collect path exists, but broader consumption and comparison remain non-green."
+      },
+      {
+        "id": "generator.functions",
+        "contract": "Generator functions suspend and resume without replaying prior effects or losing local state.",
+        "probes": [
+          {
+            "id": "probe:generator.functions:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Generator functions suspend and resume without replaying prior effects or losing local state.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "Generators",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+                "selector": "fn check_call",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "Generators",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/calls.rs",
+              "selector": "fn check_call",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_generator_expr",
+              "owner_issue": 1152,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "ReplacementGenerator",
+              "owner_issue": 1152,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-generator.functions",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1152,
+        "migration_or_blocker": "Generator-function frames and resumption remain explicit replacement refusals."
+      },
+      {
+        "id": "iteration.protocol-and-adapters",
+        "contract": "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
+        "probes": [
+          {
+            "id": "probe:iteration.protocol-and-adapters:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "IteratorAdapters",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
+                "selector": "fn resolve_iteration_protocol",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "IteratorAdapters",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
+              "selector": "fn resolve_iteration_protocol",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_general_iteration",
+              "owner_issue": 1152,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_loop",
+              "owner_issue": 1152,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-iteration.protocol-and-adapters",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1152,
+        "migration_or_blocker": "The callable/lazy-generator runtime slice owns the first admitted adapter profile; general protocol dispatch remains blocked."
+      },
+      {
+        "id": "iteration.user-and-fallible",
+        "contract": "User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.",
+        "probes": [
+          {
+            "id": "probe:iteration.user-and-fallible:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "FallibleIteration",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
+                "selector": "fn resolve_iteration_protocol",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "FallibleIteration",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/ops.rs",
+              "selector": "fn resolve_iteration_protocol",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_general_iteration",
+              "owner_issue": 1101,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_loop",
+              "owner_issue": 1101,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-iteration.user-and-fallible",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1101,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1101,
+        "migration_or_blocker": "Body IR protocol facts need a runtime dispatch and error-routing owner before the direct profile can admit these forms."
+      },
+      {
+        "id": "language.aggregates-and-projections",
+        "contract": "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
+        "probes": [
+          {
+            "id": "probe:language.aggregates-and-projections:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "StdCollections",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/collections.rs",
+                "selector": "fn check_list",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "StdCollections",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/collections.rs",
+              "selector": "fn check_list",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_aggregate",
+              "owner_issue": 1154,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn evaluate_aggregate",
+              "owner_issue": 1154,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-language.aggregates-and-projections",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1154,
+        "migration_or_blocker": "Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation."
+      },
+      {
+        "id": "language.control-flow-complete",
+        "contract": "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
+        "probes": [
+          {
+            "id": "probe:language.control-flow-complete:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "IfWhileLet",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+                "selector": "fn check_if_expr",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "IfWhileLet",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
+              "selector": "fn check_if_expr",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_if_expr",
+              "owner_issue": 1154,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_loop",
+              "owner_issue": 1154,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-language.control-flow-complete",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1154,
+        "migration_or_blocker": "The current direct profile covers only the bounded scalar subset; #1154 owns the required value and pattern runtime."
+      },
+      {
+        "id": "language.match-and-patterns",
+        "contract": "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
+        "probes": [
+          {
+            "id": "probe:language.match-and-patterns:binding-and-refusal",
+            "positive": {
+              "outcome": "AcceptedBehavior",
+              "contract": "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
+              "anchor": {
+                "surface": "SourceAst",
+                "status": "Observed",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+                "selector": "PatternAlternation",
+                "owner_issue": null,
+                "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+              }
+            },
+            "negative": {
+              "outcome": "IntentionalRefusal",
+              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "anchor": {
+                "surface": "Typechecker",
+                "status": "Observed",
+                "repository_path": "src/frontend/typechecker/check_expr/match_.rs",
+                "selector": "fn check_match",
+                "owner_issue": null,
+                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              }
+            }
+          }
+        ],
+        "evidence": {
+          "source_contract": "Checked",
+          "legacy_run": "Unknown",
+          "body_ir": "Partial",
+          "direct_replacement": "BlockedByRequirements",
+          "independent_comparison": "NonGreenShadowUnavailable",
+          "surfaces": {
+            "source_ast": {
+              "surface": "SourceAst",
+              "status": "Observed",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
+              "selector": "PatternAlternation",
+              "owner_issue": null,
+              "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
+            },
+            "typechecker": {
+              "surface": "Typechecker",
+              "status": "Observed",
+              "repository_path": "src/frontend/typechecker/check_expr/match_.rs",
+              "selector": "fn check_match",
+              "owner_issue": null,
+              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+            },
+            "body_ir": {
+              "surface": "BodyIr",
+              "status": "Planned",
+              "repository_path": "src/frontend/body_ir.rs",
+              "selector": "fn lower_match",
+              "owner_issue": 1154,
+              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+            },
+            "replacement_executor": {
+              "surface": "ReplacementExecutor",
+              "status": "Planned",
+              "repository_path": "src/backend/replacement/mod.rs",
+              "selector": "fn execute_call",
+              "owner_issue": 1154,
+              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+            },
+            "parity_corpus": {
+              "Planned": {
+                "case_id": "parity-987-plan-language.match-and-patterns",
+                "owner_issue": 987,
+                "anchor": {
+                  "surface": "ParityCorpus",
+                  "status": "Planned",
+                  "repository_path": "tests/parity_corpus_tests.rs",
+                  "selector": "fn seed_corpus",
+                  "owner_issue": 987,
+                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                }
+              }
+            },
+            "independent_comparison": {
+              "Unavailable": {
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
+                }
+              }
+            },
+            "scoped_comparisons": []
+          }
+        },
+        "disposition": "Planned",
+        "owner_issue": 1154,
+        "migration_or_blocker": "Depends on #1101 for complete Body IR vocabulary; #1154 owns pattern dispatch over direct values."
+      },
+      {
         "id": "language.numeric-complete",
         "contract": "The full numeric contract preserves widths, literals, conversions, overflow, decimal behavior, and diagnostics beyond the scalar profile.",
         "probes": [
@@ -4725,7 +4810,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "NumericTypeSystem",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4755,7 +4840,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "NumericTypeSystem",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4838,7 +4923,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "NumericTypeSystem",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4868,7 +4953,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "NumericTypeSystem",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4951,7 +5036,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "NamespacedStdlib",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -4981,7 +5066,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "NamespacedStdlib",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5064,7 +5149,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "ComputedProperties",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5094,7 +5179,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "ComputedProperties",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5177,7 +5262,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "CheckedApiMetadata",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5207,7 +5292,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "CheckedApiMetadata",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5290,7 +5375,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "StdChecksum",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5320,7 +5405,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "StdChecksum",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5403,7 +5488,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "StdEnviron",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5433,7 +5518,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "StdEnviron",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5516,7 +5601,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "StdLogging",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5546,7 +5631,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "StdLogging",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5629,7 +5714,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "BuildReportsAndRustInspection",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5659,7 +5744,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "BuildReportsAndRustInspection",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5742,7 +5827,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "AbstractTraits",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5772,7 +5857,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "AbstractTraits",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5855,7 +5940,7 @@
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
-                "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+                "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
                 "selector": "CheckedCBindingFoundation",
                 "owner_issue": null,
                 "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5885,7 +5970,7 @@
             "source_ast": {
               "surface": "SourceAst",
               "status": "Observed",
-              "repository_path": "src/replacement_compatibility/v0_5_stdlib/capabilities.incn",
+              "repository_path": "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn",
               "selector": "CheckedCBindingFoundation",
               "owner_issue": null,
               "note": "The linked frozen public descriptor supplies the source-level contract crosswalk."
@@ -5959,25 +6044,11 @@
     ],
     "requirements": [
       {
-        "id": "async.runtime",
-        "invariant": "Async tasks have explicit scheduler, wake, cancellation, and receipt semantics.",
-        "owner_boundary": "frontend Body IR plus replacement runtime",
-        "verification_anchor": "async typechecker and Body-IR tests",
-        "internal_only_rationale": "Schedulers and wake queues are mechanisms, not public capabilities."
-      },
-      {
         "id": "call.argument-binder",
         "invariant": "Parameter binding preserves positional, named, default, preset, variadic, and diagnostic rules.",
         "owner_boundary": "typechecker partial projection and replacement call runtime",
         "verification_anchor": "partial/default typechecker and Body-IR tests",
         "internal_only_rationale": "Binding slots are shared call machinery, not a user feature."
-      },
-      {
-        "id": "call.frames",
-        "invariant": "Every local or nested callable has isolated locals, return flow, and source-owned spans.",
-        "owner_boundary": "replacement runtime call dispatcher",
-        "verification_anchor": "stored-callable Body-IR tests and #1152 execution probes",
-        "internal_only_rationale": "Frames enable several callable features without being user-visible themselves."
       },
       {
         "id": "captures.lexical-environments",
@@ -5992,6 +6063,27 @@
         "owner_boundary": "Body IR lowering and replacement evaluator",
         "verification_anchor": "replacement-body-v0 corpus",
         "internal_only_rationale": "Normalized control nodes are implementation vocabulary."
+      },
+      {
+        "id": "runtime.scalar-values",
+        "invariant": "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
+        "owner_boundary": "Body IR operands/rvalues and replacement evaluator",
+        "verification_anchor": "replacement-body-v0 scalar corpus",
+        "internal_only_rationale": "Scalar representation is an internal evaluator mechanism."
+      },
+      {
+        "id": "async.runtime",
+        "invariant": "Async tasks have explicit scheduler, wake, cancellation, and receipt semantics.",
+        "owner_boundary": "frontend Body IR plus replacement runtime",
+        "verification_anchor": "async typechecker and Body-IR tests",
+        "internal_only_rationale": "Schedulers and wake queues are mechanisms, not public capabilities."
+      },
+      {
+        "id": "call.frames",
+        "invariant": "Every local or nested callable has isolated locals, return flow, and source-owned spans.",
+        "owner_boundary": "replacement runtime call dispatcher",
+        "verification_anchor": "stored-callable Body-IR tests and #1152 execution probes",
+        "internal_only_rationale": "Frames enable several callable features without being user-visible themselves."
       },
       {
         "id": "diagnostics.source-authority",
@@ -6062,13 +6154,6 @@
         "owner_boundary": "Body IR aggregates/places and replacement runtime",
         "verification_anchor": "aggregate and assignment Body-IR tests",
         "internal_only_rationale": "Aggregate storage serves multiple public collection forms."
-      },
-      {
-        "id": "runtime.scalar-values",
-        "invariant": "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
-        "owner_boundary": "Body IR operands/rvalues and replacement evaluator",
-        "verification_anchor": "replacement-body-v0 scalar corpus",
-        "internal_only_rationale": "Scalar representation is an internal evaluator mechanism."
       },
       {
         "id": "suspension.continuations",
@@ -6475,6 +6560,36 @@
     ],
     "requirement_links": [
       {
+        "feature_id": "call.partial-binding",
+        "requirement_id": "call.argument-binder",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
+        "feature_id": "call.partial-binding",
+        "requirement_id": "captures.lexical-environments",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
+        "feature_id": "call.stored-callables",
+        "requirement_id": "call.frames",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
+        "feature_id": "call.stored-callables",
+        "requirement_id": "captures.lexical-environments",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
+        "feature_id": "language.control-flow",
+        "requirement_id": "control.normalized-flow",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
+        "feature_id": "language.numeric-and-scalar",
+        "requirement_id": "runtime.scalar-values",
+        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
+      },
+      {
         "feature_id": "async.tasks",
         "requirement_id": "async.runtime",
         "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
@@ -6497,26 +6612,6 @@
       {
         "feature_id": "call.named-and-variadic",
         "requirement_id": "types.resolved-dispatch",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
-        "feature_id": "call.partial-binding",
-        "requirement_id": "call.argument-binder",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
-        "feature_id": "call.partial-binding",
-        "requirement_id": "captures.lexical-environments",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
-        "feature_id": "call.stored-callables",
-        "requirement_id": "call.frames",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
-        "feature_id": "call.stored-callables",
-        "requirement_id": "captures.lexical-environments",
         "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
       },
       {
@@ -6590,11 +6685,6 @@
         "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
       },
       {
-        "feature_id": "language.control-flow",
-        "requirement_id": "control.normalized-flow",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
         "feature_id": "language.control-flow-complete",
         "requirement_id": "control.normalized-flow",
         "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
@@ -6612,11 +6702,6 @@
       {
         "feature_id": "language.match-and-patterns",
         "requirement_id": "nominal.value-model",
-        "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
-      },
-      {
-        "feature_id": "language.numeric-and-scalar",
-        "requirement_id": "runtime.scalar-values",
         "rationale": "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery."
       },
       {

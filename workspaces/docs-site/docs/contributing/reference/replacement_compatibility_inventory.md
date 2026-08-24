@@ -2,15 +2,27 @@
 
 !!! warning "Generated control-plane reference"
 
-    Do not edit this page by hand. Regenerate it from the checked public-capability baseline and compiler-owned replacement registry.
+    Do not edit this page by hand. Regenerate it from the checked public-capability baseline and compiler-boundary registrations.
 
-This is a validated control-plane inventory, not a parity claim. A feature row turns green only after direct execution and an independent, receipt-bound source-observable comparison for its full contract. A matched corpus case remains scoped evidence and cannot promote an incomplete feature. Generated Rust, Body IR representation, and legacy compilation are separate facts.
+This is a validated migration control plane, not a permanent second language-feature catalogue and not a parity claim. Durable feature and private-mechanism records are registered beside the compiler boundary that owns them; the collector joins and validates them here. The explicitly marked migration bootstrap exists only while unlanded work lacks such a boundary. A feature row turns green only after direct execution and an independent, receipt-bound source-observable comparison for its full contract. A matched corpus case remains scoped evidence and cannot promote an incomplete feature. Generated Rust, Body IR representation, and legacy compilation are separate facts.
 
 ## Release-pinned public baseline
 
 - Release: `v0.5.0` at `f6c17e0f8948c032f8b308236d57d9dee6ab1e9f`
+- Baseline role: `MigrationCompatibilityTarget`
 - Checked source blob: `42f718a9c35f816a68bb3ff13578eaf6725e3d0b`
 - Capability descriptors: `67`
+- Retirement: Retire this active baseline when the v0.5 replacement migration closes; retain the source only as an explicitly historical regression fixture if a later migration needs it.
+
+The `v0.5.0` source is a frozen migration baseline, not the beginning of a version archive. It is retained only under the stated retirement condition.
+
+## Collector assembly and bootstrap retirement
+
+| Contributor | Lifecycle | Features | Private requirements | Location | Retirement condition |
+|---|---|---|---|---|---|
+| `backend.replacement.bounded-scalar-control` | LocalImplementation | 2 | 2 | `src/backend/replacement/mod.rs::fn replacement_compatibility_direct_execution_contribution` | - |
+| `frontend.body-ir.callable-values` | LocalImplementation | 2 | 2 | `src/frontend/body_ir.rs::fn replacement_compatibility_body_ir_contribution` | - |
+| `replacement-compatibility.migration-bootstrap` | MigrationBootstrap | 23 | 17 | `src/replacement_compatibility.rs::fn migration_bootstrap_compatibility_contribution` | Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it. |
 
 ## Compatibility features
 
@@ -164,10 +176,10 @@ Every planned feature below has a currently open mechanism owner. #1146 is compl
 
 Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.
 
-- `probe:async.tasks:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::AsyncAwait`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
+- `probe:async.tasks:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AsyncAwait`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
   - Positive contract: Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::AsyncAwait`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AsyncAwait`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_yield`; owner #1155
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1155
@@ -178,10 +190,10 @@ Async functions, await, and race preserve scheduling, cancellation, and diagnost
 
 Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.
 
-- `probe:call.named-and-variadic:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CallSiteGenerics`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
+- `probe:call.named-and-variadic:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CallSiteGenerics`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
   - Positive contract: Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CallSiteGenerics`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CallSiteGenerics`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
@@ -192,10 +204,10 @@ Named calls preserve resolved targets, generic arguments, positional/named bindi
 
 Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.
 
-- `probe:call.partial-binding:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CallablePresets`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
+- `probe:call.partial-binding:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CallablePresets`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
   - Positive contract: Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CallablePresets`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CallablePresets`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
@@ -206,10 +218,10 @@ Partial presets capture at construction, remain overrideable defaults, and prese
 
 Stored closures and partials retain lexical capture timing, ownership, and isolated local call frames.
 
-- `probe:call.stored-callables:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::FirstClassFunctions`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
+- `probe:call.stored-callables:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::FirstClassFunctions`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
   - Positive contract: Stored closures and partials retain lexical capture timing, ownership, and isolated local call frames.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::FirstClassFunctions`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::FirstClassFunctions`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
@@ -220,10 +232,10 @@ Stored closures and partials retain lexical capture timing, ownership, and isola
 
 Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.
 
-- `probe:decorators.dsl-surfaces:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ScopedDslSurfaces`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/decorators.rs::fn validate_decorators_allowing_user_defined`
+- `probe:decorators.dsl-surfaces:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ScopedDslSurfaces`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/decorators.rs::fn validate_decorators_allowing_user_defined`
   - Positive contract: Decorators and scoped DSL surfaces preserve activation, dispatch, and source-owned diagnostics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ScopedDslSurfaces`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ScopedDslSurfaces`
 - Typechecker: Observed `src/frontend/typechecker/collect/decorators.rs::fn validate_decorators_allowing_user_defined`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #555
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #555
@@ -234,10 +246,10 @@ Decorators and scoped DSL surfaces preserve activation, dispatch, and source-own
 
 Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.
 
-- `probe:diagnostics.stable:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StableDiagnostics`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_stmt.rs::fn check_statement`
+- `probe:diagnostics.stable:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StableDiagnostics`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_stmt.rs::fn check_statement`
   - Positive contract: Source diagnostics retain intentional acceptance/refusal boundaries, spans, and machine-readable identity.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StableDiagnostics`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StableDiagnostics`
 - Typechecker: Observed `src/frontend/typechecker/check_stmt.rs::fn check_statement`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #655
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_free_function`; owner #655
@@ -248,10 +260,10 @@ Source diagnostics retain intentional acceptance/refusal boundaries, spans, and 
 
 Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.
 
-- `probe:error.result-and-try:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ResultCombinators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_try`
+- `probe:error.result-and-try:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ResultCombinators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_try`
   - Positive contract: Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ResultCombinators`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ResultCombinators`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_try`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_try`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1154
@@ -262,10 +274,10 @@ Result combinators and explicit propagation retain success, error, ordering, and
 
 Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.
 
-- `probe:generator.expressions:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::Generators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
+- `probe:generator.expressions:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::Generators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
   - Positive contract: Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::Generators`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::Generators`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_generator_expr`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1152
@@ -276,10 +288,10 @@ Generator expressions preserve construction-versus-consumption timing and lazy c
 
 Generator functions suspend and resume without replaying prior effects or losing local state.
 
-- `probe:generator.functions:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::Generators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
+- `probe:generator.functions:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::Generators`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
   - Positive contract: Generator functions suspend and resume without replaying prior effects or losing local state.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::Generators`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::Generators`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_generator_expr`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1152
@@ -290,10 +302,10 @@ Generator functions suspend and resume without replaying prior effects or losing
 
 Rust and C boundaries preserve checked signatures, coercions, explicit unsafe acknowledgements, and source-map diagnostics.
 
-- `probe:interop.rust-and-c:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CheckedCBindingFoundation`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls/rust_boundary.rs::fn validate_rust_boundary_value`
+- `probe:interop.rust-and-c:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CheckedCBindingFoundation`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/calls/rust_boundary.rs::fn validate_rust_boundary_value`
   - Positive contract: Rust and C boundaries preserve checked signatures, coercions, explicit unsafe acknowledgements, and source-map diagnostics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CheckedCBindingFoundation`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CheckedCBindingFoundation`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls/rust_boundary.rs::fn validate_rust_boundary_value`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #989
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #989
@@ -304,10 +316,10 @@ Rust and C boundaries preserve checked signatures, coercions, explicit unsafe ac
 
 Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.
 
-- `probe:iteration.protocol-and-adapters:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IteratorAdapters`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
+- `probe:iteration.protocol-and-adapters:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IteratorAdapters`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
   - Positive contract: Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IteratorAdapters`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IteratorAdapters`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_general_iteration`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1152
@@ -318,10 +330,10 @@ Iterator protocols, adapters, and consumers preserve lazy dispatch, callback tim
 
 User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.
 
-- `probe:iteration.user-and-fallible:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::FallibleIteration`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
+- `probe:iteration.user-and-fallible:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::FallibleIteration`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
   - Positive contract: User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::FallibleIteration`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::FallibleIteration`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_general_iteration`; owner #1101
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1101
@@ -332,10 +344,10 @@ User-defined and fallible iteration preserve protocol calls, terminal behavior, 
 
 Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.
 
-- `probe:language.aggregates-and-projections:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdCollections`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/collections.rs::fn check_list`
+- `probe:language.aggregates-and-projections:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdCollections`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/collections.rs::fn check_list`
   - Positive contract: Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdCollections`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdCollections`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/collections.rs::fn check_list`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_aggregate`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_aggregate`; owner #1154
@@ -346,10 +358,10 @@ Tuple, list, dict, set, slice, projection, mutation, equality, and ordering reta
 
 Bounded scalar conditionals, loops, returns, assertions, and range iteration execute directly with explicit receipts.
 
-- `probe:language.control-flow:bounded-direct-profile` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IfWhileLet`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
+- `probe:language.control-flow:bounded-direct-profile` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IfWhileLet`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
   - Positive contract: Bounded scalar conditionals, loops, returns, assertions, and range iteration execute directly with explicit receipts.
   - Negative contract: Inputs outside the bounded direct profile refuse visibly with their source span.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IfWhileLet`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IfWhileLet`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
 - Body IR: Observed `src/frontend/body_ir.rs::fn lower_if`
 - Replacement executor: Observed `src/backend/replacement/mod.rs::fn execute_loop`
@@ -359,10 +371,10 @@ Bounded scalar conditionals, loops, returns, assertions, and range iteration exe
 
 Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.
 
-- `probe:language.control-flow-complete:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IfWhileLet`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
+- `probe:language.control-flow-complete:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IfWhileLet`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
   - Positive contract: Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::IfWhileLet`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::IfWhileLet`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_if_expr`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1154
@@ -373,10 +385,10 @@ Control flow beyond the bounded scalar profile preserves value-carrying branches
 
 Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.
 
-- `probe:language.match-and-patterns:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::PatternAlternation`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/match_.rs::fn check_match`
+- `probe:language.match-and-patterns:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::PatternAlternation`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/match_.rs::fn check_match`
   - Positive contract: Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::PatternAlternation`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::PatternAlternation`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/match_.rs::fn check_match`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_match`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1154
@@ -387,10 +399,10 @@ Match, destructuring, alternation, guards, and exhaustiveness preserve branch se
 
 Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.
 
-- `probe:language.numeric-and-scalar:bounded-direct-profile` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
+- `probe:language.numeric-and-scalar:bounded-direct-profile` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
   - Positive contract: Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.
   - Negative contract: Inputs outside the bounded direct profile refuse visibly with their source span.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Observed `src/frontend/body_ir.rs::fn lower_binary`
 - Replacement executor: Observed `src/backend/replacement/mod.rs::fn evaluate_binary`
@@ -401,10 +413,10 @@ Bounded scalar arithmetic, comparisons, boolean operators, and strings execute d
 
 The full numeric contract preserves widths, literals, conversions, overflow, decimal behavior, and diagnostics beyond the scalar profile.
 
-- `probe:language.numeric-complete:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
+- `probe:language.numeric-complete:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
   - Positive contract: The full numeric contract preserves widths, literals, conversions, overflow, decimal behavior, and diagnostics beyond the scalar profile.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1154
@@ -415,10 +427,10 @@ The full numeric contract preserves widths, literals, conversions, overflow, dec
 
 String operators and formatting preserve interpolation order, conversions, and runtime failures.
 
-- `probe:language.strings-and-format:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
+- `probe:language.strings-and-format:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
   - Positive contract: String operators and formatting preserve interpolation order, conversions, and runtime failures.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NumericTypeSystem`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1101
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1101
@@ -429,10 +441,10 @@ String operators and formatting preserve interpolation order, conversions, and r
 
 Modules, imports, aliases, namespaces, and reexports resolve to one source-observable identity.
 
-- `probe:module.identity-and-aliases:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NamespacedStdlib`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_import`
+- `probe:module.identity-and-aliases:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NamespacedStdlib`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_import`
   - Positive contract: Modules, imports, aliases, namespaces, and reexports resolve to one source-observable identity.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::NamespacedStdlib`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NamespacedStdlib`
 - Typechecker: Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_import`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1042
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1042
@@ -443,10 +455,10 @@ Modules, imports, aliases, namespaces, and reexports resolve to one source-obser
 
 Models, unions, value enums, newtypes, computed properties, and static storage preserve construction and dispatch semantics.
 
-- `probe:nominal.models-unions-enums:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ComputedProperties`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_decl.rs::fn check_model`
+- `probe:nominal.models-unions-enums:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ComputedProperties`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_decl.rs::fn check_model`
   - Positive contract: Models, unions, value enums, newtypes, computed properties, and static storage preserve construction and dispatch semantics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::ComputedProperties`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::ComputedProperties`
 - Typechecker: Observed `src/frontend/typechecker/check_decl.rs::fn check_model`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_constructor`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_aggregate`; owner #1154
@@ -457,10 +469,10 @@ Models, unions, value enums, newtypes, computed properties, and static storage p
 
 Libraries, checked API metadata, providers, workspaces, and consumer imports preserve public identity and defaults.
 
-- `probe:package.public-boundaries:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CheckedApiMetadata`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_pub_imports`
+- `probe:package.public-boundaries:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CheckedApiMetadata`; negative IntentionalRefusal at Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_pub_imports`
   - Positive contract: Libraries, checked API metadata, providers, workspaces, and consumer imports preserve public identity and defaults.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::CheckedApiMetadata`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::CheckedApiMetadata`
 - Typechecker: Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_pub_imports`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #989
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #989
@@ -471,10 +483,10 @@ Libraries, checked API metadata, providers, workspaces, and consumer imports pre
 
 Data-oriented stdlib services preserve their documented input, output, and error contracts.
 
-- `probe:runtime.std-data-services:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdChecksum`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
+- `probe:runtime.std-data-services:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdChecksum`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
   - Positive contract: Data-oriented stdlib services preserve their documented input, output, and error contracts.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdChecksum`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdChecksum`
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
@@ -485,10 +497,10 @@ Data-oriented stdlib services preserve their documented input, output, and error
 
 Hosted filesystem, environment, I/O, web, temporary-resource, and process-adjacent services retain authority and lifecycle semantics.
 
-- `probe:runtime.std-hosted-services:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdEnviron`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
+- `probe:runtime.std-hosted-services:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdEnviron`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
   - Positive contract: Hosted filesystem, environment, I/O, web, temporary-resource, and process-adjacent services retain authority and lifecycle semantics.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdEnviron`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdEnviron`
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
@@ -499,10 +511,10 @@ Hosted filesystem, environment, I/O, web, temporary-resource, and process-adjace
 
 Logging, telemetry, registries, and metadata services preserve structured values and provider behavior.
 
-- `probe:runtime.std-observability:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdLogging`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
+- `probe:runtime.std-observability:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdLogging`; negative IntentionalRefusal at Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
   - Positive contract: Logging, telemetry, registries, and metadata services preserve structured values and provider behavior.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::StdLogging`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::StdLogging`
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
@@ -513,10 +525,10 @@ Logging, telemetry, registries, and metadata services preserve structured values
 
 Test discovery, assertions, formatter, build reports, inspection, lifecycle, installer, and Oven observability preserve documented contracts.
 
-- `probe:testing-and-tooling:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::BuildReportsAndRustInspection`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_decl.rs::fn check_test_module`
+- `probe:testing-and-tooling:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::BuildReportsAndRustInspection`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_decl.rs::fn check_test_module`
   - Positive contract: Test discovery, assertions, formatter, build reports, inspection, lifecycle, installer, and Oven observability preserve documented contracts.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::BuildReportsAndRustInspection`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::BuildReportsAndRustInspection`
 - Typechecker: Observed `src/frontend/typechecker/check_decl.rs::fn check_test_module`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #1034
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_free_function`; owner #1034
@@ -527,10 +539,10 @@ Test discovery, assertions, formatter, build reports, inspection, lifecycle, ins
 
 Traits, generics, type tokens, protocol hooks, derives, and resolved method signatures preserve checked dispatch decisions.
 
-- `probe:types.traits-generics-reflection:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::AbstractTraits`; negative IntentionalRefusal at Observed `src/frontend/typechecker/trait_bound_relations.rs::fn type_satisfies_explicit_bound`
+- `probe:types.traits-generics-reflection:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AbstractTraits`; negative IntentionalRefusal at Observed `src/frontend/typechecker/trait_bound_relations.rs::fn type_satisfies_explicit_bound`
   - Positive contract: Traits, generics, type tokens, protocol hooks, derives, and resolved method signatures preserve checked dispatch decisions.
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
-- Source/AST: Observed `src/replacement_compatibility/v0_5_stdlib/capabilities.incn::AbstractTraits`
+- Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AbstractTraits`
 - Typechecker: Observed `src/frontend/typechecker/trait_bound_relations.rs::fn type_satisfies_explicit_bound`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1033
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1033

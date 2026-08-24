@@ -14,6 +14,13 @@ fn release_pinned_baseline_is_checked_and_complete() -> Result<(), Box<dyn std::
     assert_eq!(baseline.release.tag, "v0.5.0");
     assert_eq!(baseline.capabilities.len(), 67);
     assert_eq!(baseline.release.source_blob, "42f718a9c35f816a68bb3ff13578eaf6725e3d0b");
+    assert_eq!(baseline.release.role.as_str(), "MigrationCompatibilityTarget");
+    assert!(
+        baseline
+            .release
+            .source_snapshot_path
+            .contains("migration_baselines/v0.5.0")
+    );
     assert!(
         baseline
             .capabilities
@@ -65,6 +72,43 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
 
     validate_replacement_compatibility_registry(&baseline, &registry)?;
     assert_eq!(registry.features.len(), 27);
+    assert_eq!(registry.registration_sources.len(), 3);
+    let body_ir = registry
+        .registration_sources
+        .iter()
+        .find(|source| source.id == "frontend.body-ir.callable-values")
+        .ok_or("missing Body-IR callable registration source")?;
+    assert_eq!(body_ir.lifecycle.as_str(), "LocalImplementation");
+    assert_eq!(
+        body_ir.feature_ids,
+        vec!["call.partial-binding".to_string(), "call.stored-callables".to_string()]
+    );
+    let executor = registry
+        .registration_sources
+        .iter()
+        .find(|source| source.id == "backend.replacement.bounded-scalar-control")
+        .ok_or("missing direct-executor registration source")?;
+    assert_eq!(executor.lifecycle.as_str(), "LocalImplementation");
+    assert_eq!(
+        executor.feature_ids,
+        vec![
+            "language.control-flow".to_string(),
+            "language.numeric-and-scalar".to_string()
+        ]
+    );
+    let bootstrap = registry
+        .registration_sources
+        .iter()
+        .find(|source| source.id == "replacement-compatibility.migration-bootstrap")
+        .ok_or("missing migration bootstrap registration source")?;
+    assert_eq!(bootstrap.lifecycle.as_str(), "MigrationBootstrap");
+    assert_eq!(bootstrap.feature_ids.len(), 23);
+    assert!(
+        bootstrap
+            .retirement_condition
+            .as_deref()
+            .is_some_and(|condition| condition.contains("every remaining feature and requirement"))
+    );
     assert!(registry.features.iter().all(|feature| {
         !feature.evidence.is_parity_green()
             && matches!(
@@ -100,6 +144,10 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
 
     let projection = render_developer_projection(&baseline, &registry)?;
     assert!(projection.contains("# Replacement compatibility inventory"));
+    assert!(projection.contains("not a permanent second language-feature catalogue"));
+    assert!(projection.contains("## Collector assembly and bootstrap retirement"));
+    assert!(projection.contains("`frontend.body-ir.callable-values` | LocalImplementation"));
+    assert!(projection.contains("`replacement-compatibility.migration-bootstrap` | MigrationBootstrap"));
     assert!(projection.contains("`call.stored-callables`"));
     assert!(projection.contains("NonGreenShadowUnavailable"));
     assert!(projection.contains("#1152"));
@@ -120,5 +168,6 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
     );
     assert!(machine.get("baseline").is_some());
     assert!(machine.get("registry").is_some());
+    assert!(machine["registry"].get("registration_sources").is_some());
     Ok(())
 }

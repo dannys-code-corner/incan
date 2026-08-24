@@ -1,9 +1,14 @@
-//! Replacement compatibility control-plane registry.
+//! Replacement compatibility control-plane collector.
 //!
 //! The public `std.capabilities` registry remains the authority for user-facing capability descriptions. This module
-//! adds the separate compiler-owned control plane needed to move a frozen release baseline through Body IR, direct
-//! replacement execution, and independent comparison without collapsing those facts into one traffic-light status.
-//! It intentionally contains no executor implementation and cannot change backend selection.
+//! collects feature and implementation-requirement registrations from the compiler boundaries that own them. During
+//! the 0.5-to-replacement migration, it also carries a deliberately temporary bootstrap crosswalk for work that has
+//! not yet reached an owning implementation boundary. The collector makes that debt and its retirement conditions
+//! visible; it is not a permanent second catalogue of language features.
+//!
+//! The control plane moves a frozen release baseline through Body IR, direct replacement execution, and independent
+//! comparison without collapsing those facts into one traffic-light status. It intentionally contains no executor
+//! implementation and cannot change backend selection.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -15,10 +20,11 @@ use thiserror::Error;
 
 use crate::frontend::capability_metadata::{PublicCapabilityDescriptor, public_capability_descriptors};
 
-const BASELINE_MANIFEST: &str = include_str!("replacement_compatibility/v0_5_public_capability_baseline.json");
+const BASELINE_MANIFEST: &str = include_str!("replacement_compatibility/migration_baselines/v0.5.0/manifest.json");
 const FROZEN_V0_5_CAPABILITIES_SOURCE: &[u8] =
-    include_bytes!("replacement_compatibility/v0_5_stdlib/capabilities.incn");
-const FROZEN_V0_5_CAPABILITIES_PATH: &str = "src/replacement_compatibility/v0_5_stdlib/capabilities.incn";
+    include_bytes!("replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn");
+const FROZEN_V0_5_CAPABILITIES_PATH: &str =
+    "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn";
 const LIVE_CAPABILITIES_SOURCE: &str = "crates/incan_stdlib/stdlib/capabilities.incn";
 const COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE: u32 = 1146;
 
@@ -26,25 +32,108 @@ const COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE: u32 = 1146;
 ///
 /// Bump this whenever the serialized document's field shape or a serialized enum contract changes. The public
 /// `std.capabilities` registry remains independently versioned and is not governed by this projection version.
-pub const REPLACEMENT_COMPATIBILITY_INVENTORY_SCHEMA_VERSION: u32 = 3;
+pub const REPLACEMENT_COMPATIBILITY_INVENTORY_SCHEMA_VERSION: u32 = 4;
 
-/// Machine-readable pin for a released public-capability baseline.
+/// Lifecycle of one input to the replacement compatibility collector.
+///
+/// A local registration is durable compiler architecture: the boundary that implements a feature or private
+/// mechanism declares its evidence alongside that implementation. A migration bootstrap registration is temporary
+/// coverage scaffolding and must name its retirement condition. The collector can contain both while the migration
+/// is incomplete, but cannot hide one as the other.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum CompatibilityRegistrationLifecycle {
+    /// A compiler module owns this registration beside the implementation boundary it describes.
+    LocalImplementation,
+    /// A temporary release-migration crosswalk awaits migration into local implementation registrations.
+    MigrationBootstrap,
+}
+
+impl CompatibilityRegistrationLifecycle {
+    /// Return the stable developer-facing spelling for projections and reports.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalImplementation => "LocalImplementation",
+            Self::MigrationBootstrap => "MigrationBootstrap",
+        }
+    }
+}
+
+/// Provenance for a set of records collected into the replacement compatibility inventory.
+///
+/// This is intentionally a module-level record rather than a tag on every helper function. A source-observable
+/// feature can span type checking, Body IR, execution, and comparison; the nearest boundary that owns each coherent
+/// contribution registers it here, and the collector validates the joined result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompatibilityRegistrationSource {
+    /// Stable identity of the contributing compiler boundary.
+    pub id: String,
+    /// Whether this contributor is durable local architecture or temporary migration scaffolding.
+    pub lifecycle: CompatibilityRegistrationLifecycle,
+    /// Repository-relative module or fixture path containing the registration.
+    pub repository_path: String,
+    /// Stable source selector for the registration function or bootstrap declaration.
+    pub selector: String,
+    /// Explicit exit condition for migration-only scaffolding; absent for local implementation registrations.
+    pub retirement_condition: Option<String>,
+    /// Stable compatibility-feature IDs supplied by this contributor.
+    pub feature_ids: Vec<String>,
+    /// Stable private-requirement IDs supplied by this contributor.
+    pub requirement_ids: Vec<String>,
+}
+
+/// One module-owned contribution that the collector joins into the public registry projection.
+///
+/// This crate-private input type deliberately has no serialization contract. The collected registry is the
+/// developer-facing projection; feature ownership remains local to the contributing compiler boundary.
+#[derive(Debug, Clone)]
+pub(crate) struct ReplacementCompatibilityContribution {
+    pub(crate) source: CompatibilityRegistrationSource,
+    pub(crate) features: Vec<CompatibilityFeature>,
+    pub(crate) requirements: Vec<ImplementationRequirement>,
+    pub(crate) capability_links: Vec<PublicCapabilityFeatureLink>,
+    pub(crate) requirement_links: Vec<FeatureRequirementLink>,
+}
+
+/// Purpose of a frozen release source in the compatibility collector.
+///
+/// This is intentionally not a general historical-registry taxonomy. A new release snapshot needs an explicit
+/// migration use case; the normal source of truth remains the present-tense checked `std.capabilities` registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReleaseBaselineRole {
+    /// A temporary coverage ruler for the 0.5-to-replacement migration.
+    MigrationCompatibilityTarget,
+}
+
+impl ReleaseBaselineRole {
+    /// Return the stable developer-facing spelling for projections and reports.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::MigrationCompatibilityTarget => "MigrationCompatibilityTarget",
+        }
+    }
+}
+
+/// Machine-readable pin for a released public-capability migration baseline.
 ///
 /// The pin intentionally stores release identity and the Git object ID of the authored source, rather than a second
 /// hand-maintained list of capability descriptors. The descriptor rows are derived from compiler-checked metadata
 /// only after the source bytes match this pin.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReleasePin {
+    /// Why this frozen source exists; this prevents a compatibility fixture from becoming an accidental archive.
+    pub role: ReleaseBaselineRole,
     /// Semantic version tag that owns this immutable compatibility target.
     pub tag: String,
     /// Commit that carries the released `std.capabilities` source.
     pub revision: String,
     /// Git blob ID for the exact authored capability-registry source bytes.
     pub source_blob: String,
-    /// Repository-relative committed snapshot path containing the pinned source bytes.
+    /// Repository-relative migration-fixture path containing the pinned source bytes.
     pub source_snapshot_path: String,
     /// Number of descriptors that the checked release source must decode to.
     pub expected_descriptor_count: usize,
+    /// Explicit condition for retiring this baseline from the active control plane.
+    pub retirement_condition: String,
 }
 
 /// A public capability record produced from checked `std.capabilities` metadata.
@@ -615,9 +704,15 @@ impl OutOfEnvelopeCategory {
     }
 }
 
-/// Complete compiler-owned registry and its two explicit relation sets.
+/// Complete compatibility projection collected from local implementation registrations and migration scaffolding.
+///
+/// The aggregate is a validation and reporting view, not the owning declaration site for a language feature. New
+/// durable work belongs in the relevant compiler boundary; only unresolved migration coverage may remain in the
+/// explicitly marked bootstrap contributor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ReplacementCompatibilityRegistry {
+    /// Compiler boundaries that supplied the collected records and their migration lifecycle.
+    pub registration_sources: Vec<CompatibilityRegistrationSource>,
     /// Source-observable compatibility contracts.
     pub features: Vec<CompatibilityFeature>,
     /// Private mechanisms shared by the contracts.
@@ -640,7 +735,7 @@ pub struct ReplacementCompatibilityInventoryDocument {
     pub schema_version: u32,
     /// Immutable release-pinned public baseline.
     pub baseline: PublicCapabilityBaseline,
-    /// Compiler-owned compatibility features, requirements, and relations.
+    /// Compatibility features, requirements, relations, and contributor provenance collected from compiler modules.
     pub registry: ReplacementCompatibilityRegistry,
 }
 
@@ -735,21 +830,126 @@ fn frozen_v0_5_capabilities_snapshot_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FROZEN_V0_5_CAPABILITIES_PATH)
 }
 
-/// Return the compiler-owned registry for the full v0.5 public capability baseline.
+/// Return the collected compatibility registry for the full v0.5 public capability baseline.
 ///
-/// Every incomplete in-envelope contract names an existing issue owner and a blocker/migration note. The registry is
-/// intentionally declarative: it records the execution boundary but neither evaluates a Body IR module nor selects a
-/// backend.
+/// The first two contributors are durable registrations beside Body IR and the bounded direct executor. The final
+/// contributor is intentionally temporary migration scaffolding for contracts whose implementation boundary has not
+/// landed yet, including the audited released-capability crosswalk. The collector records that distinction instead of
+/// letting its bootstrap map masquerade as the permanent home for all features.
 pub fn replacement_compatibility_registry() -> ReplacementCompatibilityRegistry {
-    let capability_links = public_capability_links();
-    let mut features = compatibility_features();
+    collect_replacement_compatibility_contributions(vec![
+        crate::frontend::body_ir::replacement_compatibility_body_ir_contribution(),
+        crate::backend::replacement::replacement_compatibility_direct_execution_contribution(),
+        migration_bootstrap_compatibility_contribution(),
+    ])
+}
+
+/// Join module-owned compatibility contributions into one validated projection input.
+///
+/// Keeping this collector small and explicit is intentional: adding a compiler boundary requires registering that
+/// boundary here, but never adding a feature row to a second central catalogue.
+pub(crate) fn collect_replacement_compatibility_contributions(
+    contributions: Vec<ReplacementCompatibilityContribution>,
+) -> ReplacementCompatibilityRegistry {
+    let mut registration_sources = Vec::with_capacity(contributions.len());
+    let mut features = Vec::new();
+    let mut requirements = Vec::new();
+    let mut capability_links = Vec::new();
+    let mut requirement_links = Vec::new();
+    for contribution in contributions {
+        registration_sources.push(contribution.source);
+        features.extend(contribution.features);
+        requirements.extend(contribution.requirements);
+        capability_links.extend(contribution.capability_links);
+        requirement_links.extend(contribution.requirement_links);
+    }
     attach_frozen_source_anchors(&mut features, &capability_links);
     ReplacementCompatibilityRegistry {
+        registration_sources,
         features,
-        requirements: implementation_requirements(),
+        requirements,
         capability_links,
-        requirement_links: feature_requirement_links(),
+        requirement_links,
         out_of_envelope: Vec::new(),
+    }
+}
+
+/// Build a durable module-owned contribution for the collector.
+pub(crate) fn local_implementation_contribution(
+    id: &'static str,
+    repository_path: &'static str,
+    selector: &'static str,
+    features: Vec<CompatibilityFeature>,
+    requirements: Vec<ImplementationRequirement>,
+    capability_links: Vec<PublicCapabilityFeatureLink>,
+    requirement_links: Vec<FeatureRequirementLink>,
+) -> ReplacementCompatibilityContribution {
+    contribution(
+        id,
+        CompatibilityRegistrationLifecycle::LocalImplementation,
+        repository_path,
+        selector,
+        None,
+        features,
+        requirements,
+        capability_links,
+        requirement_links,
+    )
+}
+
+/// Build an explicitly temporary migration contribution for records without a landed local boundary yet.
+fn migration_bootstrap_contribution(
+    id: &'static str,
+    repository_path: &'static str,
+    selector: &'static str,
+    retirement_condition: &'static str,
+    features: Vec<CompatibilityFeature>,
+    requirements: Vec<ImplementationRequirement>,
+    capability_links: Vec<PublicCapabilityFeatureLink>,
+    requirement_links: Vec<FeatureRequirementLink>,
+) -> ReplacementCompatibilityContribution {
+    contribution(
+        id,
+        CompatibilityRegistrationLifecycle::MigrationBootstrap,
+        repository_path,
+        selector,
+        Some(retirement_condition),
+        features,
+        requirements,
+        capability_links,
+        requirement_links,
+    )
+}
+
+/// Construct the common contributor metadata and derive its visible record membership.
+fn contribution(
+    id: &'static str,
+    lifecycle: CompatibilityRegistrationLifecycle,
+    repository_path: &'static str,
+    selector: &'static str,
+    retirement_condition: Option<&'static str>,
+    features: Vec<CompatibilityFeature>,
+    requirements: Vec<ImplementationRequirement>,
+    capability_links: Vec<PublicCapabilityFeatureLink>,
+    requirement_links: Vec<FeatureRequirementLink>,
+) -> ReplacementCompatibilityContribution {
+    ReplacementCompatibilityContribution {
+        source: CompatibilityRegistrationSource {
+            id: id.to_string(),
+            lifecycle,
+            repository_path: repository_path.to_string(),
+            selector: selector.to_string(),
+            retirement_condition: retirement_condition.map(str::to_string),
+            feature_ids: features.iter().map(|feature| feature.id.clone()).collect(),
+            requirement_ids: requirements
+                .iter()
+                .map(|requirement| requirement.id.to_string())
+                .collect(),
+        },
+        features,
+        requirements,
+        capability_links,
+        requirement_links,
     }
 }
 
@@ -805,6 +1005,13 @@ pub fn validate_replacement_compatibility_registry(
     if requirement_ids.len() != registry.requirements.len() {
         errors.push("implementation requirements contain duplicate IDs".to_string());
     }
+    validate_registration_sources(
+        &registry.registration_sources,
+        &feature_ids,
+        &requirement_ids,
+        workspace_root.as_deref(),
+        &mut errors,
+    );
 
     let mapped_capabilities = registry
         .capability_links
@@ -1002,6 +1209,146 @@ pub fn validate_replacement_compatibility_registry(
         Ok(())
     } else {
         Err(RegistryValidationError::from_messages(errors))
+    }
+}
+
+/// Validate that the collected projection still knows where every feature and requirement is owned.
+///
+/// The central collector deliberately validates provenance instead of accepting an anonymous feature vector. That
+/// prevents a future edit from reintroducing a permanent hand-maintained catalogue under a different field name.
+fn validate_registration_sources(
+    sources: &[CompatibilityRegistrationSource],
+    feature_ids: &BTreeSet<&str>,
+    requirement_ids: &BTreeSet<&str>,
+    workspace_root: Option<&Path>,
+    errors: &mut Vec<String>,
+) {
+    let source_ids = sources.iter().map(|source| source.id.as_str()).collect::<BTreeSet<_>>();
+    if source_ids.len() != sources.len() {
+        errors.push("compatibility registration sources contain duplicate IDs".to_string());
+    }
+    if !sources.iter().any(|source| {
+        matches!(
+            source.lifecycle,
+            CompatibilityRegistrationLifecycle::LocalImplementation
+        )
+    }) {
+        errors.push("compatibility collector has no local implementation registrations".to_string());
+    }
+
+    let mut registered_feature_counts = BTreeMap::new();
+    let mut registered_requirement_counts = BTreeMap::new();
+    for source in sources {
+        if source.id.trim().is_empty() {
+            errors.push("compatibility registration source lacks an ID".to_string());
+        }
+        if source.repository_path.is_empty()
+            || Path::new(&source.repository_path).is_absolute()
+            || source.repository_path.split('/').any(|segment| segment == "..")
+        {
+            errors.push(format!(
+                "compatibility registration source `{}` has an invalid repository-relative path",
+                source.id
+            ));
+        }
+        if source.selector.trim().is_empty() {
+            errors.push(format!(
+                "compatibility registration source `{}` lacks a selector",
+                source.id
+            ));
+        }
+        match source.lifecycle {
+            CompatibilityRegistrationLifecycle::LocalImplementation => {
+                if source.retirement_condition.is_some() {
+                    errors.push(format!(
+                        "local implementation registration `{}` has a migration retirement condition",
+                        source.id
+                    ));
+                }
+            }
+            CompatibilityRegistrationLifecycle::MigrationBootstrap => {
+                if source.retirement_condition.as_deref().is_none_or(str::is_empty) {
+                    errors.push(format!(
+                        "migration bootstrap registration `{}` lacks an explicit retirement condition",
+                        source.id
+                    ));
+                }
+            }
+        }
+        if let Some(root) = workspace_root {
+            let path = root.join(&source.repository_path);
+            if !path.is_file() {
+                errors.push(format!(
+                    "compatibility registration source `{}` points at missing repository path `{}`",
+                    source.id, source.repository_path
+                ));
+            } else if let Ok(contents) = fs::read_to_string(&path)
+                && !contents.contains(&source.selector)
+            {
+                errors.push(format!(
+                    "compatibility registration source `{}` selector `{}` is dangling at `{}`",
+                    source.id, source.selector, source.repository_path
+                ));
+            }
+        }
+        let source_feature_ids = source.feature_ids.iter().map(String::as_str).collect::<BTreeSet<_>>();
+        if source_feature_ids.len() != source.feature_ids.len() {
+            errors.push(format!(
+                "compatibility registration source `{}` lists duplicate feature IDs",
+                source.id
+            ));
+        }
+        for feature_id in source_feature_ids {
+            if !feature_ids.contains(feature_id) {
+                errors.push(format!(
+                    "compatibility registration source `{}` names unknown feature `{feature_id}`",
+                    source.id
+                ));
+            }
+            *registered_feature_counts.entry(feature_id).or_insert(0usize) += 1;
+        }
+        let source_requirement_ids = source
+            .requirement_ids
+            .iter()
+            .map(String::as_str)
+            .collect::<BTreeSet<_>>();
+        if source_requirement_ids.len() != source.requirement_ids.len() {
+            errors.push(format!(
+                "compatibility registration source `{}` lists duplicate requirement IDs",
+                source.id
+            ));
+        }
+        for requirement_id in source_requirement_ids {
+            if !requirement_ids.contains(requirement_id) {
+                errors.push(format!(
+                    "compatibility registration source `{}` names unknown requirement `{requirement_id}`",
+                    source.id
+                ));
+            }
+            *registered_requirement_counts.entry(requirement_id).or_insert(0usize) += 1;
+        }
+    }
+    for feature_id in feature_ids {
+        match registered_feature_counts.get(feature_id) {
+            Some(1) => {}
+            Some(count) => errors.push(format!(
+                "compatibility feature `{feature_id}` is registered by {count} sources instead of exactly one"
+            )),
+            None => errors.push(format!(
+                "compatibility feature `{feature_id}` has no registration source"
+            )),
+        }
+    }
+    for requirement_id in requirement_ids {
+        match registered_requirement_counts.get(requirement_id) {
+            Some(1) => {}
+            Some(count) => errors.push(format!(
+                "implementation requirement `{requirement_id}` is registered by {count} sources instead of exactly one"
+            )),
+            None => errors.push(format!(
+                "implementation requirement `{requirement_id}` has no registration source"
+            )),
+        }
     }
 }
 
@@ -1431,16 +1778,37 @@ pub fn render_developer_projection(
     let mut output = String::new();
     output.push_str("# Replacement compatibility inventory\n\n");
     output.push_str("!!! warning \"Generated control-plane reference\"\n\n");
-    output.push_str("    Do not edit this page by hand. Regenerate it from the checked public-capability baseline and compiler-owned replacement registry.\n\n");
-    output.push_str("This is a validated control-plane inventory, not a parity claim. A feature row turns green only after direct execution and an independent, receipt-bound source-observable comparison for its full contract. A matched corpus case remains scoped evidence and cannot promote an incomplete feature. Generated Rust, Body IR representation, and legacy compilation are separate facts.\n\n");
+    output.push_str("    Do not edit this page by hand. Regenerate it from the checked public-capability baseline and compiler-boundary registrations.\n\n");
+    output.push_str("This is a validated migration control plane, not a permanent second language-feature catalogue and not a parity claim. Durable feature and private-mechanism records are registered beside the compiler boundary that owns them; the collector joins and validates them here. The explicitly marked migration bootstrap exists only while unlanded work lacks such a boundary. A feature row turns green only after direct execution and an independent, receipt-bound source-observable comparison for its full contract. A matched corpus case remains scoped evidence and cannot promote an incomplete feature. Generated Rust, Body IR representation, and legacy compilation are separate facts.\n\n");
     output.push_str("## Release-pinned public baseline\n\n");
     output.push_str(&format!(
-        "- Release: `{}` at `{}`\n- Checked source blob: `{}`\n- Capability descriptors: `{}`\n\n",
+        "- Release: `{}` at `{}`\n- Baseline role: `{}`\n- Checked source blob: `{}`\n- Capability descriptors: `{}`\n- Retirement: {}\n\n",
         baseline.release.tag,
         baseline.release.revision,
+        baseline.release.role.as_str(),
         baseline.release.source_blob,
-        baseline.capabilities.len()
+        baseline.capabilities.len(),
+        baseline.release.retirement_condition,
     ));
+    output.push_str("The `v0.5.0` source is a frozen migration baseline, not the beginning of a version archive. It is retained only under the stated retirement condition.\n\n");
+    output.push_str("## Collector assembly and bootstrap retirement\n\n");
+    output
+        .push_str("| Contributor | Lifecycle | Features | Private requirements | Location | Retirement condition |\n");
+    output.push_str("|---|---|---|---|---|---|\n");
+    for source in sorted_registration_sources(&registry.registration_sources) {
+        let retirement_condition = source.retirement_condition.as_deref().unwrap_or("-");
+        output.push_str(&format!(
+            "| `{}` | {} | {} | {} | `{}::{}` | {} |\n",
+            source.id,
+            source.lifecycle.as_str(),
+            source.feature_ids.len(),
+            source.requirement_ids.len(),
+            source.repository_path,
+            source.selector,
+            retirement_condition,
+        ));
+    }
+    output.push_str("\n");
     output.push_str("## Compatibility features\n\n");
     output.push_str("| Feature | Source contract | Legacy run | Body IR | Direct replacement | #987 | Feature comparison | Scoped case comparisons | Disposition | Owner |\n");
     output.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
@@ -1606,6 +1974,11 @@ fn release_baseline_manifest() -> Result<BaselineManifest, RegistryValidationErr
             "v0.5 baseline manifest points at `{}`, expected committed snapshot `{FROZEN_V0_5_CAPABILITIES_PATH}`",
             manifest.release.source_snapshot_path
         )]));
+    }
+    if manifest.release.retirement_condition.trim().is_empty() {
+        return Err(RegistryValidationError::from_messages(vec![
+            "v0.5 migration baseline lacks an explicit retirement condition".to_string(),
+        ]));
     }
     Ok(manifest)
 }
@@ -1800,6 +2173,13 @@ fn sorted_features(features: &[CompatibilityFeature]) -> Vec<&CompatibilityFeatu
     sorted
 }
 
+/// Sort contributor provenance by stable identity for deterministic developer output.
+fn sorted_registration_sources(sources: &[CompatibilityRegistrationSource]) -> Vec<&CompatibilityRegistrationSource> {
+    let mut sorted = sources.iter().collect::<Vec<_>>();
+    sorted.sort_by_key(|source| source.id.as_str());
+    sorted
+}
+
 /// Sort implementation requirements by stable identity for deterministic developer output.
 fn sorted_requirements(requirements: &[ImplementationRequirement]) -> Vec<&ImplementationRequirement> {
     let mut sorted = requirements.iter().collect::<Vec<_>>();
@@ -1934,8 +2314,12 @@ struct BaselineManifest {
     release: ReleasePin,
 }
 
-/// Construct all source-observable compatibility features and their current factored evidence.
-fn compatibility_features() -> Vec<CompatibilityFeature> {
+/// Construct temporary migration coverage for feature contracts without a landed local registration yet.
+///
+/// This is deliberately not the permanent feature registry. As a coherent mechanism lands, its record must move to
+/// the owning module's contribution and disappear from this function. The collector validates that the bootstrap
+/// source remains visibly marked until that transition is complete.
+fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
     vec![
         planned_feature(
             "async.tasks",
@@ -1948,18 +2332,6 @@ fn compatibility_features() -> Vec<CompatibilityFeature> {
             "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
             1152,
             "Call-frame and binder execution beyond the bounded scalar profile is owned by the callable runtime slice.",
-        ),
-        planned_feature(
-            "call.partial-binding",
-            "Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.",
-            1152,
-            "Body IR carries the source contract; direct local callable targets remain visibly refused until the callable runtime slice executes them.",
-        ),
-        planned_feature(
-            "call.stored-callables",
-            "Stored closures and partials retain lexical capture timing, ownership, and isolated local call frames.",
-            1152,
-            "Direct execution deliberately refuses local callable targets; this is the coherent callable-frame profile.",
         ),
         planned_feature(
             "decorators.dsl-surfaces",
@@ -2009,11 +2381,6 @@ fn compatibility_features() -> Vec<CompatibilityFeature> {
             1154,
             "Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation.",
         ),
-        preserved_feature(
-            "language.control-flow",
-            "Bounded scalar conditionals, loops, returns, assertions, and range iteration execute directly with explicit receipts.",
-            "replacement-body-v0-001 through replacement-body-v0-007",
-        ),
         planned_feature(
             "language.control-flow-complete",
             "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
@@ -2025,11 +2392,6 @@ fn compatibility_features() -> Vec<CompatibilityFeature> {
             "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
             1154,
             "Depends on #1101 for complete Body IR vocabulary; #1154 owns pattern dispatch over direct values.",
-        ),
-        preserved_feature(
-            "language.numeric-and-scalar",
-            "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
-            "replacement-body-v0-001 through replacement-body-v0-007",
         ),
         planned_feature(
             "language.numeric-complete",
@@ -2098,6 +2460,20 @@ fn compatibility_features() -> Vec<CompatibilityFeature> {
             "Public ABI and interop parity is an explicit replacement-boundary slice, not a direct scalar-executor extension.",
         ),
     ]
+}
+
+/// Return the temporary crosswalk records that await migration into an owning compiler boundary.
+fn migration_bootstrap_compatibility_contribution() -> ReplacementCompatibilityContribution {
+    migration_bootstrap_contribution(
+        "replacement-compatibility.migration-bootstrap",
+        "src/replacement_compatibility.rs",
+        "fn migration_bootstrap_compatibility_contribution",
+        "Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it.",
+        migration_bootstrap_compatibility_features(),
+        migration_bootstrap_implementation_requirements(),
+        public_capability_links(),
+        migration_bootstrap_feature_requirement_links(),
+    )
 }
 
 /// Audited extension points for a feature family's typechecker, Body-IR, and direct-runtime coverage.
@@ -2249,6 +2625,39 @@ fn planned_feature(
     blocker: &'static str,
 ) -> CompatibilityFeature {
     let profile = feature_anchor_profile(id);
+    planned_feature_at_boundary(
+        id,
+        contract,
+        owner_issue,
+        blocker,
+        profile.typechecker_path,
+        profile.typechecker_selector,
+        profile.body_ir_selector,
+        profile.replacement_executor_selector,
+    )
+}
+
+/// Build one planned feature at the module that owns its current compiler boundary.
+///
+/// The bootstrap map uses [`planned_feature`] only until an implementation has a coherent local registration. New
+/// implementation work must call this constructor from that boundary with its own audited selectors rather than
+/// extending the migration profile switch above.
+pub(crate) fn planned_feature_at_boundary(
+    id: &'static str,
+    contract: &'static str,
+    owner_issue: u32,
+    blocker: &'static str,
+    typechecker_path: &'static str,
+    typechecker_selector: &'static str,
+    body_ir_selector: &'static str,
+    replacement_executor_selector: &'static str,
+) -> CompatibilityFeature {
+    let profile = FeatureAnchorProfile {
+        typechecker_path,
+        typechecker_selector,
+        body_ir_selector,
+        replacement_executor_selector,
+    };
     let source_ast = observed_anchor(
         EvidenceSurface::SourceAst,
         FROZEN_V0_5_CAPABILITIES_PATH,
@@ -2328,13 +2737,24 @@ fn planned_feature(
     }
 }
 
-/// Build one currently bounded direct-execution feature without claiming independent comparison green.
-fn preserved_feature(
+/// Build one bounded direct-execution feature at the direct implementation boundary that owns it.
+///
+/// Direct execution remains separate from comparison. This factory never widens a feature to comparison-green; that
+/// still requires the receipt-bound evidence validated by the collector.
+pub(crate) fn preserved_feature_at_boundary(
     id: &'static str,
     contract: &'static str,
-    _direct_execution_evidence: &'static str,
+    typechecker_path: &'static str,
+    typechecker_selector: &'static str,
+    body_ir_selector: &'static str,
+    replacement_executor_selector: &'static str,
 ) -> CompatibilityFeature {
-    let profile = feature_anchor_profile(id);
+    let profile = FeatureAnchorProfile {
+        typechecker_path,
+        typechecker_selector,
+        body_ir_selector,
+        replacement_executor_selector,
+    };
     let source_ast = observed_anchor(
         EvidenceSurface::SourceAst,
         FROZEN_V0_5_CAPABILITIES_PATH,
@@ -2474,8 +2894,8 @@ fn preserved_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
     }
 }
 
-/// Construct every private implementation requirement shared by the public feature contracts.
-fn implementation_requirements() -> Vec<ImplementationRequirement> {
+/// Construct temporary private requirements that have not reached their owning local implementation boundary yet.
+fn migration_bootstrap_implementation_requirements() -> Vec<ImplementationRequirement> {
     vec![
         requirement(
             "async.runtime",
@@ -2485,32 +2905,11 @@ fn implementation_requirements() -> Vec<ImplementationRequirement> {
             "Schedulers and wake queues are mechanisms, not public capabilities.",
         ),
         requirement(
-            "call.argument-binder",
-            "Parameter binding preserves positional, named, default, preset, variadic, and diagnostic rules.",
-            "typechecker partial projection and replacement call runtime",
-            "partial/default typechecker and Body-IR tests",
-            "Binding slots are shared call machinery, not a user feature.",
-        ),
-        requirement(
             "call.frames",
             "Every local or nested callable has isolated locals, return flow, and source-owned spans.",
             "replacement runtime call dispatcher",
             "stored-callable Body-IR tests and #1152 execution probes",
             "Frames enable several callable features without being user-visible themselves.",
-        ),
-        requirement(
-            "captures.lexical-environments",
-            "Closure and partial capture reads occur at construction time with explicit ownership.",
-            "Body IR closure lowering and replacement runtime",
-            "closure/partial capture timing regressions",
-            "Lexical environments are private runtime state.",
-        ),
-        requirement(
-            "control.normalized-flow",
-            "Branches, loops, returns, assertions, and breaks execute from normalized Body IR.",
-            "Body IR lowering and replacement evaluator",
-            "replacement-body-v0 corpus",
-            "Normalized control nodes are implementation vocabulary.",
         ),
         requirement(
             "diagnostics.source-authority",
@@ -2583,13 +2982,6 @@ fn implementation_requirements() -> Vec<ImplementationRequirement> {
             "Aggregate storage serves multiple public collection forms.",
         ),
         requirement(
-            "runtime.scalar-values",
-            "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
-            "Body IR operands/rvalues and replacement evaluator",
-            "replacement-body-v0 scalar corpus",
-            "Scalar representation is an internal evaluator mechanism.",
-        ),
-        requirement(
             "suspension.continuations",
             "Generator and lazy adapter state preserve locals, instruction position, and observed effects across resume.",
             "Body IR generator model and replacement runtime",
@@ -2627,8 +3019,8 @@ fn implementation_requirements() -> Vec<ImplementationRequirement> {
     ]
 }
 
-/// Build one private implementation requirement record.
-fn requirement(
+/// Build one private requirement at its owning compiler boundary.
+pub(crate) fn implementation_requirement(
     id: &'static str,
     invariant: &'static str,
     owner_boundary: &'static str,
@@ -2642,6 +3034,23 @@ fn requirement(
         verification_anchor,
         internal_only_rationale,
     }
+}
+
+/// Build one bootstrap-private requirement through the same local-registration shape.
+fn requirement(
+    id: &'static str,
+    invariant: &'static str,
+    owner_boundary: &'static str,
+    verification_anchor: &'static str,
+    internal_only_rationale: &'static str,
+) -> ImplementationRequirement {
+    implementation_requirement(
+        id,
+        invariant,
+        owner_boundary,
+        verification_anchor,
+        internal_only_rationale,
+    )
 }
 
 /// Construct the complete v0.5 public-capability to compatibility-feature relation.
@@ -2735,18 +3144,14 @@ fn link(capability_id: &'static str, feature_id: &'static str) -> PublicCapabili
     }
 }
 
-/// Construct every compatibility-feature to implementation-requirement relation.
-fn feature_requirement_links() -> Vec<FeatureRequirementLink> {
+/// Construct temporary feature-to-requirement links whose owning mechanism has not reached local registration yet.
+fn migration_bootstrap_feature_requirement_links() -> Vec<FeatureRequirementLink> {
     vec![
         req_link("async.tasks", "async.runtime"),
         req_link("async.tasks", "receipts.comparison"),
         req_link("call.named-and-variadic", "call.argument-binder"),
         req_link("call.named-and-variadic", "call.frames"),
         req_link("call.named-and-variadic", "types.resolved-dispatch"),
-        req_link("call.partial-binding", "call.argument-binder"),
-        req_link("call.partial-binding", "captures.lexical-environments"),
-        req_link("call.stored-callables", "call.frames"),
-        req_link("call.stored-callables", "captures.lexical-environments"),
         req_link("decorators.dsl-surfaces", "surface.decorator-dispatch"),
         req_link("diagnostics.stable", "diagnostics.source-authority"),
         req_link("diagnostics.stable", "receipts.comparison"),
@@ -2761,12 +3166,10 @@ fn feature_requirement_links() -> Vec<FeatureRequirementLink> {
         req_link("iteration.user-and-fallible", "iteration.protocol-dispatch"),
         req_link("iteration.user-and-fallible", "error.result-routing"),
         req_link("language.aggregates-and-projections", "runtime.aggregate-store"),
-        req_link("language.control-flow", "control.normalized-flow"),
         req_link("language.control-flow-complete", "control.normalized-flow"),
         req_link("language.control-flow-complete", "runtime.aggregate-store"),
         req_link("language.match-and-patterns", "patterns.dispatch"),
         req_link("language.match-and-patterns", "nominal.value-model"),
-        req_link("language.numeric-and-scalar", "runtime.scalar-values"),
         req_link("language.numeric-complete", "runtime.scalar-values"),
         req_link("language.numeric-complete", "runtime.aggregate-store"),
         req_link("language.strings-and-format", "runtime.scalar-values"),
@@ -2786,13 +3189,21 @@ fn feature_requirement_links() -> Vec<FeatureRequirementLink> {
     ]
 }
 
-/// Build one feature-to-requirement relation using the shared mechanism rationale.
-fn req_link(feature_id: &'static str, requirement_id: &'static str) -> FeatureRequirementLink {
+/// Build one local feature-to-private-requirement relation.
+pub(crate) fn feature_requirement_link(
+    feature_id: &'static str,
+    requirement_id: &'static str,
+) -> FeatureRequirementLink {
     FeatureRequirementLink {
         feature_id,
         requirement_id,
         rationale: "The private mechanism is required to preserve this source-observable contract without backend-specific rediscovery.",
     }
+}
+
+/// Build one temporary bootstrap feature-to-requirement relation through the shared local relation shape.
+fn req_link(feature_id: &'static str, requirement_id: &'static str) -> FeatureRequirementLink {
+    feature_requirement_link(feature_id, requirement_id)
 }
 
 #[cfg(test)]
@@ -2822,6 +3233,20 @@ mod tests {
         assert!(blob.status.success());
         assert!(String::from_utf8(blob.stdout)?.contains(&baseline.release.source_blob));
         assert_eq!(baseline.release.source_snapshot_path, FROZEN_V0_5_CAPABILITIES_PATH);
+        assert!(matches!(
+            baseline.release.role,
+            ReleaseBaselineRole::MigrationCompatibilityTarget
+        ));
+        assert!(
+            baseline
+                .release
+                .source_snapshot_path
+                .contains("migration_baselines/v0.5.0")
+        );
+        assert!(baseline.release.retirement_condition.contains("replacement migration"));
+        let migration_baseline_readme =
+            fs::read_to_string(root.join("src/replacement_compatibility/migration_baselines/README.md"))?;
+        assert!(migration_baseline_readme.contains("not a historical stdlib archive"));
         assert_eq!(baseline.capabilities.len(), 67);
         Ok(())
     }
@@ -2849,6 +3274,38 @@ mod tests {
             .err()
             .ok_or("expected an unmapped baseline capability error")?;
         assert!(error.to_string().contains("StdWeb"));
+        Ok(())
+    }
+
+    #[test]
+    fn validator_rejects_anonymous_or_nonretiring_registration_sources() -> Result<(), Box<dyn std::error::Error>> {
+        let baseline = checked_v0_5_public_capability_baseline()?;
+        let mut registry = replacement_compatibility_registry();
+        let bootstrap = registry
+            .registration_sources
+            .iter_mut()
+            .find(|source| matches!(source.lifecycle, CompatibilityRegistrationLifecycle::MigrationBootstrap))
+            .ok_or("missing migration bootstrap source")?;
+        bootstrap.retirement_condition = None;
+        let local = registry
+            .registration_sources
+            .iter_mut()
+            .find(|source| source.id == "frontend.body-ir.callable-values")
+            .ok_or("missing Body-IR callable registration")?;
+        local.retirement_condition = Some("mutation fixture".to_string());
+        local.feature_ids.push("language.control-flow".to_string());
+
+        let error = validate_replacement_compatibility_registry(&baseline, &registry)
+            .err()
+            .ok_or("expected registration-source validation errors")?;
+        let rendered = error.to_string();
+        assert!(rendered.contains("migration bootstrap registration `replacement-compatibility.migration-bootstrap` lacks an explicit retirement condition"));
+        assert!(rendered.contains(
+            "local implementation registration `frontend.body-ir.callable-values` has a migration retirement condition"
+        ));
+        assert!(rendered.contains(
+            "compatibility feature `language.control-flow` is registered by 2 sources instead of exactly one"
+        ));
         Ok(())
     }
 
