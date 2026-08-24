@@ -11768,6 +11768,16 @@ mod rfc031_pub_import_integration_tests {
         Ok(main_path)
     }
 
+    /// Materialize one file from an integration fixture with its parent directories.
+    fn write_fixture_file(root: &Path, relative_path: &str, contents: &str) -> Result<(), Box<dyn std::error::Error>> {
+        let path = root.join(relative_path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(path, contents)?;
+        Ok(())
+    }
+
     fn run_check(main_path: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         let mut command = super::incan_command();
         command.arg("--check").arg(main_path);
@@ -12895,6 +12905,105 @@ def main() -> None:
         assert!(
             generated_main.contains("boundarykit::__IncanUnion"),
             "expected public helper calls to use provider-qualified union wrappers.\ngenerated main.rs:\n{generated_main}"
+        );
+
+        Ok(())
+    }
+
+    /// Regression for #1198: a sealed public provider and its consumer share the flattened union variant order.
+    #[test]
+    fn external_pub_consumer_uses_flattened_nested_union_variant_index_issue1198()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let prior_provider_root = tmp.path().join("prior_provider");
+        let provider_root = tmp.path().join("provider");
+        let consumer_root = tmp.path().join("consumer");
+
+        for (relative_path, contents) in [
+            (
+                "incan.toml",
+                include_str!("fixtures/pub_union_consumer_issue1198/provider/incan.toml"),
+            ),
+            (
+                "src/projection_builders.incn",
+                include_str!("fixtures/pub_union_consumer_issue1198/provider/src/projection_builders.incn"),
+            ),
+            (
+                "src/functions/literals/always_true.incn",
+                include_str!("fixtures/pub_union_consumer_issue1198/provider/src/functions/literals/always_true.incn"),
+            ),
+            (
+                "src/dataset.incn",
+                include_str!("fixtures/pub_union_consumer_issue1198/provider/src/dataset.incn"),
+            ),
+            (
+                "src/lib.incn",
+                include_str!("fixtures/pub_union_consumer_issue1198/provider/src/lib.incn"),
+            ),
+        ] {
+            write_fixture_file(&provider_root, relative_path, contents)?;
+        }
+        // A package must retain a receipt-specific copy of a direct plan even when a prior source revision produced
+        // byte-identical generated Rust. This module-docstring revision changes source authority without changing
+        // the provider closure, reproducing the reusable-plan collision without relying on shared test state.
+        for relative_path in [
+            "incan.toml",
+            "src/projection_builders.incn",
+            "src/functions/literals/always_true.incn",
+            "src/dataset.incn",
+            "src/lib.incn",
+        ] {
+            let contents = std::fs::read_to_string(provider_root.join(relative_path))?;
+            let contents = if relative_path == "src/lib.incn" {
+                contents.replace(
+                    "Public facade for the #1198 provider's nested projection-union regression API.",
+                    "Earlier facade prose for the same public regression API.",
+                )
+            } else {
+                contents
+            };
+            write_fixture_file(&prior_provider_root, relative_path, &contents)?;
+        }
+        let prior_provider_bake = bake_library_provider(&prior_provider_root)?;
+        assert!(
+            prior_provider_bake.status.success(),
+            "expected the prior #1198 provider source revision to bake.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&prior_provider_bake.stdout),
+            String::from_utf8_lossy(&prior_provider_bake.stderr)
+        );
+        for (relative_path, contents) in [
+            (
+                "incan.toml",
+                include_str!("fixtures/pub_union_consumer_issue1198/consumer/incan.toml"),
+            ),
+            (
+                "src/main.incn",
+                include_str!("fixtures/pub_union_consumer_issue1198/consumer/src/main.incn"),
+            ),
+        ] {
+            write_fixture_file(&consumer_root, relative_path, contents)?;
+        }
+
+        let provider_bake = bake_library_provider(&provider_root)?;
+        assert!(
+            provider_bake.status.success(),
+            "expected the #1198 provider bake to succeed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&provider_bake.stdout),
+            String::from_utf8_lossy(&provider_bake.stderr)
+        );
+
+        let consumer_bake = bake_project(&consumer_root)?;
+        assert!(
+            consumer_bake.status.success(),
+            "expected the #1198 consumer bake to select the provider's flattened union variant.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&consumer_bake.stdout),
+            String::from_utf8_lossy(&consumer_bake.stderr)
+        );
+        let generated_main =
+            std::fs::read_to_string(consumer_root.join("target/incan/issue1198_union_consumer/src/main.rs"))?;
+        assert!(
+            generated_main.contains("issue1198_union_provider::__IncanUnion60eb06ef6f070724::V1(\n                issue1198_union_provider::always_true()"),
+            "expected BoolLiteralExpr to use V1 in the provider's flattened union.\ngenerated main.rs:\n{generated_main}"
         );
 
         Ok(())

@@ -103,6 +103,7 @@ fn legacy_cargo_capacity_abort_terminates_descendants() -> Result<(), Box<dyn st
         inspection_packages: None,
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::GeneratedSource,
         compact_debug_info: false,
+        source_compiler_vocab_support: false,
     });
 
     assert!(

@@ -745,6 +745,20 @@ fn oven_inspection_sources(
         .collect()
 }
 
+/// Return whether a sealed source catalog owns the requested immutable Cargo source archive.
+///
+/// This check guards source-root hand-off only; it does not authorize reuse of compiled Rust artifacts, whose
+/// feature-sensitive receipts are validated by the direct-rustc plan.
+#[cfg(feature = "rust_inspect")]
+fn registry_source_is_owned_by_catalog(
+    source: &crate::oven::rustc::OvenRustcRegistrySourcePackage,
+    catalog: &[crate::oven::rustc::OvenRustcRegistrySourcePackage],
+) -> bool {
+    catalog.iter().any(|candidate| {
+        candidate.package == source.package && candidate.version == source.version && candidate.source == source.source
+    })
+}
+
 /// Resolve one exact project authority and all named constituents once for the complete test command.
 #[cfg(feature = "rust_inspect")]
 pub(crate) fn prepare_project_registry_source_authorities(
@@ -876,18 +890,9 @@ pub(crate) fn prepare_project_registry_source_authorities(
                 (owner.root.as_path(), owner.catalog.as_slice())
             }
         };
-        let matches = catalog
-            .iter()
-            .filter(|candidate| {
-                candidate.package == source.package.package
-                    && candidate.version == source.package.version
-                    && candidate.features == source.package.features
-                    && candidate.source == source.package.source
-            })
-            .count();
-        if matches != 1 {
+        if !registry_source_is_owned_by_catalog(&source.package, catalog) {
             return Err(CliError::failure(format!(
-                "project inspection source `{}` {} has {matches} exact records in its named owner",
+                "project inspection source `{}` {} has no exact record in its named owner",
                 source.package.package, source.package.version
             )));
         }
@@ -2720,6 +2725,37 @@ mod tests {
             optional: false,
             package: None,
         }
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn registry_source_ownership_unifies_feature_variants_with_the_same_source_archive() {
+        let source = crate::oven::rustc::OvenRustcRegistrySource {
+            registry: "registry+https://example.invalid/index".to_string(),
+            checksum: "fixture-checksum".to_string(),
+            relative_root: "registry-sources/syn".to_string(),
+            digest: "sha256:fixture-source".to_string(),
+        };
+        let requested = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            package: "syn".to_string(),
+            version: "2.0.117".to_string(),
+            features: vec!["derive".to_string()],
+            source: source.clone(),
+        };
+        let owner = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            features: vec!["clone-impls".to_string(), "full".to_string()],
+            ..requested.clone()
+        };
+
+        assert!(registry_source_is_owned_by_catalog(&requested, &[owner]));
+        let different_archive = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            source: crate::oven::rustc::OvenRustcRegistrySource {
+                checksum: "other-fixture-checksum".to_string(),
+                ..source
+            },
+            ..requested.clone()
+        };
+        assert!(!registry_source_is_owned_by_catalog(&different_archive, &[requested]));
     }
 
     #[test]

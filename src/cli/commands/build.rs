@@ -166,6 +166,8 @@ const OVEN_PROJECT_OUTPUT_PROJECTION_SCHEMA_VERSION: u32 = 3;
 const OVEN_PROJECT_OUTPUT_REPORT_SCHEMA_VERSION: u32 = 2;
 const OVEN_PROJECT_OUTPUT_REPORT_PATH_TAG: &str = "$incan_portable_path";
 const OVEN_PROJECT_OUTPUT_REPORT_EXTERNAL_ROOT: &str = "$INCAN_EXTERNAL_AUTHORITY";
+/// Build-unit input that marks a source-built compiler's sealed vocabulary-helper closure.
+const SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT: &str = "source-compiler-vocab-support";
 /// Maximum time an explicit project bake waits for another explicit publisher's bounded staging transaction.
 const OVEN_PROJECT_OUTPUT_PUBLICATION_WAIT: Duration = Duration::from_secs(5 * 60);
 /// Short cooperative backoff while the named publisher retains the only safe staging reservation.
@@ -5618,6 +5620,7 @@ fn bake_generated_project_compatibility_plan(
     generated_root: &Path,
     rustc: &Path,
     base_loaf: Option<&OvenToolchainLoaf>,
+    source_compiler_vocab_support: bool,
 ) -> CliResult<OvenToolchainMaterialization> {
     let compile_environment = direct_rustc_reusable_project_plan_environment(generated_project, generated_root)
         .map_err(|error| CliError::failure(error.to_string()))?;
@@ -5643,6 +5646,7 @@ fn bake_generated_project_compatibility_plan(
         // multi-gigabyte dependency DWARF payload. Keep the named debug publisher compact so one project closure stays
         // inside Oven's bounded compatibility domain.
         compact_debug_info: true,
+        source_compiler_vocab_support: source_compiler_vocab_support && base_loaf.is_none(),
         // Rust package identity is carried through artifact metadata, not only source or crate names. The base owns the
         // complete Incan release cohort; the project contributes its locked third-party and provider delta.
         base_loaf: base_loaf.map(|base| OvenLegacyCargoBaseLoaf {
@@ -5846,6 +5850,7 @@ fn bake_generated_project_test_dependency_plan(
         inspection_packages: None,
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::CheckedDeclared,
         compact_debug_info: true,
+        source_compiler_vocab_support: false,
         base_loaf: base_loaf.map(|base| OvenLegacyCargoBaseLoaf {
             loaf_identity: base.loaf_identity.clone(),
             build_unit_identity: base.loaf_build_unit_identity.clone(),
@@ -5995,6 +6000,11 @@ fn select_or_bake_generated_project_plan(
     if receipt_requires_final_interop_plan(receipt) {
         return Err(interop_final_plan_required_error());
     }
+    let source_compiler_vocab_support = receipt
+        .sources
+        .build_unit_inputs
+        .get(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .is_some_and(|value| value == "v1");
     if mode == OvenProjectPlanMode::ExplicitBake {
         // The completed project-output Loaf owns generated project sources and the final native result. Do not bake
         // an empty project extension when the installed release Loaf already supplies the complete native dependency
@@ -6028,6 +6038,7 @@ fn select_or_bake_generated_project_plan(
             generated_root,
             rustc,
             base_loaf.as_ref(),
+            source_compiler_vocab_support,
         )?;
         return select_published_project_plan(store, receipt, materialization)?
             .ok_or_else(|| {
@@ -9305,6 +9316,15 @@ fn prepare_library_project(
     let mut oven_build_inputs = normal_oven
         .then(|| oven_build_unit_inputs(&provider_plan, &project_requirements, &resolved))
         .transpose()?;
+    let source_compiler_vocab_support = normal_oven
+        && manifest.vocab().is_some()
+        && crate::oven::legacy_cargo::source_compiler_vocab_support_is_available();
+    if source_compiler_vocab_support && let Some(build_inputs) = oven_build_inputs.as_mut() {
+        // A source-built compiler seals this helper at the explicit publisher boundary. Keep that closure in a
+        // distinct build unit so a v0.5.0 plan without it can neither shadow nor become ambiguous with the
+        // upgraded receipt. Packaged compilers continue to select their release-cohort helper unchanged.
+        build_inputs.insert(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT.to_string(), "v1".to_string());
+    }
     let oven_rustc = normal_oven
         .then(resolve_active_rustc)
         .transpose()
@@ -11784,17 +11804,29 @@ fn export_selected_package_loaf(
                 entry.kind,
                 "package export",
             )?;
-            if exported.identity != entry.identity || exported.kind != entry.kind {
+            if exported.kind != entry.kind
+                || exported.receipt_identity != entry.receipt.identity
+                || exported.build_unit_identity != entry.receipt.build_unit_identity
+                || exported.intent != entry.receipt.intent
+            {
                 return Err(CliError::failure(
-                    "package Loaf changed identity or kind during immutable export",
+                    "package Loaf changed its receipt-bound execution contract during immutable export",
                 ));
             }
-            Ok(entry)
+            // A shared direct plan can be byte-identical to a plan first sealed under another compatible receipt.
+            // The package store must still publish that verified content under this library output's receipt, so its
+            // portable entry identity is the destination publication rather than the reusable source entry.
+            Ok(OvenPackagedLibraryLoafEntry {
+                receipt: entry.receipt,
+                identity: exported.identity,
+                kind: entry.kind,
+                base_loaf_identity: entry.base_loaf_identity,
+            })
         })
         .collect()
 }
 
-/// Copy one selected immutable entry through the destination store's own validation and atomic publication path.
+/// Copy one selected immutable entry, or its receipt-compatible direct-plan equivalent, through destination validation.
 ///
 /// A package Loaf is never a directory alias to another cache. The destination verifies every copied artifact and
 /// calculates its own bounded admission before making the entry visible.
@@ -11830,11 +11862,21 @@ fn copy_receipted_oven_store_entry(
         .select_payloads_matching_for_execution(|manifest| {
             manifest.identity == entry_identity
                 && manifest.kind == entry_kind
-                && manifest.receipt_identity == receipt.identity
                 && manifest.build_unit_identity == receipt.build_unit_identity
                 && manifest.intent == receipt.intent
         })
         .map_err(|error| CliError::failure(format!("failed to select provider Loaf for {operation}: {error}")))?;
+    if selected.is_empty() && entry_kind == OvenArtifactKind::DirectRustcPlan {
+        // Direct plans are reusable by their verified build unit and intent. A semantically inert source edit can
+        // change the caller receipt while preserving the exact sealed Rust closure, leaving its source-store identity
+        // under the original receipt. Select that compatible closure only through the ordinary receipt-aware planner,
+        // then re-publish it below with the package's current receipt.
+        if let Some(compatible) =
+            select_direct_rustc_plan_for_execution(source_store, receipt).map_err(oven_rustc_error)?
+        {
+            selected.push(compatible);
+        }
+    }
     if selected.len() != 1 {
         return Err(CliError::failure(format!(
             "expected one receipt-selected provider Loaf `{entry_identity}` for {operation}, found {}",
@@ -11842,6 +11884,15 @@ fn copy_receipted_oven_store_entry(
         )));
     }
     let (manifest, artifact_root, payload, _lease) = selected.remove(0).into_parts();
+    if manifest.kind != entry_kind
+        || manifest.build_unit_identity != receipt.build_unit_identity
+        || manifest.intent != receipt.intent
+        || (entry_kind != OvenArtifactKind::DirectRustcPlan && manifest.receipt_identity != receipt.identity)
+    {
+        return Err(CliError::failure(format!(
+            "selected provider Loaf `{entry_identity}` changed its receipt-bound execution contract during {operation}"
+        )));
+    }
     let materialized_files = manifest
         .materialized_files
         .iter()
@@ -11851,7 +11902,7 @@ fn copy_receipted_oven_store_entry(
         })
         .collect::<Vec<_>>();
     let exported = destination_store
-        .publish(&OvenArtifactPublishRequest {
+        .publish_receipt_bound(&OvenArtifactPublishRequest {
             receipt: receipt.clone(),
             domain: manifest.domain.clone(),
             kind: manifest.kind,
@@ -11859,9 +11910,13 @@ fn copy_receipted_oven_store_entry(
             materialized_files,
         })
         .map_err(|error| CliError::failure(format!("failed to publish provider Loaf during {operation}: {error}")))?;
-    if exported.identity != manifest.identity {
+    if exported.kind != entry_kind
+        || exported.receipt_identity != receipt.identity
+        || exported.build_unit_identity != receipt.build_unit_identity
+        || exported.intent != receipt.intent
+    {
         return Err(CliError::failure(
-            "provider Loaf changed identity during immutable store copy",
+            "provider Loaf changed its receipt-bound execution contract during immutable store copy",
         ));
     }
     Ok(exported)
@@ -12376,7 +12431,7 @@ fn import_checked_packaged_library_loaf(
         )));
     };
     for entry in &package_profile.entries {
-        copy_receipted_oven_store_entry(
+        let imported = copy_receipted_oven_store_entry(
             source_store,
             consumer_store,
             &entry.receipt,
@@ -12384,6 +12439,12 @@ fn import_checked_packaged_library_loaf(
             entry.kind,
             "consumer package-Loaf import",
         )?;
+        if imported.identity != entry.identity {
+            return Err(CliError::failure(format!(
+                "consumer package-Loaf import changed the sealed entry identity `{}`",
+                entry.identity
+            )));
+        }
     }
     Ok(())
 }

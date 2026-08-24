@@ -179,6 +179,11 @@ pub struct OvenLegacyCargoPrepareRequest<'a> {
     /// semantics remain unchanged. It prevents compiler-shipped sealed Loaf data from consuming policy capacity with
     /// linker-irrelevant debug sections.
     pub compact_debug_info: bool,
+    /// Whether this explicit source-built project publication must seal the compiler-owned vocabulary helper.
+    ///
+    /// This is admitted only by the source-built compiler's explicit Oven bake. The normal build, run, and test
+    /// paths select the helper from the already sealed plan and never receive Cargo authority.
+    pub source_compiler_vocab_support: bool,
     /// Optional immutable standard-library base selected before an explicit project bake.
     ///
     /// When present, the publisher substitutes the exact release-owned dependency cohort—compiler runtime,
@@ -1167,7 +1172,18 @@ fn select_existing_direct_rustc_plan_identity(
     match request.base_loaf.as_ref() {
         Some(base) => select_existing_project_extension_identity(request.store, &request.receipt, base),
         None => match select_direct_rustc_plan_identity(request.store, &request.receipt) {
-            Ok(plan_identity) => Ok(Some(plan_identity)),
+            Ok(plan_identity) => {
+                if request.source_compiler_vocab_support
+                    && !stored_plan_supplies_source_compiler_vocab_support(
+                        request.store,
+                        &plan_identity,
+                        &request.receipt.intent,
+                    )?
+                {
+                    return Ok(None);
+                }
+                Ok(Some(plan_identity))
+            }
             Err(super::rustc::OvenRustcError::PlanSelection { message, .. })
                 if message == "no compatible stored direct-rustc plan is available" =>
             {
@@ -1176,6 +1192,34 @@ fn select_existing_direct_rustc_plan_identity(
             Err(error) => Err(OvenLegacyCargoError::Plan(error.to_string())),
         },
     }
+}
+
+/// Return whether a reusable direct plan already seals the host vocabulary closure required by this source build.
+///
+/// The base plan selector intentionally shares a build-unit identity across generated source revisions. A
+/// pre-patch source-built plan may therefore remain otherwise receipt-compatible while lacking the compiler-owned
+/// helper. Only the explicit publisher uses this capability check; normal consumers select an already prepared plan
+/// and never use it to acquire Cargo authority.
+fn stored_plan_supplies_source_compiler_vocab_support(
+    store: &OvenStore,
+    plan_identity: &str,
+    intent: &OvenBuildIntent,
+) -> Result<bool, OvenLegacyCargoError> {
+    let (manifest, _artifact_root, payload, _lease) = store.select_payload_for_execution(plan_identity)?;
+    if manifest.kind != OvenArtifactKind::DirectRustcPlan || manifest.intent != *intent {
+        return Ok(false);
+    }
+    let plan = serde_json::from_slice::<OvenRustcArtifactManifest>(&payload).map_err(|error| {
+        OvenLegacyCargoError::Plan(format!(
+            "stored direct-rustc plan `{plan_identity}` has an invalid payload while checking vocabulary support: {error}"
+        ))
+    })?;
+    Ok(plan.vocab_auxiliary_targets.iter().any(|target| {
+        target.target == intent.target
+            && ["incan_vocab", "serde_json"]
+                .into_iter()
+                .all(|crate_name| target.externs.iter().any(|artifact| artifact.crate_name == crate_name))
+    }))
 }
 
 /// Return the observable no-publisher result for one exact existing plan.
@@ -1188,6 +1232,31 @@ fn reused_direct_rustc_plan_result(plan_identity: String) -> OvenLegacyCargoPrep
         registry_leaves: Vec::new(),
         transient_reservation_bytes: 0,
     }
+}
+
+/// Return the compiler checkout whose checked workspace lock owns a source-built vocabulary helper bake.
+///
+/// `CARGO_MANIFEST_DIR` is compiled into the executable, so this does not accept a caller-selected source directory.
+/// A packaged compiler does not carry the checked workspace layout and must instead select a release-cohort Loaf.
+fn source_compiler_vocab_support_root() -> Result<PathBuf, OvenLegacyCargoError> {
+    let root = canonical_directory(Path::new(env!("CARGO_MANIFEST_DIR")), "compiler source root")?;
+    if !source_compiler_vocab_support_is_available() {
+        return Err(OvenLegacyCargoError::Plan(format!(
+            "source-built compiler vocabulary support requires the checked compiler workspace at {}; no release-cohort Loaf is available",
+            root.display()
+        )));
+    }
+    Ok(root)
+}
+
+/// Return whether this executable was built from the checked compiler workspace that owns `incan_vocab`.
+///
+/// This is a compiler-origin capability rather than caller input. It distinguishes a source-built compiler, which
+/// may seal its checked helper closure at the explicit publisher boundary, from a packaged compiler that must rely
+/// on a shipped release-cohort Loaf.
+pub(crate) fn source_compiler_vocab_support_is_available() -> bool {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    root.join("Cargo.lock").is_file() && root.join("crates/incan_vocab/Cargo.toml").is_file()
 }
 
 /// Prepare and publish exactly one receipt-bound direct-rustc closure through the hidden `legacy_cargo` boundary.
@@ -1306,7 +1375,6 @@ pub fn prepare_direct_rustc_plan(
         request.publication_kind,
         request.compact_debug_info,
     )?;
-    let transient_reservation_bytes = conservative_directory_reservation(&staging)?;
     let cargo_lock = generated_project.join("Cargo.lock");
     let cargo_lock_bytes = regular_file_bytes(&cargo_lock)?;
     let profile_directory = cargo_profile_directory(&request.receipt.intent.profile)?;
@@ -1433,9 +1501,8 @@ pub fn prepare_direct_rustc_plan(
         profile: request.receipt.intent.profile.clone(),
     };
     write_provenance(&provenance_path, &provenance)?;
-    canonicalize_supporting_artifacts(&mut supporting_artifacts)?;
     let has_registry_sources = !registry_sources.is_empty();
-    let plan = OvenRustcArtifactManifest {
+    let mut plan = OvenRustcArtifactManifest {
         schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
         intent: request.receipt.intent.clone(),
         dependency_search_paths,
@@ -1448,6 +1515,30 @@ pub fn prepare_direct_rustc_plan(
         vocab_auxiliary_targets: Vec::new(),
         supporting_artifacts,
     };
+    if request.source_compiler_vocab_support {
+        if request.base_loaf.is_some() {
+            return Err(OvenLegacyCargoError::Plan(
+                "a project extension cannot bake a source compiler vocabulary helper beside its selected release-cohort Loaf"
+                    .to_string(),
+            ));
+        }
+        let compiler_root = source_compiler_vocab_support_root()?;
+        let compiler_support_target = staging.join("compiler-vocab-target");
+        crate::oven::loaf::bake_source_compiler_vocab_support(
+            crate::oven::loaf::OvenSourceCompilerVocabSupportRequest {
+                plan: &mut plan,
+                loaf_staging: &staging,
+                compiler_root: &compiler_root,
+                cargo: &request.cargo,
+                rustc: &request.rustc,
+                cargo_target: &compiler_support_target,
+                capacity_roots: &[&staging],
+                transient_limit,
+            },
+        )
+        .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
+    }
+    canonicalize_supporting_artifacts(&mut plan.supporting_artifacts)?;
     let (kind, payload, materialized_plan) = if let Some(base) = request.base_loaf.as_ref() {
         if base.artifacts.intent != request.receipt.intent {
             return Err(OvenLegacyCargoError::ReceiptMismatch {
@@ -1535,6 +1626,7 @@ pub fn prepare_direct_rustc_plan(
         payload,
         materialized_files,
     };
+    let transient_reservation_bytes = conservative_directory_reservation(&staging)?;
     request
         .store
         .ensure_legacy_cargo_batch_physical_capacity(&staging, std::slice::from_ref(&publication))?;
@@ -5204,7 +5296,8 @@ fn read_legacy_cargo_metadata(
 /// Read publisher metadata with the caller's explicit Cargo.lock admission policy.
 ///
 /// Compiler-owned publication always requires a pre-existing lock. The sole `false` caller is the explicit user
-/// project bake, which may create its first offline Cargo.lock before its source and final compiler plans are sealed.
+/// project bake, which may resolve and create its first Cargo.lock before its source and final compiler plans are
+/// sealed. Every later publisher invocation is locked and offline against that newly sealed authority.
 fn read_legacy_cargo_metadata_with_lock_policy(
     cargo: &Path,
     cargo_manifest: &Path,
@@ -5237,13 +5330,17 @@ fn read_legacy_cargo_metadata_for_platform(
             field: "Cargo manifest",
             message: format!("{} has no package directory", cargo_manifest.display()),
         })?;
+    let cargo_lock_exists = package_root.join("Cargo.lock").is_file();
     let mut command = Command::new(&cargo);
     command
         .current_dir(package_root)
         .arg("metadata")
         .arg("--manifest-path")
         .arg(&cargo_manifest)
-        .args(["--offline", "--format-version", "1"]);
+        .args(["--format-version", "1"]);
+    if require_existing_lock || cargo_lock_exists {
+        command.arg("--offline");
+    }
     if require_existing_lock {
         command.arg("--locked");
     }
@@ -7062,12 +7159,12 @@ fn run_legacy_cargo_invocation(
         .arg(target_triple)
         .arg("--target-dir")
         .arg(target)
-        .arg("--offline")
         .arg("--message-format=json-render-diagnostics");
-    // Existing locks are immutable publisher authority. A checked first-bake fixture may not have a lock yet; its
-    // explicit offline Cargo boundary creates one, which is then digested into the Loaf identity. Compiler-root and
+    // Existing locks are immutable publisher authority. The explicit project publisher alone may resolve a missing
+    // first lock; once Cargo writes it, every remaining publisher action is locked and offline. Compiler-root and
     // synthetic foundation projects always arrive with locks and therefore cannot silently re-resolve their graph.
     if package_root.join("Cargo.lock").is_file() {
+        command.arg("--offline");
         command.arg("--locked");
     }
     if !features.is_empty() {
@@ -11442,6 +11539,7 @@ version = "1.0.0"
             inspection_packages: Some(Vec::new()),
             direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::CheckedDeclared,
             compact_debug_info: false,
+            source_compiler_vocab_support: false,
             base_loaf: None,
         })?;
 
@@ -11682,6 +11780,7 @@ version = "1.0.0"
             inspection_packages: None,
             direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::GeneratedSource,
             compact_debug_info: false,
+            source_compiler_vocab_support: false,
             base_loaf: None,
         })?;
 
@@ -11742,7 +11841,7 @@ version = "1.0.0"
 
     #[cfg(unix)]
     #[test]
-    fn publisher_runs_cargo_from_the_generated_project_directory() -> Result<(), Box<dyn std::error::Error>> {
+    fn publisher_uses_network_only_for_a_fresh_explicit_project_resolution() -> Result<(), Box<dyn std::error::Error>> {
         use std::os::unix::fs::PermissionsExt;
 
         let fixture = tempfile::tempdir()?;
@@ -11791,14 +11890,42 @@ version = "1.0.0"
         )?;
 
         assert_eq!(
-            fs::canonicalize(project)?,
+            fs::canonicalize(&project)?,
             fs::canonicalize(fs::read_to_string(observed_directory)?.trim())?
         );
         assert_eq!(fs::read_to_string(observed_debug_setting)?, "");
         assert_eq!(fs::read_to_string(observed_incremental_setting)?, "");
-        let arguments = fs::read_to_string(observed_arguments)?;
+        let arguments = fs::read_to_string(&observed_arguments)?;
         assert!(arguments.lines().any(|argument| argument == "--profile"));
         assert!(arguments.lines().any(|argument| argument == OVEN_COMPILER_TEST_PROFILE));
+        assert!(
+            !arguments.lines().any(|argument| argument == "--offline"),
+            "a fresh explicit project bake must be able to establish its initial Cargo.lock"
+        );
+        assert!(
+            !arguments.lines().any(|argument| argument == "--locked"),
+            "a fresh explicit project bake cannot require a lock before Cargo has created it"
+        );
+
+        fs::write(project.join("Cargo.lock"), "version = 4\n")?;
+        let _ = run_legacy_cargo_invocation(
+            &cargo,
+            &rustc,
+            &project.join("Cargo.toml"),
+            &fixture.path().join("target"),
+            fixture.path(),
+            "aarch64-apple-darwin",
+            OVEN_COMPILER_TEST_PROFILE,
+            &[],
+            1024 * 1024,
+            "build",
+            &OvenLegacyCargoInvocationTarget::None,
+            false,
+            false,
+        )?;
+        let locked_arguments = fs::read_to_string(&observed_arguments)?;
+        assert!(locked_arguments.lines().any(|argument| argument == "--offline"));
+        assert!(locked_arguments.lines().any(|argument| argument == "--locked"));
         Ok(())
     }
 

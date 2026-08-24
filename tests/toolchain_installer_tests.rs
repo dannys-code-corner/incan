@@ -199,6 +199,47 @@ fn incan_binary() -> PathBuf {
     repo_root().join("target").join("debug").join("incan")
 }
 
+/// Copy a test compiler while making its compile-time development source root unavailable.
+///
+/// A binary built by this integration test otherwise embeds this checkout through `CARGO_MANIFEST_DIR`, which masks
+/// an installed-archive lookup even when the test runs the extracted executable. This isolated copy preserves every
+/// compiler behavior except that development fallback, so the release test can prove normal executable-relative
+/// discovery without mutating the checkout that concurrent tests use.
+fn incan_binary_without_development_source(root: &Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let compiler = incan_binary();
+    let source_root = env!("CARGO_MANIFEST_DIR").as_bytes();
+    let mut bytes = fs::read(&compiler)?;
+    let mut replacements = 0_usize;
+    for start in 0..=bytes.len().saturating_sub(source_root.len()) {
+        let end = start + source_root.len();
+        if bytes[start..end] == *source_root {
+            bytes[start..end].fill(b'x');
+            replacements = replacements.saturating_add(1);
+        }
+    }
+    assert!(
+        replacements > 0,
+        "test compiler did not embed its development source root: {}",
+        compiler.display()
+    );
+    let isolated = root.join("incan-without-development-source");
+    fs::write(&isolated, bytes)?;
+    make_executable(&isolated)?;
+    #[cfg(target_os = "macos")]
+    {
+        let signature = Command::new("codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&isolated)
+            .output()?;
+        assert!(
+            signature.status.success(),
+            "could not ad-hoc sign isolated test compiler:\n{}",
+            String::from_utf8_lossy(&signature.stderr)
+        );
+    }
+    Ok(isolated)
+}
+
 fn prepare_toolchain_assets(
     dist: &Path,
     generated_at: &str,
@@ -374,11 +415,15 @@ fn write_fixture_sdk_provider_seed(root: &Path, profile: &str) -> Result<PathBuf
             }),
         );
     }
+    // Prerelease comparators only admit the explicitly named release cohort. Keep this test fixture coupled to the
+    // compiler compiled into this integration test so a patch-release dev build exercises the packaged archive rather
+    // than failing before metadata inspection on stale fixture compatibility data.
+    let compiler_version = incan::version::INCAN_VERSION;
     let inventory = serde_json::json!({
         "schema_version": 2,
         "sdk_id": "incan-fixture",
         "sdk_version": "0.5.0",
-        "compiler_requirement": ">=0.5.0-dev.6,<0.6.0",
+        "compiler_requirement": format!("={compiler_version}"),
         "provider_codegen_revision": incan::version::SDK_PROVIDER_CODEGEN_REVISION,
         "components": inventory_components,
         "profiles": {
@@ -748,12 +793,16 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
         !listing.lines().any(|path| path.starts_with("./stdlib/")),
         "toolchain archive must not publish legacy top-level stdlib source:\n{listing}"
     );
-    assert!(
-        !listing
-            .lines()
-            .any(|path| path.starts_with("./crates/incan_stdlib/stdlib/")),
-        "toolchain archive must not publish provider-owned stdlib source:\n{listing}"
-    );
+    for source in [
+        "crates/incan_stdlib/stdlib/prelude.incn",
+        "crates/incan_stdlib/stdlib/testing.incn",
+        "crates/incan_stdlib/stdlib/encoding/base64.incn",
+    ] {
+        assert!(
+            listing.contains(source),
+            "toolchain archive is missing required stdlib source {source}:\n{listing}"
+        );
+    }
     assert!(
         !listing.lines().any(|path| path.contains(".cargo-target")),
         "toolchain archive must not publish Cargo build intermediates:\n{listing}"
@@ -837,6 +886,70 @@ fn toolchain_archive_packager_writes_archive_checksum_and_release_metadata() -> 
             String::from_utf8_lossy(&metadata.stderr)
         );
     }
+    Ok(())
+}
+
+#[test]
+fn packaged_stdlib_source_bundle_supports_metadata_imports() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = ToolchainTestStaging::new()?;
+    let out_dir = tmp.path().join("toolchain");
+    let (_, incan_lsp) = write_fixture_toolchain_commands(tmp.path())?;
+    let incan = incan_binary_without_development_source(tmp.path())?;
+    package_fixture_archive(&out_dir, "x86_64-unknown-linux-gnu", &incan, &incan_lsp)?;
+
+    let release = fs::read_to_string(out_dir.join("toolchain-release.txt"))?;
+    let archive = out_dir.join(format!("incan-{}-x86_64-unknown-linux-gnu.tar.gz", release.trim()));
+    let extracted = tmp.path().join("extracted-toolchain");
+    fs::create_dir_all(&extracted)?;
+    let extract = Command::new("tar")
+        .args(["-xzf"])
+        .arg(&archive)
+        .args(["-C"])
+        .arg(&extracted)
+        .status()?;
+    assert!(extract.success(), "toolchain archive extraction failed");
+
+    let project = tmp.path().join("metadata-import");
+    let source_dir = project.join("src");
+    fs::create_dir_all(&source_dir)?;
+    fs::write(
+        project.join("incan.toml"),
+        "[project]\nname = \"metadata_import\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        source_dir.join("lib.incn"),
+        "from std.testing import assert_true\n\npub def check() -> None:\n    assert_true(True)\n",
+    )?;
+
+    let packaged_stdlib = extracted.join("crates/incan_stdlib/stdlib");
+    assert!(
+        packaged_stdlib.is_dir(),
+        "extracted toolchain is missing its stdlib source bundle: {}",
+        packaged_stdlib.display()
+    );
+    let output = Command::new(extracted.join("bin/incan"))
+        .args(["tools", "metadata", "api"])
+        .arg(&project)
+        .args(["--format", "json"])
+        .current_dir(tmp.path())
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", tmp.path().join("metadata-incan-home"))
+        .env_remove("INCAN_STDLIB")
+        .env_remove("INCAN_STDLIB_DIR")
+        .env_remove("INCAN_STDLIB_PATH")
+        .output()?;
+    assert!(
+        output.status.success(),
+        "packaged stdlib source import must support metadata inspection (status {}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        metadata.pointer("/package/name").and_then(serde_json::Value::as_str),
+        Some("metadata_import")
+    );
     Ok(())
 }
 
