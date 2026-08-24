@@ -18,7 +18,8 @@
 //! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
 //! arithmetic/comparison/boolean binary operators and all three unary operators, calls and method calls (including
 //! named, out-of-order, defaulted, and explicitly generic argument spellings -- see [`BodyBuilder::lower_call`]),
-//! field access, indexing, slicing, parenthesization, tuples, list/dict/set literals (no spreads), `model`/`class`
+//! field access, indexing, slicing, parenthesization, tuples, list/dict/set literals (list and dict spread entries
+//! included; set literals have no spread spelling), `model`/`class`
 //! construction (named-only at the source level, bound to declared field order -- see
 //! [`BodyBuilder::lower_nominal_construction`]), expression-position `if`/`loop`, `try` (`?`), f-strings,
 //! list/dict comprehensions, lazy generator expressions, closure literals, partial callables (see
@@ -28,8 +29,8 @@
 //!
 //! Everything else lowers to an explicit `Statement::Unsupported` / `Operand::Unknown` node rather than panicking,
 //! so the model stays total over real programs. That residue is not a short tail, and #1101 tracks it as named
-//! remaining work rather than as an implied "almost everything" claim: spread call arguments (`f(*xs)`, `f(**kw)`,
-//! `Ctor(**kw)`) and spread entries in list/dict literals; the `**`, bitwise, shift, `in`/`not
+//! remaining work rather than as an implied "almost everything" claim: a keyword spread in a `model`/`class`
+//! construction (`Ctor(**kw)`); the `**`, bitwise, shift, `in`/`not
 //! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
 //! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
 //! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
@@ -2670,27 +2671,6 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             span,
             out,
         )
-    }
-
-    /// Lower every argument in `args` to an operand, or return `None` if any argument is named or an unpack
-    /// (`*args`/`**kwargs`) — v0's [`bir::Callee`] call shape only models positional arguments, so callers use the
-    /// `None` case to fall back to an explicit unsupported placeholder instead of dropping the extra arguments.
-    fn lower_positional_args(
-        &mut self,
-        args: &[ast::CallArg],
-        scope: bir::ScopeId,
-        out: &mut Vec<bir::Statement>,
-    ) -> Option<Vec<bir::Operand>> {
-        let mut operands = Vec::with_capacity(args.len());
-        for arg in args {
-            match arg {
-                ast::CallArg::Positional(expr) => operands.push(self.lower_expr_to_operand(expr, scope, out)),
-                ast::CallArg::Named(_, _) | ast::CallArg::PositionalUnpack(_) | ast::CallArg::KeywordUnpack(_) => {
-                    return None;
-                }
-            }
-        }
-        Some(operands)
     }
 
     /// Lower planned call arguments in written source order, then place them into declaration-slot order.
@@ -8892,6 +8872,168 @@ mod tests {
                 .any(|stmt| matches!(&stmt.kind, bir::StatementKind::Await { .. })),
             "no suspension point may be emitted for a keyword that is not `await`: {out:?}"
         );
+    }
+
+    // ========================================================================
+    // #1159 -- spread arguments and spread aggregate elements
+    // ========================================================================
+
+    #[test]
+    fn a_trailing_spread_splices_before_its_fixed_elements() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def m(xs: list[int]) -> None:\n  out = [*xs, 1]\n  return\n";
+        let module = build(source, &["m", "spread_trailing"])?;
+        let snapshot = module.render_snapshot();
+        assert_eq!(
+            snapshot,
+            build(source, &["m", "spread_trailing"])?.render_snapshot(),
+            "lowering must be deterministic"
+        );
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a list spread must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("list[*move(_0, last_use), const(1)]"),
+            "the spread must keep its written position and carry its own ownership fact: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fixed_elements_keep_their_positions_on_both_sides_of_a_spread() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def m(xs: list[int]) -> None:\n  out = [1, *xs, 2]\n  return\n";
+        let module = build(source, &["m", "spread_middle"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("list[const(1), *move(_0, last_use), const(2)]"),
+            "surrounding fixed elements must keep their positions relative to the spread: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn multiple_spreads_each_keep_their_own_element() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def m(xs: list[int], ys: list[int]) -> None:\n  out = [*xs, *ys]\n  return\n";
+        let module = build(source, &["m", "spread_multi"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "multiple spreads must lower: {snapshot}"
+        );
+        assert_eq!(snapshot.matches("list[*").count(), 1, "one aggregate: {snapshot}");
+        assert_eq!(
+            snapshot.lines().filter(|line| line.contains("list[")).count(),
+            1,
+            "both spreads belong to the same aggregate: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_dict_spread_keeps_its_written_position_before_an_overriding_key() -> Result<(), Box<dyn std::error::Error>> {
+        // The override rule is what makes this meaningful: entries take effect in order and a later entry wins,
+        // so the spread must stay *before* the literal key rather than being reordered or merged.
+        let source = "def m(d: dict[str, int]) -> None:\n  out = {**d, \"a\": 1}\n  return\n";
+        let module = build(source, &["m", "dict_spread"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a dict spread must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("dict[**move(_0, last_use), const(\"a\"): const(1)]"),
+            "the spread must precede the overriding key and stay a distinct entry: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_dict_spread_after_a_literal_key_keeps_that_order() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def m(d: dict[str, int]) -> None:\n  out = {\"a\": 1, **d}\n  return\n";
+        let module = build(source, &["m", "dict_spread_after"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("dict[const(\"a\"): const(1), **move(_0, last_use)]"),
+            "written entry order decides precedence, so it must survive lowering: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_positional_call_spread_lowers_without_a_declared_slot_claim() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def log(*items: int) -> None:\n  return\n\ndef m(xs: list[int]) -> None:\n  log(*xs)\n  return\n";
+        let module = build(source, &["m", "call_spread"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a call spread must lower: {snapshot}"
+        );
+        // A spread makes the arity a runtime fact, so the call must record no declared-slot binding rather than
+        // asserting an identity slot map nobody checked.
+        assert!(
+            snapshot.contains("call fn:log unbound(*move(_0, last_use))"),
+            "a spread call must be unbound and carry the spliced source's ownership fact: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_mixed_call_keeps_every_written_argument_form() -> Result<(), Box<dyn std::error::Error>> {
+        // The issue's combined form. A named argument here has no declared slot to bind to, because the spread
+        // makes the arity a runtime fact -- but discarding its name would lose source information.
+        let source = "def log(a: int, b: int, *items: int, **fields: int) -> None:\n  return\n\ndef m(xs: list[int], kw: dict[str, int]) -> None:\n  log(1, *xs, b=2, **kw)\n  return\n";
+        let module = build(source, &["m", "call_mixed"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "the combined call form must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call fn:log unbound(const(1), *move(_0, last_use), b=const(2), **move(_1, last_use))"),
+            "positional, spread, named, and keyword-spread arguments must each keep their written form and order: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_method_call_spread_lowers_after_the_borrowed_receiver() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "class C:\n  def take(self, *items: int) -> None:\n    return\n\ndef m(c: C, xs: list[int]) -> None:\n  c.take(*xs)\n  return\n";
+        let module = build(source, &["m", "method_spread"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a method call spread must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call method:take unbound(borrow(_0), *move(_1, last_use))"),
+            "the receiver stays args[0] and is never spliced: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn set_literals_have_no_spread_spelling_to_represent() -> Result<(), Box<dyn std::error::Error>> {
+        // Documenting a finding rather than adding surface: the source language rejects set spread in every
+        // position, and `ast::Expr::Set` has no entry enum that could carry one. RFC 038 excludes it deliberately.
+        for source in [
+            "def m(xs: list[int]) -> None:\n  out = {*xs}\n  return\n",
+            "def m(xs: list[int]) -> None:\n  out = {1, *xs}\n  return\n",
+        ] {
+            let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+            assert!(
+                parser::parse(&tokens).is_err(),
+                "the parser must reject set spread rather than Body IR having to refuse it: {source}"
+            );
+        }
+        Ok(())
     }
 }
 

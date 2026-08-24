@@ -380,6 +380,48 @@ fn case_supported_race_for_reaches_body_ir() -> ComparisonOutcome {
 }
 
 // ============================================================================
+// Cases 12 and 13 — Supported language contract: spread forms reach Body IR (#1159)
+// ============================================================================
+
+// `VariadicAndSpreadCalls` is a public capability. Before #1159 every spread form lowered to a placeholder, and
+// for a list or dict literal the placeholder replaced the *whole* literal, so its fixed elements were erased too.
+const CASE_12_SRC: &str = r#"
+def main() -> None:
+    xs = [2, 3]
+    values = [1, *xs, 4]
+    base = {"a": 1}
+    merged = {**base, "b": 2}
+    println(len(values))
+    println(len(merged))
+"#;
+
+fn case_supported_literal_spreads_reach_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_12_SRC,
+        "list and dict literal spreads to lower with their fixed elements intact",
+    )
+}
+
+// Call-site spreads, including the combined form where a named argument sits alongside one. The callee's arity is
+// a runtime fact here, so the call records no declared-slot binding — but every written argument form survives.
+const CASE_13_SRC: &str = r#"
+def log(a: int, b: int, *items: int, **fields: int) -> None:
+    println(a)
+
+def main() -> None:
+    xs = [3, 4]
+    kw = {"k": 5}
+    log(1, *xs, b=2, **kw)
+"#;
+
+fn case_supported_call_spreads_reach_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_13_SRC,
+        "positional, spread, named, and keyword-spread call arguments to lower together",
+    )
+}
+
+// ============================================================================
 // Case 6 — Diagnostic behavior: dead code after `return` warns (migrated from a silent accept)
 // ============================================================================
 
@@ -772,6 +814,28 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_11_SRC,
             evaluate: Some(case_supported_race_for_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0012",
+            title: "List and dict literal spreads lower with their fixed elements intact",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1159; src/frontend/body_ir.rs::tests::fixed_elements_keep_their_positions_on_both_sides_of_a_spread",
+            disposition: Disposition::Preserved,
+            source: CASE_12_SRC,
+            evaluate: Some(case_supported_literal_spreads_reach_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0013",
+            title: "Positional, spread, named, and keyword-spread call arguments lower together",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1159; src/frontend/body_ir.rs::tests::a_mixed_call_keeps_every_written_argument_form",
+            disposition: Disposition::Preserved,
+            source: CASE_13_SRC,
+            evaluate: Some(case_supported_call_spreads_reach_body_ir),
             replacement_execution: None,
         },
         ParityCase {
