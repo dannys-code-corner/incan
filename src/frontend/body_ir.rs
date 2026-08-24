@@ -3203,7 +3203,15 @@ impl<'a> BodyBuilder<'a> {
             (SurfaceFeatureKey::SoftKeyword(KeywordId::Await), ast::SurfaceExprPayload::PrefixUnary(awaited)) => {
                 self.lower_await(awaited, span, scope, out)
             }
-            (_, ast::SurfaceExprPayload::RaceFor(race)) => self.lower_race_for(race, span, scope, out),
+            (
+                SurfaceFeatureKey::ScopedDslSurface {
+                    dependency_key,
+                    descriptor_key,
+                },
+                ast::SurfaceExprPayload::RaceFor(race),
+            ) if dependency_key == "std.async" && descriptor_key == "race_for" => {
+                self.lower_race_for(race, span, scope, out)
+            }
             (_, payload) => self.unsupported_operand(surface_expr_label(payload), scope, hir_span(span), out),
         }
     }
@@ -3255,7 +3263,6 @@ impl<'a> BodyBuilder<'a> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let hir_span_value = hir_span(span);
-        self.record_runtime_requirement(AbiV0RuntimeRequirement::AsyncRuntime);
 
         // Selection observes every awaitable, so all of them are evaluated first, in source order, into the
         // enclosing block. Only the winning arm's body runs, so arm bodies are lowered into their own blocks below.
@@ -3263,19 +3270,36 @@ impl<'a> BodyBuilder<'a> {
         for arm in &race.arms {
             awaitables.push(self.lower_expr_to_operand(&arm.awaitable, scope, out));
         }
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::AsyncRuntime);
 
         let mut arms = Vec::with_capacity(race.arms.len());
         for (arm, awaitable) in race.arms.iter().zip(awaitables) {
             let arm_scope = self.new_scope(Some(scope), hir_span_value);
-            let binding_ty = self.resolve_ty(arm.awaitable.span);
-            let binding = self.declare_new_local(race.binding.clone(), binding_ty, arm_scope, hir_span_value, &[]);
-            let shadowed = self.bindings.insert(race.binding.clone(), binding);
+            // The arm binds the *awaited output* type, which only the typechecker computes: `Awaitable[T]` binds
+            // `T`, `JoinHandle[T]` binds `Result[T, TaskJoinError]`. The awaitable's own type would be wrong.
+            let binding_ty = self
+                .type_info
+                .race_arm_binding_type(arm.awaitable.span)
+                .map(semantic_type_from_resolved)
+                .unwrap_or(IncanType::Unknown);
+            // Capture the enclosing binding *before* declaring: `declare_new_local` installs the new local itself,
+            // so reading `self.bindings` afterwards would capture the arm's own local and destroy the outer one.
+            let shadowed = self.bindings.get(&race.binding).copied();
+            let reads = match &arm.body {
+                ast::RaceForBody::Expr(expr) => count_reads_in_expr(&race.binding, &expr.node),
+                ast::RaceForBody::Block(stmts) => count_reads_in_stmts(&race.binding, stmts),
+            };
+            let binding =
+                self.declare_new_local_with_reads(race.binding.clone(), binding_ty, arm_scope, hir_span_value, reads);
 
             let mut arm_stmts = Vec::new();
             let result = match &arm.body {
                 ast::RaceForBody::Expr(expr) => self.lower_expr_to_operand(expr, arm_scope, &mut arm_stmts),
-                ast::RaceForBody::Block(stmts) => self.lower_race_arm_block(stmts, arm_scope, &mut arm_stmts),
+                ast::RaceForBody::Block(stmts) => {
+                    self.lower_race_arm_block(stmts, arm.awaitable.span, arm_scope, &mut arm_stmts)
+                }
             };
+            self.insert_scope_drops(&mut arm_stmts, arm_scope);
 
             // The arm binding is scoped to its own arm, exactly like a closure parameter: code after the race must
             // keep resolving the name to whatever it meant outside.
@@ -3313,22 +3337,20 @@ impl<'a> BodyBuilder<'a> {
 
     /// Lower a race arm's block body, whose value is its trailing expression statement.
     ///
-    /// That trailing-expression convention is the source contract the typechecker already applies
-    /// (`check_race_arm_block_body`), so lowering follows it rather than inventing a second rule. A block whose last
-    /// statement is not an expression has no value to produce, and yields an explicit unknown operand.
+    /// That trailing-expression convention is the source contract the typechecker already applies, so lowering
+    /// matches `check_race_arm_block_body` exactly, including its two non-expression cases: an empty block and a
+    /// block whose last statement is not an expression both produce `Unit`, the same type the checker assigns them.
+    /// Refusing either would make a program the source language accepts unrepresentable, and the established
+    /// precedent for a valueless block arm is [`Self::lower_match`]'s own block body.
     fn lower_race_arm_block(
         &mut self,
         stmts: &[ast::Spanned<ast::Statement>],
+        arm_span: ast::Span,
         scope: bir::ScopeId,
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let Some((last, leading)) = stmts.split_last() else {
-            return self.unsupported_operand(
-                "empty race arm body".to_string(),
-                scope,
-                hir_span(ast::Span { start: 0, end: 0 }),
-                out,
-            );
+            return bir::Operand::Constant(bir::Constant::Unit);
         };
         for (index, stmt) in leading.iter().enumerate() {
             self.lower_stmt_into(stmt, &stmts[index + 1..], scope, out);
@@ -3336,13 +3358,9 @@ impl<'a> BodyBuilder<'a> {
         match &last.node {
             ast::Statement::Expr(expr) => self.lower_expr_to_operand(expr, scope, out),
             _ => {
+                let _ = arm_span;
                 self.lower_stmt_into(last, &[], scope, out);
-                self.unsupported_operand(
-                    "race arm body whose last statement produces no value".to_string(),
-                    scope,
-                    hir_span(last.span),
-                    out,
-                )
+                bir::Operand::Constant(bir::Constant::Unit)
             }
         }
     }
@@ -7611,11 +7629,11 @@ mod tests {
     fn records_the_async_runtime_requirement_on_the_awaiting_body() -> Result<(), Box<dyn std::error::Error>> {
         let source = format!("{ASYNC_PRELUDE}async def f() -> int:\n  return await fast()\n");
         let module = build(&source, &["m", "await_req"])?;
-        let snapshot = module.render_snapshot();
+        let rendered = body_named(&module, "f")?.render_snapshot();
 
         assert!(
-            snapshot.contains("async_runtime"),
-            "an awaiting body must record its async runtime requirement: {snapshot}"
+            rendered.contains("async_runtime"),
+            "the requirement must be recorded on the awaiting body itself, not merely somewhere in the module: {rendered}"
         );
         Ok(())
     }
@@ -7742,7 +7760,7 @@ mod tests {
         // emitted ahead of the race statement rather than inside an arm.
         let fast_at = rendered.find("call fn:fast(").ok_or("missing first awaitable")?;
         let slow_at = rendered.find("call fn:slow(").ok_or("missing second awaitable")?;
-        let race_at = rendered.find("race [").ok_or("missing race statement")?;
+        let race_at = rendered.find("race:").ok_or("missing race statement")?;
         assert!(
             fast_at < slow_at && slow_at < race_at,
             "all arm awaitables must be evaluated, in source order, before selection: {rendered}"
@@ -7752,6 +7770,35 @@ mod tests {
             rendered.matches("value : int [binding]").count(),
             2,
             "each arm must bind its own local rather than sharing one: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_race_arm_binding_does_not_escape_its_arm() -> Result<(), Box<dyn std::error::Error>> {
+        // The arm binding shadows an enclosing name only for the duration of its own arm. Restoring it is the same
+        // discipline `lower_closure` follows, and getting it wrong is silent: reads after the race would resolve to
+        // the last arm's local, so the body would compute the wrong value with no unsupported node to show for it.
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  value = 100\n  winner = race for value:\n    await fast() => value\n    await slow() => value\n  return value + winner\n"
+        );
+        let module = build(&source, &["m", "race_shadow"])?;
+        let body = body_named(&module, "f")?;
+        let rendered = body.render_snapshot();
+
+        // `value` is declared first, so it is local 0; the trailing `value + winner` must read exactly that local.
+        let outer = local_for_binding(&rendered, "value").ok_or("missing outer binding")?;
+        assert_eq!(
+            outer, "_0",
+            "the outer binding should be the first declared local: {rendered}"
+        );
+        let sum_line = rendered
+            .lines()
+            .find(|line| line.contains(" + "))
+            .ok_or("missing the trailing sum")?;
+        assert!(
+            sum_line.contains("copy(_0)"),
+            "a read after the race must resolve to the enclosing binding, not an arm local: {rendered}"
         );
         Ok(())
     }
@@ -7768,14 +7815,20 @@ mod tests {
             !rendered.contains("unsupported("),
             "a block arm body must lower: {rendered}"
         );
-        // The block arm's statements live inside that arm, not in the enclosing body: only the winning arm runs.
-        let race_line = rendered
+        // The arm body's statements live inside the arm, indented under it -- only the winning arm runs, so they
+        // must not be hoisted into the enclosing block alongside the awaitables.
+        let arm_stmt = rendered
             .lines()
-            .find(|line| line.contains("race ["))
-            .ok_or("missing race statement")?;
+            .find(|line| line.contains("* const(2)"))
+            .ok_or("missing the arm body computation")?;
         assert!(
-            race_line.contains("* const(2)"),
-            "the arm body's own computation must stay inside the arm: {race_line}"
+            arm_stmt.starts_with("      "),
+            "an arm body statement must stay nested inside its arm: {rendered}"
+        );
+        // The block's trailing expression becomes the arm's result, not merely a statement inside it.
+        assert!(
+            rendered.contains("-> copy(_5)"),
+            "the block's trailing expression must become the arm's result operand: {rendered}"
         );
         Ok(())
     }
@@ -7792,12 +7845,31 @@ mod tests {
         let rendered = body_named(&module, "f")?.render_snapshot();
 
         assert!(
-            rendered.contains("race ["),
+            rendered.contains("race:"),
             "the race itself must still be represented: {rendered}"
         );
+        // Asserting the node exists somewhere in the body would also pass if it had been hoisted into the enclosing
+        // block -- the exact regression this test exists to catch -- so require it to be indented inside an arm.
+        let refusal = rendered
+            .lines()
+            .find(|line| line.contains("unsupported("))
+            .ok_or("missing the refusal for the unrepresentable arm construct")?;
         assert!(
-            rendered.contains("unsupported("),
-            "the unrepresentable arm construct must keep its own node: {rendered}"
+            refusal.starts_with("      "),
+            "the refusal must stay inside its arm rather than collapsing or escaping the race: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_async_method_body_is_marked_async() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "import std.async\n\nclass C:\n  async def m(self) -> int:\n    return 1\n";
+        let module = build(source, &["m", "async_method"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("body async m"),
+            "an async method body must carry the same async fact as an async function: {snapshot}"
         );
         Ok(())
     }

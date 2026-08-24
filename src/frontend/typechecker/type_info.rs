@@ -1064,6 +1064,13 @@ pub struct CallArtifacts {
     /// Function-value calls can recover this from the callee expression type, but method calls need a snapshot because
     /// lowering does not retain the frontend method table.
     pub call_site_callable_params: HashMap<(usize, usize), Vec<CallableParam>>,
+    /// Resolved winner-binding type for one `race for` arm, keyed by that arm's awaitable expression span (#1164).
+    ///
+    /// A race arm binds the shared `race for value:` name to the *awaited output* type, not to the awaitable's own
+    /// type: `Awaitable[T]` binds `T`, and `JoinHandle[T]` binds `Result[T, TaskJoinError]`. Only the typechecker
+    /// performs that unwrapping (`await_output_type`), and the arm binding has no `await X` expression span of its
+    /// own for lowering to look up, so the decision is recorded here instead of being re-derived.
+    pub race_arm_binding_types: HashMap<(usize, usize), ResolvedType>,
     /// Resolved `model`/`class` construction field binding, keyed by full call expression span (#1158).
     ///
     /// Source-level construction is named-only, so the constructor check is the stage that decides which declared
@@ -1704,6 +1711,16 @@ impl TypeCheckInfo {
             .call_site_callable_params
             .get(&(span.start, span.end))
             .map(Vec::as_slice)
+    }
+
+    /// Return the resolved winner-binding type for the `race for` arm whose awaitable is at `span` (#1164).
+    pub fn race_arm_binding_type(&self, span: Span) -> Option<&ResolvedType> {
+        self.calls.race_arm_binding_types.get(&(span.start, span.end))
+    }
+
+    /// Record the resolved winner-binding type for one `race for` arm (#1164).
+    pub(crate) fn record_race_arm_binding_type(&mut self, span: Span, ty: ResolvedType) {
+        self.calls.race_arm_binding_types.insert((span.start, span.end), ty);
     }
 
     /// Return the resolved `model`/`class` construction field binding recorded for `span`, if any (#1158).

@@ -139,8 +139,9 @@ impl Body {
     /// `yield` only ever appears inside a function whose declared return type is `Generator[T]` (the typechecker
     /// enforces this), so this alone is already a reliable generator signal for a `Body` in isolation.
     ///
-    /// The walk recurses into nested [`StatementKind::If`]/[`StatementKind::Loop`] blocks (the only statement kinds
-    /// that themselves carry a nested [`Block`]) but does not recurse into a [`Rvalue::Closure`]'s
+    /// The walk recurses into every statement kind that carries a nested [`Block`] --
+    /// [`StatementKind::If`], [`StatementKind::Loop`], and each [`StatementKind::Race`] arm -- but does not recurse
+    /// into a [`Rvalue::Closure`]'s
     /// [`ClosureBody`] or a [`Rvalue::Generator`]'s [`GeneratorBody`]. A yield nested in either value does not make
     /// the *enclosing* function body a generator, matching how the existing backend's own `body_contains_yield`
     /// walker never descends into nested closure/function literals.
@@ -193,6 +194,10 @@ fn statement_contains_yield(stmt: &Statement) -> bool {
             then_block, else_block, ..
         } => block_contains_yield(then_block) || else_block.as_ref().is_some_and(block_contains_yield),
         StatementKind::Loop { body } => block_contains_yield(body),
+        // A race arm body is a nested block like any other. A body cannot currently be both async and a generator,
+        // so this is unreachable today; walking it anyway keeps the traversal total over the statement vocabulary
+        // rather than silently under-reporting if that ever changes.
+        StatementKind::Race { arms, .. } => arms.iter().any(|arm| block_contains_yield(&arm.body)),
         _ => false,
     }
 }
@@ -1306,24 +1311,10 @@ pub struct RaceArm {
 }
 
 impl RaceArm {
-    /// Render a deterministic maintainer-facing spelling for this arm.
-    fn render_snapshot(&self) -> String {
-        format!(
-            "await {} => _{} {{ {} }} -> {}",
-            self.awaitable.render_snapshot(),
-            self.binding.0,
-            self.body
-                .stmts
-                .iter()
-                .map(|stmt| {
-                    let mut rendered = String::new();
-                    render_statement(&mut rendered, stmt, "", 0);
-                    rendered.trim_end().to_string()
-                })
-                .collect::<Vec<_>>()
-                .join("; "),
-            self.result.render_snapshot()
-        )
+    /// Render this arm's header and result. Its block is rendered separately by the statement renderer, so nested
+    /// control flow inside an arm keeps the same line-oriented, indented shape it has anywhere else.
+    fn render_header(&self) -> String {
+        format!("await {} => _{}:", self.awaitable.render_snapshot(), self.binding.0)
     }
 }
 
@@ -1563,8 +1554,12 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
                 .as_ref()
                 .map(|place| format!("{} = ", place.render_snapshot()))
                 .unwrap_or_default();
-            let rendered: Vec<String> = arms.iter().map(RaceArm::render_snapshot).collect();
-            let _ = writeln!(out, "{indent}{dest}race [{}]", rendered.join(", "));
+            let _ = writeln!(out, "{indent}{dest}race:");
+            for arm in arms {
+                let _ = writeln!(out, "{indent}  {}", arm.render_header());
+                render_block(out, &arm.body, depth + 2);
+                let _ = writeln!(out, "{indent}  -> {}", arm.result.render_snapshot());
+            }
         }
         StatementKind::Drop { local } => {
             let _ = writeln!(out, "{indent}drop _{}", local.0);
@@ -1737,7 +1732,11 @@ pub enum StatementKind {
     /// This node says a suspension happens here. It says nothing about *how*: task/frame state, wake/resume routing,
     /// and scheduling are the executing backend's, tracked by #1155.
     Await {
-        /// Where the resumed value is written. `None` when the awaited result is discarded.
+        /// Where the resumed value is written.
+        ///
+        /// Frontend lowering always supplies a destination today, including for a discarded `await` in statement
+        /// position: the resumed value gets a temporary that the surrounding statement then ignores. The option
+        /// exists for a future producer that can prove the value is unobservable, not because one exists now.
         destination: Option<Place>,
         /// The awaitable being suspended on.
         awaited: Operand,
@@ -1754,7 +1753,8 @@ pub enum StatementKind {
     /// As with [`Self::Await`], this records what the race *means*, not how it is driven: concurrent polling,
     /// first-completion detection, and the cancellation mechanism belong to #1155.
     Race {
-        /// Where the winning arm's result is written. `None` when the race's value is discarded.
+        /// Where the winning arm's result is written. Always supplied by frontend lowering today, for the same
+        /// reason as [`StatementKind::Await::destination`].
         destination: Option<Place>,
         /// The arms, in source order. Order is not priority — see this variant's docs.
         arms: Vec<RaceArm>,

@@ -326,6 +326,60 @@ fn case_supported_named_call_arguments_reach_body_ir() -> ComparisonOutcome {
 }
 
 // ============================================================================
+// Cases 10 and 11 — Supported language contract: async surface reaches Body IR (#1164)
+// ============================================================================
+
+// `AsyncAwait` is a public capability in the release-pinned baseline. Before #1164 an `await` lowered to a
+// placeholder labelled only "prefix-keyword surface expression", so the suspension point — the one fact a task
+// runtime needs — did not exist in Body IR at all. The cutover must keep both the source form and its
+// representation, including the body-level async fact for a body that awaits nothing.
+const CASE_10_SRC: &str = r#"
+import std.async
+
+async def fetch() -> int:
+    return 7
+
+async def main() -> None:
+    value = await fetch()
+    println(value)
+"#;
+
+fn case_supported_await_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_10_SRC,
+        "`await` to lower to a real Body IR suspension point rather than an unsupported placeholder",
+    )
+}
+
+// `AsyncRace` collapsed even harder: the whole `race for` expression became one placeholder, erasing every arm,
+// arm body, and the shared binding. Both arm forms — a bare expression and a block with a trailing value — are
+// part of the source contract.
+const CASE_11_SRC: &str = r#"
+import std.async
+
+async def fast() -> int:
+    return 1
+
+async def slow() -> int:
+    return 2
+
+async def main() -> None:
+    winner = race for value:
+        await fast() => value
+        await slow() =>
+            doubled = value * 2
+            doubled
+    println(winner)
+"#;
+
+fn case_supported_race_for_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_11_SRC,
+        "`race for` to lower to a real Body IR race with its arms, arm bodies, and bindings intact",
+    )
+}
+
+// ============================================================================
 // Case 6 — Diagnostic behavior: dead code after `return` warns (migrated from a silent accept)
 // ============================================================================
 
@@ -625,6 +679,28 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_9_SRC,
             evaluate: Some(case_supported_named_call_arguments_reach_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0010",
+            title: "`await` lowers to a Body IR suspension point with a destination",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1164; src/frontend/body_ir.rs::tests::lowers_await_as_an_explicit_suspension_point_with_a_destination",
+            disposition: Disposition::Preserved,
+            source: CASE_10_SRC,
+            evaluate: Some(case_supported_await_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0011",
+            title: "`race for` lowers to a Body IR race with per-arm bindings and bodies",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1164; src/frontend/body_ir.rs::tests::lowers_a_two_arm_race_with_per_arm_bindings_and_pre_selection_awaitables",
+            disposition: Disposition::Preserved,
+            source: CASE_11_SRC,
+            evaluate: Some(case_supported_race_for_reaches_body_ir),
             replacement_execution: None,
         },
         ParityCase {
