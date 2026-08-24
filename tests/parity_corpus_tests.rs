@@ -469,6 +469,45 @@ def collect_lazy_values() -> int:
     return values[0] + values[1]
 "#;
 
+const REPLACEMENT_BODY_V0_008_SRC: &str = r#"
+def stored_closure() -> int:
+    offset = 2
+    add: (int) -> int = (value) => value + offset
+    return add(40)
+"#;
+
+const REPLACEMENT_BODY_V0_009_SRC: &str = r#"
+def route(method: int, path: int, content_type: int = 3) -> int:
+    return method * 100 + path * 10 + content_type
+
+def partial_defaults() -> int:
+    method = 1
+    get = partial route(method=method)
+    normal = get(4)
+    overridden = get(method=7, path=2, content_type=5)
+    return normal + overridden
+"#;
+
+const REPLACEMENT_BODY_V0_010_SRC: &str = r#"
+def counter() -> Generator[int]:
+    for value in range(1, 3):
+        yield value
+    yield 3
+
+def generator_function() -> int:
+    values = counter().collect()
+    return values[0] * 100 + values[1] * 10 + values[2]
+"#;
+
+const REPLACEMENT_BODY_V0_011_SRC: &str = r#"
+def generator_adapters() -> int:
+    offset = 1
+    increment: (int) -> int = (value) => value + offset
+    accepted: (int) -> bool = (value) => value > 2
+    values = (value for value in range(1, 5)).map(increment).filter(accepted).collect()
+    return values[0] * 10 + values[1]
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -523,6 +562,38 @@ fn replacement_body_v0_007_arguments() -> Vec<ReplacementValue> {
 
 fn replacement_body_v0_007_expected() -> ReplacementValue {
     ReplacementValue::Int(70)
+}
+
+fn replacement_body_v0_008_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_008_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_009_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_009_expected() -> ReplacementValue {
+    ReplacementValue::Int(868)
+}
+
+fn replacement_body_v0_010_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_010_expected() -> ReplacementValue {
+    ReplacementValue::Int(123)
+}
+
+fn replacement_body_v0_011_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_011_expected() -> ReplacementValue {
+    ReplacementValue::Int(34)
 }
 
 // ============================================================================
@@ -815,6 +886,70 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "collect_lazy_values",
                 arguments: replacement_body_v0_007_arguments,
                 expected: replacement_body_v0_007_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-008",
+            title: "Captured stored closures execute in isolated direct Body-IR frames",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1152; tests/replacement_backend_execution_tests.rs::replacement_executes_a_captured_stored_closure_in_an_isolated_frame",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_008_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "stored_closure",
+                arguments: replacement_body_v0_008_arguments,
+                expected: replacement_body_v0_008_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-009",
+            title: "Partial presets and declaration defaults bind through direct Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1152; tests/replacement_backend_execution_tests.rs::replacement_executes_partial_presets_source_defaults_and_named_overrides",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_009_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "partial_defaults",
+                arguments: replacement_body_v0_009_arguments,
+                expected: replacement_body_v0_009_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-010",
+            title: "Generator-function frames resume directly through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1152; tests/replacement_backend_execution_tests.rs::replacement_resumes_a_generator_function_without_replaying_its_prefix",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_010_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "generator_function",
+                arguments: replacement_body_v0_010_arguments,
+                expected: replacement_body_v0_010_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-011",
+            title: "Lazy generator map and filter adapters invoke local Body-IR callables",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1152; tests/replacement_backend_execution_tests.rs::replacement_executes_lazy_generator_adapters_with_local_callbacks",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_011_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "generator_adapters",
+                arguments: replacement_body_v0_011_arguments,
+                expected: replacement_body_v0_011_expected,
                 shadow_comparison: false,
             }),
         },
@@ -1131,8 +1266,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        7,
-        "the six #988 cases plus #1123's lazy-generator case must stay stable in #987"
+        11,
+        "the six #988 cases, #1123's lazy-generator case, and #1152's four callable/runtime cases must stay stable in #987"
     );
 
     for row in replacement_rows {
