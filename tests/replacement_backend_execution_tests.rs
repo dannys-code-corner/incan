@@ -555,6 +555,37 @@ def main() -> int:
     Ok(())
 }
 
+/// Refuse an async declaration even without an explicit suspension; it creates a task rather than a scalar value.
+#[test]
+fn replacement_refuses_an_async_body_without_an_await_at_its_declaration_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = r#"
+import std.async
+
+async def main() -> int:
+  return 42
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("async body executed synchronously as {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("async def main")
+        .ok_or("async fixture must contain its declaration")?;
+    let span = error
+        .primary_span()
+        .ok_or("async body refusal must retain its declaration span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error.to_string().contains("async task body"),
+        "async declarations must refuse as task bodies before #1155: {error}"
+    );
+    Ok(())
+}
+
 /// Refuse an index projection outside the selected tuple-field loop profile at its original source span.
 #[test]
 fn replacement_refuses_collection_index_projection_with_the_original_source_span()

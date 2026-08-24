@@ -414,6 +414,13 @@ fn validate_unambiguous_range_builtin(module: &BodyIrModule) -> Result<(), Repla
 /// would let an otherwise admitted call dispatch an unvalidated sibling body and publish a receipt for a profile the
 /// runtime promises to refuse.
 fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
+    // An `async def` produces an awaitable even when its body has no explicit `await`. Executing its statements as
+    // an ordinary scalar body would erase task construction, suspension, wake, cancellation, and receipt semantics
+    // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
+    // executor may infer by scanning the block for an await statement.
+    if body.is_async {
+        return Err(unsupported("async task body", body.span));
+    }
     validate_binding_identity(body)?;
     let range_iterator_locals = range_iterator_locals(&body.block);
     validate_collection_local_types(body, &body.block, &range_iterator_locals)?;
