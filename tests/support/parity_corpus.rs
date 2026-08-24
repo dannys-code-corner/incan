@@ -40,8 +40,8 @@
 //! green result, and never losing the replacement execution that did happen.
 
 use incan::backend::replacement::{
-    OwnershipReadProjection, ReplacementValue, RuntimeRequirementProjection, execute_prevalidated_free_function,
-    prepare_free_function_execution,
+    OwnershipReadProjection, ReplacementValue, RuntimeRequirementProjection, TaskLifecycleProjection,
+    execute_prevalidated_free_function, prepare_free_function_execution,
 };
 use incan::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, BackendSelectionError, FallbackPolicy,
@@ -192,6 +192,8 @@ pub(crate) enum ReceiptRef {
         ownership_reads: Vec<OwnershipReadProjection>,
         /// Canonical Body-IR runtime requirements observed by direct execution.
         runtime_requirements: Vec<RuntimeRequirementProjection>,
+        /// Canonical direct-task lifecycle evidence observed by direct execution. Empty for non-async cases.
+        task_lifecycle: Vec<TaskLifecycleProjection>,
         /// Concrete reason the intentionally requested semantic comparison is non-green.
         comparison_reason: String,
     },
@@ -463,6 +465,7 @@ fn retained_replacement_evidence(
             body_snapshot: execution.body_snapshot.clone(),
             ownership_reads: execution.ownership_evidence(),
             runtime_requirements: execution.runtime_requirement_evidence(),
+            task_lifecycle: execution.task_lifecycle_evidence(),
             comparison_reason: unavailable_reason(comparison),
         },
     })
@@ -616,6 +619,7 @@ fn execute_direct_replacement_plan(
     let body_snapshot = execution.body_snapshot.clone();
     let ownership_reads = execution.ownership_evidence();
     let runtime_requirements = execution.runtime_requirement_evidence();
+    let task_lifecycle = execution.task_lifecycle_evidence();
     ReplacementPlanEvidence {
         behavior_outcome,
         receipt: ReceiptRef::ReplacementExecuted {
@@ -625,6 +629,7 @@ fn execute_direct_replacement_plan(
             body_snapshot,
             ownership_reads,
             runtime_requirements,
+            task_lifecycle,
             comparison_reason,
         },
     }
@@ -982,10 +987,11 @@ pub(crate) struct CorpusSummary {
 /// selection/execution identities and canonical body, ownership, and runtime evidence. Version `4` makes
 /// `OverallState::Green` reachable through the bounded #1146 source-observable comparison, adds the
 /// `non_green_shadow_diverged` count and the `source_observable_comparison_available` flag, and gives
-/// `ReceiptRef::ShadowMatched`/`ShadowDiverged` both routes' receipt identities. Bump again whenever
+/// `ReceiptRef::ShadowMatched`/`ShadowDiverged` both routes' receipt identities. Version `5` adds the canonical
+/// direct-task lifecycle projection. Bump again whenever
 /// `CorpusSummary`'s or `CaseReport`'s field shape changes in a way a consumer (including #655) would need to
 /// notice.
-pub(crate) const SCHEMA_VERSION: u32 = 4;
+pub(crate) const SCHEMA_VERSION: u32 = 5;
 
 /// Evaluate every case in the corpus and assemble the CI-readable summary.
 ///

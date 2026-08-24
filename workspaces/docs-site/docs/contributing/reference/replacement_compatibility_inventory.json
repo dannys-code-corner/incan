@@ -2892,11 +2892,13 @@
         "retirement_condition": null,
         "feature_ids": [
           "language.control-flow",
-          "language.numeric-and-scalar"
+          "language.numeric-and-scalar",
+          "async.tasks"
         ],
         "requirement_ids": [
           "control.normalized-flow",
-          "runtime.scalar-values"
+          "runtime.scalar-values",
+          "async.runtime"
         ]
       },
       {
@@ -2906,7 +2908,6 @@
         "selector": "fn migration_bootstrap_compatibility_contribution",
         "retirement_condition": "Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it.",
         "feature_ids": [
-          "async.tasks",
           "call.named-and-variadic",
           "decorators.dsl-surfaces",
           "diagnostics.stable",
@@ -2931,7 +2932,6 @@
           "interop.rust-and-c"
         ],
         "requirement_ids": [
-          "async.runtime",
           "call.frames",
           "diagnostics.source-authority",
           "error.result-routing",
@@ -3444,13 +3444,13 @@
       },
       {
         "id": "async.tasks",
-        "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
+        "contract": "One exact source-local `std.async` activation executes same-module async calls, direct await, and source-order ready-tie races through receipt-bound task frames.",
         "probes": [
           {
-            "id": "probe:async.tasks:binding-and-refusal",
+            "id": "probe:async.tasks:bounded-direct-profile",
             "positive": {
               "outcome": "AcceptedBehavior",
-              "contract": "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
+              "contract": "One exact source-local `std.async` activation executes same-module async calls, direct await, and source-order ready-tie races through receipt-bound task frames.",
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
@@ -3462,14 +3462,14 @@
             },
             "negative": {
               "outcome": "IntentionalRefusal",
-              "contract": "Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.",
+              "contract": "Inputs outside the bounded direct profile refuse visibly with their source span.",
               "anchor": {
                 "surface": "Typechecker",
                 "status": "Observed",
                 "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
                 "selector": "fn check_await",
                 "owner_issue": null,
-                "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+                "note": "The audited typechecker boundary supplies the current source admission anchor for this bounded direct profile."
               }
             }
           }
@@ -3477,8 +3477,8 @@
         "evidence": {
           "source_contract": "Checked",
           "legacy_run": "Unknown",
-          "body_ir": "Partial",
-          "direct_replacement": "BlockedByRequirements",
+          "body_ir": "Represented",
+          "direct_replacement": "Executable",
           "independent_comparison": "NonGreenShadowUnavailable",
           "surfaces": {
             "source_ast": {
@@ -3495,35 +3495,37 @@
               "repository_path": "src/frontend/typechecker/check_expr/control_flow.rs",
               "selector": "fn check_await",
               "owner_issue": null,
-              "note": "The audited typechecker boundary is the current admission or diagnostic seam; feature-specific positive and negative probes remain owned materialization work."
+              "note": "The audited typechecker boundary supplies the current source admission anchor for this bounded direct profile."
             },
             "body_ir": {
               "surface": "BodyIr",
-              "status": "Planned",
+              "status": "Observed",
               "repository_path": "src/frontend/body_ir.rs",
-              "selector": "fn lower_yield",
-              "owner_issue": 1155,
-              "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
+              "selector": "fn lower_race_for",
+              "owner_issue": null,
+              "note": "Body IR lowers the currently bounded direct profile through compiler-owned operation records."
             },
             "replacement_executor": {
               "surface": "ReplacementExecutor",
-              "status": "Planned",
+              "status": "Observed",
               "repository_path": "src/backend/replacement/mod.rs",
-              "selector": "ReplacementGenerator",
-              "owner_issue": 1155,
-              "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
+              "selector": "fn execute_race",
+              "owner_issue": null,
+              "note": "The replacement evaluator seam executes the currently bounded direct profile; the #987 corpus is recorded separately."
             },
             "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-async.tasks",
-                "owner_issue": 987,
+              "Registered": {
+                "case_ids": [
+                  "replacement-body-v0-018",
+                  "replacement-body-v0-019"
+                ],
                 "anchor": {
                   "surface": "ParityCorpus",
-                  "status": "Planned",
+                  "status": "Observed",
                   "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                  "selector": "replacement-body-v0-018",
+                  "owner_issue": null,
+                  "note": "The stable #987 seed corpus registers this bounded direct-execution evidence."
                 }
               }
             },
@@ -3543,7 +3545,7 @@
                 "outstanding_evidence": {
                   "Scheduled": {
                     "owner_issue": 1155,
-                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                    "note": "#1155 owns exact paired source-observable evidence through #1146's completed route; direct task execution alone remains non-green."
                   }
                 }
               }
@@ -3551,9 +3553,9 @@
             "scoped_comparisons": []
           }
         },
-        "disposition": "Planned",
+        "disposition": "Preserved",
         "owner_issue": 1155,
-        "migration_or_blocker": "Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state."
+        "migration_or_blocker": "#1155 owns the bounded source-local task profile and its remaining paired source-observable comparison evidence."
       },
       {
         "id": "call.named-and-variadic",
@@ -6073,10 +6075,10 @@
       },
       {
         "id": "async.runtime",
-        "invariant": "Async tasks have explicit scheduler, wake, cancellation, and receipt semantics.",
-        "owner_boundary": "frontend Body IR plus replacement runtime",
-        "verification_anchor": "async typechecker and Body-IR tests",
-        "internal_only_rationale": "Schedulers and wake queues are mechanisms, not public capabilities."
+        "invariant": "Source-local direct tasks preserve construction, polling, source-order race ties, cancellation, and receipt-bound lifecycle evidence.",
+        "owner_boundary": "source-local Body IR plus replacement task runtime",
+        "verification_anchor": "replacement-body-v0-018 and replacement-body-v0-019 corpus probes",
+        "internal_only_rationale": "Task frames are private direct-execution machinery, not a general scheduler claim."
       },
       {
         "id": "call.frames",
