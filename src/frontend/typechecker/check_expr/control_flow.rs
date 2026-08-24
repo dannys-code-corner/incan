@@ -238,6 +238,9 @@ impl TypeChecker {
                 arm_body_types.push(ResolvedType::Unknown);
                 continue;
             };
+            // Body IR lowering consumes this instead of re-deriving the unwrap from the awaitable's own type.
+            self.type_info
+                .record_race_arm_binding_type(arm.awaitable.span, binding_ty.clone());
             arm_body_types.push(self.check_race_arm_body(&race.binding, binding_ty, &arm.body));
         }
 

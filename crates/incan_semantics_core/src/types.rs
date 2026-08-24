@@ -287,6 +287,12 @@ pub enum AbiV0RuntimeRequirement {
     HostedStd,
     Allocator,
     PanicStrategy,
+    /// An async task runtime, required by a body containing `await` or `race for` (#1164).
+    ///
+    /// Mirrors the surface-level [`crate::RuntimeRequirement::AsyncRuntime`] fact so a consumer reads the
+    /// requirement off the body it applies to, instead of re-deriving it by scanning the program's imports and
+    /// declaration modifiers.
+    AsyncRuntime,
 }
 
 /// ABI representation category known to the compiler today.
