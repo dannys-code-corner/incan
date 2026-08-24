@@ -79,14 +79,14 @@ extra:
 
 extra_css:
   - stylesheets/pygments.css
-  - /shared/incapunk/incapunk.css?v=20260816-release-05-4
+  - /shared/incapunk/incapunk.css?v=20260824-v06-roadmap-2
 
 extra_javascript:
   - _snippets/javascripts/mathjax.js
   - _snippets/javascripts/incan_home_motion.js?v=20260810-learning-refresh-1
   - shared/incapunk/incus-library/manifest.js?v=20260810-learning-refresh-1
-  - _snippets/javascripts/incan_docs_components.js?v=20260810-learning-refresh-1
-  - _snippets/javascripts/incan_mermaid.js?v=20260810-learning-refresh-1
+  - _snippets/javascripts/incan_docs_components.js?v=20260824-v06-roadmap-6
+  - _snippets/javascripts/incan_mermaid.js?v=20260824-v06-roadmap-9
   - https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js
   - _snippets/javascripts/tablesort.js
   - _snippets/javascripts/rfc_table_filter.js
@@ -353,7 +353,9 @@ nav:
           - Overview: whitepapers/index.md
           - Incan ecosystem north star: whitepapers/incan_ecosystem_north_star.md
           - A Cargo-free toolchain for Incan and Rust: whitepapers/incan_oven_positioning.md
-      - Roadmap: roadmap.md
+      - Roadmap:
+          - Overview: roadmap.md
+          - Incan 0.6 delivery: project/v0_6_delivery.md
       - Learning journey QA: project/learning_journey.md
       # XXX: Temporary page while in beta
       - Stability policy: stability.md
