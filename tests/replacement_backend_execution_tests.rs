@@ -290,8 +290,16 @@ def main() -> int:
   return unsupported_sibling()
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "main", &[])
-        .expect_err("an unsupported sibling must refuse before it executes directly");
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "an unsupported sibling must refuse before it executes directly, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
     let expected_start = source
         .find("[]")
         .ok_or("fixture must contain the sibling list literal")?;
@@ -315,8 +323,16 @@ def main() -> int:
   return range(20, 22)
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "main", &[])
-        .expect_err("the unresolved range target must not choose a source declaration as a builtin");
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "the unresolved range target must not choose a source declaration as a builtin, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
     let expected_start = source
         .find("def range")
         .ok_or("fixture must contain the range declaration")?;
@@ -434,7 +450,12 @@ def main() -> int:
   return 1
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "main", &[]).expect_err("bytes default must refuse directly");
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("bytes default must refuse directly, got {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
     let default_start = source
         .find("b\"x\"")
         .ok_or("default fixture must contain bytes literal")?;
@@ -447,15 +468,23 @@ def main() -> int:
 
 /// A missing direct-entry argument refuses at the original declaration body, whose call is the selected entrypoint.
 #[test]
-fn replacement_refuses_a_missing_required_callable_argument_at_the_parameter_span()
+fn replacement_refuses_a_missing_required_callable_argument_at_the_declaration_body_span()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def needs(value: int) -> int:
   return value
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "needs", &[])
-        .expect_err("the required callable parameter must refuse when omitted");
+    let error = match execute_free_function(&module, "needs", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "the required callable parameter must refuse when omitted, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
     let expected_start = source.find("def needs").ok_or("fixture must contain the declaration")?;
     let span = error
         .primary_span()
@@ -554,6 +583,39 @@ def main() -> int:
     Ok(())
 }
 
+/// Refuse ordinary collection indexing; only generator `.collect()` values admit one index projection.
+#[test]
+fn replacement_refuses_plain_collection_index_projection_with_the_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pairs = [(1, 2)]
+  pair = pairs[0]
+  return 0
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("plain collection index executed as {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("pair = pairs[0]")
+        .ok_or("plain collection index fixture must contain its source assignment")?;
+    let span = error
+        .primary_span()
+        .ok_or("plain collection index refusal must retain its source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error
+            .to_string()
+            .contains("outside the generator-expression collect profile"),
+        "plain collection index must stay outside the generator collect profile: {error}"
+    );
+    Ok(())
+}
+
 /// Refuse a standalone tuple before it can be used outside the selected collection profile.
 #[test]
 fn replacement_refuses_standalone_tuple_with_the_original_source_span() -> Result<(), Box<dyn std::error::Error>> {
@@ -594,7 +656,12 @@ def main() -> int:
   return x
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "main", &[]).expect_err("shadowing must refuse directly");
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("shadowing must refuse directly, got {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
     let expected_start = source
         .find("let x = 2")
         .ok_or("shadowing fixture must contain the inner binding")?;
@@ -616,7 +683,12 @@ def main() -> int:
   return x
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = execute_free_function(&module, "main", &[]).expect_err("reassignment must refuse directly");
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("reassignment must refuse directly, got {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
     let expected_start = source
         .rfind("x = 2")
         .ok_or("reassignment fixture must contain the second binding")?;

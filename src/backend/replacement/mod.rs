@@ -142,6 +142,15 @@ impl GeneratorFrame {
             steps: 0,
         }
     }
+
+    /// Return the cumulative execution budget a resumed frame must inherit from its caller.
+    ///
+    /// A generator retains the last count it observed between polls, while its parent may execute other statements
+    /// before polling it again. Resumption must therefore start from whichever count is greater; choosing the
+    /// frame count alone would let deferred work reset the direct execution budget.
+    fn resume_step_budget(&self, caller_steps: usize) -> usize {
+        caller_steps.max(self.steps)
+    }
 }
 
 impl GeneratorCursor {
@@ -2061,7 +2070,8 @@ impl BodyExecutor {
         let named_body = generator.named_body.take();
         let frame_evidence = generator.frame_evidence.take();
         let locals = std::mem::take(&mut generator.frame.locals);
-        let mut deferred = Self::with_locals(&self.module, locals, generator.frame.steps);
+        let resume_steps = generator.frame.resume_step_budget(self.steps);
+        let mut deferred = Self::with_locals(&self.module, locals, resume_steps);
         if let Some(body) = &named_body {
             deferred.record_body(body);
         }
@@ -2835,5 +2845,47 @@ fn constant_value(constant: &Constant) -> ReplacementValue {
         Constant::Str(value) => ReplacementValue::Str(value.clone()),
         Constant::Unit | Constant::None => ReplacementValue::Unit,
         Constant::Float(value) => ReplacementValue::Float(value.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use incan_semantics_core::CompilerNodeId;
+
+    use super::{
+        BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, MAX_EXECUTION_STEPS, Operand,
+        ReplacementExecutionError, ReplacementGenerator, Statement, StatementKind,
+    };
+
+    /// A resumed generator must retain the steps its parent spent before the first poll.
+    #[test]
+    fn generator_resume_counts_the_parent_budget_before_polling_its_frame() {
+        let span = HirSourceSpan::new(0, 1);
+        let module = BodyIrModule {
+            module_id: CompilerNodeId::module("replacement.generator_budget_test"),
+            bodies: Vec::new(),
+        };
+        let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS);
+        let mut generator = ReplacementGenerator {
+            frame: GeneratorFrame::new(
+                BTreeMap::new(),
+                vec![Statement {
+                    kind: StatementKind::Yield {
+                        value: Operand::Constant(Constant::Int(1)),
+                    },
+                    span,
+                }],
+            ),
+            named_body: None,
+            frame_evidence: None,
+        };
+
+        let result = executor.resume_generator(&mut generator, span);
+        assert!(
+            matches!(result, Err(ReplacementExecutionError::RuntimeFailure { .. })),
+            "the first generator poll must consume the caller's already-exhausted execution budget"
+        );
     }
 }
