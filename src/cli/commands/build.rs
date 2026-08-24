@@ -27,6 +27,7 @@ use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState,
     digest_output, finalize_receipt, resolve_execution, select_backend, unavailable_shadow_comparison,
 };
+use crate::backend::shadow::PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON;
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::cli::{CliError, CliResult, ExitCode};
 use crate::compiled_sdk::CompiledSdkModules;
@@ -2329,10 +2330,13 @@ fn multi_file_output_identity(main_code: &str, rust_modules: &HashMap<Vec<String
 
 /// Shadow-comparison state for one build's backend execution receipt.
 ///
-/// The direct #988 executor has no source-observable legacy comparator yet, so a requested shadow comparison is
-/// explicitly `Unavailable` rather than silently `NotRequested` or inferred from generated Rust.
+/// #1146 implements a real source-observable comparison, but only for the bounded profile in
+/// `crate::backend::shadow`: one module, one named free function that is not the program entrypoint, and concrete
+/// scalar arguments. Every build path observes the module's `main` instead, whose return value the produced
+/// process does not expose, so a requested comparison stays explicitly `Unavailable` with that reason rather than
+/// silently `NotRequested` or inferred from generated Rust.
 fn backend_shadow_comparison(selection: &BackendSelection) -> ShadowComparisonState {
-    unavailable_shadow_comparison(selection.shadow_requested)
+    unavailable_shadow_comparison(selection.shadow_requested, PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON)
 }
 
 /// Declare and resolve a backend selection for one build, before codegen runs (#986).
@@ -2601,7 +2605,7 @@ fn build_replacement_file_report(
     let executed = resolve_available_replacement_execution(&selection)?;
     let execution = execute_prevalidated_free_function(execution_plan)
         .map_err(|error| replacement_profile_cli_error(error, &entrypoint))?;
-    let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
+    let shadow_comparison = backend_shadow_comparison(&selection);
     let backend_receipt = finalize_receipt(
         &selection,
         executed,

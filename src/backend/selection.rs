@@ -29,7 +29,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Current wire format for [`BackendSelection`] and [`BackendExecutionReceipt`].
-pub const BACKEND_SELECTION_SCHEMA_VERSION: u32 = 1;
+///
+/// Version `2` is the first version in which [`ShadowComparisonState::Matched`] and
+/// [`ShadowComparisonState::Diverged`] are reachable, and both carry the comparison profile that produced them
+/// (#1146). Version `1` could only ever record `NotRequested` or `Unavailable`, so no v1 receipt can contain a
+/// comparison payload; the bump exists so a consumer that already deserializes `shadow_comparison` is told the
+/// shape grew rather than silently meeting an unfamiliar variant body.
+pub const BACKEND_SELECTION_SCHEMA_VERSION: u32 = 2;
 
 /// Implementation revision of the current Rust-emission ("legacy") backend.
 ///
@@ -43,12 +49,6 @@ pub const LEGACY_BACKEND_REVISION: u32 = 1;
 /// #988 provides its first direct-execution profile. Bump this when that profile's observable execution or
 /// receipt-bound semantic evidence changes for previously accepted source.
 pub const REPLACEMENT_BACKEND_REVISION: u32 = 1;
-
-/// Canonical reason for a requested shadow comparison that has no source-observable legacy comparator yet.
-///
-/// This deliberately names the missing comparison boundary, not implementation availability: a direct replacement
-/// executor exists for #988's narrow profile, while generated Rust remains inspection-only and cannot prove parity.
-pub const SHADOW_COMPARISON_UNAVAILABLE_REASON: &str = "no source-observable legacy/replacement comparator is implemented for this profile; generated Rust is not semantic proof";
 
 /// Compiler backend that can produce or execute a build unit.
 ///
@@ -129,22 +129,46 @@ pub enum ShadowComparisonState {
     /// A shadow comparison was requested but could not run, with the concrete reason (for example, the active
     /// profile has no source-observable legacy/replacement comparator).
     Unavailable { reason: String },
-    /// A shadow comparison ran and the replacement backend's output matched the executed
-    /// backend's output under the compilation's comparison rules.
-    Matched,
-    /// A shadow comparison ran and the outputs diverged, with a human-readable summary of the
-    /// difference.
-    Diverged { detail: String },
+    /// Both routes ran independently under one comparison profile and produced the same source-level observable.
+    ///
+    /// Two profile facts are recorded, and both are needed. `profile_kind` is the stable, human-meaningful kind
+    /// of comparison that ran (for example `crate::backend::shadow::SHADOW_COMPARISON_PROFILE_ID`); a registry
+    /// keyed on comparison capability links against it, and it survives every change to the compared source.
+    /// `profile_identity` is the content identity of the exact instance — this source, this observed function,
+    /// these arguments — so evidence names one comparison rather than a class of them. Recording only the hash
+    /// would leave a consumer unable to say *what kind* of comparison it is looking at; recording only the kind
+    /// would let two different comparisons claim the same evidence.
+    ///
+    /// `observable` is the compared value itself, not a summary of it, so a reader can see what agreement was
+    /// claimed over without holding the comparison report.
+    Matched {
+        profile_kind: String,
+        profile_identity: String,
+        observable: String,
+    },
+    /// Both routes ran independently under one comparison profile and produced different source-level observables.
+    ///
+    /// Carries the same two profile facts as [`ShadowComparisonState::Matched`]. `detail` names both sides
+    /// factually. This is a regression signal on the backend-selection axis, never a reason to fall back to the
+    /// other backend.
+    Diverged {
+        profile_kind: String,
+        profile_identity: String,
+        detail: String,
+    },
 }
 
-/// Produce the canonical shadow state for a request that cannot yet run a source-observable comparison.
+/// Produce the canonical shadow state for a request that could not run a source-observable comparison.
 ///
-/// This preserves the distinction between no request and an explicitly requested but non-green unavailable result.
+/// `reason` must name the concrete boundary that stopped the comparison, so an unavailable result stays a visible
+/// non-green state with an actionable explanation rather than a generic "not supported". Callers pass
+/// `shadow_requested` straight from the selection so the distinction between "nobody asked" and "asked and could
+/// not run" is preserved: only the latter is a non-green outcome.
 #[must_use]
-pub fn unavailable_shadow_comparison(shadow_requested: bool) -> ShadowComparisonState {
+pub fn unavailable_shadow_comparison(shadow_requested: bool, reason: &str) -> ShadowComparisonState {
     if shadow_requested {
         ShadowComparisonState::Unavailable {
-            reason: SHADOW_COMPARISON_UNAVAILABLE_REASON.to_string(),
+            reason: reason.to_string(),
         }
     } else {
         ShadowComparisonState::NotRequested
@@ -650,10 +674,51 @@ mod tests {
         assert!(selection.shadow_requested);
 
         let executed = resolve_execution(&selection, true)?;
-        let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested);
+        let shadow_comparison = unavailable_shadow_comparison(selection.shadow_requested, "no comparator staged");
         let receipt = finalize_receipt(&selection, executed, "sha256:output", shadow_comparison.clone(), 1)?;
         assert_eq!(receipt.shadow_comparison, shadow_comparison);
         receipt.verify_identity()?;
+        Ok(())
+    }
+
+    #[test]
+    fn an_unrequested_shadow_comparison_stays_distinct_from_an_unavailable_one() {
+        assert_eq!(
+            unavailable_shadow_comparison(false, "no comparator staged"),
+            ShadowComparisonState::NotRequested
+        );
+    }
+
+    #[test]
+    fn a_recorded_comparison_outcome_is_covered_by_the_receipt_identity() -> Result<(), BackendSelectionError> {
+        let selection = select_backend(
+            BackendKind::Replacement,
+            true,
+            true,
+            "sha256:source",
+            FallbackPolicy::Refuse,
+        );
+        let executed = resolve_execution(&selection, true)?;
+        let matched = ShadowComparisonState::Matched {
+            profile_kind: "incan.shadow_comparison.example.v0".to_string(),
+            profile_identity: "sha256:profile".to_string(),
+            observable: "completed(42)".to_string(),
+        };
+        let mut receipt = finalize_receipt(&selection, executed, "sha256:output", matched.clone(), 1)?;
+        receipt.verify_identity()?;
+        assert_eq!(receipt.shadow_comparison, matched);
+
+        // Rewriting an agreed comparison into a divergence claim (or the reverse) without recomputing the
+        // identity is exactly the tampering a receipt-bound comparison has to make visible.
+        receipt.shadow_comparison = ShadowComparisonState::Diverged {
+            profile_kind: "incan.shadow_comparison.example.v0".to_string(),
+            profile_identity: "sha256:profile".to_string(),
+            detail: "invented".to_string(),
+        };
+        let Err(error) = receipt.verify_identity() else {
+            panic!("a rewritten shadow-comparison outcome must be detected");
+        };
+        assert!(matches!(error, BackendSelectionError::ReceiptIdentityMismatch { .. }));
         Ok(())
     }
 

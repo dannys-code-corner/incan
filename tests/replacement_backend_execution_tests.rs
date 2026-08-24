@@ -850,11 +850,57 @@ fn replacement_cli_shadow_receipt_is_explicitly_non_green() -> Result<(), Box<dy
     let reason = receipt["shadow_comparison"]["unavailable"]["reason"]
         .as_str()
         .ok_or("requested shadow comparison must persist an unavailable reason")?;
-    assert_eq!(reason, incan::backend::selection::SHADOW_COMPARISON_UNAVAILABLE_REASON);
+    assert_eq!(reason, incan::backend::shadow::PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON);
+
+    // The CLI must report the same truth the corpus path does: this build observes the module's `main`, which the
+    // bounded #1146 comparison profile deliberately excludes, so no comparison ran and none is claimed.
+    assert!(
+        receipt["shadow_comparison"].get("matched").is_none() && receipt["shadow_comparison"].get("diverged").is_none(),
+        "a build-path shadow request must never persist a comparison outcome: {}",
+        receipt["shadow_comparison"]
+    );
     assert!(
         !temporary.path().join("target/incan").exists(),
         "shadow comparison must not generate a legacy project as semantic evidence"
     );
+    Ok(())
+}
+
+/// A shadow request must not change what the replacement build executes, records, or refuses.
+///
+/// The comparison axis is additive: asking for one may make a receipt non-green, but it may never turn a refusal
+/// into a success, silently select the other backend, or alter the executed result.
+#[test]
+fn a_shadow_request_does_not_alter_replacement_execution() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    fs::write(&entrypoint, "def main() -> int:\n  return 42\n")?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+            "--shadow",
+        ])
+        .output()?;
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(
+        stdout.contains("replacement backend executed `main`: 42"),
+        "unexpected shadowed replacement output: {stdout}"
+    );
+
+    let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        temporary.path().join(".incan/backend/receipt.json"),
+    )?)?;
+    assert_eq!(receipt["executed_backend"], "replacement");
+    assert_eq!(receipt["selection"]["selected_backend"], "replacement");
+    assert_eq!(receipt["selection"]["fallback_policy"], "refuse");
+    assert_eq!(receipt["fallback_outcome"], serde_json::json!("not_needed"));
     Ok(())
 }
 

@@ -199,13 +199,24 @@ pub(super) fn toolchain_crate_path(crate_name: &str) -> PathBuf {
 // ProjectGenerator impl — Cargo.toml generation
 // ============================================================================
 
+/// Rust edition a generated Incan project is compiled under when the manifest does not name one.
+///
+/// Exposed so any other consumer that has to compile emitted Rust the way a real generated project would — for
+/// example the #1146 shadow comparison's legacy route — reads the edition from here instead of restating it and
+/// drifting when the default moves.
+pub const DEFAULT_GENERATED_RUST_EDITION: &str = "2021";
+
 impl ProjectGenerator {
     /// Generate Cargo.toml content as a TOML-serialized string.
     ///
     /// Builds a [`CargoManifest`] struct from the generator's configuration and serializes it via [`toml::to_string`].
     /// The output is valid TOML by construction.
     pub(super) fn generate_cargo_toml(&self) -> io::Result<String> {
-        let edition = self.rust_edition.as_deref().unwrap_or("2021").to_string();
+        let edition = self
+            .rust_edition
+            .as_deref()
+            .unwrap_or(DEFAULT_GENERATED_RUST_EDITION)
+            .to_string();
         let package_name = self.cargo_package_name().to_string();
         let (dependencies, dev_dependencies) = self.dependencies_with_sdk_rebindings()?;
 
