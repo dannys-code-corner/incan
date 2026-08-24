@@ -507,6 +507,13 @@ pub struct IrEmitter<'a> {
     source_dependency_constructor_reexports_dirty: bool,
     /// Constructor metadata keyed by the exact public dependency and namespace-relative declaration path.
     pub_dependency_constructor_metadata: HashMap<(String, Vec<String>), StructConstructorMetadata>,
+    /// Unambiguous public nominal types keyed by short name and their Rust-visible provider path.
+    ///
+    /// Crate-root anonymous union wrappers are emitted before ordinary `use` items. A wrapper can therefore retain a
+    /// provider-local member name from checked `pub::` metadata even when the consumer never imported that member
+    /// directly. Keep the checked provider path so that payload can be emitted without relying on crate-root
+    /// re-exports that the provider did not declare.
+    public_dependency_type_paths: HashMap<String, Vec<String>>,
     /// Transparent local type aliases keyed by alias name.
     type_aliases: HashMap<String, IrType>,
     /// Incan `rusttype` aliases that should use compiler-owned call conversion rules at the surface boundary.
@@ -523,6 +530,8 @@ pub struct IrEmitter<'a> {
     const_bindings: std::collections::HashMap<String, (IrType, TypedExpr)>,
     /// Map of type name -> module path segments for dependency modules.
     type_module_paths: HashMap<String, Vec<String>>,
+    /// Nominal declarations owned by the program currently being emitted.
+    local_nominal_type_names: HashSet<String>,
     /// Provider module paths owned by linked compiled SDK providers.
     ///
     /// These paths do not use the consumer-only `__incan_std` namespace, so generated support fast paths need an
@@ -659,6 +668,7 @@ impl<'a> IrEmitter<'a> {
             source_dependency_constructor_reexports: Vec::new(),
             source_dependency_constructor_reexports_dirty: false,
             pub_dependency_constructor_metadata: HashMap::new(),
+            public_dependency_type_paths: HashMap::new(),
             type_aliases: HashMap::new(),
             rusttype_alias_names: HashSet::new(),
             method_signatures: HashMap::new(),
@@ -667,6 +677,7 @@ impl<'a> IrEmitter<'a> {
             const_string_literals: std::collections::HashMap::new(),
             const_bindings: std::collections::HashMap::new(),
             type_module_paths: HashMap::new(),
+            local_nominal_type_names: HashSet::new(),
             compiled_sdk_module_paths: HashSet::new(),
             compiled_sdk_type_module_paths: HashMap::new(),
             ambiguous_type_names: HashSet::new(),
@@ -1525,6 +1536,20 @@ impl<'a> IrEmitter<'a> {
         self.emit_dependency_item_path(&facade_path, name)
     }
 
+    /// Emit a checked public-provider type through its Rust-visible path when a crate-root wrapper cannot rely on
+    /// imports.
+    pub(in crate::backend::ir::emit) fn emit_public_dependency_type_path(&self, name: &str) -> Option<TokenStream> {
+        if name.contains("::") || self.local_nominal_type_names.contains(name) {
+            return None;
+        }
+        let path = self.public_dependency_type_paths.get(name)?;
+        let mut segments = path.iter().map(|segment| Self::rust_ident(segment));
+        let first = segments.next()?;
+        let name = Self::rust_ident(name);
+        let path = segments.fold(quote! { #first }, |path, segment| quote! { #path :: #segment });
+        Some(quote! { #path :: #name })
+    }
+
     /// Emit a dependency-qualified value path when a local value name is ambiguous.
     pub(in crate::backend::ir::emit) fn emit_dependency_value_path(&self, name: &str) -> Option<TokenStream> {
         if name.contains("::") || self.ambiguous_value_names.contains(name) {
@@ -1569,10 +1594,50 @@ impl<'a> IrEmitter<'a> {
     /// dependency modules.
     pub(crate) fn seed_public_dependency_nominal_metadata(&mut self, index: &LibraryManifestIndex) {
         let mut counts = HashMap::<String, usize>::new();
+        let mut public_type_paths = HashMap::<String, HashSet<Vec<String>>>::new();
         for library in index.known_libraries() {
             let Some(LibraryManifestIndexEntry::Loaded { manifest, .. }) = index.get(&library) else {
                 continue;
             };
+            let mut manifest_nominal_names = manifest
+                .exports
+                .models
+                .iter()
+                .map(|model| model.name.clone())
+                .chain(manifest.exports.classes.iter().map(|class| class.name.clone()))
+                .chain(manifest.exports.enums.iter().map(|enum_| enum_.name.clone()))
+                .chain(manifest.exports.newtypes.iter().map(|newtype| newtype.name.clone()))
+                .collect::<Vec<_>>();
+            manifest_nominal_names.sort();
+            manifest_nominal_names.dedup();
+            for name in manifest_nominal_names {
+                public_type_paths.entry(name).or_default().insert(vec![library.clone()]);
+            }
+            if let Some(api) = manifest.contract_metadata.api.as_ref() {
+                for module in &api.modules {
+                    let mut provider_path = vec![library.clone()];
+                    if !matches!(module.module_path.as_slice(), [root] if root == "lib" || root == "main") {
+                        provider_path.extend(module.module_path.iter().cloned());
+                    }
+                    for declaration in module.declarations.iter().filter(|declaration| {
+                        crate::frontend::api_metadata::checked_api_declaration_is_public_namespace_member(declaration)
+                    }) {
+                        let nominal_name = match declaration {
+                            ApiDeclaration::Model(model) => Some(&model.name),
+                            ApiDeclaration::Class(class) => Some(&class.name),
+                            ApiDeclaration::Enum(enum_) => Some(&enum_.name),
+                            ApiDeclaration::Newtype(newtype) => Some(&newtype.name),
+                            _ => None,
+                        };
+                        if let Some(name) = nominal_name {
+                            public_type_paths
+                                .entry(name.clone())
+                                .or_default()
+                                .insert(provider_path.clone());
+                        }
+                    }
+                }
+            }
             let mut public_names = manifest
                 .exports
                 .models
@@ -1619,6 +1684,17 @@ impl<'a> IrEmitter<'a> {
                 }
             }
         }
+
+        self.public_dependency_type_paths = public_type_paths
+            .into_iter()
+            .filter_map(|(name, paths)| {
+                if paths.len() == 1 {
+                    paths.into_iter().next().map(|path| (name, path))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         for library in index.known_libraries() {
             let Some(LibraryManifestIndexEntry::Loaded { manifest, .. }) = index.get(&library) else {
