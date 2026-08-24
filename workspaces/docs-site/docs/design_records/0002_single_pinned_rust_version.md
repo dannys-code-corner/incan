@@ -51,6 +51,7 @@ Pinning the minimum supported version alongside the others is deliberate rather 
 - Contributors need Rust 1.98.0 to build the compiler.
 - Generated projects compile under 2024 language rules. That edition changes more than syntax — reserved words, opaque-return lifetime capture, `static mut` references, and tail-expression temporary scopes all differ — so moving the emitted edition is a real behavior change for generated code, not a cosmetic bump.
 - **Reserved-word escaping must lead the edition change.** The 2024 edition reserved `gen`, and the compiler's keyword-escape registry does not carry it, so an Incan declaration named `gen` currently emits an unescaped Rust `gen` that is valid under 2021 and a hard error under 2024. A program that compiles today would break on the edition move. The registry must be corrected first; that correction stands on its own merit regardless of when the edition moves.
+- Pinning makes the compiler's symbol-mangling scheme dependable. Rust 1.97 made v0 mangling the default, and v0 preserves generic parameter values rather than hiding them behind a hash. Work that reads symbols back — recovering a canonical source identity from an emitted name, or reconciling an artifact against compiler-owned declarations — can rely on that only because the release is pinned. Under a floating channel the mangling scheme is whatever the build date supplied, and any such work would need to detect and tolerate both schemes.
 - Two nightly dependencies survive this decision and are not mismatches under it:
   - `cargo +nightly fmt` remains required, because the project's formatting configuration uses unstable comment and documentation wrapping options. It formats the compiler's own Rust source; it is never shipped and never compiles user code.
   - The nightly publisher toolchain used by the test harness exists only to exercise Cargo's nightly-only metadata flags. Its justification disappears with the move off Cargo, so it should be retired rather than pinned.
@@ -81,5 +82,7 @@ This record derives from the v0.6 direction of moving off Cargo, from [RFC 119](
 ## References
 
 - [Issue #1168: bump generated projects to Rust edition 2024 and pin the shipped Rust release](https://github.com/encero-systems/incan/issues/1168)
+- [Issue #1174: tighten RFC 120 so the emitted-name projection is recoverable](https://github.com/encero-systems/incan/issues/1174) — depends on v0 being dependable
+- [Issue #1182: reconcile artifact symbols against compiler-owned declarations](https://github.com/encero-systems/incan/issues/1182) — same dependency
 - [PR #1157: source-observable shadow comparison](https://github.com/encero-systems/incan/pull/1157) — surfaced the edition constant and the unescaped `gen` gap
 - [RFC 119: Oven-native Rust build facets and Cargo interoperation](../RFCs/119_oven_native_rust_build_facets_and_cargo_interoperation.md)
