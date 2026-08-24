@@ -1,5 +1,5 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "baseline": {
     "release": {
       "tag": "v0.5.0",
@@ -2954,14 +2954,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1155,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3059,14 +3067,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3164,14 +3180,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3269,14 +3293,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3374,14 +3406,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 555,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3479,14 +3519,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 655,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3584,14 +3632,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3689,14 +3745,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3794,14 +3858,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -3899,14 +3971,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1152,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4004,14 +4084,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1101,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4109,14 +4197,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4217,14 +4313,21 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This incomplete feature aggregate lacks a paired #1146 result, so direct execution is not parity green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "UnscheduledDebt": {
+                    "note": "The bounded direct profile has no scheduled owner for its remaining aggregate and corpus-case comparison evidence."
+                  }
                 }
               }
             },
@@ -4322,14 +4425,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4427,14 +4538,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4536,14 +4655,21 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This incomplete feature aggregate lacks a paired #1146 result, so direct execution is not parity green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "UnscheduledDebt": {
+                    "note": "The bounded direct profile has no scheduled owner for its remaining aggregate and corpus-case comparison evidence."
+                  }
                 }
               }
             },
@@ -4674,14 +4800,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4779,14 +4913,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1101,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4884,14 +5026,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1042,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -4989,14 +5139,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1154,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5094,14 +5252,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 989,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5199,14 +5365,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1156,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5304,14 +5478,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1156,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5409,14 +5591,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1156,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5514,14 +5704,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1034,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5619,14 +5817,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 1033,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },
@@ -5724,14 +5930,22 @@
             },
             "independent_comparison": {
               "Unavailable": {
-                "owner_issue": 1146,
-                "anchor": {
-                  "surface": "IndependentComparison",
-                  "status": "Observed",
-                  "repository_path": "tests/support/parity_corpus.rs",
-                  "selector": "NonGreenShadowUnavailable",
-                  "owner_issue": null,
-                  "note": "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green."
+                "comparison_infrastructure": {
+                  "issue": 1146,
+                  "anchor": {
+                    "surface": "IndependentComparison",
+                    "status": "Observed",
+                    "repository_path": "tests/support/parity_corpus.rs",
+                    "selector": "NonGreenShadowUnavailable",
+                    "owner_issue": null,
+                    "note": "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership."
+                  }
+                },
+                "outstanding_evidence": {
+                  "Scheduled": {
+                    "owner_issue": 989,
+                    "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                  }
                 }
               }
             },

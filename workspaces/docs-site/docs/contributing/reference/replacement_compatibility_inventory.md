@@ -144,7 +144,7 @@ This is a validated control-plane inventory, not a parity claim. A feature row t
 
 ## Remaining-work issue map
 
-Every planned feature below has a currently open mechanism owner. #1146 remains a comparison prerequisite, not an implementation owner: `replacement-body-v0-001` has one paired match, while all incomplete features and uncovered cases remain non-green.
+Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. `replacement-body-v0-001` has one paired match, while all incomplete features and uncovered cases remain non-green.
 
 - #555: `decorators.dsl-surfaces`
 - #655: `diagnostics.stable`
@@ -171,7 +171,7 @@ Async functions, await, and race preserve scheduling, cancellation, and diagnost
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_yield`; owner #1155
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1155
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1155: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state.
 
 ### `call.named-and-variadic`
@@ -185,7 +185,7 @@ Named calls preserve resolved targets, generic arguments, positional/named bindi
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Call-frame and binder execution beyond the bounded scalar profile is owned by the callable runtime slice.
 
 ### `call.partial-binding`
@@ -199,7 +199,7 @@ Partial presets capture at construction, remain overrideable defaults, and prese
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Body IR carries the source contract; direct local callable targets remain visibly refused until the callable runtime slice executes them.
 
 ### `call.stored-callables`
@@ -213,7 +213,7 @@ Stored closures and partials retain lexical capture timing, ownership, and isola
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Direct execution deliberately refuses local callable targets; this is the coherent callable-frame profile.
 
 ### `decorators.dsl-surfaces`
@@ -227,7 +227,7 @@ Decorators and scoped DSL surfaces preserve activation, dispatch, and source-own
 - Typechecker: Observed `src/frontend/typechecker/collect/decorators.rs::fn validate_decorators_allowing_user_defined`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #555
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #555
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #555: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Surface packs and decorators require a source-to-runtime dispatch boundary before direct execution can classify them.
 
 ### `diagnostics.stable`
@@ -241,7 +241,7 @@ Source diagnostics retain intentional acceptance/refusal boundaries, spans, and 
 - Typechecker: Observed `src/frontend/typechecker/check_stmt.rs::fn check_statement`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #655
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_free_function`; owner #655
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #655: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: The compatibility report and corpus need receipt-bound diagnostic evidence; generated Rust diagnostics are not a substitute.
 
 ### `error.result-and-try`
@@ -255,7 +255,7 @@ Result combinators and explicit propagation retain success, error, ordering, and
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_try`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_try`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Depends on #1101 for complete Body IR vocabulary; #1154 owns Result/error value routing.
 
 ### `generator.expressions`
@@ -269,7 +269,7 @@ Generator expressions preserve construction-versus-consumption timing and lazy c
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_generator_expr`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: The bounded generator-expression collect path exists, but broader consumption and comparison remain non-green.
 
 ### `generator.functions`
@@ -283,7 +283,7 @@ Generator functions suspend and resume without replaying prior effects or losing
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls.rs::fn check_call`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_generator_expr`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Generator-function frames and resumption remain explicit replacement refusals.
 
 ### `interop.rust-and-c`
@@ -297,7 +297,7 @@ Rust and C boundaries preserve checked signatures, coercions, explicit unsafe ac
 - Typechecker: Observed `src/frontend/typechecker/check_expr/calls/rust_boundary.rs::fn validate_rust_boundary_value`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #989
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #989
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #989: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Public ABI and interop parity is an explicit replacement-boundary slice, not a direct scalar-executor extension.
 
 ### `iteration.protocol-and-adapters`
@@ -311,7 +311,7 @@ Iterator protocols, adapters, and consumers preserve lazy dispatch, callback tim
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_general_iteration`; owner #1152
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1152
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1152: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: The callable/lazy-generator runtime slice owns the first admitted adapter profile; general protocol dispatch remains blocked.
 
 ### `iteration.user-and-fallible`
@@ -325,7 +325,7 @@ User-defined and fallible iteration preserve protocol calls, terminal behavior, 
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn resolve_iteration_protocol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_general_iteration`; owner #1101
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1101
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1101: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Body IR protocol facts need a runtime dispatch and error-routing owner before the direct profile can admit these forms.
 
 ### `language.aggregates-and-projections`
@@ -339,7 +339,7 @@ Tuple, list, dict, set, slice, projection, mutation, equality, and ordering reta
 - Typechecker: Observed `src/frontend/typechecker/check_expr/collections.rs::fn check_list`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_aggregate`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_aggregate`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation.
 
 ### `language.control-flow`
@@ -353,7 +353,7 @@ Bounded scalar conditionals, loops, returns, assertions, and range iteration exe
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
 - Body IR: Observed `src/frontend/body_ir.rs::fn lower_if`
 - Replacement executor: Observed `src/backend/replacement/mod.rs::fn execute_loop`
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; unscheduled evidence debt: The bounded direct profile has no scheduled owner for its remaining aggregate and corpus-case comparison evidence.
 
 ### `language.control-flow-complete`
 
@@ -366,7 +366,7 @@ Control flow beyond the bounded scalar profile preserves value-carrying branches
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_if_expr`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_if_expr`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_loop`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: The current direct profile covers only the bounded scalar subset; #1154 owns the required value and pattern runtime.
 
 ### `language.match-and-patterns`
@@ -380,7 +380,7 @@ Match, destructuring, alternation, guards, and exhaustiveness preserve branch se
 - Typechecker: Observed `src/frontend/typechecker/check_expr/match_.rs::fn check_match`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_match`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Depends on #1101 for complete Body IR vocabulary; #1154 owns pattern dispatch over direct values.
 
 ### `language.numeric-and-scalar`
@@ -394,8 +394,8 @@ Bounded scalar arithmetic, comparisons, boolean operators, and strings execute d
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Observed `src/frontend/body_ir.rs::fn lower_binary`
 - Replacement executor: Observed `src/backend/replacement/mod.rs::fn evaluate_binary`
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
-- #1146 case `replacement-body-v0-001` (ComparedMatch) comparison: paired Observed `tests/parity_corpus_tests.rs::legacy_receipt_identity`; Observed `tests/parity_corpus_tests.rs::replacement_receipt_identity`; Observed `tests/parity_corpus_tests.rs::fn the_compared_row_carries_two_route_receipts_and_its_oven_authority`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; unscheduled evidence debt: The bounded direct profile has no scheduled owner for its remaining aggregate and corpus-case comparison evidence.
+- Completed #1146 case `replacement-body-v0-001` (ComparedMatch) comparison: paired Observed `tests/parity_corpus_tests.rs::legacy_receipt_identity`; Observed `tests/parity_corpus_tests.rs::replacement_receipt_identity`; Observed `tests/parity_corpus_tests.rs::fn the_compared_row_carries_two_route_receipts_and_its_oven_authority`
 
 ### `language.numeric-complete`
 
@@ -408,7 +408,7 @@ The full numeric contract preserves widths, literals, conversions, overflow, dec
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: The current direct profile is intentionally scalar-bounded; #1154 owns the shared direct value model required for remaining numeric forms.
 
 ### `language.strings-and-format`
@@ -422,7 +422,7 @@ String operators and formatting preserve interpolation order, conversions, and r
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1101
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1101
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1101: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: String concatenation is boundedly executable; f-strings and general formatting remain explicit refusals.
 
 ### `module.identity-and-aliases`
@@ -436,7 +436,7 @@ Modules, imports, aliases, namespaces, and reexports resolve to one source-obser
 - Typechecker: Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_import`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1042
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1042
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1042: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Canonical source identity is a prerequisite for a replacement profile that crosses module boundaries.
 
 ### `nominal.models-unions-enums`
@@ -450,7 +450,7 @@ Models, unions, value enums, newtypes, computed properties, and static storage p
 - Typechecker: Observed `src/frontend/typechecker/check_decl.rs::fn check_model`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_constructor`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_aggregate`; owner #1154
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Depends on #1101 for complete nominal Body IR; #1154 owns the direct nominal value representation.
 
 ### `package.public-boundaries`
@@ -464,7 +464,7 @@ Libraries, checked API metadata, providers, workspaces, and consumer imports pre
 - Typechecker: Observed `src/frontend/typechecker/collect/stdlib_imports.rs::fn collect_pub_imports`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #989
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #989
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #989: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Package and ABI boundaries deliberately remain outside the direct source-only profile until #656/#989 evidence exists.
 
 ### `runtime.std-data-services`
@@ -478,7 +478,7 @@ Data-oriented stdlib services preserve their documented input, output, and error
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1156: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: #1156 owns checked provider-service dispatch; collection and nominal values remain a #1154 prerequisite.
 
 ### `runtime.std-hosted-services`
@@ -492,7 +492,7 @@ Hosted filesystem, environment, I/O, web, temporary-resource, and process-adjace
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1156: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: #1156 owns checked provider-service dispatch and depends on authority/receipt facts from #662.
 
 ### `runtime.std-observability`
@@ -506,7 +506,7 @@ Logging, telemetry, registries, and metadata services preserve structured values
 - Typechecker: Observed `src/frontend/typechecker/stdlib_loader.rs::fn lookup_function_symbol`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1156
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1156
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1156: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: #1156 owns checked provider-service dispatch; provider authority and receipts remain explicit prerequisites.
 
 ### `testing-and-tooling`
@@ -520,7 +520,7 @@ Test discovery, assertions, formatter, build reports, inspection, lifecycle, ins
 - Typechecker: Observed `src/frontend/typechecker/check_decl.rs::fn check_test_module`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_function_body`; owner #1034
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_free_function`; owner #1034
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1034: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: These are control-plane contracts with source and receipt evidence, not direct Body-IR execution rows.
 
 ### `types.traits-generics-reflection`
@@ -534,5 +534,5 @@ Traits, generics, type tokens, protocol hooks, derives, and resolved method sign
 - Typechecker: Observed `src/frontend/typechecker/trait_bound_relations.rs::fn type_satisfies_explicit_bound`
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_call`; owner #1033
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn execute_call`; owner #1033
-- Aggregate #1146 comparison: unavailable via #1146; Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1033: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
 - Blocker/migration: Type-directed runtime calls and reflection need canonical source facts and value representation beyond the current profile.

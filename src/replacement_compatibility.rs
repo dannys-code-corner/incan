@@ -20,12 +20,13 @@ const FROZEN_V0_5_CAPABILITIES_SOURCE: &[u8] =
     include_bytes!("replacement_compatibility/v0_5_stdlib/capabilities.incn");
 const FROZEN_V0_5_CAPABILITIES_PATH: &str = "src/replacement_compatibility/v0_5_stdlib/capabilities.incn";
 const LIVE_CAPABILITIES_SOURCE: &str = "crates/incan_stdlib/stdlib/capabilities.incn";
+const COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE: u32 = 1146;
 
 /// Version of the machine-readable replacement compatibility inventory document.
 ///
 /// Bump this whenever the serialized document's field shape or a serialized enum contract changes. The public
 /// `std.capabilities` registry remains independently versioned and is not governed by this projection version.
-pub const REPLACEMENT_COMPATIBILITY_INVENTORY_SCHEMA_VERSION: u32 = 2;
+pub const REPLACEMENT_COMPATIBILITY_INVENTORY_SCHEMA_VERSION: u32 = 3;
 
 /// Machine-readable pin for a released public-capability baseline.
 ///
@@ -212,7 +213,7 @@ pub struct FeatureSurfaceCoverage {
     pub replacement_executor: EvidenceAnchor,
     /// Stable #987 corpus link or typed corpus-plan identifier.
     pub parity_corpus: ParityCorpusReference,
-    /// Aggregate receipt-bound #1146 comparison evidence or an explicit incomplete-coverage route.
+    /// Aggregate receipt-bound comparison evidence or an explicit incomplete-coverage route.
     pub independent_comparison: ComparisonEvidence,
     /// Case-scoped comparison facts that must not widen the enclosing feature's aggregate comparison state.
     pub scoped_comparisons: Vec<CorpusCaseComparisonEvidence>,
@@ -253,15 +254,44 @@ pub enum ParityCorpusReference {
     },
 }
 
+/// Completed comparison infrastructure that makes receipt-bound comparison possible.
+///
+/// This provenance is distinct from the owner of any still-missing case or aggregate evidence. In particular,
+/// completion of the infrastructure issue never makes that completed issue an owner of outstanding evidence debt.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CompletedComparisonInfrastructure {
+    /// Completed issue that delivered the reusable comparison route.
+    pub issue: u32,
+    /// Observed repository anchor proving the completed infrastructure boundary.
+    pub anchor: EvidenceAnchor,
+}
+
+/// Ownership state for comparison evidence that remains unavailable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum OutstandingComparisonEvidence {
+    /// A current feature/runtime owner is scheduled to materialize the missing comparison evidence.
+    Scheduled {
+        /// Open issue responsible for the remaining evidence, not the completed infrastructure issue.
+        owner_issue: u32,
+        /// Concrete scope of the still-missing evidence.
+        note: String,
+    },
+    /// No feature/runtime owner has scheduled the remaining comparison evidence yet.
+    UnscheduledDebt {
+        /// Concrete reason that the missing evidence remains explicitly unscheduled.
+        note: String,
+    },
+}
+
 /// Typed independent-comparison evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub enum ComparisonEvidence {
-    /// #1146's receipt-bound legacy route is not yet available, so the feature remains explicitly non-green.
+    /// The aggregate or case remains non-green while completed comparison infrastructure awaits more evidence.
     Unavailable {
-        /// #1146 owns the paired legacy comparison route.
-        owner_issue: u32,
-        /// Existing comparison implementation boundary and unavailable-state selector.
-        anchor: EvidenceAnchor,
+        /// Completed reusable comparison infrastructure that supplies provenance, not outstanding-work ownership.
+        comparison_infrastructure: CompletedComparisonInfrastructure,
+        /// Scheduled owner or explicit unscheduled debt for the still-missing evidence.
+        outstanding_evidence: OutstandingComparisonEvidence,
     },
     /// A direct run and legacy run have matching receipt-bound comparison records.
     Paired {
@@ -1144,6 +1174,7 @@ fn validate_feature_surface_coverage(
         &format!("feature `{}`", feature.id),
         feature.evidence.independent_comparison,
         &coverage.independent_comparison,
+        feature.owner_issue,
         workspace_root,
         errors,
     );
@@ -1182,6 +1213,7 @@ fn validate_feature_surface_coverage(
             &format!("feature `{}` case `{}`", feature.id, comparison.case_id),
             comparison.state,
             &comparison.evidence,
+            feature.owner_issue,
             workspace_root,
             errors,
         );
@@ -1193,25 +1225,67 @@ fn validate_comparison_evidence(
     label: &str,
     state: IndependentComparisonState,
     evidence: &ComparisonEvidence,
+    feature_owner_issue: Option<u32>,
     workspace_root: Option<&Path>,
     errors: &mut Vec<String>,
 ) {
     match evidence {
-        ComparisonEvidence::Unavailable { owner_issue, anchor } => {
-            if !matches!(state, IndependentComparisonState::NonGreenShadowUnavailable) || *owner_issue != 1146 {
+        ComparisonEvidence::Unavailable {
+            comparison_infrastructure,
+            outstanding_evidence,
+        } => {
+            if !matches!(state, IndependentComparisonState::NonGreenShadowUnavailable) {
                 errors.push(format!("{label} has an invalid unavailable-comparison classification"));
             }
             validate_evidence_anchor(
-                &format!("{label} #1146 comparison route"),
-                anchor,
+                &format!("{label} completed comparison infrastructure"),
+                &comparison_infrastructure.anchor,
                 EvidenceSurface::IndependentComparison,
                 workspace_root,
                 errors,
             );
-            if !matches!(anchor.status, EvidenceAnchorStatus::Observed) {
+            if comparison_infrastructure.issue != COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE {
                 errors.push(format!(
-                    "{label} has an unavailable comparison without an observed #1146 route anchor"
+                    "{label} records completed comparison infrastructure #{}, expected #{}",
+                    comparison_infrastructure.issue, COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE
                 ));
+            }
+            if !matches!(comparison_infrastructure.anchor.status, EvidenceAnchorStatus::Observed) {
+                errors.push(format!(
+                    "{label} has unavailable comparison evidence without an observed completed-infrastructure anchor"
+                ));
+            }
+            match outstanding_evidence {
+                OutstandingComparisonEvidence::Scheduled { owner_issue, note } => {
+                    if *owner_issue == COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE {
+                        errors.push(format!(
+                            "{label} assigns completed comparison infrastructure #{} as outstanding evidence owner",
+                            COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE
+                        ));
+                    }
+                    if Some(*owner_issue) != feature_owner_issue {
+                        errors.push(format!(
+                            "{label} schedules outstanding comparison evidence for #{owner_issue}, which does not match the feature owner"
+                        ));
+                    }
+                    if note.trim().is_empty() {
+                        errors.push(format!(
+                            "{label} has a scheduled comparison owner without an evidence note"
+                        ));
+                    }
+                }
+                OutstandingComparisonEvidence::UnscheduledDebt { note } => {
+                    if let Some(owner_issue) = feature_owner_issue {
+                        errors.push(format!(
+                            "{label} has unscheduled comparison evidence debt despite feature owner #{owner_issue}"
+                        ));
+                    }
+                    if note.trim().is_empty() {
+                        errors.push(format!(
+                            "{label} has unscheduled comparison evidence debt without a note"
+                        ));
+                    }
+                }
             }
         }
         ComparisonEvidence::Paired {
@@ -1434,7 +1508,7 @@ pub fn render_developer_projection(
         ));
     }
     output.push_str("\n## Remaining-work issue map\n\n");
-    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 remains a comparison prerequisite, not an implementation owner: `replacement-body-v0-001` has one paired match, while all incomplete features and uncovered cases remain non-green.\n\n");
+    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. `replacement-body-v0-001` has one paired match, while all incomplete features and uncovered cases remain non-green.\n\n");
     let features_by_owner = features_by_owner(&registry.features);
     for (owner, features) in features_by_owner {
         output.push_str(&format!(
@@ -1464,7 +1538,7 @@ pub fn render_developer_projection(
                 probe.positive.contract, probe.negative.contract
             ));
             output.push_str(&format!(
-                "- Source/AST: {}\n- Typechecker: {}\n- Body IR: {}\n- Replacement executor: {}\n- Aggregate #1146 comparison: {}\n",
+                "- Source/AST: {}\n- Typechecker: {}\n- Body IR: {}\n- Replacement executor: {}\n- Aggregate comparison: {}\n",
                 render_evidence_anchor(&feature.evidence.surfaces.source_ast),
                 render_evidence_anchor(&feature.evidence.surfaces.typechecker),
                 render_evidence_anchor(&feature.evidence.surfaces.body_ir),
@@ -1473,7 +1547,7 @@ pub fn render_developer_projection(
             ));
             for comparison in &feature.evidence.surfaces.scoped_comparisons {
                 output.push_str(&format!(
-                    "- #1146 case `{}` ({}) comparison: {}\n",
+                    "- Completed #1146 case `{}` ({}) comparison: {}\n",
                     comparison.case_id,
                     comparison.state.as_str(),
                     comparison_evidence_label(&comparison.evidence),
@@ -1771,8 +1845,16 @@ fn scoped_comparison_label(comparisons: &[CorpusCaseComparisonEvidence]) -> Stri
 /// Render factored comparison evidence while preserving its unavailable or paired state.
 fn comparison_evidence_label(evidence: &ComparisonEvidence) -> String {
     match evidence {
-        ComparisonEvidence::Unavailable { owner_issue, anchor } => {
-            format!("unavailable via #{}; {}", owner_issue, render_evidence_anchor(anchor))
+        ComparisonEvidence::Unavailable {
+            comparison_infrastructure,
+            outstanding_evidence,
+        } => {
+            format!(
+                "unavailable; completed comparison infrastructure #{} at {}; {}",
+                comparison_infrastructure.issue,
+                render_evidence_anchor(&comparison_infrastructure.anchor),
+                outstanding_comparison_evidence_label(outstanding_evidence),
+            )
         }
         ComparisonEvidence::Paired {
             legacy_receipt,
@@ -1784,6 +1866,18 @@ fn comparison_evidence_label(evidence: &ComparisonEvidence) -> String {
             render_evidence_anchor(replacement_receipt),
             render_evidence_anchor(comparison_record)
         ),
+    }
+}
+
+/// Render the owner or explicit debt for comparison evidence without reassigning completed infrastructure work.
+fn outstanding_comparison_evidence_label(evidence: &OutstandingComparisonEvidence) -> String {
+    match evidence {
+        OutstandingComparisonEvidence::Scheduled { owner_issue, note } => {
+            format!("outstanding evidence owner #{owner_issue}: {note}")
+        }
+        OutstandingComparisonEvidence::UnscheduledDebt { note } => {
+            format!("unscheduled evidence debt: {note}")
+        }
     }
 }
 
@@ -2218,13 +2312,12 @@ fn planned_feature(
                     ),
                 },
                 independent_comparison: ComparisonEvidence::Unavailable {
-                    owner_issue: 1146,
-                    anchor: observed_anchor(
-                        EvidenceSurface::IndependentComparison,
-                        "tests/support/parity_corpus.rs",
-                        "NonGreenShadowUnavailable",
-                        "This feature lacks a paired #1146 result, so its aggregate comparison state is explicitly non-green.",
-                    ),
+                    comparison_infrastructure: completed_comparison_infrastructure(),
+                    outstanding_evidence: OutstandingComparisonEvidence::Scheduled {
+                        owner_issue,
+                        note: "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
+                            .to_string(),
+                    },
                 },
                 scoped_comparisons: Vec::new(),
             },
@@ -2304,13 +2397,11 @@ fn preserved_feature(
                     ),
                 },
                 independent_comparison: ComparisonEvidence::Unavailable {
-                    owner_issue: 1146,
-                    anchor: observed_anchor(
-                        EvidenceSurface::IndependentComparison,
-                        "tests/support/parity_corpus.rs",
-                        "NonGreenShadowUnavailable",
-                        "This incomplete feature aggregate lacks a paired #1146 result, so direct execution is not parity green.",
-                    ),
+                    comparison_infrastructure: completed_comparison_infrastructure(),
+                    outstanding_evidence: OutstandingComparisonEvidence::UnscheduledDebt {
+                        note: "The bounded direct profile has no scheduled owner for its remaining aggregate and corpus-case comparison evidence."
+                            .to_string(),
+                    },
                 },
                 scoped_comparisons: scoped_comparisons(id),
             },
@@ -2318,6 +2409,19 @@ fn preserved_feature(
         disposition: CompatibilityDisposition::Preserved,
         owner_issue: None,
         migration_or_blocker: None,
+    }
+}
+
+/// Return #1146's completed reusable comparison infrastructure without assigning it outstanding evidence work.
+fn completed_comparison_infrastructure() -> CompletedComparisonInfrastructure {
+    CompletedComparisonInfrastructure {
+        issue: COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE,
+        anchor: observed_anchor(
+            EvidenceSurface::IndependentComparison,
+            "tests/support/parity_corpus.rs",
+            "NonGreenShadowUnavailable",
+            "#1146 completed the reusable paired-comparison route; outstanding case and aggregate evidence has separate ownership.",
+        ),
     }
 }
 
@@ -2880,6 +2984,41 @@ mod tests {
         let rendered = error.to_string();
         assert!(rendered.contains("scoped comparison for unlinked #987 case `replacement-body-v0-007`"));
         assert!(rendered.contains("paired comparison evidence without a compared state"));
+        Ok(())
+    }
+
+    #[test]
+    fn validator_rejects_completed_comparison_infrastructure_as_outstanding_evidence_owner()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let baseline = checked_v0_5_public_capability_baseline()?;
+        let mut registry = replacement_compatibility_registry();
+        let feature = registry
+            .features
+            .iter_mut()
+            .find(|feature| feature.id == "call.stored-callables")
+            .ok_or("missing stored-callables feature")?;
+        let ComparisonEvidence::Unavailable {
+            outstanding_evidence, ..
+        } = &mut feature.evidence.surfaces.independent_comparison
+        else {
+            return Err("stored-callables must begin with unavailable comparison evidence".into());
+        };
+        *outstanding_evidence = OutstandingComparisonEvidence::Scheduled {
+            owner_issue: COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE,
+            note: "Mutation fixture that conflates completed infrastructure with future evidence ownership."
+                .to_string(),
+        };
+
+        let error = validate_replacement_compatibility_registry(&baseline, &registry)
+            .err()
+            .ok_or("expected completed-infrastructure ownership validation error")?;
+        let rendered = error.to_string();
+        assert!(rendered.contains("assigns completed comparison infrastructure #1146 as outstanding evidence owner"));
+        assert!(
+            rendered.contains(
+                "schedules outstanding comparison evidence for #1146, which does not match the feature owner"
+            )
+        );
         Ok(())
     }
 

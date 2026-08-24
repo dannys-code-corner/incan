@@ -107,6 +107,10 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
     assert!(projection.contains("replacement-body-v0-001: ComparedMatch"));
     assert!(projection.contains("legacy_receipt_identity"));
     assert!(projection.contains("replacement_receipt_identity"));
+    assert!(projection.contains("completed comparison infrastructure #1146"));
+    assert!(projection.contains("outstanding evidence owner #1152"));
+    assert!(projection.contains("unscheduled evidence debt"));
+    assert!(!projection.contains("unavailable via #1146"));
 
     let machine: serde_json::Value = serde_json::from_str(&render_machine_readable_inventory(&baseline, &registry)?)?;
     assert!(machine.is_object());
