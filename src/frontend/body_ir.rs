@@ -75,13 +75,20 @@ pub fn build_body_ir_module_v0(
 ) -> bir::BodyIrModule {
     let module_identity = body_ir_module_identity(module_path);
     let module_id = CompilerNodeId::module(module_identity.clone());
+    let function_default_sources = collect_function_default_sources(program);
     let bodies = program
         .declarations
         .iter()
         .flat_map(|decl| -> Vec<bir::Body> {
             match &decl.node {
                 ast::Declaration::Function(function) => {
-                    vec![lower_function_body(function, decl.span, &module_identity, type_info)]
+                    vec![lower_function_body(
+                        function,
+                        decl.span,
+                        &module_identity,
+                        type_info,
+                        &function_default_sources,
+                    )]
                 }
                 ast::Declaration::Model(model) => lower_owner_method_bodies(
                     &model.methods,
@@ -89,6 +96,7 @@ pub fn build_body_ir_module_v0(
                     owner_self_type(&model.name, &model.type_params),
                     &module_identity,
                     type_info,
+                    &function_default_sources,
                 ),
                 ast::Declaration::Class(class) => lower_owner_method_bodies(
                     &class.methods,
@@ -96,6 +104,7 @@ pub fn build_body_ir_module_v0(
                     owner_self_type(&class.name, &class.type_params),
                     &module_identity,
                     type_info,
+                    &function_default_sources,
                 ),
                 ast::Declaration::Trait(trait_decl) => lower_owner_method_bodies(
                     &trait_decl.methods,
@@ -103,12 +112,51 @@ pub fn build_body_ir_module_v0(
                     IncanType::SelfType,
                     &module_identity,
                     type_info,
+                    &function_default_sources,
                 ),
                 _ => Vec::new(),
             }
         })
         .collect();
     bir::BodyIrModule { module_id, bodies }
+}
+
+/// Source-declared ordinary default expressions for each top-level function in this module.
+///
+/// Body-IR lowering needs this small source map only while it lowers a local `partial target(...)` into a forwarding
+/// closure: the checked callable signature retains availability but not the executable default expression. The map
+/// never leaves this frontend boundary; the resulting [`bir::CallableParamDefault::Source`] stores only Body IR.
+type FunctionDefaultSources = HashMap<String, Vec<FunctionDefaultSource>>;
+
+/// Source facts a synthesized local partial needs for one target parameter.
+#[derive(Clone)]
+struct FunctionDefaultSource {
+    /// The target parameter's original span.
+    param_span: ast::Span,
+    /// The target's ordinary source default, if it declared one.
+    default: Option<ast::Spanned<ast::Expr>>,
+}
+
+/// Collect the source expressions a synthesized local partial needs to retain target defaults in Body IR.
+fn collect_function_default_sources(program: &ast::Program) -> FunctionDefaultSources {
+    program
+        .declarations
+        .iter()
+        .filter_map(|decl| match &decl.node {
+            ast::Declaration::Function(function) => Some((
+                function.name.clone(),
+                function
+                    .params
+                    .iter()
+                    .map(|param| FunctionDefaultSource {
+                        param_span: param.span,
+                        default: param.node.default.clone(),
+                    })
+                    .collect(),
+            )),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Lower every non-abstract method in `methods` (owned by the class/model/trait named `owner_name`) into one
@@ -127,6 +175,7 @@ fn lower_owner_method_bodies(
     receiver_ty: IncanType,
     module_identity: &str,
     type_info: &TypeCheckInfo,
+    function_default_sources: &FunctionDefaultSources,
 ) -> Vec<bir::Body> {
     methods
         .iter()
@@ -138,6 +187,7 @@ fn lower_owner_method_bodies(
                 &receiver_ty,
                 module_identity,
                 type_info,
+                function_default_sources,
             )
         })
         .collect()
@@ -164,11 +214,12 @@ fn lower_function_body(
     decl_span: ast::Span,
     module_identity: &str,
     type_info: &TypeCheckInfo,
+    function_default_sources: &FunctionDefaultSources,
 ) -> bir::Body {
     let decl_id = CompilerNodeId::declaration(module_identity, &function.name);
     let binding = type_info.declarations.function_bindings.get(&function.name);
 
-    let mut builder = BodyBuilder::new(type_info);
+    let mut builder = BodyBuilder::new(type_info, function_default_sources);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut param_locals = Vec::with_capacity(function.params.len());
@@ -188,6 +239,18 @@ fn lower_function_body(
         param_locals.push(local);
     }
 
+    let mut params = Vec::with_capacity(function.params.len());
+    for (param, local) in function.params.iter().zip(param_locals.iter().copied()) {
+        let ty = builder.locals[local.index()].ty.clone();
+        params.push(bir::CallableParam {
+            local,
+            name: param.node.name.clone(),
+            ty,
+            span: hir_span(param.span),
+            default: builder.lower_callable_default(param.node.default.as_ref(), root_scope),
+        });
+    }
+
     let mut stmts = Vec::new();
     builder.lower_block_into(&function.body, root_scope, &mut stmts);
     builder.insert_scope_drops(&mut stmts, root_scope);
@@ -205,6 +268,7 @@ fn lower_function_body(
         name: function.name.clone(),
         span: hir_span(decl_span),
         locals: builder.locals,
+        params,
         param_locals,
         scopes: builder.scopes,
         block: bir::Block {
@@ -243,6 +307,7 @@ fn lower_method_body(
     receiver_ty: &IncanType,
     module_identity: &str,
     type_info: &TypeCheckInfo,
+    function_default_sources: &FunctionDefaultSources,
 ) -> Option<bir::Body> {
     let body_stmts = method.body.as_ref()?;
 
@@ -255,16 +320,25 @@ fn lower_method_body(
         .method_bindings_by_span
         .get(&(decl_span.start, decl_span.end));
 
-    let mut builder = BodyBuilder::new(type_info);
+    let mut builder = BodyBuilder::new(type_info, function_default_sources);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
+    let mut params = Vec::with_capacity(method.params.len() + 1);
     let mut param_locals = Vec::with_capacity(method.params.len() + 1);
     if let Some(receiver) = method.receiver {
         let mutable = matches!(receiver, ast::Receiver::Mutable);
         let self_local = builder.declare_receiver_local(receiver_ty.clone(), mutable, root_scope, hir_span(decl_span));
         param_locals.push(self_local);
+        params.push(bir::CallableParam {
+            local: self_local,
+            name: "self".to_string(),
+            ty: receiver_ty.clone(),
+            span: hir_span(decl_span),
+            default: bir::CallableParamDefault::Required,
+        });
     }
 
+    let mut ordinary_param_locals = Vec::with_capacity(method.params.len());
     for (index, param) in method.params.iter().enumerate() {
         let ty = binding
             .and_then(|b| b.params.get(index))
@@ -279,6 +353,18 @@ fn lower_method_body(
         );
         builder.locals[local.index()].origin = bir::LocalOrigin::Parameter;
         param_locals.push(local);
+        ordinary_param_locals.push(local);
+    }
+
+    for (param, local) in method.params.iter().zip(ordinary_param_locals) {
+        let ty = builder.locals[local.index()].ty.clone();
+        params.push(bir::CallableParam {
+            local,
+            name: param.node.name.clone(),
+            ty,
+            span: hir_span(param.span),
+            default: builder.lower_callable_default(param.node.default.as_ref(), root_scope),
+        });
     }
 
     let mut stmts = Vec::new();
@@ -298,6 +384,7 @@ fn lower_method_body(
         name: method.name.clone(),
         span: hir_span(decl_span),
         locals: builder.locals,
+        params,
         param_locals,
         scopes: builder.scopes,
         block: bir::Block {
@@ -332,8 +419,10 @@ fn owner_self_type(owner_name: &str, owner_type_params: &[ast::TypeParam]) -> In
 
 /// Per-function lowering state: fresh local/scope allocation, current name bindings, and accumulated body-level
 /// facts (runtime requirements, panic facts, which locals have been moved out of their declaring scope).
-struct BodyBuilder<'a> {
-    type_info: &'a TypeCheckInfo,
+struct BodyBuilder<'type_info, 'source> {
+    type_info: &'type_info TypeCheckInfo,
+    /// Source defaults for top-level partial targets, retained only until they lower into Body IR.
+    function_default_sources: &'source FunctionDefaultSources,
     locals: Vec<bir::LocalDecl>,
     scopes: Vec<bir::ScopeInfo>,
     /// Current source-name -> local binding. Later bindings of the same name (new `let`/`mut` assignments) shadow
@@ -363,11 +452,12 @@ struct BodyBuilder<'a> {
     next_scope: u32,
 }
 
-impl<'a> BodyBuilder<'a> {
+impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Start a fresh builder for one function body, with no locals, scopes, or accumulated facts yet.
-    fn new(type_info: &'a TypeCheckInfo) -> Self {
+    fn new(type_info: &'type_info TypeCheckInfo, function_default_sources: &'source FunctionDefaultSources) -> Self {
         Self {
             type_info,
+            function_default_sources,
             locals: Vec::new(),
             scopes: Vec::new(),
             bindings: HashMap::new(),
@@ -827,8 +917,8 @@ impl<'a> BodyBuilder<'a> {
     ) {
         // A closure value already carries the typechecker's callable shape. A partial retains that full callable
         // type, with captured presets represented as named-overrideable defaults. Positional calls skip those preset
-        // slots, and `LocalCallableTarget::parameter_slots` records the resulting declaration mapping. Keeping this
-        // type on the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
+        // slots, and `LocalCallableTarget::binding` records the resulting declaration mapping. Keeping this type on
+        // the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
         let ty = self
             .callable_value_ty(&assignment.value)
             .unwrap_or_else(|| self.resolve_ty(assignment.value.span));
@@ -2243,6 +2333,98 @@ impl<'a> BodyBuilder<'a> {
         });
     }
 
+    // ---- Callable defaults ----
+
+    /// Lower one source-declared default into a deferred Body-IR computation.
+    ///
+    /// The ordinary function body may not contain this computation: source defaults run only when the matching
+    /// parameter is omitted. While lowering it, callable-local bindings are hidden because the legacy path
+    /// materializes source defaults while assembling call arguments, before the callee frame is bound. A default
+    /// therefore becomes a closed Body-IR computation or a tagged refusal: a callable-local or other external
+    /// source read, every explicitly unsupported Body-IR form, and a default without a usable canonical type fact
+    /// refuse at the default expression's own span. The final condition is deliberately fail-closed: Body IR may
+    /// not make an unchecked source default executable by reconstructing source semantics. This leaves a direct
+    /// consumer no reason to consult AST/HIR/typechecker state or legacy execution.
+    fn lower_callable_default(
+        &mut self,
+        default_expr: Option<&ast::Spanned<ast::Expr>>,
+        scope: bir::ScopeId,
+    ) -> bir::CallableParamDefault {
+        let Some(default_expr) = default_expr else {
+            return bir::CallableParamDefault::Required;
+        };
+
+        let locals_len = self.locals.len();
+        let scopes_len = self.scopes.len();
+        let runtime_requirements_len = self.runtime_requirements.len();
+        let panic_facts_len = self.panic_facts.len();
+        let next_local = self.next_local;
+        let next_scope = self.next_scope;
+        let saved_remaining_reads = self.remaining_reads.clone();
+        let saved_moved_out = self.moved_out.clone();
+        let saved_bindings = std::mem::take(&mut self.bindings);
+        let saved_external_locals = std::mem::take(&mut self.external_locals);
+        let mut stmts = Vec::new();
+        let result = self.lower_expr_to_operand(default_expr, scope, &mut stmts);
+        let mut unresolved_names: Vec<String> = self.external_locals.keys().cloned().collect();
+        unresolved_names.sort();
+        self.bindings = saved_bindings;
+        self.external_locals = saved_external_locals;
+
+        let refusal = first_unsupported_default_statement(&stmts)
+            .or_else(|| {
+                (!unresolved_names.is_empty()).then(|| {
+                    (
+                        hir_span(default_expr.span),
+                        format!(
+                            "default reads Body-IR-external name(s): {}",
+                            unresolved_names.join(", ")
+                        ),
+                    )
+                })
+            })
+            .or_else(|| {
+                self.type_info
+                    .validated_newtype_coercion(default_expr.span)
+                    .is_some()
+                    .then(|| {
+                        (
+                            hir_span(default_expr.span),
+                            "default requires a validated-newtype coercion Body IR does not yet represent".to_string(),
+                        )
+                    })
+            })
+            .or_else(|| {
+                matches!(
+                    self.resolve_ty(default_expr.span),
+                    IncanType::Unknown | IncanType::Never
+                )
+                .then(|| {
+                    (
+                        hir_span(default_expr.span),
+                        "default expression lacks a usable typecheck fact".to_string(),
+                    )
+                })
+            });
+        if let Some((span, description)) = refusal {
+            self.locals.truncate(locals_len);
+            self.scopes.truncate(scopes_len);
+            self.runtime_requirements.truncate(runtime_requirements_len);
+            self.panic_facts.truncate(panic_facts_len);
+            self.next_local = next_local;
+            self.next_scope = next_scope;
+            self.remaining_reads = saved_remaining_reads;
+            self.moved_out = saved_moved_out;
+            return bir::CallableParamDefault::Unsupported { span, description };
+        }
+
+        bir::CallableParamDefault::Source(bir::DefaultComputation {
+            span: hir_span(default_expr.span),
+            stmts,
+            result,
+        })
+    }
+
     // ---- Expressions ----
 
     /// Lower one expression into an [`bir::Operand`], dispatching on its AST kind and, where evaluation has side
@@ -3419,8 +3601,7 @@ impl<'a> BodyBuilder<'a> {
 
         // ---- Bind the closure's own parameters, shadowing any outer binding of the same name ----
         let param_types = self.closure_param_types(params, expr_span);
-        let mut closure_params = Vec::with_capacity(params.len());
-        let mut param_locals = Vec::with_capacity(params.len());
+        let mut closure_param_locals = Vec::with_capacity(params.len());
         for (param, ty) in params.iter().zip(param_types) {
             let previous = self.bindings.get(&param.node.name).copied();
             let total_reads = count_reads_in_expr(&param.node.name, &body_expr.node);
@@ -3432,14 +3613,20 @@ impl<'a> BodyBuilder<'a> {
                 total_reads,
             );
             self.locals[local.index()].origin = bir::LocalOrigin::Parameter;
-            closure_params.push(bir::ClosureParam {
+            closure_param_locals.push(local);
+            saved_bindings.push((param.node.name.clone(), previous));
+        }
+
+        let mut closure_params = Vec::with_capacity(params.len());
+        for (param, local) in params.iter().zip(closure_param_locals) {
+            let ty = self.locals[local.index()].ty.clone();
+            closure_params.push(bir::CallableParam {
+                local,
                 name: param.node.name.clone(),
                 ty,
-                has_default: param.node.default.is_some(),
-                preset_capture: None,
+                span: hir_span(param.span),
+                default: self.lower_callable_default(param.node.default.as_ref(), closure_scope),
             });
-            param_locals.push(local);
-            saved_bindings.push((param.node.name.clone(), previous));
         }
 
         // ---- Lower the body under the closure's own bindings, then restore the enclosing scope's ----
@@ -3457,7 +3644,6 @@ impl<'a> BodyBuilder<'a> {
         }
 
         let closure_body = bir::ClosureBody {
-            param_locals,
             capture_locals,
             stmts: body_stmts,
             result,
@@ -3510,10 +3696,12 @@ impl<'a> BodyBuilder<'a> {
     /// Preset values (`partial.args`) are lowered once each, at the partial-creation site -- exactly like an
     /// ordinary call argument, not deduplicated per free-variable name the way [`Self::lower_closure`]'s captures
     /// are -- and folded into the synthesized closure's own `captured_operands`. Every declared target parameter
-    /// remains a closure parameter in declaration order. A preset parameter has `has_default` plus an explicit
-    /// `preset_capture`, so callers may omit it to use the construction-time value or override it by name. Positional
-    /// local calls skip those preset-default parameters; [`Self::lower_call`] records the supplied declaration slots
-    /// rather than pretending the complete callable surface is a residual function type.
+    /// remains a closure parameter in declaration order. A preset parameter records
+    /// [`bir::CallableParamDefault::PartialPreset`], while an unpresetted target default retains its distinct
+    /// source-default contract: a deferred [`bir::CallableParamDefault::Source`] computation only when it has
+    /// usable type facts, otherwise an original-span refusal. Positional local calls skip only preset parameters;
+    /// [`Self::lower_call`] records the supplied declaration slots rather than pretending the complete callable
+    /// surface is a residual function type.
     ///
     /// `Expr::Partial` uses this same full callable surface through `local_partial_params`; module-level partial
     /// declarations intentionally keep their existing full-signature-plus-preset-metadata projection for backend
@@ -3564,6 +3752,7 @@ impl<'a> BodyBuilder<'a> {
             );
         }
         let target_name = target_name.clone();
+        let target_default_sources = self.function_default_sources.get(&target_name).cloned();
         let closure_scope = self.new_scope(Some(scope), hir_span_value);
 
         // ---- Lower each preset value once, at the partial-creation site, as a captured operand ----
@@ -3587,9 +3776,8 @@ impl<'a> BodyBuilder<'a> {
 
         // ---- Every target parameter stays on the closure surface; presets become overrideable defaults ----
         let mut closure_params = Vec::new();
-        let mut param_locals = Vec::new();
         let mut call_arg_locals = Vec::with_capacity(binding.params.len());
-        for param in &binding.params {
+        for (index, param) in binding.params.iter().enumerate() {
             let Some(param_name) = &param.name else {
                 return self.unsupported_operand(
                     "partial callable target with an unnamed parameter".to_string(),
@@ -3603,13 +3791,27 @@ impl<'a> BodyBuilder<'a> {
             let local =
                 self.declare_new_local_with_reads(param_name.clone(), ty.clone(), closure_scope, hir_span_value, 1);
             self.locals[local.index()].origin = bir::LocalOrigin::Parameter;
-            closure_params.push(bir::ClosureParam {
+            let source_param = target_default_sources.as_ref().and_then(|params| params.get(index));
+            let default = match preset_lookup.get(param_name).copied() {
+                Some(capture) => bir::CallableParamDefault::PartialPreset { capture },
+                None => match source_param {
+                    Some(source_param) => self.lower_callable_default(source_param.default.as_ref(), closure_scope),
+                    None if param.has_default => bir::CallableParamDefault::Unsupported {
+                        span: hir_span_value,
+                        description: format!(
+                            "partial target {target_name} declares a default Body IR could not source"
+                        ),
+                    },
+                    None => bir::CallableParamDefault::Required,
+                },
+            };
+            closure_params.push(bir::CallableParam {
+                local,
                 name: param_name.clone(),
                 ty,
-                has_default: param.has_default || preset_lookup.contains_key(param_name),
-                preset_capture: preset_lookup.get(param_name).copied(),
+                span: source_param.map_or(hir_span_value, |param| hir_span(param.param_span)),
+                default,
             });
-            param_locals.push(local);
             call_arg_locals.push(local);
             saved_bindings.push((param_name.clone(), previous));
         }
@@ -3645,7 +3847,6 @@ impl<'a> BodyBuilder<'a> {
         );
 
         let closure_body = bir::ClosureBody {
-            param_locals,
             capture_locals,
             stmts: body_stmts,
             result,
@@ -3938,6 +4139,50 @@ impl<'a> BodyBuilder<'a> {
                 bir::Pattern::Or(alternatives)
             }
         }
+    }
+}
+
+/// Return the first explicitly unsupported default statement, preserving the source span a direct consumer must
+/// show when it refuses an omitted argument.
+///
+/// [`BodyBuilder::unsupported_operand`] records every unsupported expression as a
+/// [`bir::StatementKind::Unsupported`] statement. Defaults can also nest executable statement sequences inside
+/// control-flow, race arms, closures, generators, and match arms, so the scan walks each such sequence before the
+/// deferred computation becomes callable metadata.
+fn first_unsupported_default_statement(stmts: &[bir::Statement]) -> Option<(HirSourceSpan, String)> {
+    stmts.iter().find_map(first_unsupported_default_statement_inner)
+}
+
+/// Inspect one statement and each rvalue shape that owns a nested executable statement sequence.
+fn first_unsupported_default_statement_inner(statement: &bir::Statement) -> Option<(HirSourceSpan, String)> {
+    match &statement.kind {
+        bir::StatementKind::Unsupported { description } => Some((statement.span, description.clone())),
+        bir::StatementKind::Assign { rvalue, .. } => first_unsupported_default_rvalue(rvalue),
+        bir::StatementKind::If {
+            then_block, else_block, ..
+        } => first_unsupported_default_statement(&then_block.stmts).or_else(|| {
+            else_block
+                .as_ref()
+                .and_then(|block| first_unsupported_default_statement(&block.stmts))
+        }),
+        bir::StatementKind::Loop { body } => first_unsupported_default_statement(&body.stmts),
+        bir::StatementKind::Race { arms, .. } => arms
+            .iter()
+            .find_map(|arm| first_unsupported_default_statement(&arm.body.stmts)),
+        _ => None,
+    }
+}
+
+/// Inspect an rvalue's deferred executable parts without treating its explicit operands as source syntax to rebuild.
+fn first_unsupported_default_rvalue(rvalue: &bir::Rvalue) -> Option<(HirSourceSpan, String)> {
+    match rvalue {
+        bir::Rvalue::Closure { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Generator { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Match { arms, .. } => arms.iter().find_map(|arm| {
+            first_unsupported_default_statement(&arm.guard_stmts)
+                .or_else(|| first_unsupported_default_statement(&arm.body_stmts))
+        }),
+        _ => None,
     }
 }
 
@@ -5138,9 +5383,9 @@ mod tests {
 
     /// Lower an intentionally-invalid source program after recording its typecheck diagnostics.
     ///
-    /// Positive local-partial coverage must go through [`build`], which requires ordinary typechecking. This helper
-    /// is only for Body IR's fail-closed assertions: after the source checker correctly rejects an invalid residual
-    /// call, lowering must still make its unsupported representation explicit rather than approximating it.
+    /// Positive coverage must go through [`build`], which requires ordinary typechecking. This helper is only for
+    /// Body IR's fail-closed assertions: after the source checker correctly rejects a program, lowering must still
+    /// make its unsupported representation explicit rather than approximating it.
     fn build_after_expected_typecheck_errors(
         source: &str,
         module_path: &[&str],
@@ -5153,7 +5398,7 @@ mod tests {
         let diagnostics = checker
             .check_program(&program)
             .err()
-            .ok_or("expected the intentional residual-call diagnostic")?
+            .ok_or("expected the intentionally invalid source program to produce a diagnostic")?
             .into_iter()
             .map(|diagnostic| diagnostic.message)
             .collect();
@@ -5856,6 +6101,499 @@ mod tests {
     }
 
     #[test]
+    fn top_level_defaults_lower_to_deferred_source_computations() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def fallback() -> int:\n  return 2\n\ndef choose(limit: u8 = 7, value: int = fallback()) -> int:\n  return value\n";
+        let module = build(source, &["m", "top_level_default"])?;
+        let choose = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "choose")
+            .ok_or("expected the choose Body IR")?;
+        let limit = choose.params.first().ok_or("expected choose's limit parameter")?;
+        let value = choose.params.get(1).ok_or("expected choose's value parameter")?;
+
+        assert_eq!(limit.local, bir::LocalId(0));
+        assert_eq!(limit.name, "limit");
+        assert_eq!(
+            limit.ty,
+            IncanType::Primitive(IncanPrimitiveType::Numeric("u8".to_string()))
+        );
+        let bir::CallableParamDefault::Source(limit_default) = &limit.default else {
+            return Err("a checked literal default must become a deferred Body-IR computation".into());
+        };
+        let limit_start = source.find("7,").ok_or("missing literal default source spelling")?;
+        assert_eq!(limit_default.span, HirSourceSpan::new(limit_start, limit_start + 1));
+        assert!(limit_default.stmts.is_empty());
+        assert_eq!(limit_default.result, bir::Operand::Constant(bir::Constant::Int(7)));
+
+        assert_eq!(value.local, bir::LocalId(1));
+        assert_eq!(value.name, "value");
+        let bir::CallableParamDefault::Source(value_default) = &value.default else {
+            return Err("a checked function default call must become a deferred Body-IR computation".into());
+        };
+        let call_start = source.rfind("fallback()").ok_or("missing default source spelling")?;
+        assert_eq!(
+            value_default.span,
+            HirSourceSpan::new(call_start, call_start + "fallback()".len()),
+            "the direct consumer must receive the default expression's exact source span"
+        );
+        let [call] = value_default.stmts.as_slice() else {
+            return Err("the deferred function default should contain one call statement".into());
+        };
+        let bir::StatementKind::Call {
+            destination: Some(destination),
+            callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+            args,
+            may_panic,
+        } = &call.kind
+        else {
+            return Err("the deferred default must retain a direct named call".into());
+        };
+        assert_eq!(target.name, "fallback");
+        assert!(target.type_args.is_empty());
+        assert!(args.is_empty());
+        assert!(!may_panic);
+        let bir::Operand::Place(result) = &value_default.result else {
+            return Err("the deferred default call must return its computed temporary".into());
+        };
+        assert_eq!(&result.place, destination);
+        assert!(
+            !choose.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } if target.name == "fallback"
+            )),
+            "the default call must not be appended to the ordinary function body: {choose:?}"
+        );
+        assert!(
+            !choose
+                .locals
+                .iter()
+                .any(|local| matches!(local.origin, bir::LocalOrigin::External)),
+            "a refused source default must not retain an implicit frontend lookup: {choose:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn generic_method_defaults_use_the_shared_parameter_contract_after_self() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "def fallback() -> str:\n  return \"label\"\n\nmodel Shelf[T]:\n  def label[U](self, owner_items: list[T] = [], method_items: list[U] = [], suffix: str = \"\", fallback_label: str = fallback()) -> str:\n    return suffix\n";
+        let module = build(source, &["m", "method_default"])?;
+        let label = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "label")
+            .ok_or("expected the label method Body IR")?;
+        let self_param = label.params.first().ok_or("expected the self parameter")?;
+        let owner_items = label.params.get(1).ok_or("expected the owner-generic parameter")?;
+        let method_items = label.params.get(2).ok_or("expected the method-generic parameter")?;
+        let suffix = label.params.get(3).ok_or("expected the literal default parameter")?;
+        let fallback_label = label.params.get(4).ok_or("expected the call default parameter")?;
+
+        assert_eq!(self_param.local, bir::LocalId(0));
+        assert!(
+            self_param.span.start < self_param.span.end,
+            "the synthetic receiver must carry its documented declaration-span fallback"
+        );
+        assert!(matches!(&self_param.default, bir::CallableParamDefault::Required));
+        assert!(matches!(&owner_items.default, bir::CallableParamDefault::Source(_)));
+        assert!(matches!(&method_items.default, bir::CallableParamDefault::Source(_)));
+        let bir::CallableParamDefault::Source(suffix_default) = &suffix.default else {
+            return Err("a checked method literal default must become a deferred computation".into());
+        };
+        let literal_start = source.find("\"\"").ok_or("missing method literal default spelling")?;
+        assert_eq!(
+            suffix_default.span,
+            HirSourceSpan::new(literal_start, literal_start + "\"\"".len())
+        );
+        assert!(suffix_default.stmts.is_empty());
+        assert_eq!(
+            suffix_default.result,
+            bir::Operand::Constant(bir::Constant::Str(String::new()))
+        );
+        let bir::CallableParamDefault::Source(fallback_default) = &fallback_label.default else {
+            return Err("a checked method call default must become a deferred computation".into());
+        };
+        let call_start = source
+            .rfind("fallback()")
+            .ok_or("missing method call default spelling")?;
+        assert_eq!(
+            fallback_default.span,
+            HirSourceSpan::new(call_start, call_start + "fallback()".len())
+        );
+        assert_eq!(fallback_default.stmts.len(), 1);
+        assert!(
+            !label.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } if target.name == "fallback"
+            )),
+            "the method default call must not be appended to the ordinary method body: {label:?}"
+        );
+        assert_eq!(label.param_locals.len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn trait_method_default_uses_a_deferred_source_computation() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def fallback() -> str:\n  return \"hello\"\n\ntrait Greeter:\n  def greet(self, greeting: str = fallback()) -> str:\n    return greeting\n";
+        let module = build(source, &["m", "trait_method_default"])?;
+        let greet = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "greet")
+            .ok_or("expected the greet trait-method Body IR")?;
+        let self_param = greet.params.first().ok_or("expected the self parameter")?;
+        let greeting = greet.params.get(1).ok_or("expected the greeting parameter")?;
+
+        assert!(matches!(&self_param.default, bir::CallableParamDefault::Required));
+        let bir::CallableParamDefault::Source(default) = &greeting.default else {
+            return Err("a checked trait-method default must become a deferred computation".into());
+        };
+        let default_start = source
+            .rfind("fallback()")
+            .ok_or("missing trait-method default source spelling")?;
+        assert_eq!(
+            default.span,
+            HirSourceSpan::new(default_start, default_start + "fallback()".len())
+        );
+        let [call] = default.stmts.as_slice() else {
+            return Err("the deferred trait-method default should contain one call statement".into());
+        };
+        assert!(matches!(
+            &call.kind,
+            bir::StatementKind::Call {
+                callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                ..
+            } if target.name == "fallback"
+        ));
+        assert!(
+            !greet.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } if target.name == "fallback"
+            )),
+            "the trait-method default call must not be appended to the ordinary method body: {greet:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn unrepresentable_default_is_a_parameter_refusal_at_its_own_span() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def keep(payload: bytes = b\"x\") -> bytes:\n  return payload\n";
+        let module = build(source, &["m", "unsupported_default"])?;
+        let keep = module.bodies.first().ok_or("expected the keep function Body IR")?;
+        let payload = keep.params.first().ok_or("expected the payload parameter")?;
+
+        let bir::CallableParamDefault::Unsupported { span, description } = &payload.default else {
+            return Err("bytes defaults must refuse instead of pretending to be executable".into());
+        };
+        assert_eq!(description, "bytes literal");
+        let default_start = source.find("b\"x\"").ok_or("missing bytes default spelling")?;
+        assert_eq!(
+            *span,
+            HirSourceSpan::new(default_start, default_start + "b\"x\"".len()),
+            "the refusal must retain the unsupported default expression's exact source span"
+        );
+        assert_eq!(
+            keep.locals.len(),
+            1,
+            "refused speculative lowering must not leak a default temporary or external local: {keep:?}"
+        );
+        assert!(
+            !keep
+                .block
+                .stmts
+                .iter()
+                .any(|statement| matches!(&statement.kind, bir::StatementKind::Unsupported { .. })),
+            "the refusal belongs to the parameter contract, not the normal function body: {keep:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_race_arm_in_a_default_is_found_at_its_nested_source_span() {
+        // A race remains a structured Body-IR node even when one arm has an unsupported construct. Callable
+        // defaults have the stricter contract: the whole deferred computation must be executable, so the default
+        // boundary must find that nested refusal and retain the nested construct's span for direct consumers.
+        let unsupported_span = HirSourceSpan::new(24, 34);
+        let statements = vec![bir::Statement {
+            kind: bir::StatementKind::Race {
+                destination: None,
+                arms: vec![bir::RaceArm {
+                    awaitable: bir::Operand::Constant(bir::Constant::Int(1)),
+                    binding: bir::LocalId(0),
+                    body: bir::Block {
+                        scope: bir::ScopeId(1),
+                        stmts: vec![bir::Statement {
+                            kind: bir::StatementKind::Unsupported {
+                                description: "power operator".to_string(),
+                            },
+                            span: unsupported_span,
+                        }],
+                    },
+                    result: bir::Operand::Constant(bir::Constant::Int(0)),
+                }],
+            },
+            span: HirSourceSpan::new(10, 40),
+        }];
+
+        assert_eq!(
+            first_unsupported_default_statement(&statements),
+            Some((unsupported_span, "power operator".to_string())),
+            "a direct consumer must refuse the nested construct rather than accept a partially unsupported default"
+        );
+    }
+
+    #[test]
+    fn unsupported_rvalue_bodies_in_a_default_are_found_at_their_nested_source_spans() {
+        // A source default can construct a closure or generator, or evaluate a match, whose structured Body IR owns
+        // more statements than the outer assignment exposes. Those statement sequences are still part of the direct
+        // default contract: a consumer must receive their original refusal span instead of a misleading `Source`.
+        let unsupported = |span, description| bir::Statement {
+            kind: bir::StatementKind::Unsupported {
+                description: description.to_string(),
+            },
+            span,
+        };
+        let assignment = |rvalue| bir::Statement {
+            kind: bir::StatementKind::Assign {
+                place: bir::Place::from_local(bir::LocalId(0)),
+                rvalue,
+            },
+            span: HirSourceSpan::new(0, 80),
+        };
+        let result = bir::Operand::Constant(bir::Constant::Int(0));
+        let closure_span = HirSourceSpan::new(10, 20);
+        let generator_span = HirSourceSpan::new(21, 31);
+        let guard_span = HirSourceSpan::new(32, 42);
+        let body_span = HirSourceSpan::new(43, 53);
+        let cases = vec![
+            (
+                vec![assignment(bir::Rvalue::Closure {
+                    params: Vec::new(),
+                    captured_operands: Vec::new(),
+                    body: Box::new(bir::ClosureBody {
+                        capture_locals: Vec::new(),
+                        stmts: vec![unsupported(closure_span, "closure body")],
+                        result: result.clone(),
+                    }),
+                })],
+                closure_span,
+                "closure body",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Generator {
+                    source: bir::Operand::Constant(bir::Constant::Int(1)),
+                    captured_operands: Vec::new(),
+                    body: Box::new(bir::GeneratorBody {
+                        source_local: bir::LocalId(1),
+                        capture_locals: Vec::new(),
+                        stmts: vec![unsupported(generator_span, "generator body")],
+                    }),
+                })],
+                generator_span,
+                "generator body",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Match {
+                    scrutinee: bir::Operand::Constant(bir::Constant::Int(1)),
+                    arms: vec![bir::MatchArm {
+                        pattern: bir::Pattern::Wildcard,
+                        guard_stmts: vec![unsupported(guard_span, "match guard")],
+                        guard: Some(bir::Operand::Constant(bir::Constant::Bool(true))),
+                        body_stmts: Vec::new(),
+                        result: result.clone(),
+                    }],
+                })],
+                guard_span,
+                "match guard",
+            ),
+            (
+                vec![assignment(bir::Rvalue::Match {
+                    scrutinee: bir::Operand::Constant(bir::Constant::Int(1)),
+                    arms: vec![bir::MatchArm {
+                        pattern: bir::Pattern::Wildcard,
+                        guard_stmts: Vec::new(),
+                        guard: None,
+                        body_stmts: vec![unsupported(body_span, "match body")],
+                        result,
+                    }],
+                })],
+                body_span,
+                "match body",
+            ),
+        ];
+
+        for (statements, span, description) in cases {
+            assert_eq!(
+                first_unsupported_default_statement(&statements),
+                Some((span, description.to_string())),
+                "a nested {description} refusal must prevent an incomplete default computation from becoming Source"
+            );
+        }
+    }
+
+    #[test]
+    fn invalid_default_is_rejected_before_body_ir_is_built() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def choose(value: int = \"wrong\") -> int:\n  return value\n";
+        let error = build(source, &["m", "invalid_default"])
+            .err()
+            .ok_or("a mismatched callable default must be rejected before Body IR construction")?;
+        assert!(
+            error.to_string().contains("Type mismatch: expected 'int', found 'str'"),
+            "the source typechecker must reject the mismatched default before a Body-IR consumer sees it: {error}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn refused_default_restores_ownership_state_before_local_ids_are_reused() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Lowering the partial moves one of its synthesized forwarding locals before the bytes literal refuses.
+        // The transaction must discard that move before `second` reuses the local id in the normal body, or the
+        // required root-scope drop would silently disappear.
+        let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + b\"x\") -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
+        let (module, _diagnostics) =
+            build_after_expected_typecheck_errors(source, &["m", "default_ownership_rollback"])?;
+        let choose = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "choose")
+            .ok_or("expected the choose Body IR")?;
+        let value = choose.params.first().ok_or("expected choose's value parameter")?;
+        assert!(matches!(
+            &value.default,
+            bir::CallableParamDefault::Unsupported { description, .. } if description == "bytes literal"
+        ));
+        let second = choose
+            .locals
+            .iter()
+            .find(|local| local.name == "second")
+            .ok_or("expected second binding after refused default")?;
+        assert!(
+            choose.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Drop { local } if *local == second.id
+            )),
+            "a stale speculative move must not suppress second's required drop: {choose:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_callable_defaults_remain_body_ir_refusals_without_implicit_captures()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let cases = [
+            (
+                "earlier parameter",
+                "def choose(first: str, second: str = first) -> str:\n  return second\n",
+                "first",
+            ),
+            (
+                "receiver",
+                "model Label:\n  text: str\n\n  def choose(self, value: str = self.text) -> str:\n    return value\n",
+                "self.text",
+            ),
+            (
+                "bare field",
+                "model Label:\n  text: str\n\n  def choose(self, value: str = text) -> str:\n    return value\n",
+                "text",
+            ),
+            (
+                "bare property",
+                "model Label:\n  text: str\n\n  property display -> str:\n    return self.text\n\n  def choose(self, value: str = display) -> str:\n    return value\n",
+                "display",
+            ),
+        ];
+
+        for (case, source, default_spelling) in cases {
+            let (module, diagnostics) = build_after_expected_typecheck_errors(source, &["m", "default_capture"])?;
+            let rejected_name = match default_spelling.split('.').next() {
+                Some(name) => name,
+                None => default_spelling,
+            };
+            assert!(
+                diagnostics.iter().any(|diagnostic| diagnostic.contains(rejected_name)),
+                "the source checker must reject the {case} default before Body IR: {diagnostics:?}"
+            );
+            let choose = module
+                .bodies
+                .iter()
+                .find(|body| body.name == "choose")
+                .ok_or("expected the choose Body IR")?;
+            let parameter = choose.params.last().ok_or("expected the defaulted parameter")?;
+            let bir::CallableParamDefault::Unsupported { span, description } = &parameter.default else {
+                return Err(format!("a {case} default must not fabricate a callable-frame or instance capture").into());
+            };
+            let default_start = source
+                .rfind(default_spelling)
+                .ok_or("missing invalid default source spelling")?;
+            assert_eq!(
+                *span,
+                HirSourceSpan::new(default_start, default_start + default_spelling.len()),
+                "the {case} refusal must preserve the whole default expression span"
+            );
+            assert!(description.contains(rejected_name));
+            assert!(
+                !choose
+                    .locals
+                    .iter()
+                    .any(|local| matches!(local.origin, bir::LocalOrigin::External)),
+                "a direct consumer must not need an implicit lexical lookup for the refused {case} default: {choose:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn validated_newtype_default_remains_a_visible_body_ir_refusal() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "type Attempts = newtype int:\n  def from_underlying(n: int) -> Result[Attempts, ValidationError]:\n    return Ok(Attempts(n))\n\ndef choose(value: Attempts = 3) -> Attempts:\n  return value\n";
+        let module = build(source, &["m", "newtype_default"])?;
+        let choose = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "choose")
+            .ok_or("expected the choose Body IR")?;
+        let value = choose.params.first().ok_or("expected the newtype default parameter")?;
+        let bir::CallableParamDefault::Unsupported { span, description } = &value.default else {
+            return Err(
+                "a default requiring validated-newtype coercion must not become a raw source computation".into(),
+            );
+        };
+        let default_start = source.rfind("3)").ok_or("missing newtype default spelling")?;
+        assert_eq!(*span, HirSourceSpan::new(default_start, default_start + 1));
+        assert_eq!(
+            description,
+            "default requires a validated-newtype coercion Body IR does not yet represent"
+        );
+        assert_eq!(choose.locals.len(), 1);
+        assert!(
+            !choose
+                .locals
+                .iter()
+                .any(|local| matches!(local.origin, bir::LocalOrigin::External)),
+            "the newtype refusal must not leave a hidden source lookup in the callable body: {choose:?}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn aliased_method_parameter_type_retains_the_checked_callable_type() -> Result<(), Box<dyn std::error::Error>> {
         // `UserId` is a type alias for `int` (RFC-style `type X = Y`). A naive re-parse of the raw `id: UserId`
         // annotation inside Body IR (with no alias table of its own) could only produce `Named("UserId")`; the
@@ -6210,6 +6948,20 @@ mod tests {
         let source = "def make(step: int) -> int:\n  add: (int) -> int = (x) => x + 1\n  return add(step)\n";
         let module = build(source, &["m", "closure_no_capture"])?;
         let snapshot = module.render_snapshot();
+        let make = module.bodies.first().ok_or("expected the make function Body IR")?;
+        let closure_params = make
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                bir::StatementKind::Assign {
+                    rvalue: bir::Rvalue::Closure { params, .. },
+                    ..
+                } => Some(params),
+                _ => None,
+            })
+            .ok_or("expected the closure literal")?;
+        let x = closure_params.first().ok_or("expected the closure parameter")?;
 
         assert!(
             !snapshot.contains("unsupported("),
@@ -6220,9 +6972,44 @@ mod tests {
             "a closure that reads no outer variable should capture nothing: {snapshot}"
         );
         assert!(
-            snapshot.contains("closure(params=[x: int]"),
+            snapshot.contains("closure(params=[x: int local=_"),
             "the closure's own parameter should be recorded: {snapshot}"
         );
+        assert_eq!(x.name, "x");
+        assert_eq!(x.local, bir::LocalId(1));
+        assert_eq!(
+            x.span,
+            HirSourceSpan::new(
+                source.find("(x)").ok_or("missing closure parameter spelling")? + 1,
+                source.find("(x)").ok_or("missing closure parameter spelling")? + 2,
+            )
+        );
+        assert!(matches!(&x.default, bir::CallableParamDefault::Required));
+        Ok(())
+    }
+
+    #[test]
+    fn source_closure_default_syntax_is_refused_before_body_ir_exists() -> Result<(), Box<dyn std::error::Error>> {
+        // Closure parameter parsing deliberately accepts identifiers only. Keeping this source-level failure explicit
+        // means #1172 does not invent an executable local-closure default from parser-unrepresentable syntax.
+        let source = "def make() -> int:\n  value: (int) -> int = (x = 1) => x\n  return value(2)\n";
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let errors = match parser::parse(&tokens) {
+            Ok(_) => return Err("closure-default source syntax must not parse into a Body-IR input".into()),
+            Err(errors) => errors,
+        };
+        let parameter_start = source
+            .find("x = 1")
+            .ok_or("missing closure default parameter spelling")?;
+        let parameter_end = parameter_start + "x = 1".len();
+
+        assert!(
+            errors
+                .iter()
+                .any(|error| { error.span.start >= parameter_start && error.span.end <= parameter_end }),
+            "the parser must refuse the closure-default spelling at its own source parameter range: {errors:?}"
+        );
+
         Ok(())
     }
 
@@ -6312,17 +7099,93 @@ mod tests {
     fn lowers_a_partial_callable_into_a_forwarding_closure() -> Result<(), Box<dyn std::error::Error>> {
         // A local partial retains every target parameter in its callable surface. The captured `method` is a
         // defaulted, overrideable slot, while `path` remains required and `content_type` keeps the target default.
-        let source = "def route(method: str, path: str, content_type: str = \"text\") -> str:\n  return method + path + content_type\n\ndef make() -> str:\n  get = partial route(method=\"GET\")\n  return get(path=\"/health\")\n";
+        // `method` is read again after construction, so the non-Copy preset capture must be a real clone fact.
+        let source = "def route(method: str, path: str, content_type: str = \"text\") -> str:\n  return method + path + content_type\n\ndef make(method: str) -> str:\n  get = partial route(method=method)\n  named = get(method=\"POST\", path=\"/named\")\n  return method + get(\"/health\")\n";
         let module = build(source, &["m", "partial_callable"])?;
         let snapshot = module.render_snapshot();
+        let make = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "make")
+            .ok_or("expected the make function Body IR")?;
+        let (partial_params, captured_operands, closure_body) = make
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                bir::StatementKind::Assign {
+                    rvalue:
+                        bir::Rvalue::Closure {
+                            params,
+                            captured_operands,
+                            body,
+                        },
+                    ..
+                } => Some((params, captured_operands, body)),
+                _ => None,
+            })
+            .ok_or("expected the synthesized partial closure")?;
+        let method = partial_params
+            .iter()
+            .find(|param| param.name == "method")
+            .ok_or("expected the captured method parameter")?;
+        let content_type = partial_params
+            .iter()
+            .find(|param| param.name == "content_type")
+            .ok_or("expected the target default parameter")?;
 
+        assert!(matches!(
+            &method.default,
+            bir::CallableParamDefault::PartialPreset { .. }
+        ));
+        let bir::CallableParamDefault::PartialPreset { capture } = &method.default else {
+            return Err("the partial preset must retain its capture local".into());
+        };
+        assert_eq!(closure_body.capture_locals, vec![*capture]);
+        assert!(matches!(
+            captured_operands.first(),
+            Some(bir::Operand::Place(bir::PlaceOperand {
+                fact: bir::OwnershipFact::Clone,
+                ..
+            }))
+        ));
+        let bir::CallableParamDefault::Source(content_type_default) = &content_type.default else {
+            return Err("the unpresetted checked default must remain a deferred source computation".into());
+        };
+        let content_type_start = source.find("\"text\"").ok_or("missing content_type default spelling")?;
+        assert_eq!(
+            content_type_default.span,
+            HirSourceSpan::new(content_type_start, content_type_start + "\"text\"".len())
+        );
+        assert!(content_type_default.stmts.is_empty());
+        assert_eq!(
+            content_type_default.result,
+            bir::Operand::Constant(bir::Constant::Str("text".to_string()))
+        );
+        let supplied_slots: Vec<Vec<usize>> = make
+            .block
+            .stmts
+            .iter()
+            .filter_map(|statement| match &statement.kind {
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Local(target)),
+                    ..
+                } => match &target.binding {
+                    bir::ArgumentBinding::Resolved { arguments, .. } => {
+                        Some(arguments.iter().map(|argument| argument.slot).collect())
+                    }
+                    bir::ArgumentBinding::UnresolvedPositional => None,
+                },
+                _ => None,
+            })
+            .collect();
         assert!(
-            !snapshot.contains("unsupported("),
-            "a bare-function-name partial callable should lower fully: {snapshot}"
+            supplied_slots.iter().any(|slots| slots.as_slice() == [0, 1]),
+            "a named argument must override the captured preset in its declaration slot: {make:?}"
         );
         assert!(
-            snapshot.contains("method: str = captured("),
-            "the preset must remain an overrideable closure parameter backed by a captured default: {snapshot}"
+            supplied_slots.iter().any(|slots| slots.as_slice() == [1]),
+            "a positional residual argument must omit the preset and trailing source default by declaration slot: {make:?}"
         );
         assert!(
             snapshot.contains("call local:move(_"),

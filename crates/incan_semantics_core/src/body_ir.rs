@@ -35,7 +35,7 @@
 //! a call site left to their declared defaults. One binding type serves direct calls, local callable values, method
 //! calls, and construction, so a consumer reads the same fact the same way regardless of the spelling. A default's
 //! *value* is deliberately not materialized at the call site: its computation stays owned by the declaration that
-//! introduced it, matching the contract [`ClosureParam`] already states. Resolved explicit call-site type arguments
+//! introduced it, matching the contract [`CallableParam`] already states. Resolved explicit call-site type arguments
 //! ride on the callee target rather than the argument list, because they are part of which callable was selected
 //! rather than what it was passed.
 
@@ -80,7 +80,17 @@ pub struct Body {
     /// Every local (parameter, user binding, or compiler-introduced temporary) declared in this body, in
     /// declaration order. Referenced elsewhere by [`LocalId`] index.
     pub locals: Vec<LocalDecl>,
+    /// The callable contract for every parameter, in declaration order.
+    ///
+    /// Unlike `param_locals`, this keeps the direct-consumer binding contract: parameter identity, source span,
+    /// resolved type, and whether omission requires a call-time computation, uses a construction-time partial
+    /// preset, or must refuse because v0 cannot evaluate the source default. A target must consume this field rather
+    /// than reconstructing defaults from AST/HIR/typechecker state or generated Rust.
+    pub params: Vec<CallableParam>,
     /// Locals bound to this body's parameters, in parameter order.
+    ///
+    /// Kept as a compatibility projection for pre-#1172 consumers that only support required arguments. New
+    /// consumers must use `params` so omission behavior stays visible and fail-closed.
     pub param_locals: Vec<LocalId>,
     /// Source scope tree for this body, used to map statements/locals back to lexical scopes for diagnostics.
     pub scopes: Vec<ScopeInfo>,
@@ -160,6 +170,12 @@ impl Body {
         );
         for local in &self.locals {
             let _ = writeln!(&mut out, "  {}", local.render_snapshot());
+        }
+        if !self.params.is_empty() {
+            let _ = writeln!(&mut out, "  params:");
+            for param in &self.params {
+                let _ = writeln!(&mut out, "    {}", param.render_snapshot());
+            }
         }
         render_block(&mut out, &self.block, 1);
         if !self.runtime_requirements.is_empty() {
@@ -528,7 +544,7 @@ pub enum Rvalue {
     /// variable is exactly the kind of copy/move/borrow decision this model must carry, not omit.
     Closure {
         /// The closure's own declared parameters, in order.
-        params: Vec<ClosureParam>,
+        params: Vec<CallableParam>,
         /// Every free variable the closure reads from its enclosing scope (or, for a partial callable's
         /// synthesized closure, every preset value), each lowered exactly once at the point this closure literal is
         /// constructed -- in first-occurrence source order, each carrying its own [`OwnershipFact`]/last-use marker
@@ -629,7 +645,7 @@ impl Rvalue {
                 captured_operands,
                 body,
             } => {
-                let params_str: Vec<String> = params.iter().map(ClosureParam::render_snapshot).collect();
+                let params_str: Vec<String> = params.iter().map(CallableParam::render_snapshot).collect();
                 let captures_str: Vec<String> = captured_operands.iter().map(Operand::render_snapshot).collect();
                 format!(
                     "closure(params=[{}], captures=[{}]) {{ {} }}",
@@ -659,35 +675,136 @@ impl Rvalue {
     }
 }
 
-/// One parameter of a [`Rvalue::Closure`] (or a partial callable's synthesized forwarding closure).
+/// One parameter of a top-level/method [`Body`] or [`Rvalue::Closure`].
 ///
-/// `has_default` preserves whether an argument may be omitted for this callable value. A partial's preset parameter
-/// remains present as an overrideable default: [`Self::preset_capture`] identifies the value captured when the
-/// partial was constructed. A source-declared default has `has_default` set but no capture; its computation remains
-/// owned by the declaration/closure definition that introduced it.
+/// Every callable surface uses this one representation so a direct consumer can bind top-level functions, methods,
+/// and local closures by the same contract. `default` is intentionally tagged instead of using an availability bit
+/// plus an optional capture: ordinary defaults are evaluated at the omitted call site, while partial presets were
+/// already evaluated when the callable was constructed. A consumer must visibly refuse
+/// [`CallableParamDefault::Unsupported`] at its stored source span instead of guessing from source structures or
+/// silently falling back.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ClosureParam {
+pub struct CallableParam {
+    /// The local that receives this argument in the callable's execution frame.
+    pub local: LocalId,
+    /// Source-level parameter name.
     pub name: String,
+    /// Fully resolved parameter type.
     pub ty: IncanType,
-    pub has_default: bool,
-    /// The closure-body local holding this partial parameter's construction-time preset, if any.
+    /// Original parameter span, retained for argument-binding diagnostics.
     ///
-    /// This is set only when `has_default` is true. It distinguishes the callable value's materialized preset from
-    /// an ordinary source default and ensures an executor can use the captured value exactly when the caller omits
-    /// this named parameter, while still accepting a caller-provided override.
-    pub preset_capture: Option<LocalId>,
+    /// The syntax AST currently retains no receiver-token range, so a synthetic method `self` parameter uses the
+    /// enclosing method declaration span. All source-spelled parameters retain their own parameter span.
+    pub span: HirSourceSpan,
+    /// The value to use when this parameter is omitted, or the explicit reason direct evaluation is unavailable.
+    pub default: CallableParamDefault,
 }
 
-impl ClosureParam {
+impl CallableParam {
     /// Render a deterministic maintainer-facing spelling for this parameter.
     fn render_snapshot(&self) -> String {
-        let default = match (self.has_default, self.preset_capture) {
-            (true, Some(capture)) => format!(" = captured(_{})", capture.0),
-            (true, None) => " = default".to_string(),
-            (false, None) => String::new(),
-            (false, Some(capture)) => format!(" = invalid-capture(_{})", capture.0),
-        };
-        format!("{}: {}{default}", self.name, self.ty)
+        format!(
+            "{}: {} local=_{} span={}..{}{}",
+            self.name,
+            self.ty,
+            self.local.0,
+            self.span.start,
+            self.span.end,
+            self.default.render_snapshot()
+        )
+    }
+}
+
+/// The direct-consumer binding behavior for one [`CallableParam`].
+///
+/// A source default owns a closed, type-fact-backed Body-IR computation and is evaluated only when the corresponding
+/// argument is omitted. Lowering must use [`CallableParamDefault::Unsupported`] instead when it cannot establish
+/// that contract. A partial preset instead names a closure-frame local populated from the partial's construction-time
+/// capture. These variants must remain distinct: treating a preset as a source computation would evaluate it again,
+/// while treating a source computation as a capture would evaluate it too early.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CallableParamDefault {
+    /// The caller must supply this argument.
+    Required,
+    /// A source-declared default with usable canonical type facts whose Body-IR statements and result run at the
+    /// omitted call site.
+    ///
+    /// The computation runs in its declaration-owned default-evaluation context, before the callable execution
+    /// frame receives an argument for this parameter. Its lowering deliberately refuses reads that would require a
+    /// callable-local binding, so a direct consumer must execute the stored computation as-is and then bind its
+    /// result to [`CallableParam::local`].
+    Source(DefaultComputation),
+    /// A partial-callable value captured when the partial was constructed and still overrideable by the caller.
+    PartialPreset {
+        /// The closure-frame local populated from the matching captured operand.
+        capture: LocalId,
+    },
+    /// A source-declared default Body IR cannot evaluate without recreating another compiler layer.
+    ///
+    /// Direct consumers must refuse at `span`; they must not use a legacy fallback or report the enclosing
+    /// declaration/call span instead.
+    Unsupported {
+        /// Original source span of the unrepresentable default expression.
+        span: HirSourceSpan,
+        /// Maintainer-facing reason the expression cannot be executed directly.
+        description: String,
+    },
+}
+
+impl CallableParamDefault {
+    /// Render a deterministic maintainer-facing spelling of the omission behavior.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Required => String::new(),
+            Self::Source(computation) => format!(" = source_default({})", computation.render_snapshot()),
+            Self::PartialPreset { capture } => format!(" = captured(_{})", capture.0),
+            Self::Unsupported { span, description } => {
+                format!(
+                    " = unsupported_default({description} span={}..{})",
+                    span.start, span.end
+                )
+            }
+        }
+    }
+}
+
+/// A deferred Body-IR computation for one source-declared parameter default.
+///
+/// `stmts` are intentionally not appended to the owning callable's normal block: evaluating them there would run a
+/// default even when a caller supplied an argument. A direct consumer executes this closed computation at the
+/// omitted call site, before binding the callable frame's [`CallableParam::local`] argument. Any source read that
+/// would require a callable-local or otherwise unrepresented lexical binding is recorded instead as
+/// [`CallableParamDefault::Unsupported`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct DefaultComputation {
+    /// Full source span of the default expression.
+    pub span: HirSourceSpan,
+    /// Statements that must run before producing `result`.
+    pub stmts: Vec<Statement>,
+    /// The default expression's computed value.
+    pub result: Operand,
+}
+
+impl DefaultComputation {
+    /// Render a deterministic maintainer-facing spelling of the deferred computation.
+    fn render_snapshot(&self) -> String {
+        let flattened = render_flattened_stmts(&self.stmts);
+        if flattened.is_empty() {
+            format!(
+                "span={}..{} result: {}",
+                self.span.start,
+                self.span.end,
+                self.result.render_snapshot()
+            )
+        } else {
+            format!(
+                "span={}..{} {}; result: {}",
+                self.span.start,
+                self.span.end,
+                flattened.join("; "),
+                self.result.render_snapshot()
+            )
+        }
     }
 }
 
@@ -702,14 +819,11 @@ impl ClosureParam {
 /// overwrite, restored explicitly around closure bodies specifically -- see `BodyBuilder::lower_closure`), so
 /// giving each closure a separate zero-based local space would mean inventing a parallel indexing scheme just for
 /// this one construct. Reusing the owning body's monotonic counter keeps every [`LocalId`] in a function globally
-/// unique and lets [`Self::param_locals`]/[`Self::capture_locals`] simply index into the same [`Body::locals`] the
-/// rest of the function uses, so a closure's own parameters and captures show up in the ordinary `locals:` listing
-/// like any other local.
+/// unique and lets [`Rvalue::Closure`]'s [`CallableParam::local`] values and [`Self::capture_locals`] simply index
+/// into the same [`Body::locals`] the rest of the function uses, so a closure's own parameters and captures show up
+/// in the ordinary `locals:` listing like any other local.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ClosureBody {
-    /// The closure's own declared parameters, in order. Each entry indexes into the owning [`Body`]'s `locals` (see
-    /// the type-level docs for why closures do not carry their own separate locals vector).
-    pub param_locals: Vec<LocalId>,
     /// The closure's own captured-binding locals, in the same order as [`Rvalue::Closure::captured_operands`] --
     /// `capture_locals[i]` is where a read of the `i`-th captured operand's value is durably bound inside the
     /// closure body, so subsequent reads inside the body see it as an ordinary local rather than re-reading the
@@ -1149,10 +1263,11 @@ pub enum ArgumentBinding {
         ///
         /// Each names a parameter or field the call site left to a default. Body IR records the fact without
         /// materializing the value: the default's computation stays owned by whichever declaration or callable value
-        /// introduced it, which is the contract [`ClosureParam`] already states. For an ordinary declaration that is
-        /// a source-declared default; for a partial callable it may instead be the construction-time preset
-        /// [`ClosureParam::preset_capture`] identifies, so a consumer reads the owning [`Rvalue::Closure`] rather
-        /// than assuming the target declaration has a default of its own. Recording the omission here is still what
+        /// introduced it, which is the contract [`CallableParam`] already states. For an ordinary declaration that is
+        /// a source-declared [`CallableParamDefault::Source`] computation; for a partial callable it may instead be
+        /// the construction-time [`CallableParamDefault::PartialPreset`] its callable parameter identifies, so a
+        /// consumer reads the owning [`Rvalue::Closure`] rather than assuming the target declaration has a default of
+        /// its own. Recording the omission here is still what
         /// frees a consumer from diffing the operand vector against the declaration, and it is why no defaulted slot
         /// carries an [`OwnershipFact`]: this call site evaluates nothing for it. Making those defaults evaluable is
         /// #1172's own scope, and this fact is what tells it which slots need a value.
@@ -1902,6 +2017,22 @@ mod tests {
                     span: HirSourceSpan::new(20, 25),
                 },
             ],
+            params: vec![
+                CallableParam {
+                    local: local_x,
+                    name: "x".to_string(),
+                    ty: IncanType::Primitive(IncanPrimitiveType::Int),
+                    span: HirSourceSpan::new(4, 5),
+                    default: CallableParamDefault::Required,
+                },
+                CallableParam {
+                    local: local_y,
+                    name: "y".to_string(),
+                    ty: IncanType::Primitive(IncanPrimitiveType::Int),
+                    span: HirSourceSpan::new(7, 8),
+                    default: CallableParamDefault::Required,
+                },
+            ],
             param_locals: vec![local_x, local_y],
             scopes: vec![ScopeInfo {
                 id: ScopeId(0),
@@ -2031,7 +2162,7 @@ mod tests {
     }
 
     #[test]
-    fn local_callable_target_and_defaulted_closure_parameter_render() {
+    fn local_callable_target_and_tagged_default_parameter_render() {
         let mut body = sample_body();
         body.block.stmts.insert(
             0,
@@ -2059,14 +2190,70 @@ mod tests {
             "a local call target must retain its operand ownership fact: {snapshot}"
         );
         assert_eq!(
-            ClosureParam {
+            CallableParam {
+                local: LocalId(7),
                 name: "suffix".to_string(),
                 ty: IncanType::Primitive(IncanPrimitiveType::Str),
-                has_default: true,
-                preset_capture: None,
+                span: HirSourceSpan::new(12, 18),
+                default: CallableParamDefault::Source(DefaultComputation {
+                    span: HirSourceSpan::new(21, 27),
+                    stmts: Vec::new(),
+                    result: Operand::Constant(Constant::Str("txt".to_string())),
+                }),
             }
             .render_snapshot(),
-            "suffix: str = default"
+            "suffix: str local=_7 span=12..18 = source_default(span=21..27 result: const(\"txt\"))"
+        );
+    }
+
+    #[test]
+    fn callable_parameter_default_origins_are_distinct_and_deterministic() {
+        let source = CallableParam {
+            local: LocalId(1),
+            name: "limit".to_string(),
+            ty: IncanType::Primitive(IncanPrimitiveType::Int),
+            span: HirSourceSpan::new(4, 14),
+            default: CallableParamDefault::Source(DefaultComputation {
+                span: HirSourceSpan::new(12, 13),
+                stmts: vec![Statement {
+                    kind: StatementKind::Assign {
+                        place: Place::from_local(LocalId(3)),
+                        rvalue: Rvalue::UnaryOp(UnOp::Neg, Operand::Constant(Constant::Int(1))),
+                    },
+                    span: HirSourceSpan::new(12, 13),
+                }],
+                result: Operand::place(Place::from_local(LocalId(3)), OwnershipFact::Copy, true),
+            }),
+        };
+        let preset = CallableParam {
+            local: LocalId(2),
+            name: "method".to_string(),
+            ty: IncanType::Primitive(IncanPrimitiveType::Str),
+            span: HirSourceSpan::new(16, 27),
+            default: CallableParamDefault::PartialPreset { capture: LocalId(6) },
+        };
+        let unsupported = CallableParam {
+            local: LocalId(4),
+            name: "payload".to_string(),
+            ty: IncanType::Primitive(IncanPrimitiveType::Bytes),
+            span: HirSourceSpan::new(29, 43),
+            default: CallableParamDefault::Unsupported {
+                span: HirSourceSpan::new(40, 43),
+                description: "bytes literal".to_string(),
+            },
+        };
+
+        assert_eq!(
+            source.render_snapshot(),
+            "limit: int local=_1 span=4..14 = source_default(span=12..13 _3 = -const(1); result: copy(_3, last_use))"
+        );
+        assert_eq!(
+            preset.render_snapshot(),
+            "method: str local=_2 span=16..27 = captured(_6)"
+        );
+        assert_eq!(
+            unsupported.render_snapshot(),
+            "payload: bytes local=_4 span=29..43 = unsupported_default(bytes literal span=40..43)"
         );
     }
 
@@ -2270,11 +2457,12 @@ mod tests {
                 kind: StatementKind::Assign {
                     place: Place::from_local(LocalId(2)),
                     rvalue: Rvalue::Closure {
-                        params: vec![ClosureParam {
+                        params: vec![CallableParam {
+                            local: param_local,
                             name: "z".to_string(),
                             ty: IncanType::Primitive(IncanPrimitiveType::Int),
-                            has_default: false,
-                            preset_capture: None,
+                            span: HirSourceSpan::new(0, 1),
+                            default: CallableParamDefault::Required,
                         }],
                         captured_operands: vec![Operand::place(
                             Place::from_local(LocalId(0)),
@@ -2282,7 +2470,6 @@ mod tests {
                             false,
                         )],
                         body: Box::new(ClosureBody {
-                            param_locals: vec![param_local],
                             capture_locals: vec![capture_local],
                             stmts: Vec::new(),
                             result: Operand::place(
@@ -2301,7 +2488,7 @@ mod tests {
         );
         let snapshot = body.render_snapshot();
         assert!(
-            snapshot.contains("closure(params=[z: int], captures=[clone(_0)]) { result: copy(_4) }"),
+            snapshot.contains("closure(params=[z: int local=_3 span=0..1], captures=[clone(_0)]) { result: copy(_4) }"),
             "unexpected closure rendering: {snapshot}"
         );
         assert!(snapshot.contains("local 4 x : int [captured]"));
