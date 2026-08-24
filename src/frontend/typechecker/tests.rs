@@ -129,6 +129,17 @@ fn check_str(source: &str) -> Result<(), Vec<CompileError>> {
     check(&ast)
 }
 
+fn callable_default_errors(source: &str) -> Result<Vec<CompileError>, Box<dyn std::error::Error>> {
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .err()
+        .ok_or_else(|| std::io::Error::other("expected callable default typechecking to fail"))
+        .map_err(Into::into)
+}
+
 #[test]
 fn metadata_free_path_new_records_a_borrowed_argument_boundary() -> Result<(), String> {
     let source = r#"
@@ -3436,6 +3447,225 @@ def add(a: int, b: int) -> int:
   return a + b
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn callable_default_function_records_contextual_literal_and_call_facts() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def fallback() -> int:
+  return 2
+
+def choose(limit: u8 = 7, value: int = fallback()) -> int:
+  return value
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let literal_start = source.find("7,").ok_or("missing contextual literal default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(literal_start, literal_start + 1)),
+        Some(&ResolvedType::Numeric(NumericTypeId::U8)),
+        "a numeric default must retain the declared parameter type as its canonical expression fact"
+    );
+    let call_start = source.rfind("fallback()").ok_or("missing callable default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(call_start, call_start + "fallback()".len())),
+        Some(&ResolvedType::Int),
+        "a declaration-visible default call must retain its exact root expression fact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_generic_method_records_literal_and_call_facts() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def fallback() -> str:
+  return "label"
+
+model Shelf[T]:
+  def label[U](self, owner_items: list[T] = [], method_items: list[U] = [], suffix: str = "", fallback_label: str = fallback()) -> str:
+    return suffix
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let literal_start = source.find("\"\"").ok_or("missing method literal default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(literal_start, literal_start + "\"\"".len())),
+        Some(&ResolvedType::Str),
+        "method literal defaults must retain type facts after generic owner and method contexts are installed"
+    );
+    let owner_list_start = source.find("[]").ok_or("missing generic owner list default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(owner_list_start, owner_list_start + "[]".len())),
+        Some(&ResolvedType::Generic(
+            "List".to_string(),
+            vec![ResolvedType::Named("T".to_string())],
+        )),
+        "a generic owner default must retain the owner type parameter in its root fact"
+    );
+    let method_list_start = source.rfind("[]").ok_or("missing generic method list default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(method_list_start, method_list_start + "[]".len())),
+        Some(&ResolvedType::Generic(
+            "List".to_string(),
+            vec![ResolvedType::Named("U".to_string())],
+        )),
+        "a generic method default must retain the method type parameter in its root fact"
+    );
+    let call_start = source.rfind("fallback()").ok_or("missing method call default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(call_start, call_start + "fallback()".len())),
+        Some(&ResolvedType::Str),
+        "method call defaults must retain exact root type facts after generic owner and method contexts are installed"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_function_type_mismatch_uses_the_default_expression_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = "def choose(value: int = \"wrong\") -> int:\n  return value\n";
+    let errors = callable_default_errors(source)?;
+    let default_start = source.find("\"wrong\"").ok_or("missing function mismatch default")?;
+    let default_span = Span::new(default_start, default_start + "\"wrong\"".len());
+    assert!(
+        errors.iter().any(|error| {
+            error.span == default_span && error.message.contains("Type mismatch: expected 'int', found 'str'")
+        }),
+        "expected an exact default-expression mismatch diagnostic, got: {errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_method_type_mismatch_uses_the_default_expression_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "model Label:\n  def choose(self, value: str = 1) -> str:\n    return value\n";
+    let errors = callable_default_errors(source)?;
+    let default_start = source.find("1)").ok_or("missing method mismatch default")?;
+    let default_span = Span::new(default_start, default_start + 1);
+    assert!(
+        errors.iter().any(|error| {
+            error.span == default_span && error.message.contains("Type mismatch: expected 'str', found 'int'")
+        }),
+        "expected an exact method-default mismatch diagnostic, got: {errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_defaults_cannot_read_callable_frame_bindings() -> Result<(), Box<dyn std::error::Error>> {
+    let function_source = "def choose(first: str, value: str = first) -> str:\n  return value\n";
+    let function_errors = callable_default_errors(function_source)?;
+    let first_start = function_source.rfind("first").ok_or("missing parameter default read")?;
+    let first_span = Span::new(first_start, first_start + "first".len());
+    assert!(
+        function_errors
+            .iter()
+            .any(|error| error.span == first_span && error.message.contains("Unknown symbol 'first'")),
+        "the function default must be checked before callable parameters are bound: {function_errors:?}"
+    );
+
+    let method_source =
+        "model Label:\n  text: str\n\n  def choose(self, value: str = self.text) -> str:\n    return value\n";
+    let method_errors = callable_default_errors(method_source)?;
+    let self_start = method_source.find("self.text").ok_or("missing receiver default read")?;
+    let self_span = Span::new(self_start, self_start + "self".len());
+    assert!(
+        method_errors
+            .iter()
+            .any(|error| error.span == self_span && error.message.contains("Unknown symbol 'self'")),
+        "the method default must be checked before self is bound: {method_errors:?}"
+    );
+
+    let bare_field_source =
+        "model Label:\n  text: str\n\n  def choose(self, value: str = text) -> str:\n    return value\n";
+    let bare_field_errors = callable_default_errors(bare_field_source)?;
+    let text_start = bare_field_source
+        .rfind("text")
+        .ok_or("missing bare field default read")?;
+    let text_span = Span::new(text_start, text_start + "text".len());
+    assert!(
+        bare_field_errors
+            .iter()
+            .any(|error| error.span == text_span && error.message.contains("Unknown symbol 'text'")),
+        "the method default must not resolve an enclosing instance field: {bare_field_errors:?}"
+    );
+
+    let bare_property_source = "model Label:\n  text: str\n\n  property display -> str:\n    return self.text\n\n  def choose(self, value: str = display) -> str:\n    return value\n";
+    let bare_property_errors = callable_default_errors(bare_property_source)?;
+    let display_start = bare_property_source
+        .rfind("display")
+        .ok_or("missing bare property default read")?;
+    let display_span = Span::new(display_start, display_start + "display".len());
+    assert!(
+        bare_property_errors
+            .iter()
+            .any(|error| error.span == display_span && error.message.contains("Unknown symbol 'display'")),
+        "the method default must not resolve an enclosing computed property: {bare_property_errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_newtype_records_root_type_and_checked_coercion() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Attempts = newtype int:
+  def from_underlying(n: int) -> Result[Attempts, ValidationError]:
+    return Ok(Attempts(n))
+
+def choose(value: Attempts = 3) -> Attempts:
+  return value
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let default_start = source.rfind("3)").ok_or("missing newtype default")?;
+    let default_span = Span::new(default_start, default_start + 1);
+    assert_eq!(
+        checker.type_info().expr_type(default_span),
+        Some(&ResolvedType::Int),
+        "the default retains its source expression type rather than pretending to be the newtype"
+    );
+    let coercion = checker
+        .type_info()
+        .validated_newtype_coercion(default_span)
+        .ok_or("missing callable-default validated-newtype coercion")?;
+    assert_eq!(coercion.target_type, ResolvedType::Named("Attempts".to_string()));
+    assert_eq!(coercion.steps.len(), 1);
+    assert_eq!(coercion.steps[0].newtype_name, "Attempts");
+    assert_eq!(coercion.steps[0].ctor.as_deref(), Some("from_underlying"));
+
+    Ok(())
 }
 
 #[test]

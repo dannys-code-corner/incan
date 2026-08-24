@@ -57,6 +57,10 @@ impl TypeChecker {
             self.errors.push(errors::unknown_symbol(name, span));
             return ResolvedType::Unknown;
         };
+        if self.checking_callable_default && matches!(&sym.kind, SymbolKind::Field(_) | SymbolKind::Property(_)) {
+            self.errors.push(errors::unknown_symbol(name, span));
+            return ResolvedType::Unknown;
+        }
         if let Some(span_carrier) = self.c_abi_span_bindings.get(name).copied() {
             if let Some(consumed_at) = self
                 .consumed_c_abi_span_bindings
