@@ -1924,7 +1924,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out.push(bir::Statement {
             kind: bir::StatementKind::Assign {
                 place: bir::Place::from_local(dict_local),
-                rvalue: bir::Rvalue::Aggregate(bir::AggregateKind::Dict, Vec::new()),
+                rvalue: bir::Rvalue::Dict(Vec::new()),
             },
             span: hir_span_value,
         });
@@ -3221,11 +3221,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         )
     }
 
-    /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Aggregate`] with [`bir::AggregateKind::Dict`], whose
-    /// operand vector alternates key, value, key, value, ... in source order (see that variant's own docs for the
-    /// invariant). A spread entry (`{**other}`) -- not yet modeled by v0, matching how a list literal's spread
-    /// entries are also unsupported in [`Self::lower_expr_to_operand`] -- lowers to an explicit unsupported
-    /// placeholder instead.
+    /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Dict`], one entry per source entry, in written order.
+    ///
+    /// Keys and values are lowered in written order, key before value, because both are arbitrary expressions
+    /// whose evaluation order is source-observable. A spread entry (`{**other}`) is not yet modeled and lowers to
+    /// an explicit unsupported placeholder.
     fn lower_dict(
         &mut self,
         entries: &[ast::DictEntry],
@@ -3237,23 +3237,18 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         if entries.iter().any(|entry| matches!(entry, ast::DictEntry::Spread(_))) {
             return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
         }
-        let mut operands = Vec::with_capacity(entries.len() * 2);
+        let mut lowered = Vec::with_capacity(entries.len());
         for entry in entries {
             let ast::DictEntry::Pair(key, value) = entry else {
                 return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
             };
-            operands.push(self.lower_expr_to_operand(key, scope, out));
-            operands.push(self.lower_expr_to_operand(value, scope, out));
+            let key_operand = self.lower_expr_to_operand(key, scope, out);
+            let value_operand = self.lower_expr_to_operand(value, scope, out);
+            lowered.push(bir::DictEntry::Pair(key_operand, value_operand));
         }
         let ty = self.resolve_ty(span);
         self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
-        self.push_assign_temp(
-            bir::Rvalue::Aggregate(bir::AggregateKind::Dict, fixed_elements(operands)),
-            ty,
-            scope,
-            hir_span_value,
-            out,
-        )
+        self.push_assign_temp(bir::Rvalue::Dict(lowered), ty, scope, hir_span_value, out)
     }
 
     /// Lower an f-string `f"...{expr}...{expr!r}..."` to a [`bir::Rvalue::Format`]. Literal text chunks are

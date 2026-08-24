@@ -1108,6 +1108,7 @@ fn validate_rvalue_profile(
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
         }
+        Rvalue::Dict(_) => Err(unsupported("dict literal", span)),
         Rvalue::Aggregate(kind, operands) => validate_aggregate_profile(
             kind,
             operands,
@@ -1919,6 +1920,7 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
+            Rvalue::Dict(_) => Err(unsupported("dict literal", span)),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure {
@@ -2783,7 +2785,6 @@ fn aggregate_label(kind: &incan_semantics_core::body_ir::AggregateKind) -> &'sta
     match kind {
         incan_semantics_core::body_ir::AggregateKind::Tuple => "tuple",
         incan_semantics_core::body_ir::AggregateKind::List => "list",
-        incan_semantics_core::body_ir::AggregateKind::Dict => "dict",
         incan_semantics_core::body_ir::AggregateKind::Set => "set",
         incan_semantics_core::body_ir::AggregateKind::Constructor(_) => "constructor",
     }

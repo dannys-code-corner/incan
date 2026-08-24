@@ -527,6 +527,16 @@ pub enum Rvalue {
     BinaryOp(BinOp, Operand, Operand),
     /// Build a tuple, list, or nominal-constructor value from its element/field operands.
     Aggregate(AggregateKind, Vec<ArgumentElement>),
+    /// `{k: v, ...}` dict literal, as an ordered list of entries.
+    ///
+    /// Separate from [`Self::Aggregate`] because a dict entry is a *pair*, not a single element, and a `**source`
+    /// spread is neither. Flattening keys and values into one element list would make a mis-paired list
+    /// representable and leave the pairing enforceable only by convention; this shape makes it unrepresentable.
+    ///
+    /// Entries take effect in order, and **a later entry overwrites an earlier one with the same key**. That
+    /// precedence is a property of dict construction rather than of any one call site, which is why it is stated
+    /// here rather than recorded per call site.
+    Dict(Vec<DictEntry>),
     /// An f-string interpolation, built from a sequence of literal text chunks and already-lowered embedded
     /// expressions. Mirrors the existing Rust-emission backend's dedicated `IrExprKind::Format { parts }` node
     /// (`src/backend/ir/expr.rs`) rather than a helper-call desugar: an f-string is a compiler-owned structured
@@ -619,20 +629,9 @@ impl Rvalue {
             Self::BinaryOp(op, lhs, rhs) => {
                 format!("{} {} {}", lhs.render_snapshot(), op.as_str(), rhs.render_snapshot())
             }
-            Self::Aggregate(AggregateKind::Dict, elements) => {
-                // Dict elements are flattened key, value, key, value, ... with a `**source` spread occupying a
-                // single element, so this walks logical entries through `dict_entries` rather than pairing raw
-                // elements two-at-a-time -- which would pair a spread source with the following key.
-                let entries: Vec<String> = dict_entries(elements)
-                    .into_iter()
-                    .map(|entry| match entry {
-                        DictEntry::Pair(key, value) => {
-                            format!("{}: {}", key.render_snapshot(), value.render_snapshot())
-                        }
-                        DictEntry::Spread(spread) => spread.render_snapshot(),
-                    })
-                    .collect();
-                format!("dict[{}]", entries.join(", "))
+            Self::Dict(entries) => {
+                let rendered: Vec<String> = entries.iter().map(DictEntry::render_snapshot).collect();
+                format!("dict[{}]", rendered.join(", "))
             }
             Self::Aggregate(kind, elements) => {
                 let items: Vec<String> = elements.iter().map(ArgumentElement::render_snapshot).collect();
@@ -1274,46 +1273,29 @@ pub enum SpreadKind {
     Mapping,
 }
 
-/// One logical entry of a [`AggregateKind::Dict`] element list.
+/// One entry of a dict literal, in written source order.
 ///
-/// See [`dict_entries`] for why dict entries are read through an accessor rather than by pairing elements directly.
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum DictEntry<'a> {
-    /// A `key: value` pair, occupying two consecutive elements.
-    Pair(&'a Operand, &'a Operand),
-    /// A `**source` spread, occupying one element.
-    Spread(&'a SpreadElement),
+/// A dict is built from an ordered sequence of *effects*, not from a finished mapping: keys are expressions
+/// evaluated at runtime, their evaluation order is observable, and a duplicate key is legal and meaningful
+/// (a later entry overwrites an earlier one). That is why [`Rvalue::Dict`] carries this ordered list rather than a
+/// map — a map would have to collapse duplicates at construction, which is exactly the override semantics that
+/// must survive, and it could not hold a spread whose keys are unknown until runtime.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DictEntry {
+    /// A `key: value` pair. Both operands are evaluated, key first.
+    Pair(Operand, Operand),
+    /// A `**source` spread. Its entries are spliced in at this position, and its key set is a runtime fact.
+    Spread(SpreadElement),
 }
 
-/// Walk a dict aggregate's element list as logical entries.
-///
-/// [`AggregateKind::Dict`] stores keys and values flattened into one element list, so a `key: value` pair occupies
-/// two consecutive elements while a `**source` spread occupies one. Pairing elements two-at-a-time — which was
-/// correct before #1159 and is the obvious thing to write — now silently pairs a spread source with the following
-/// key. This accessor exists so no consumer has to get that walk right by hand; it is the enforcement the flat
-/// representation cannot provide on its own.
-///
-/// A trailing key with no value cannot be produced by lowering and is skipped rather than reported, matching the
-/// renderer's existing tolerance for a malformed list.
-pub fn dict_entries(elements: &[ArgumentElement]) -> Vec<DictEntry<'_>> {
-    let mut entries = Vec::new();
-    let mut index = 0;
-    while index < elements.len() {
-        match &elements[index] {
-            ArgumentElement::Spread(spread) => {
-                entries.push(DictEntry::Spread(spread));
-                index += 1;
-            }
-            ArgumentElement::One(key) => {
-                match elements.get(index + 1).and_then(ArgumentElement::as_one) {
-                    Some(value) => entries.push(DictEntry::Pair(key, value)),
-                    None => break,
-                }
-                index += 2;
-            }
+impl DictEntry {
+    /// Render a deterministic maintainer-facing spelling.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Pair(key, value) => format!("{}: {}", key.render_snapshot(), value.render_snapshot()),
+            Self::Spread(spread) => spread.render_snapshot(),
         }
     }
-    entries
 }
 
 /// Aggregate value shape built by [`Rvalue::Aggregate`].
@@ -1321,16 +1303,6 @@ pub fn dict_entries(elements: &[ArgumentElement]) -> Vec<DictEntry<'_>> {
 pub enum AggregateKind {
     Tuple,
     List,
-    /// `{k: v, ...}` dict literal. The paired [`Rvalue::Aggregate`] operand vector alternates key, value, key,
-    /// value, ... (`operands[2*i]` is the i-th entry's key, `operands[2*i + 1]` is its value), so a single flat
-    /// operand vector can carry key/value pairs without a second `Rvalue` shape. Callers must always push keys and
-    /// values in matching pairs, except that a `**source` spread occupies a *single* element -- read the list
-    /// through [`dict_entries`] rather than pairing elements by hand.
-    ///
-    /// Entries take effect in element order and **a later entry overwrites an earlier one with the same key**.
-    /// That precedence is a property of this aggregate kind rather than of any one call site, so it is recorded
-    /// here instead of as a span-keyed fact, and it is what makes `{**base, "x": 1}` well defined.
-    Dict,
     /// `{v, ...}` set literal. Operands are the set's elements, one per entry -- the same flat shape as
     /// [`AggregateKind::List`].
     Set,
@@ -1343,7 +1315,6 @@ impl AggregateKind {
         match self {
             Self::Tuple => "tuple".to_string(),
             Self::List => "list".to_string(),
-            Self::Dict => "dict".to_string(),
             Self::Set => "set".to_string(),
             Self::Constructor(target) => format!("constructor({}){}", target.name, target.binding.render_snapshot()),
         }
@@ -2258,27 +2229,24 @@ mod tests {
     }
 
     #[test]
-    fn dict_entries_walks_a_spread_without_pairing_it_with_the_following_key() {
-        // Pairing elements two-at-a-time was correct before spreads existed and is the obvious thing to write, so
-        // this pins the case it silently gets wrong: `{**base, "x": 1}` must read as a spread followed by a pair.
-        let elements = vec![
-            ArgumentElement::Spread(SpreadElement {
+    fn a_dict_spread_cannot_be_mispaired_with_the_following_key() {
+        // With a flattened key/value list, `{**base, "x": 1}` had to be walked carefully or the spread source
+        // would pair with the following key. Structured entries make that state unrepresentable; this pins the
+        // rendering that proves the entries stay distinct.
+        let entries = vec![
+            DictEntry::Spread(SpreadElement {
                 source: Operand::Constant(Constant::Str("base".to_string())),
                 kind: SpreadKind::Mapping,
             }),
-            ArgumentElement::One(Operand::Constant(Constant::Str("x".to_string()))),
-            ArgumentElement::One(Operand::Constant(Constant::Int(1))),
+            DictEntry::Pair(
+                Operand::Constant(Constant::Str("x".to_string())),
+                Operand::Constant(Constant::Int(1)),
+            ),
         ];
 
-        let entries = dict_entries(&elements);
-        assert_eq!(entries.len(), 2, "one spread plus one pair: {entries:?}");
-        assert!(
-            matches!(entries[0], DictEntry::Spread(_)),
-            "the spread must be its own entry: {entries:?}"
-        );
-        assert!(
-            matches!(entries[1], DictEntry::Pair(_, _)),
-            "the following key/value must stay paired with each other: {entries:?}"
+        assert_eq!(
+            Rvalue::Dict(entries).render_snapshot(),
+            "dict[**const(\"base\"), const(\"x\"): const(1)]"
         );
     }
 
@@ -2446,13 +2414,10 @@ mod tests {
             Statement {
                 kind: StatementKind::Assign {
                     place: Place::from_local(LocalId(2)),
-                    rvalue: Rvalue::Aggregate(
-                        AggregateKind::Dict,
-                        vec![
-                            ArgumentElement::One(Operand::Constant(Constant::Str("a".to_string()))),
-                            ArgumentElement::One(Operand::Constant(Constant::Int(1))),
-                        ],
-                    ),
+                    rvalue: Rvalue::Dict(vec![DictEntry::Pair(
+                        Operand::Constant(Constant::Str("a".to_string())),
+                        Operand::Constant(Constant::Int(1)),
+                    )]),
                 },
                 span: HirSourceSpan::new(0, 1),
             },
