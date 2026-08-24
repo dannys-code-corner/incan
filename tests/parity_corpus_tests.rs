@@ -621,7 +621,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             title: "Named, out-of-order, and defaulted call arguments lower to Body IR",
             category: BehaviorCategory::SupportedLanguageContract,
             lane: EvidenceLane::DirectParserTypechecker,
-            evidence: "#1158; src/frontend/body_ir.rs::tests::out_of_order_named_call_arguments_evaluate_in_written_source_order",
+            evidence: "#1158; src/frontend/body_ir.rs::tests::{out_of_order_named_call_arguments_evaluate_in_written_source_order, an_omitted_defaulted_argument_is_recorded_as_a_defaulted_slot}",
             disposition: Disposition::Preserved,
             source: CASE_9_SRC,
             evaluate: Some(case_supported_named_call_arguments_reach_body_ir),

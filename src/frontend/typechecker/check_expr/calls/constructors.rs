@@ -40,6 +40,10 @@ impl TypeChecker {
         let mut bound_fields: Vec<Option<String>> = Vec::with_capacity(args.len());
         for arg in args {
             let CallArg::Named(field_name, expr) = arg else {
+                // Positional arguments already returned above, so this is a `*`/`**` spread: a written argument that
+                // resolves to no single field. Recording `None` keeps `bound_fields` aligned with `args` and makes
+                // the fail-closed guard below actually fire, rather than silently recording a shorter binding.
+                bound_fields.push(None);
                 continue;
             };
 
@@ -118,10 +122,15 @@ impl TypeChecker {
     /// reference. Without this fact, lowering would have to re-resolve field aliases and re-derive field order from
     /// AST spelling, duplicating a decision this check has already made.
     ///
-    /// Deliberately fail-closed: nothing is recorded unless every written argument resolved to a declared field and
-    /// every declared field is either supplied or defaulted. A partial binding is worse than none, because lowering
-    /// would represent a construction the source never validly expressed; with no fact recorded, lowering refuses by
-    /// name instead.
+    /// Deliberately fail-closed: nothing is recorded unless every written argument resolved to exactly one declared
+    /// field and every declared field is either supplied or defaulted. A partial binding is worse than none, because
+    /// lowering would represent a construction the source never validly expressed; with no fact recorded, lowering
+    /// refuses by name instead. An argument spread records `None` for the same reason -- it is a written argument
+    /// that supplies an unknown set of fields, so it must suppress the fact rather than shorten it.
+    ///
+    /// A recorded binding means the *field binding* is resolvable, not that the construction is otherwise valid: a
+    /// private-field or field-type violation is diagnosed separately and leaves the binding recorded. That is safe
+    /// because lowering only consumes these facts after a clean check.
     fn record_constructor_field_binding_for_lowering(
         &mut self,
         type_name: &str,

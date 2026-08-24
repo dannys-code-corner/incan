@@ -1720,7 +1720,7 @@ impl<'a> BodyBuilder<'a> {
             Some(p) => out.push(bir::Statement {
                 kind: bir::StatementKind::Call {
                     destination: Some(bir::Place::from_local(iterator_local)),
-                    callee: bir::Callee::Method(bir::MethodTarget::positional(p.iter_method.clone(), 0)),
+                    callee: bir::Callee::Method(bir::MethodTarget::synthesized(p.iter_method.clone())),
                     args: vec![bir::Operand::place(iterable_place, bir::OwnershipFact::Borrow, false)],
                     may_panic: false,
                 },
@@ -1967,7 +1967,7 @@ impl<'a> BodyBuilder<'a> {
             Some(protocol) => generator_stmts.push(bir::Statement {
                 kind: bir::StatementKind::Call {
                     destination: Some(bir::Place::from_local(iterator_local)),
-                    callee: bir::Callee::Method(bir::MethodTarget::positional(protocol.iter_method.clone(), 0)),
+                    callee: bir::Callee::Method(bir::MethodTarget::synthesized(protocol.iter_method.clone())),
                     args: vec![bir::Operand::place(
                         bir::Place::from_local(source_local),
                         bir::OwnershipFact::Borrow,
@@ -2156,7 +2156,7 @@ impl<'a> BodyBuilder<'a> {
                 out.push(bir::Statement {
                     kind: bir::StatementKind::Call {
                         destination: None,
-                        callee: bir::Callee::Method(bir::MethodTarget::positional("push", 1)),
+                        callee: bir::Callee::Method(bir::MethodTarget::synthesized("push")),
                         args: vec![
                             bir::Operand::place(
                                 bir::Place::from_local(*list_local),
@@ -2177,7 +2177,7 @@ impl<'a> BodyBuilder<'a> {
                 out.push(bir::Statement {
                     kind: bir::StatementKind::Call {
                         destination: None,
-                        callee: bir::Callee::Method(bir::MethodTarget::positional("insert", 2)),
+                        callee: bir::Callee::Method(bir::MethodTarget::synthesized("insert")),
                         args: vec![
                             bir::Operand::place(
                                 bir::Place::from_local(*dict_local),
@@ -2523,13 +2523,26 @@ impl<'a> BodyBuilder<'a> {
     /// written. A declaration slot the call site never supplied becomes a defaulted slot rather than an operand:
     /// this call site evaluates nothing for it, so it has no ownership fact to record and the default's computation
     /// stays owned by the declaration.
+    ///
+    /// Because ownership is decided during that written-order pass, each operand's [`bir::OwnershipFact`] and
+    /// last-use marker are sequenced by `written_position` and **not** by operand index -- see
+    /// [`bir::ArgumentBinding`]'s own docs, which state the invariant a consumer has to honor.
     fn lower_planned_args(
         &mut self,
         planned: &[(usize, &ast::Spanned<ast::Expr>)],
         slot_count: usize,
         scope: bir::ScopeId,
         out: &mut Vec<bir::Statement>,
-    ) -> (Vec<bir::Operand>, bir::ArgumentBinding) {
+    ) -> Result<(Vec<bir::Operand>, bir::ArgumentBinding), String> {
+        // Both planners derive their slots from the same declaration surface they report the count of, so an
+        // out-of-range slot is unreachable. It is still refused rather than skipped: dropping the operand while
+        // leaving the statements that computed it in `out` would produce a silently wrong call, which is the worst
+        // failure mode this node has.
+        if let Some((slot, _)) = planned.iter().find(|(slot, _)| *slot >= slot_count) {
+            return Err(format!(
+                "argument bound to declaration slot {slot} outside the callee's {slot_count} declared slots"
+            ));
+        }
         let mut lowered: Vec<Option<(bir::Operand, usize)>> = (0..slot_count).map(|_| None).collect();
         for (written_position, (slot, expr)) in planned.iter().enumerate() {
             let operand = self.lower_expr_to_operand(expr, scope, out);
@@ -2550,13 +2563,110 @@ impl<'a> BodyBuilder<'a> {
                 None => defaulted_slots.push(slot),
             }
         }
-        (
+        Ok((
             operands,
-            bir::ArgumentBinding {
+            bir::ArgumentBinding::Resolved {
                 arguments,
                 defaulted_slots,
             },
-        )
+        ))
+    }
+
+    /// Resolve the declared parameter surface for a direct named call, or describe why it cannot be represented.
+    ///
+    /// `Ok(None)` means "no resolved signature" — a builtin or any callee this module carries no declaration for.
+    /// That is not an error: positional arguments still lower faithfully, they simply carry no declared-slot claim.
+    ///
+    /// Overloads are why this is resolved per call site rather than per name. `function_bindings` is keyed by bare
+    /// source name, so for two same-name declarations it holds only one of them; binding a call against the wrong
+    /// overload's parameter *names* would silently reorder its arguments, turning an honest refusal into a wrong
+    /// answer. The typechecker already records which overload it selected for this call span, so this follows that
+    /// decision to the declaration and reads that declaration's own signature. If a name is overloaded but no
+    /// selection was recorded, this fails closed rather than picking one.
+    fn declared_slots_for_direct_call(&self, name: &str, span: ast::Span) -> Result<Option<Vec<DeclaredSlot>>, String> {
+        let declarations = &self.type_info.declarations;
+        let overloads = declarations.function_overloads.get(name);
+        let is_overloaded = overloads.is_some_and(|candidates| candidates.len() > 1);
+
+        if is_overloaded {
+            let Some(selected) = self.type_info.selected_function_emitted_name(span) else {
+                return Err(format!(
+                    "call to overloaded function `{name}` whose selected declaration was not resolved"
+                ));
+            };
+            let Some(candidates) = overloads else {
+                return Err(format!(
+                    "call to overloaded function `{name}` with no candidate declarations"
+                ));
+            };
+            let selected_span = candidates
+                .iter()
+                .map(|candidate| candidate.span)
+                .find(|candidate_span| {
+                    declarations
+                        .function_emitted_names
+                        .get(&(candidate_span.start, candidate_span.end))
+                        .is_some_and(|emitted| emitted == selected)
+                });
+            let Some(selected_span) = selected_span else {
+                return Err(format!(
+                    "call to overloaded function `{name}` whose selected declaration could not be located"
+                ));
+            };
+            let Some(binding) = declarations
+                .function_bindings_by_span
+                .get(&(selected_span.start, selected_span.end))
+            else {
+                return Err(format!(
+                    "call to overloaded function `{name}` whose selected declaration has no checked signature"
+                ));
+            };
+            return Ok(Some(
+                binding.params.iter().map(DeclaredSlot::from_checked_param).collect(),
+            ));
+        }
+
+        Ok(declarations
+            .function_bindings
+            .get(name)
+            .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect()))
+    }
+
+    /// Bind a call's arguments against a declared parameter surface, falling back to positional lowering when there
+    /// is none to bind against.
+    ///
+    /// Shared by the direct-call and method paths so both treat an unresolved or rest-bearing signature the same
+    /// way. A rest (`*args`/`**kwargs`) parameter means a written argument no longer corresponds one-to-one with a
+    /// declared slot, so those calls keep lowering their positional arguments — refusing them would drop a delivered
+    /// language capability — but record [`bir::ArgumentBinding::UnresolvedPositional`] rather than a slot map this
+    /// stage did not compute. A named or spread argument against such a signature is still refused: binding a name
+    /// into a rest parameter is variadic-binding work this issue does not own.
+    fn bind_declared_args(
+        &mut self,
+        callee: &str,
+        declared: Option<Vec<DeclaredSlot>>,
+        args: &[ast::CallArg],
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> Result<(Vec<bir::Operand>, bir::ArgumentBinding), String> {
+        let has_rest = declared
+            .as_ref()
+            .is_some_and(|slots| slots.iter().any(|slot| slot.is_rest));
+        let fixed_slots = declared.filter(|_| !has_rest);
+        let Some(slots) = fixed_slots else {
+            let reason = if has_rest {
+                "a rest parameter"
+            } else {
+                "no resolved signature"
+            };
+            let Some(operands) = self.lower_positional_args(args, scope, out) else {
+                return Err(format!("{callee} called with named or spread arguments and {reason}"));
+            };
+            return Ok((operands, bir::ArgumentBinding::UnresolvedPositional));
+        };
+        let planned = plan_declared_args(callee, &slots, args)?;
+        self.lower_planned_args(&planned, slots.len(), scope, out)
+            .map_err(|description| format!("{callee}: {description}"))
     }
 
     /// Resolve a call site's explicit type arguments to semantic types, or describe why they cannot be represented.
@@ -2649,7 +2759,17 @@ impl<'a> BodyBuilder<'a> {
             .copied()
             .zip(written_exprs)
             .collect();
-        let (operands, binding) = self.lower_planned_args(&planned, field_binding.field_count, scope, out);
+        let (operands, binding) = match self.lower_planned_args(&planned, field_binding.field_count, scope, out) {
+            Ok(bound) => bound,
+            Err(description) => {
+                return self.unsupported_operand(
+                    format!("construction of `{name}`: {description}"),
+                    scope,
+                    hir_span_value,
+                    out,
+                );
+            }
+        };
         let ty = self.resolve_ty(span);
         self.push_assign_temp(
             bir::Rvalue::Aggregate(
@@ -2700,7 +2820,10 @@ impl<'a> BodyBuilder<'a> {
 
         // A recorded constructor field binding is the typechecker's own statement that this spelling constructs a
         // nominal value, which is what distinguishes `P(x=1)` from a call to a function that happens to be named
-        // `P`. Construction takes no call-site type arguments, so this precedes the type-argument resolution below.
+        // `P`. A construction may carry call-site type arguments (`Box[int]()` is accepted), but the typechecker
+        // records no monomorphization for them, and the constructed value's own type already carries the resolved
+        // arguments -- so this deliberately does not duplicate them on the constructor target rather than claiming
+        // construction cannot be generic.
         if self.type_info.constructor_field_binding(span).is_some() {
             return self.lower_nominal_construction(&name, args, span, scope, out);
         }
@@ -2735,7 +2858,12 @@ impl<'a> BodyBuilder<'a> {
             // for a later executor instead of re-deriving it from the local's source spelling.
             let place = bir::Place::from_local(local);
             let (fact, last_use) = self.ownership_fact_for_place(&place, &self.locals[local.index()].ty.clone());
-            let (operands, binding) = self.lower_planned_args(&planned, slots.len(), scope, out);
+            let (operands, binding) = match self.lower_planned_args(&planned, slots.len(), scope, out) {
+                Ok(bound) => bound,
+                Err(description) => {
+                    return self.unsupported_operand(description, scope, hir_span_value, out);
+                }
+            };
             let callee = bir::Callee::Function(bir::CallableTarget::Local(bir::LocalCallableTarget {
                 operand: bir::PlaceOperand { place, fact, last_use },
                 binding,
@@ -2744,38 +2872,33 @@ impl<'a> BodyBuilder<'a> {
             return self.push_call_temp(callee, operands, ty, scope, hir_span_value, false, out);
         }
 
-        let declared: Option<Vec<DeclaredSlot>> = self
-            .type_info
-            .declarations
-            .function_bindings
-            .get(&name)
-            .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect());
-        let (operands, binding) = match declared {
-            Some(slots) => {
-                let planned = match plan_declared_args(&format!("function `{name}`"), &slots, args) {
-                    Ok(planned) => planned,
-                    Err(description) => {
-                        return self.unsupported_operand(description, scope, hir_span_value, out);
-                    }
-                };
-                self.lower_planned_args(&planned, slots.len(), scope, out)
-            }
-            None => {
-                // Builtins and other callables this module carries no resolved signature for. Positional arguments
-                // still bind by position, but a named or spread spelling cannot be resolved to a declaration slot
-                // without one, and guessing a slot order here is exactly the re-derivation #1158 exists to prevent.
-                let Some(operands) = self.lower_positional_args(args, scope, out) else {
-                    return self.unsupported_operand(
-                        format!("call to `{name}` with named or spread arguments and no resolved signature"),
-                        scope,
-                        hir_span_value,
-                        out,
-                    );
-                };
-                let count = operands.len();
-                (operands, bir::ArgumentBinding::positional(count))
+        // A name that resolves to a nominal type but has no recorded field binding is a construction the checker
+        // declined to bind (a duplicate or unknown field). Refusing it as a call to an unknown function would name
+        // the wrong construct entirely.
+        if self.type_info.declarations.class_layouts.contains_key(&name)
+            || self.type_info.declarations.model_field_visibilities.contains_key(&name)
+        {
+            return self.unsupported_operand(
+                format!("construction of `{name}` with an unresolved field layout"),
+                scope,
+                hir_span_value,
+                out,
+            );
+        }
+
+        let declared = match self.declared_slots_for_direct_call(&name, span) {
+            Ok(declared) => declared,
+            Err(description) => {
+                return self.unsupported_operand(description, scope, hir_span_value, out);
             }
         };
+        let (operands, binding) =
+            match self.bind_declared_args(&format!("function `{name}`"), declared, args, scope, out) {
+                Ok(bound) => bound,
+                Err(description) => {
+                    return self.unsupported_operand(description, scope, hir_span_value, out);
+                }
+            };
 
         let ty = self.resolve_ty(span);
         self.push_call_temp(
@@ -2851,29 +2974,13 @@ impl<'a> BodyBuilder<'a> {
         let recv_place = self.lower_expr_to_place(recv, scope, out);
         let receiver_operand = bir::Operand::place(recv_place, bir::OwnershipFact::Borrow, false);
 
-        let (mut arg_operands, binding) = match declared {
-            Some(slots) => {
-                let planned = match plan_declared_args(&format!("method `{name}`"), &slots, args) {
-                    Ok(planned) => planned,
-                    Err(description) => {
-                        return self.unsupported_operand(description, scope, hir_span_value, out);
-                    }
-                };
-                self.lower_planned_args(&planned, slots.len(), scope, out)
-            }
-            None => {
-                let Some(operands) = self.lower_positional_args(args, scope, out) else {
-                    return self.unsupported_operand(
-                        format!("method call `{name}` with named or spread arguments and no resolved signature"),
-                        scope,
-                        hir_span_value,
-                        out,
-                    );
-                };
-                let count = operands.len();
-                (operands, bir::ArgumentBinding::positional(count))
-            }
-        };
+        let (mut arg_operands, binding) =
+            match self.bind_declared_args(&format!("method `{name}`"), declared, args, scope, out) {
+                Ok(bound) => bound,
+                Err(description) => {
+                    return self.unsupported_operand(description, scope, hir_span_value, out);
+                }
+            };
 
         let mut call_args = Vec::with_capacity(arg_operands.len() + 1);
         call_args.push(receiver_operand);
@@ -3332,7 +3439,7 @@ impl<'a> BodyBuilder<'a> {
         let ret_ty = semantic_type_from_resolved(&binding.return_type);
         // The synthesized forwarding call supplies every declared parameter of the target, in declaration order:
         // preset slots are filled from the captured locals and residual slots from the closure's own parameters.
-        let forwarding_binding = bir::ArgumentBinding::positional(call_args.len());
+        let forwarding_binding = bir::ArgumentBinding::resolved_positional(call_args.len());
         let result = self.push_call_temp(
             bir::Callee::Function(bir::CallableTarget::Named(bir::NamedCallableTarget {
                 name: target_name,
@@ -3760,10 +3867,12 @@ impl DeclaredSlot {
 
 /// Plan a call's supplied arguments into declaration slots before lowering any expression.
 ///
-/// This validates the whole call before a callee or argument ownership read is emitted, then leaves the returned
-/// expressions in source evaluation order. The caller can therefore lower values left-to-right while the final
-/// argument vector follows declaration order. Preset-default slots are intentionally omitted from positional binding
-/// and may be skipped in the vector because the call's [`bir::ArgumentBinding`] records each supplied operand's
+/// This validates the whole call before any *argument* ownership read is emitted, then leaves the returned
+/// expressions in source evaluation order. A method call is the one exception on the callee side: its receiver is
+/// read first, because source evaluation observes the receiver before the arguments, so a refusal here can follow a
+/// receiver read that the refused call never consumes. The caller can therefore lower values left-to-right while the
+/// final argument vector follows declaration order. Preset-default slots are intentionally omitted from positional
+/// binding and may be skipped in the vector because the call's [`bir::ArgumentBinding`] records each supplied operand's
 /// declaration slot; an omitted ordinary default is recorded the same way, as a defaulted slot.
 ///
 /// `callee` is the caller's own description of the target (`function \`add\``, `local callable \`g\``,
@@ -5110,7 +5219,7 @@ mod tests {
             "should start from an empty list aggregate: {snapshot}"
         );
         assert!(
-            snapshot.contains("call method:push(mut_borrow("),
+            snapshot.contains("call method:push unbound(mut_borrow("),
             "should grow the list via a synthesized push call: {snapshot}"
         );
         assert!(
@@ -5127,7 +5236,7 @@ mod tests {
         let snapshot = module.render_snapshot();
 
         assert!(
-            snapshot.contains("call method:push("),
+            snapshot.contains("call method:push unbound("),
             "filtered comprehension should still push accepted elements: {snapshot}"
         );
         assert!(
@@ -5162,7 +5271,7 @@ mod tests {
             "should start from an empty dict aggregate: {snapshot}"
         );
         assert!(
-            snapshot.contains("call method:insert(mut_borrow("),
+            snapshot.contains("call method:insert unbound(mut_borrow("),
             "should grow the dict via a synthesized insert call: {snapshot}"
         );
         Ok(())
@@ -6771,6 +6880,25 @@ mod tests {
         }
     }
 
+    /// A resolved binding's two lists: the per-operand records, and the slots left to a default.
+    type ResolvedBindingParts<'a> = (&'a [bir::BoundArgument], &'a [usize]);
+
+    /// Return a call's resolved argument binding, failing when the call recorded no declared-slot binding.
+    ///
+    /// Insisting on [`bir::ArgumentBinding::Resolved`] is the point: a test that accepted
+    /// `UnresolvedPositional` would silently pass against an implementation that stopped binding named arguments.
+    fn resolved_binding(kind: &bir::StatementKind) -> Result<ResolvedBindingParts<'_>, Box<dyn std::error::Error>> {
+        match call_binding(kind)? {
+            bir::ArgumentBinding::Resolved {
+                arguments,
+                defaulted_slots,
+            } => Ok((arguments, defaulted_slots)),
+            bir::ArgumentBinding::UnresolvedPositional => {
+                Err("expected a resolved declared-slot binding, found an unresolved positional call".into())
+            }
+        }
+    }
+
     /// Return the named body from a lowered module.
     fn body_named<'a>(module: &'a bir::BodyIrModule, name: &str) -> Result<&'a bir::Body, Box<dyn std::error::Error>> {
         module
@@ -6858,6 +6986,18 @@ mod tests {
             snapshot.contains("call fn:add(const(1), const(2))"),
             "a mixed call binding in declaration order needs no slot map: {snapshot}"
         );
+        // The rendered string alone would also match an implementation that ignored named binding entirely and
+        // lowered arguments in written order, so assert the resolved binding itself.
+        let (arguments, defaulted_slots) = resolved_binding(single_call(body_named(&module, "use")?)?)?;
+        assert!(defaulted_slots.is_empty(), "nothing was omitted: {defaulted_slots:?}");
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| (argument.slot, argument.written_position))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 1)],
+            "`b=2` must resolve to declared slot 1 rather than being taken positionally: {arguments:?}"
+        );
         Ok(())
     }
 
@@ -6893,17 +7033,17 @@ mod tests {
         let source = "def add(a: int, b: int = 2) -> int:\n  return a + b\n\ndef use() -> int:\n  return add(1)\n";
         let module = build(source, &["m", "call_default"])?;
         let use_body = body_named(&module, "use")?;
-        let binding = call_binding(single_call(use_body)?)?;
+        let (arguments, defaulted_slots) = resolved_binding(single_call(use_body)?)?;
 
         assert_eq!(
-            binding.defaulted_slots,
-            vec![1],
-            "an omitted default must be an explicit call-site fact: {binding:?}"
+            defaulted_slots,
+            [1],
+            "an omitted default must be an explicit call-site fact: {defaulted_slots:?}"
         );
         assert_eq!(
-            binding.arguments.len(),
+            arguments.len(),
             1,
-            "only the supplied argument gets an operand: {binding:?}"
+            "only the supplied argument gets an operand: {arguments:?}"
         );
         Ok(())
     }
@@ -6917,25 +7057,21 @@ mod tests {
         let module = build(source, &["m", "interior_default"])?;
         let snapshot = module.render_snapshot();
         let use_body = body_named(&module, "use")?;
-        let binding = call_binding(single_call(use_body)?)?;
+        let (arguments, defaulted_slots) = resolved_binding(single_call(use_body)?)?;
 
         assert!(
             !snapshot.contains("unsupported("),
             "an interior default hole must now lower: {snapshot}"
         );
         assert_eq!(
-            binding.defaulted_slots,
-            vec![1],
-            "slot 1 takes its declared default: {binding:?}"
+            defaulted_slots,
+            [1],
+            "slot 1 takes its declared default: {defaulted_slots:?}"
         );
         assert_eq!(
-            binding
-                .arguments
-                .iter()
-                .map(|argument| argument.slot)
-                .collect::<Vec<_>>(),
+            arguments.iter().map(|argument| argument.slot).collect::<Vec<_>>(),
             vec![0, 2],
-            "the supplied operands must keep their real declaration slots: {binding:?}"
+            "the supplied operands must keep their real declaration slots: {arguments:?}"
         );
         Ok(())
     }
@@ -6946,7 +7082,7 @@ mod tests {
         let module = build(source, &["m", "method_named"])?;
         let snapshot = module.render_snapshot();
         let use_body = body_named(&module, "use")?;
-        let binding = call_binding(single_call(use_body)?)?;
+        let (arguments, _) = resolved_binding(single_call(use_body)?)?;
 
         assert!(
             !snapshot.contains("unsupported("),
@@ -6955,13 +7091,17 @@ mod tests {
         // The receiver stays `args[0]` and is deliberately outside the binding, whose slots index the method's own
         // declared parameters.
         assert_eq!(
-            binding
-                .arguments
-                .iter()
-                .map(|argument| argument.slot)
-                .collect::<Vec<_>>(),
+            arguments.iter().map(|argument| argument.slot).collect::<Vec<_>>(),
             vec![0, 1],
-            "method argument slots must index declared parameters, not the receiver: {binding:?}"
+            "method argument slots must index declared parameters, not the receiver: {arguments:?}"
+        );
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| argument.written_position)
+                .collect::<Vec<_>>(),
+            vec![1, 0],
+            "the written order of `b=2, a=1` must survive the reorder into declaration order: {arguments:?}"
         );
         assert!(
             use_body.render_snapshot().contains("borrow(_0)"),
@@ -7011,9 +7151,11 @@ mod tests {
     fn direct_and_local_named_binding_go_through_one_mechanism() -> Result<(), Box<dyn std::error::Error>> {
         // #1158's "one mechanism" criterion: the direct `Callee::Function` path and the #1124 local-callable path
         // must produce the same binding facts for the same spelling, not merely both succeed.
-        let direct = "def add(a: int, b: int) -> int:\n  return a + b\n\ndef use() -> int:\n  return add(1, b=2)\n";
+        // Deliberately an out-of-order spelling: its binding is *not* the identity, so this cannot be satisfied by
+        // two independent mechanisms that merely agree on the trivial case, nor by a path that never bound at all.
+        let direct = "def add(a: int, b: int) -> int:\n  return a + b\n\ndef use() -> int:\n  return add(b=2, a=1)\n";
         let local =
-            "def add(a: int, b: int) -> int:\n  return a + b\n\ndef use() -> int:\n  g = add\n  return g(1, b=2)\n";
+            "def add(a: int, b: int) -> int:\n  return a + b\n\ndef use() -> int:\n  g = add\n  return g(b=2, a=1)\n";
 
         let direct_module = build(direct, &["m", "one_direct"])?;
         let local_module = build(local, &["m", "one_local"])?;
@@ -7023,6 +7165,137 @@ mod tests {
         assert_eq!(
             direct_binding, local_binding,
             "a direct call and a local-callable call must resolve one spelling identically"
+        );
+        let bir::ArgumentBinding::Resolved { arguments, .. } = direct_binding else {
+            return Err("the shared mechanism must produce a resolved binding, not a positional fallback".into());
+        };
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| (argument.slot, argument.written_position))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (1, 0)],
+            "the shared binding must be the non-trivial one this spelling implies: {arguments:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_overloaded_call_binds_against_the_declaration_the_typechecker_selected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression: `function_bindings` is keyed by bare name, so it holds only one of two same-name
+        // declarations. Binding against the wrong overload's parameter *names* silently swaps the arguments --
+        // a wrong answer where the previous refusal was at least honest.
+        let source = "def pick(a: int, b: int) -> int:\n  return a - b\n\ndef pick(b: str, a: str) -> str:\n  return a\n\ndef use() -> int:\n  return pick(a=10, b=1)\n";
+        let module = build(source, &["m", "overload"])?;
+        let use_body = body_named(&module, "use")?;
+        let rendered = use_body.render_snapshot();
+        let (arguments, _) = resolved_binding(single_call(use_body)?)?;
+
+        // The selected overload is `pick(a: int, b: int)`, so `a=10` fills slot 0 and `b=1` fills slot 1. Binding
+        // against the *second* declaration would map `a` to slot 1 and emit the operands as `const(1), const(10)`.
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| (argument.slot, argument.written_position))
+                .collect::<Vec<_>>(),
+            vec![(0, 0), (1, 1)],
+            "the call must bind against the overload the typechecker selected: {arguments:?}"
+        );
+        assert!(
+            rendered.contains("call fn:pick(const(10), const(1))"),
+            "operands must follow the selected overload's declaration order: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_overload_set_that_changes_arity_does_not_refuse_a_valid_call() -> Result<(), Box<dyn std::error::Error>> {
+        // The other half of the same defect: with the two-parameter declaration written first, a name-keyed lookup
+        // could resolve `pick(1, 2)` against the one-parameter overload and refuse a call the typechecker accepted.
+        let source = "def pick(a: int, b: int) -> int:\n  return a + b\n\ndef pick(a: str) -> str:\n  return a\n\ndef use() -> int:\n  return pick(1, 2)\n";
+        let module = build(source, &["m", "overload_arity"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a call the typechecker accepted must not be refused by overload confusion: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_rest_parameter_callee_still_lowers_its_positional_arguments() -> Result<(), Box<dyn std::error::Error>> {
+        // Variadics are a delivered language capability. Routing the direct path through the shared planner must not
+        // silently narrow what Body IR represents; the call keeps lowering, it simply makes no declared-slot claim.
+        let source = "def total(a: int, *xs: int) -> int:\n  return a\n\ndef use() -> int:\n  return total(1, 2, 3)\n";
+        let module = build(source, &["m", "rest"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "a positional call into a rest-parameter signature must still lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("call fn:total unbound(const(1), const(2), const(3))"),
+            "a rest signature has no one-to-one declared slots, so the binding must say so: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn argument_ownership_facts_are_sequenced_by_written_order_not_operand_index()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The invariant `ArgumentBinding` documents: operands are reordered into declaration order, but their
+        // ownership facts were decided in written order. Read left to right this vector moves `_0` and then clones
+        // it; `written=[1, 0]` is what tells a consumer the clone happened first.
+        let source =
+            "def two(p: str, q: str) -> str:\n  return p + q\n\ndef use(a: str) -> str:\n  return two(q=a, p=a)\n";
+        let module = build(source, &["m", "own_order"])?;
+        let rendered = body_named(&module, "use")?.render_snapshot();
+
+        assert!(
+            rendered.contains("call fn:two written=[1, 0](move(_0, last_use), clone(_0))"),
+            "ownership facts must stay sequenced by written order: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn class_construction_binds_inherited_fields_in_declared_layout_order() -> Result<(), Box<dyn std::error::Error>> {
+        // Constructor ABI order puts the parent's fields first. A subclass construction must bind against that
+        // flattened order, not against the subclass's own declarations alone.
+        let source = "class Base:\n  a: int\n\nclass Sub extends Base:\n  b: int = 7\n\ndef make() -> Sub:\n  return Sub(b=1, a=2)\n";
+        let module = build(source, &["m", "subclass"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !snapshot.contains("unsupported("),
+            "subclass construction must lower: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("constructor(Sub) written=[1, 0][const(2), const(1)]"),
+            "inherited fields come first in constructor layout order: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_construction_the_checker_declined_to_bind_is_refused_as_a_construction()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A duplicate field leaves no recorded binding. Falling through to the direct-call path would refuse this as
+        // a call to an unknown function, naming the wrong construct entirely.
+        let source = "model P:\n  x: int = 1\n  y: int = 2\n\ndef make() -> P:\n  return P(x=1, x=2)\n";
+        let (module, diagnostics) = build_after_expected_typecheck_errors(source, &["m", "dup_field"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            !diagnostics.is_empty(),
+            "the typechecker must reject a duplicated field first"
+        );
+        assert!(
+            snapshot.contains("construction of `P` with an unresolved field layout"),
+            "a refused construction must be named as a construction: {snapshot}"
         );
         Ok(())
     }

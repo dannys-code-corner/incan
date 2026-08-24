@@ -1096,44 +1096,61 @@ impl AggregateKind {
 // Calls and runtime helpers
 // ============================================================================
 
-/// Resolved binding of one call site's arguments to the callee's declared parameters or a nominal type's declared
-/// fields.
+/// How one call site's arguments relate to the callee's declared parameters or a nominal type's declared fields.
 ///
 /// Body IR keeps a call's operand vector in *resolved declaration order* — declared parameter order for a callable,
 /// declared field order for a nominal constructor — while the statements that compute those operands are emitted in
 /// *written source order*. The two orders differ whenever a caller writes named arguments out of declaration order,
 /// and both are part of the source contract: the binding decides which parameter receives which value, while the
-/// written order decides the order in which argument sub-expressions take effect. The operand vector alone can only
-/// express the first, so this type carries the second explicitly rather than leaving a consumer to recover it by
-/// correlating temporary numbering.
+/// written order decides the order in which argument sub-expressions take effect.
 ///
-/// This is the single binding mechanism for every call shape. It replaces the per-target slot map #1124 introduced
-/// on [`LocalCallableTarget`]: local callables, direct named calls, method calls, and nominal construction all
-/// record their binding here, so a consumer learns the same fact the same way regardless of how the call was
-/// spelled.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct ArgumentBinding {
-    /// One record per surrounding argument operand, in the same order as those operands.
-    pub arguments: Vec<BoundArgument>,
-    /// Declared slots the call site omitted, in ascending slot order.
+/// # Ownership facts are sequenced by written order, not by operand index
+///
+/// This is the invariant a consumer is most likely to get wrong. Each operand's [`OwnershipFact`] and last-use
+/// marker were decided while lowering the arguments **in written source order**, so they are only coherent when read
+/// in that order. For `two(q=a, p=a)` the operand vector is `[move(_0, last_use), clone(_0)]`: read left to right
+/// that appears to move a local and then clone it, but `written_position` says the clone happened first. An executor
+/// that walks `args` in vector order will observe a use-after-move. Walk [`Self::Resolved::arguments`] by ascending
+/// `written_position` when evaluating, and by operand index only when passing already-evaluated values.
+///
+/// This is the single binding mechanism for every call shape, replacing the per-target slot map #1124 introduced on
+/// [`LocalCallableTarget`]: local callables, direct named calls, method calls, and nominal construction all record
+/// their binding here, so a consumer learns the same fact the same way regardless of how the call was spelled.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArgumentBinding {
+    /// Arguments were supplied positionally and this stage resolved no declared parameter slots for them.
     ///
-    /// Each names a parameter or field whose *declared* default applies. Body IR records the fact without
-    /// materializing the value: a source-declared default's computation stays owned by the declaration that
-    /// introduced it, which is the contract [`ClosureParam`] already states for callable values. Recording the
-    /// omission here is still what keeps a consumer from having to diff the operand vector against the declaration
-    /// to discover which slots defaulted, and it is why no defaulted slot needs an [`OwnershipFact`]: this call site
-    /// evaluates nothing for it.
-    pub defaulted_slots: Vec<usize>,
+    /// Operand `i` is simply the `i`-th written argument; **no declared-slot claim is made**. This is the honest
+    /// representation for a callee whose declared surface Body IR did not resolve — a builtin, a compiler-
+    /// synthesized collection-growth call, or a signature with a `*args`/`**kwargs` rest parameter, where a written
+    /// argument does not correspond one-to-one with a declared slot. Recording an identity slot map for those would
+    /// assert a binding nobody checked.
+    UnresolvedPositional,
+    /// Arguments were resolved against the callee's declared parameters or the type's declared fields.
+    Resolved {
+        /// One record per surrounding argument operand, in the same order as those operands.
+        arguments: Vec<BoundArgument>,
+        /// Declared slots the call site omitted, in ascending slot order.
+        ///
+        /// Each names a parameter or field the call site left to a default. Body IR records the fact without
+        /// materializing the value: the default's computation stays owned by whichever declaration or callable value
+        /// introduced it, which is the contract [`ClosureParam`] already states. For an ordinary declaration that is
+        /// a source-declared default; for a partial callable it may instead be the construction-time preset
+        /// [`ClosureParam::preset_capture`] identifies, so a consumer reads the owning [`Rvalue::Closure`] rather
+        /// than assuming the target declaration has a default of its own. Recording the omission here is still what
+        /// frees a consumer from diffing the operand vector against the declaration, and it is why no defaulted slot
+        /// carries an [`OwnershipFact`]: this call site evaluates nothing for it.
+        defaulted_slots: Vec<usize>,
+    },
 }
 
 impl ArgumentBinding {
-    /// Build the binding for a call whose arguments were all written positionally, in declaration order.
+    /// Build a resolved identity binding: operand `i` fills slot `i` and was written `i`-th, with nothing defaulted.
     ///
-    /// This is the identity binding: operand `i` fills slot `i` and was written `i`-th. Every already-positional
-    /// lowering path uses it, including compiler-synthesized calls (a comprehension's `push`/`insert`) that have no
-    /// source-level call site of their own and therefore no other order to record.
-    pub fn positional(count: usize) -> Self {
-        Self {
+    /// Only for callers that actually resolved the callee's declared parameters and know the call supplies each one
+    /// in order. A caller that did not resolve a signature wants [`Self::UnresolvedPositional`] instead.
+    pub fn resolved_positional(count: usize) -> Self {
+        Self::Resolved {
             arguments: (0..count)
                 .map(|index| BoundArgument {
                     slot: index,
@@ -1147,37 +1164,39 @@ impl ArgumentBinding {
     /// Render the non-trivial parts of this binding as snapshot suffixes.
     ///
     /// Slot and written-order lists are each emitted only when they differ from the identity mapping, and defaults
-    /// only when the call site actually omitted something, so existing positional snapshots stay unchanged.
+    /// only when the call site actually omitted something, so an ordinary positional call keeps a compact spelling
+    /// and a non-trivial binding stands out. An unresolved binding always renders its own marker, so it can never be
+    /// confused with a resolved identity binding.
     fn render_snapshot(&self) -> String {
+        let Self::Resolved {
+            arguments,
+            defaulted_slots,
+        } = self
+        else {
+            return " unbound".to_string();
+        };
         let mut out = String::new();
-        if self
-            .arguments
+        if arguments
             .iter()
             .enumerate()
             .any(|(index, argument)| argument.slot != index)
         {
-            let slots: Vec<String> = self
-                .arguments
-                .iter()
-                .map(|argument| argument.slot.to_string())
-                .collect();
+            let slots: Vec<String> = arguments.iter().map(|argument| argument.slot.to_string()).collect();
             let _ = write!(out, " slots=[{}]", slots.join(", "));
         }
-        if self
-            .arguments
+        if arguments
             .iter()
             .enumerate()
             .any(|(index, argument)| argument.written_position != index)
         {
-            let written: Vec<String> = self
-                .arguments
+            let written: Vec<String> = arguments
                 .iter()
                 .map(|argument| argument.written_position.to_string())
                 .collect();
             let _ = write!(out, " written=[{}]", written.join(", "));
         }
-        if !self.defaulted_slots.is_empty() {
-            let defaults: Vec<String> = self.defaulted_slots.iter().map(usize::to_string).collect();
+        if !defaulted_slots.is_empty() {
+            let defaults: Vec<String> = defaulted_slots.iter().map(usize::to_string).collect();
             let _ = write!(out, " defaults=[{}]", defaults.join(", "));
         }
         out
@@ -1305,14 +1324,16 @@ pub struct MethodTarget {
 }
 
 impl MethodTarget {
-    /// Build a method target for an already-positional call with no explicit type arguments.
+    /// Build a method target for a compiler-synthesized positional call with no resolved declared signature.
     ///
-    /// `arg_count` counts the method's own arguments, excluding the receiver.
-    pub fn positional(name: impl Into<String>, arg_count: usize) -> Self {
+    /// Used for calls a desugar introduces (a comprehension's `push`/`insert`, an iteration protocol's `__iter__`)
+    /// that have no source-level call site and whose declared parameters this stage never resolved, so the binding
+    /// is [`ArgumentBinding::UnresolvedPositional`] rather than a fabricated identity slot map.
+    pub fn synthesized(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
             type_args: Vec::new(),
-            binding: ArgumentBinding::positional(arg_count),
+            binding: ArgumentBinding::UnresolvedPositional,
         }
     }
 
@@ -1920,7 +1941,7 @@ mod tests {
                             fact: OwnershipFact::Copy,
                             last_use: false,
                         },
-                        binding: ArgumentBinding::positional(1),
+                        binding: ArgumentBinding::resolved_positional(1),
                     })),
                     args: vec![Operand::Constant(Constant::Int(1))],
                     may_panic: false,
