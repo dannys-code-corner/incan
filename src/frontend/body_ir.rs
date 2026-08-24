@@ -917,8 +917,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     ) {
         // A closure value already carries the typechecker's callable shape. A partial retains that full callable
         // type, with captured presets represented as named-overrideable defaults. Positional calls skip those preset
-        // slots, and `LocalCallableTarget::parameter_slots` records the resulting declaration mapping. Keeping this
-        // type on the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
+        // slots, and `LocalCallableTarget::binding` records the resulting declaration mapping. Keeping this type on
+        // the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
         let ty = self
             .callable_value_ty(&assignment.value)
             .unwrap_or_else(|| self.resolve_ty(assignment.value.span));
@@ -2382,6 +2382,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                         ),
                     )
                 })
+            })
+            .or_else(|| {
+                self.type_info
+                    .validated_newtype_coercion(default_expr.span)
+                    .is_some()
+                    .then(|| {
+                        (
+                            hir_span(default_expr.span),
+                            "default requires a validated-newtype coercion Body IR does not yet represent".to_string(),
+                        )
+                    })
             })
             .or_else(|| {
                 matches!(
@@ -5354,9 +5365,9 @@ mod tests {
 
     /// Lower an intentionally-invalid source program after recording its typecheck diagnostics.
     ///
-    /// Positive local-partial coverage must go through [`build`], which requires ordinary typechecking. This helper
-    /// is only for Body IR's fail-closed assertions: after the source checker correctly rejects an invalid residual
-    /// call, lowering must still make its unsupported representation explicit rather than approximating it.
+    /// Positive coverage must go through [`build`], which requires ordinary typechecking. This helper is only for
+    /// Body IR's fail-closed assertions: after the source checker correctly rejects a program, lowering must still
+    /// make its unsupported representation explicit rather than approximating it.
     fn build_after_expected_typecheck_errors(
         source: &str,
         module_path: &[&str],
@@ -5369,7 +5380,7 @@ mod tests {
         let diagnostics = checker
             .check_program(&program)
             .err()
-            .ok_or("expected the intentional residual-call diagnostic")?
+            .ok_or("expected the intentionally invalid source program to produce a diagnostic")?
             .into_iter()
             .map(|diagnostic| diagnostic.message)
             .collect();
@@ -6072,46 +6083,71 @@ mod tests {
     }
 
     #[test]
-    fn top_level_default_without_typecheck_facts_is_refused_at_its_own_span() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let source =
-            "def fallback() -> int:\n  return 2\n\ndef choose(value: int = fallback()) -> int:\n  return value\n";
+    fn top_level_defaults_lower_to_deferred_source_computations() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def fallback() -> int:\n  return 2\n\ndef choose(limit: u8 = 7, value: int = fallback()) -> int:\n  return value\n";
         let module = build(source, &["m", "top_level_default"])?;
         let choose = module
             .bodies
             .iter()
             .find(|body| body.name == "choose")
             .ok_or("expected the choose Body IR")?;
-        let value = choose.params.first().ok_or("expected choose's value parameter")?;
+        let limit = choose.params.first().ok_or("expected choose's limit parameter")?;
+        let value = choose.params.get(1).ok_or("expected choose's value parameter")?;
 
-        assert_eq!(value.local, bir::LocalId(0));
-        assert_eq!(value.name, "value");
-        let bir::CallableParamDefault::Unsupported { span, description } = &value.default else {
-            return Err("an unchecked function default must remain a visible refusal".into());
-        };
+        assert_eq!(limit.local, bir::LocalId(0));
+        assert_eq!(limit.name, "limit");
         assert_eq!(
-            *span,
-            HirSourceSpan::new(
-                source.rfind("fallback()").ok_or("missing default source spelling")?,
-                source.rfind("fallback()").ok_or("missing default source spelling")? + "fallback()".len(),
-            ),
+            limit.ty,
+            IncanType::Primitive(IncanPrimitiveType::Numeric("u8".to_string()))
+        );
+        let bir::CallableParamDefault::Source(limit_default) = &limit.default else {
+            return Err("a checked literal default must become a deferred Body-IR computation".into());
+        };
+        let limit_start = source.find("7,").ok_or("missing literal default source spelling")?;
+        assert_eq!(limit_default.span, HirSourceSpan::new(limit_start, limit_start + 1));
+        assert!(limit_default.stmts.is_empty());
+        assert_eq!(limit_default.result, bir::Operand::Constant(bir::Constant::Int(7)));
+
+        assert_eq!(value.local, bir::LocalId(1));
+        assert_eq!(value.name, "value");
+        let bir::CallableParamDefault::Source(value_default) = &value.default else {
+            return Err("a checked function default call must become a deferred Body-IR computation".into());
+        };
+        let call_start = source.rfind("fallback()").ok_or("missing default source spelling")?;
+        assert_eq!(
+            value_default.span,
+            HirSourceSpan::new(call_start, call_start + "fallback()".len()),
             "the direct consumer must receive the default expression's exact source span"
         );
-        assert_eq!(description, "default expression lacks a usable typecheck fact");
+        let [call] = value_default.stmts.as_slice() else {
+            return Err("the deferred function default should contain one call statement".into());
+        };
+        let bir::StatementKind::Call {
+            destination: Some(destination),
+            callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+            args,
+            may_panic,
+        } = &call.kind
+        else {
+            return Err("the deferred default must retain a direct named call".into());
+        };
+        assert_eq!(target.name, "fallback");
+        assert!(target.type_args.is_empty());
+        assert!(args.is_empty());
+        assert!(!may_panic);
+        let bir::Operand::Place(result) = &value_default.result else {
+            return Err("the deferred default call must return its computed temporary".into());
+        };
+        assert_eq!(&result.place, destination);
         assert!(
             !choose.block.stmts.iter().any(|statement| matches!(
                 &statement.kind,
                 bir::StatementKind::Call {
-                    callee: bir::Callee::Function(bir::CallableTarget::Named(name)),
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
                     ..
-                } if name == "fallback"
+                } if target.name == "fallback"
             )),
             "the default call must not be appended to the ordinary function body: {choose:?}"
-        );
-        assert_eq!(
-            choose.locals.len(),
-            1,
-            "refused speculative lowering must not retain the call temporary: {choose:?}"
         );
         assert!(
             !choose
@@ -6125,12 +6161,20 @@ mod tests {
     }
 
     #[test]
-    fn method_default_uses_the_shared_parameter_contract_after_self() -> Result<(), Box<dyn std::error::Error>> {
-        let source = "model Counter:\n  value: int\n\n  def add(self, amount: int = 2) -> int:\n    return self.value + amount\n";
+    fn generic_method_defaults_use_the_shared_parameter_contract_after_self() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let source = "def fallback() -> str:\n  return \"label\"\n\nmodel Shelf[T]:\n  def label[U](self, owner_items: list[T] = [], method_items: list[U] = [], suffix: str = \"\", fallback_label: str = fallback()) -> str:\n    return suffix\n";
         let module = build(source, &["m", "method_default"])?;
-        let add = module.bodies.first().ok_or("expected the add method Body IR")?;
-        let self_param = add.params.first().ok_or("expected the self parameter")?;
-        let amount = add.params.get(1).ok_or("expected the amount parameter")?;
+        let label = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "label")
+            .ok_or("expected the label method Body IR")?;
+        let self_param = label.params.first().ok_or("expected the self parameter")?;
+        let owner_items = label.params.get(1).ok_or("expected the owner-generic parameter")?;
+        let method_items = label.params.get(2).ok_or("expected the method-generic parameter")?;
+        let suffix = label.params.get(3).ok_or("expected the literal default parameter")?;
+        let fallback_label = label.params.get(4).ok_or("expected the call default parameter")?;
 
         assert_eq!(self_param.local, bir::LocalId(0));
         assert!(
@@ -6138,14 +6182,90 @@ mod tests {
             "the synthetic receiver must carry its documented declaration-span fallback"
         );
         assert!(matches!(&self_param.default, bir::CallableParamDefault::Required));
-        assert_eq!(amount.local, bir::LocalId(1));
-        let bir::CallableParamDefault::Unsupported { span, description } = &amount.default else {
-            return Err("an unchecked method default must remain a visible refusal".into());
+        assert!(matches!(&owner_items.default, bir::CallableParamDefault::Source(_)));
+        assert!(matches!(&method_items.default, bir::CallableParamDefault::Source(_)));
+        let bir::CallableParamDefault::Source(suffix_default) = &suffix.default else {
+            return Err("a checked method literal default must become a deferred computation".into());
         };
-        let default_start = source.find("2)").ok_or("missing method default spelling")?;
-        assert_eq!(*span, HirSourceSpan::new(default_start, default_start + 1));
-        assert_eq!(description, "default expression lacks a usable typecheck fact");
-        assert_eq!(add.param_locals, vec![bir::LocalId(0), bir::LocalId(1)]);
+        let literal_start = source.find("\"\"").ok_or("missing method literal default spelling")?;
+        assert_eq!(
+            suffix_default.span,
+            HirSourceSpan::new(literal_start, literal_start + "\"\"".len())
+        );
+        assert!(suffix_default.stmts.is_empty());
+        assert_eq!(
+            suffix_default.result,
+            bir::Operand::Constant(bir::Constant::Str(String::new()))
+        );
+        let bir::CallableParamDefault::Source(fallback_default) = &fallback_label.default else {
+            return Err("a checked method call default must become a deferred computation".into());
+        };
+        let call_start = source
+            .rfind("fallback()")
+            .ok_or("missing method call default spelling")?;
+        assert_eq!(
+            fallback_default.span,
+            HirSourceSpan::new(call_start, call_start + "fallback()".len())
+        );
+        assert_eq!(fallback_default.stmts.len(), 1);
+        assert!(
+            !label.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } if target.name == "fallback"
+            )),
+            "the method default call must not be appended to the ordinary method body: {label:?}"
+        );
+        assert_eq!(label.param_locals.len(), 5);
+
+        Ok(())
+    }
+
+    #[test]
+    fn trait_method_default_uses_a_deferred_source_computation() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def fallback() -> str:\n  return \"hello\"\n\ntrait Greeter:\n  def greet(self, greeting: str = fallback()) -> str:\n    return greeting\n";
+        let module = build(source, &["m", "trait_method_default"])?;
+        let greet = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "greet")
+            .ok_or("expected the greet trait-method Body IR")?;
+        let self_param = greet.params.first().ok_or("expected the self parameter")?;
+        let greeting = greet.params.get(1).ok_or("expected the greeting parameter")?;
+
+        assert!(matches!(&self_param.default, bir::CallableParamDefault::Required));
+        let bir::CallableParamDefault::Source(default) = &greeting.default else {
+            return Err("a checked trait-method default must become a deferred computation".into());
+        };
+        let default_start = source
+            .rfind("fallback()")
+            .ok_or("missing trait-method default source spelling")?;
+        assert_eq!(
+            default.span,
+            HirSourceSpan::new(default_start, default_start + "fallback()".len())
+        );
+        let [call] = default.stmts.as_slice() else {
+            return Err("the deferred trait-method default should contain one call statement".into());
+        };
+        assert!(matches!(
+            &call.kind,
+            bir::StatementKind::Call {
+                callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                ..
+            } if target.name == "fallback"
+        ));
+        assert!(
+            !greet.block.stmts.iter().any(|statement| matches!(
+                &statement.kind,
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } if target.name == "fallback"
+            )),
+            "the trait-method default call must not be appended to the ordinary method body: {greet:?}"
+        );
 
         Ok(())
     }
@@ -6185,24 +6305,15 @@ mod tests {
     }
 
     #[test]
-    fn unchecked_default_type_mismatch_is_not_admitted_as_executable_body_ir() -> Result<(), Box<dyn std::error::Error>>
-    {
-        // Function defaults currently lack their own typechecker expression facts. In particular, this mismatch
-        // must not become executable merely because the callable parameter has an `int` annotation.
+    fn invalid_default_is_rejected_before_body_ir_is_built() -> Result<(), Box<dyn std::error::Error>> {
         let source = "def choose(value: int = \"wrong\") -> int:\n  return value\n";
-        let module = build(source, &["m", "unchecked_default_type_mismatch"])?;
-        let choose = module.bodies.first().ok_or("expected the choose Body IR")?;
-        let value = choose.params.first().ok_or("expected choose's value parameter")?;
-
-        let bir::CallableParamDefault::Unsupported { span, description } = &value.default else {
-            return Err("an unchecked type mismatch must not be executable in Body IR".into());
-        };
-        let default_start = source.find("\"wrong\"").ok_or("missing default spelling")?;
-        assert_eq!(
-            *span,
-            HirSourceSpan::new(default_start, default_start + "\"wrong\"".len())
+        let error = build(source, &["m", "invalid_default"])
+            .err()
+            .ok_or("a mismatched callable default must be rejected before Body IR construction")?;
+        assert!(
+            error.to_string().contains("Type mismatch: expected 'int', found 'str'"),
+            "the source typechecker must reject the mismatched default before a Body-IR consumer sees it: {error}"
         );
-        assert_eq!(description, "default expression lacks a usable typecheck fact");
 
         Ok(())
     }
@@ -6214,7 +6325,8 @@ mod tests {
         // The transaction must discard that move before `second` reuses the local id in the normal body, or the
         // required root-scope drop would silently disappear.
         let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + b\"x\") -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
-        let module = build(source, &["m", "default_ownership_rollback"])?;
+        let (module, _diagnostics) =
+            build_after_expected_typecheck_errors(source, &["m", "default_ownership_rollback"])?;
         let choose = module
             .bodies
             .iter()
@@ -6242,33 +6354,99 @@ mod tests {
     }
 
     #[test]
-    fn callable_local_default_is_refused_rather_than_implicitly_capturing_a_parameter()
+    fn invalid_callable_defaults_remain_body_ir_refusals_without_implicit_captures()
     -> Result<(), Box<dyn std::error::Error>> {
-        // The legacy call emitter materializes source defaults before binding a callee frame. A declaration-local
-        // read is therefore not a valid implicit capture for the direct contract: it must remain a source-spanned
-        // refusal until a compiler-owned representation can make its timing and binding explicit.
-        let source = "def choose(first: str, second: str = first) -> str:\n  return second\n";
-        let module = build(source, &["m", "default_parameter_reference"])?;
-        let choose = module.bodies.first().ok_or("expected the choose function Body IR")?;
-        let second = choose.params.get(1).ok_or("expected the second parameter")?;
+        let cases = [
+            (
+                "earlier parameter",
+                "def choose(first: str, second: str = first) -> str:\n  return second\n",
+                "first",
+            ),
+            (
+                "receiver",
+                "model Label:\n  text: str\n\n  def choose(self, value: str = self.text) -> str:\n    return value\n",
+                "self.text",
+            ),
+            (
+                "bare field",
+                "model Label:\n  text: str\n\n  def choose(self, value: str = text) -> str:\n    return value\n",
+                "text",
+            ),
+            (
+                "bare property",
+                "model Label:\n  text: str\n\n  property display -> str:\n    return self.text\n\n  def choose(self, value: str = display) -> str:\n    return value\n",
+                "display",
+            ),
+        ];
 
-        let bir::CallableParamDefault::Unsupported { span, description } = &second.default else {
-            return Err("a declaration-local default read must not fabricate a callee-frame capture".into());
+        for (case, source, default_spelling) in cases {
+            let (module, diagnostics) = build_after_expected_typecheck_errors(source, &["m", "default_capture"])?;
+            let rejected_name = match default_spelling.split('.').next() {
+                Some(name) => name,
+                None => default_spelling,
+            };
+            assert!(
+                diagnostics.iter().any(|diagnostic| diagnostic.contains(rejected_name)),
+                "the source checker must reject the {case} default before Body IR: {diagnostics:?}"
+            );
+            let choose = module
+                .bodies
+                .iter()
+                .find(|body| body.name == "choose")
+                .ok_or("expected the choose Body IR")?;
+            let parameter = choose.params.last().ok_or("expected the defaulted parameter")?;
+            let bir::CallableParamDefault::Unsupported { span, description } = &parameter.default else {
+                return Err(format!("a {case} default must not fabricate a callable-frame or instance capture").into());
+            };
+            let default_start = source
+                .rfind(default_spelling)
+                .ok_or("missing invalid default source spelling")?;
+            assert_eq!(
+                *span,
+                HirSourceSpan::new(default_start, default_start + default_spelling.len()),
+                "the {case} refusal must preserve the whole default expression span"
+            );
+            assert!(description.contains(rejected_name));
+            assert!(
+                !choose
+                    .locals
+                    .iter()
+                    .any(|local| matches!(local.origin, bir::LocalOrigin::External)),
+                "a direct consumer must not need an implicit lexical lookup for the refused {case} default: {choose:?}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn validated_newtype_default_remains_a_visible_body_ir_refusal() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "type Attempts = newtype int:\n  def from_underlying(n: int) -> Result[Attempts, ValidationError]:\n    return Ok(Attempts(n))\n\ndef choose(value: Attempts = 3) -> Attempts:\n  return value\n";
+        let module = build(source, &["m", "newtype_default"])?;
+        let choose = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "choose")
+            .ok_or("expected the choose Body IR")?;
+        let value = choose.params.first().ok_or("expected the newtype default parameter")?;
+        let bir::CallableParamDefault::Unsupported { span, description } = &value.default else {
+            return Err(
+                "a default requiring validated-newtype coercion must not become a raw source computation".into(),
+            );
         };
-        let default_start = source.rfind("first").ok_or("missing default parameter read")?;
-        assert_eq!(*span, HirSourceSpan::new(default_start, default_start + "first".len()));
-        assert_eq!(description, "default reads Body-IR-external name(s): first");
+        let default_start = source.rfind("3)").ok_or("missing newtype default spelling")?;
+        assert_eq!(*span, HirSourceSpan::new(default_start, default_start + 1));
         assert_eq!(
-            choose.locals.len(),
-            2,
-            "the refused default read must not leak an external local into the callable body: {choose:?}"
+            description,
+            "default requires a validated-newtype coercion Body IR does not yet represent"
         );
+        assert_eq!(choose.locals.len(), 1);
         assert!(
             !choose
                 .locals
                 .iter()
                 .any(|local| matches!(local.origin, bir::LocalOrigin::External)),
-            "a direct consumer must not need an implicit lexical lookup for a refused default: {choose:?}"
+            "the newtype refusal must not leave a hidden source lookup in the callable body: {choose:?}"
         );
 
         Ok(())
@@ -6830,16 +7008,20 @@ mod tests {
                 ..
             }))
         ));
-        let bir::CallableParamDefault::Unsupported { span, description } = &content_type.default else {
-            return Err("the unpresetted unchecked default must remain a visible refusal".into());
+        let bir::CallableParamDefault::Source(content_type_default) = &content_type.default else {
+            return Err("the unpresetted checked default must remain a deferred source computation".into());
         };
         let content_type_start = source.find("\"text\"").ok_or("missing content_type default spelling")?;
         assert_eq!(
-            *span,
+            content_type_default.span,
             HirSourceSpan::new(content_type_start, content_type_start + "\"text\"".len())
         );
-        assert_eq!(description, "default expression lacks a usable typecheck fact");
-        let supplied_slots: Vec<&Vec<usize>> = make
+        assert!(content_type_default.stmts.is_empty());
+        assert_eq!(
+            content_type_default.result,
+            bir::Operand::Constant(bir::Constant::Str("text".to_string()))
+        );
+        let supplied_slots: Vec<Vec<usize>> = make
             .block
             .stmts
             .iter()
@@ -6847,7 +7029,12 @@ mod tests {
                 bir::StatementKind::Call {
                     callee: bir::Callee::Function(bir::CallableTarget::Local(target)),
                     ..
-                } => Some(&target.parameter_slots),
+                } => match &target.binding {
+                    bir::ArgumentBinding::Resolved { arguments, .. } => {
+                        Some(arguments.iter().map(|argument| argument.slot).collect())
+                    }
+                    bir::ArgumentBinding::UnresolvedPositional => None,
+                },
                 _ => None,
             })
             .collect();

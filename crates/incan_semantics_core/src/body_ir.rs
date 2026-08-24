@@ -35,7 +35,7 @@
 //! a call site left to their declared defaults. One binding type serves direct calls, local callable values, method
 //! calls, and construction, so a consumer reads the same fact the same way regardless of the spelling. A default's
 //! *value* is deliberately not materialized at the call site: its computation stays owned by the declaration that
-//! introduced it, matching the contract [`ClosureParam`] already states. Resolved explicit call-site type arguments
+//! introduced it, matching the contract [`CallableParam`] already states. Resolved explicit call-site type arguments
 //! ride on the callee target rather than the argument list, because they are part of which callable was selected
 //! rather than what it was passed.
 
@@ -1263,10 +1263,11 @@ pub enum ArgumentBinding {
         ///
         /// Each names a parameter or field the call site left to a default. Body IR records the fact without
         /// materializing the value: the default's computation stays owned by whichever declaration or callable value
-        /// introduced it, which is the contract [`ClosureParam`] already states. For an ordinary declaration that is
-        /// a source-declared default; for a partial callable it may instead be the construction-time preset
-        /// [`ClosureParam::preset_capture`] identifies, so a consumer reads the owning [`Rvalue::Closure`] rather
-        /// than assuming the target declaration has a default of its own. Recording the omission here is still what
+        /// introduced it, which is the contract [`CallableParam`] already states. For an ordinary declaration that is
+        /// a source-declared [`CallableParamDefault::Source`] computation; for a partial callable it may instead be
+        /// the construction-time [`CallableParamDefault::PartialPreset`] its callable parameter identifies, so a
+        /// consumer reads the owning [`Rvalue::Closure`] rather than assuming the target declaration has a default of
+        /// its own. Recording the omission here is still what
         /// frees a consumer from diffing the operand vector against the declaration, and it is why no defaulted slot
         /// carries an [`OwnershipFact`]: this call site evaluates nothing for it. Making those defaults evaluable is
         /// #1172's own scope, and this fact is what tells it which slots need a value.
