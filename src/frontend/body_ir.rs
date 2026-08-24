@@ -2492,19 +2492,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 self.lower_method_call(recv, name, type_args, args, expr.span, scope, out)
             }
             ast::Expr::Tuple(items) => self.lower_aggregate(bir::AggregateKind::Tuple, items, expr.span, scope, out),
-            ast::Expr::List(entries) => {
-                if entries.iter().any(|entry| matches!(entry, ast::ListEntry::Spread(_))) {
-                    return self.unsupported_operand("list spread entries".to_string(), scope, span, out);
-                }
-                let items: Vec<ast::Spanned<ast::Expr>> = entries
-                    .iter()
-                    .map(|entry| match entry {
-                        ast::ListEntry::Element(e) => e.clone(),
-                        ast::ListEntry::Spread(_) => unreachable!("spread entries filtered out above"),
-                    })
-                    .collect();
-                self.lower_aggregate(bir::AggregateKind::List, &items, expr.span, scope, out)
-            }
+            ast::Expr::List(entries) => self.lower_list_literal(entries, expr.span, scope, out),
             ast::Expr::Dict(entries) => self.lower_dict(entries, expr.span, scope, out),
             ast::Expr::Set(items) => self.lower_aggregate(bir::AggregateKind::Set, items, expr.span, scope, out),
             ast::Expr::Constructor(name, args) => self.lower_constructor(name, args, expr.span, scope, out),
@@ -2839,25 +2827,20 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         args: &[ast::CallArg],
         scope: bir::ScopeId,
         out: &mut Vec<bir::Statement>,
-    ) -> Result<(Vec<bir::Operand>, bir::ArgumentBinding), String> {
+    ) -> Result<(Vec<bir::ArgumentElement>, bir::ArgumentBinding), String> {
         let has_rest = declared
             .as_ref()
             .is_some_and(|slots| slots.iter().any(|slot| slot.is_rest));
         let fixed_slots = declared.filter(|_| !has_rest);
         let Some(slots) = fixed_slots else {
-            let reason = if has_rest {
-                "a rest parameter"
-            } else {
-                "no resolved signature"
-            };
-            let Some(operands) = self.lower_positional_args(args, scope, out) else {
-                return Err(format!("{callee} called with named or spread arguments and {reason}"));
-            };
-            return Ok((operands, bir::ArgumentBinding::UnresolvedPositional));
+            let elements = self.lower_spread_capable_args(args, scope, out);
+            return Ok((elements, bir::ArgumentBinding::UnresolvedPositional));
         };
         let planned = plan_declared_args(callee, &slots, args)?;
-        self.lower_planned_args(&planned, slots.len(), scope, out)
-            .map_err(|description| format!("{callee}: {description}"))
+        let (operands, binding) = self
+            .lower_planned_args(&planned, slots.len(), scope, out)
+            .map_err(|description| format!("{callee}: {description}"))?;
+        Ok((fixed_elements(operands), binding))
     }
 
     /// Resolve a call site's explicit type arguments to semantic types, or describe why they cannot be represented.
@@ -2975,6 +2958,43 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             hir_span_value,
             out,
         )
+    }
+
+    /// Lower call arguments positionally, admitting spreads, for a call whose arity is not statically known.
+    ///
+    /// Every argument keeps its written form: a positional value, a named value, or a spread. None of them can be
+    /// resolved to a declared slot here, because a spread supplies an unknown number of arguments at runtime —
+    /// which is exactly why the resulting call records [`bir::ArgumentBinding::UnresolvedPositional`] rather than a
+    /// slot map asserting a binding nobody checked. A name is preserved on its element rather than discarded, so a
+    /// later consumer can still bind it once the arity is known.
+    fn lower_spread_capable_args(
+        &mut self,
+        args: &[ast::CallArg],
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> Vec<bir::ArgumentElement> {
+        let mut elements = Vec::with_capacity(args.len());
+        for arg in args {
+            match arg {
+                ast::CallArg::Positional(expr) => {
+                    elements.push(bir::ArgumentElement::One(self.lower_expr_to_operand(expr, scope, out)));
+                }
+                ast::CallArg::PositionalUnpack(source) => {
+                    elements.push(self.lower_spread_element(source, bir::SpreadKind::Sequence, scope, out));
+                }
+                ast::CallArg::KeywordUnpack(source) => {
+                    elements.push(self.lower_spread_element(source, bir::SpreadKind::Mapping, scope, out));
+                }
+                ast::CallArg::Named(name, expr) => {
+                    let operand = self.lower_expr_to_operand(expr, scope, out);
+                    elements.push(bir::ArgumentElement::Named {
+                        name: name.clone(),
+                        operand,
+                    });
+                }
+            }
+        }
+        elements
     }
 
     /// Lower a call to a locally held callable value, a nominal construction, or a direct named function.
@@ -3098,7 +3118,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 type_args: resolved_type_args,
                 binding,
             })),
-            fixed_elements(operands),
+            operands,
             ty,
             scope,
             hir_span_value,
@@ -3173,8 +3193,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 }
             };
 
+        // The receiver is `args[0]` and is never spliced, so it is always a single-value element.
         let mut call_args = Vec::with_capacity(arg_operands.len() + 1);
-        call_args.push(receiver_operand);
+        call_args.push(bir::ArgumentElement::One(receiver_operand));
         call_args.append(&mut arg_operands);
         let ty = self.resolve_ty(span);
         self.push_call_temp(
@@ -3183,13 +3204,65 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 type_args: resolved_type_args,
                 binding,
             }),
-            fixed_elements(call_args),
+            call_args,
             ty,
             scope,
             hir_span_value,
             false,
             out,
         )
+    }
+
+    /// Lower a list literal, including spread entries, into a [`bir::AggregateKind::List`] aggregate.
+    ///
+    /// Elements are lowered in written source order, so a spread source's evaluation is interleaved with the fixed
+    /// elements around it exactly as written. A spread contributes one [`bir::ArgumentElement::Spread`] whose
+    /// length is a runtime fact; surrounding fixed elements keep their positions relative to it.
+    fn lower_list_literal(
+        &mut self,
+        entries: &[ast::ListEntry],
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let mut elements = Vec::with_capacity(entries.len());
+        for entry in entries {
+            match entry {
+                ast::ListEntry::Element(item) => {
+                    elements.push(bir::ArgumentElement::One(self.lower_expr_to_operand(item, scope, out)));
+                }
+                ast::ListEntry::Spread(source) => {
+                    elements.push(self.lower_spread_element(source, bir::SpreadKind::Sequence, scope, out));
+                }
+            }
+        }
+        let ty = self.resolve_ty(span);
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+        self.push_assign_temp(
+            bir::Rvalue::Aggregate(bir::AggregateKind::List, elements),
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
+    /// Lower one spread source into a [`bir::ArgumentElement::Spread`].
+    ///
+    /// The source is read through the ordinary ownership path, so a spliced source carries the same
+    /// [`bir::OwnershipFact`]/last-use discipline as any other read. That fact is recorded on the spread itself
+    /// rather than inferred from the surrounding aggregate or call, because a spliced source is consumed
+    /// differently from a single element: its contents are distributed into the surrounding list.
+    fn lower_spread_element(
+        &mut self,
+        source: &ast::Spanned<ast::Expr>,
+        kind: bir::SpreadKind,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::ArgumentElement {
+        let operand = self.lower_expr_to_operand(source, scope, out);
+        bir::ArgumentElement::Spread(bir::SpreadElement { source: operand, kind })
     }
 
     /// Lower a tuple, (non-spread) list literal, or set literal to a [`bir::Rvalue::Aggregate`], recording an
@@ -3224,8 +3297,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Dict`], one entry per source entry, in written order.
     ///
     /// Keys and values are lowered in written order, key before value, because both are arbitrary expressions
-    /// whose evaluation order is source-observable. A spread entry (`{**other}`) is not yet modeled and lowers to
-    /// an explicit unsupported placeholder.
+    /// whose evaluation order is source-observable. A `**source` spread contributes one
+    /// [`bir::DictEntry::Spread`] in written position; entries take effect in order and a later entry overwrites an
+    /// earlier one with the same key, which is what makes `{**base, "x": 1}` well defined.
     fn lower_dict(
         &mut self,
         entries: &[ast::DictEntry],
@@ -3234,17 +3308,22 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let hir_span_value = hir_span(span);
-        if entries.iter().any(|entry| matches!(entry, ast::DictEntry::Spread(_))) {
-            return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
-        }
         let mut lowered = Vec::with_capacity(entries.len());
         for entry in entries {
-            let ast::DictEntry::Pair(key, value) = entry else {
-                return self.unsupported_operand("dict spread entries".to_string(), scope, hir_span_value, out);
-            };
-            let key_operand = self.lower_expr_to_operand(key, scope, out);
-            let value_operand = self.lower_expr_to_operand(value, scope, out);
-            lowered.push(bir::DictEntry::Pair(key_operand, value_operand));
+            match entry {
+                ast::DictEntry::Pair(key, value) => {
+                    let key_operand = self.lower_expr_to_operand(key, scope, out);
+                    let value_operand = self.lower_expr_to_operand(value, scope, out);
+                    lowered.push(bir::DictEntry::Pair(key_operand, value_operand));
+                }
+                ast::DictEntry::Spread(source) => {
+                    let operand = self.lower_expr_to_operand(source, scope, out);
+                    lowered.push(bir::DictEntry::Spread(bir::SpreadElement {
+                        source: operand,
+                        kind: bir::SpreadKind::Mapping,
+                    }));
+                }
+            }
         }
         let ty = self.resolve_ty(span);
         self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);

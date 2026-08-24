@@ -1208,6 +1208,13 @@ impl BinOp {
 pub enum ArgumentElement {
     /// Exactly one value at this position.
     One(Operand),
+    /// A value written with an argument name, at a call whose declared parameters were not statically resolved.
+    ///
+    /// A call with a resolved signature never produces this: its named arguments are bound to declared slots and
+    /// recorded in [`ArgumentBinding::Resolved`], so they appear as [`Self::One`] in slot order. This form exists
+    /// for the case where a spread makes the arity a runtime fact — a callee with a rest parameter — so the name
+    /// cannot be resolved to a slot here but must not be discarded either.
+    Named { name: String, operand: Operand },
     /// Splice the elements of one source in at this position. Its length is a runtime fact.
     Spread(SpreadElement),
 }
@@ -1219,7 +1226,7 @@ impl ArgumentElement {
     pub fn as_one(&self) -> Option<&Operand> {
         match self {
             Self::One(operand) => Some(operand),
-            Self::Spread(_) => None,
+            Self::Named { .. } | Self::Spread(_) => None,
         }
     }
 
@@ -1235,6 +1242,7 @@ impl ArgumentElement {
     fn render_snapshot(&self) -> String {
         match self {
             Self::One(operand) => operand.render_snapshot(),
+            Self::Named { name, operand } => format!("{name}={}", operand.render_snapshot()),
             Self::Spread(spread) => spread.render_snapshot(),
         }
     }
