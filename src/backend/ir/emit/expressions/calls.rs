@@ -1320,10 +1320,13 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             BinOpEmitKind::Pow { result_is_int } => {
+                // `**` emits as a method call, so the base becomes a receiver and binds tighter than any operation
+                // inside it. Without parentheses, `(x + y) ** 0.5` emits `x + y.powf(0.5)`, which silently changes
+                // the result; a coerced base also emits an invalid method call on an `as` cast.
                 if result_is_int {
-                    Ok(quote! { #l.pow(#r as u32) })
+                    Ok(quote! { (#l).pow(#r as u32) })
                 } else {
-                    Ok(quote! { #l.powf(#r) })
+                    Ok(quote! { (#l).powf(#r) })
                 }
             }
             BinOpEmitKind::Infix { token } => {
