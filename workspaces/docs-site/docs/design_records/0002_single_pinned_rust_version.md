@@ -1,7 +1,7 @@
 ---
 id: DD-0002
 title: Pin one Rust version and one generated-project edition
-status: Draft
+status: Accepted
 type: design-decision
 date: 2026-08-24
 review_target: v0.7 planning

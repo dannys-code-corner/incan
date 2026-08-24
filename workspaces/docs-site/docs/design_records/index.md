@@ -34,4 +34,4 @@ Start from the [design-record template](TEMPLATE.md) when proposing a new decisi
 | ID | Decision | Status | Review point |
 | --- | --- | --- | --- |
 | [DD-0001](0001_gpu_target_capability_deferred.md) | Defer GPU target capability and graphics contracts | Accepted | v0.8 planning |
-| [DD-0002](0002_single_pinned_rust_version.md) | Pin one Rust version and one generated-project edition | Draft | v0.7 planning |
+| [DD-0002](0002_single_pinned_rust_version.md) | Pin one Rust version and one generated-project edition | Accepted | v0.7 planning |
