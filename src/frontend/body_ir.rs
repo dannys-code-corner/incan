@@ -4527,6 +4527,70 @@ fn count_reads_in_call_arg(name: &str, arg: &ast::CallArg) -> usize {
     }
 }
 
+/// Register the callable-value contracts and private mechanisms owned by Body IR lowering.
+///
+/// This is deliberately adjacent to [`BodyBuilder::lower_closure`] and [`BodyBuilder::lower_partial`], rather than
+/// a row in the compatibility collector. The replacement executor still refuses local callable targets; that fact
+/// stays explicit in the collected evidence and does not make either feature execution-complete.
+pub(crate) fn replacement_compatibility_body_ir_contribution()
+-> crate::replacement_compatibility::ReplacementCompatibilityContribution {
+    use crate::replacement_compatibility::{
+        feature_requirement_link, implementation_requirement, local_implementation_contribution,
+        planned_feature_at_boundary,
+    };
+
+    local_implementation_contribution(
+        "frontend.body-ir.callable-values",
+        "src/frontend/body_ir.rs",
+        "fn replacement_compatibility_body_ir_contribution",
+        vec![
+            planned_feature_at_boundary(
+                "call.partial-binding",
+                "Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.",
+                1152,
+                "Body IR carries the source contract; direct local callable targets remain visibly refused until the callable runtime slice executes them.",
+                "src/frontend/typechecker/check_expr/calls.rs",
+                "fn check_call",
+                "fn lower_call",
+                "fn execute_call",
+            ),
+            planned_feature_at_boundary(
+                "call.stored-callables",
+                "Stored closures and partials retain lexical capture timing, ownership, and isolated local call frames.",
+                1152,
+                "Direct execution deliberately refuses local callable targets; this is the coherent callable-frame profile.",
+                "src/frontend/typechecker/check_expr/calls.rs",
+                "fn check_call",
+                "fn lower_call",
+                "fn execute_call",
+            ),
+        ],
+        vec![
+            implementation_requirement(
+                "call.argument-binder",
+                "Parameter binding preserves positional, named, default, preset, variadic, and diagnostic rules.",
+                "typechecker partial projection and replacement call runtime",
+                "partial/default typechecker and Body-IR tests",
+                "Binding slots are shared call machinery, not a user feature.",
+            ),
+            implementation_requirement(
+                "captures.lexical-environments",
+                "Closure and partial capture reads occur at construction time with explicit ownership.",
+                "Body IR closure lowering and replacement runtime",
+                "closure/partial capture timing regressions",
+                "Lexical environments are private runtime state.",
+            ),
+        ],
+        Vec::new(),
+        vec![
+            feature_requirement_link("call.partial-binding", "call.argument-binder"),
+            feature_requirement_link("call.partial-binding", "captures.lexical-environments"),
+            feature_requirement_link("call.stored-callables", "call.frames"),
+            feature_requirement_link("call.stored-callables", "captures.lexical-environments"),
+        ],
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

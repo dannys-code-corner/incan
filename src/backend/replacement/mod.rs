@@ -1989,6 +1989,64 @@ fn aggregate_label(kind: &incan_semantics_core::body_ir::AggregateKind) -> &'sta
     }
 }
 
+/// Register the bounded scalar/control profile beside the replacement executor that implements it.
+///
+/// The compatibility collector reports this contribution but does not own its feature definitions. In particular,
+/// successful direct execution remains non-green until aggregate source contracts have their own paired comparison
+/// evidence; the single `replacement-body-v0-001` match stays case-scoped.
+pub(crate) fn replacement_compatibility_direct_execution_contribution()
+-> crate::replacement_compatibility::ReplacementCompatibilityContribution {
+    use crate::replacement_compatibility::{
+        feature_requirement_link, implementation_requirement, local_implementation_contribution,
+        preserved_feature_at_boundary,
+    };
+
+    local_implementation_contribution(
+        "backend.replacement.bounded-scalar-control",
+        "src/backend/replacement/mod.rs",
+        "fn replacement_compatibility_direct_execution_contribution",
+        vec![
+            preserved_feature_at_boundary(
+                "language.control-flow",
+                "Bounded scalar conditionals, loops, returns, assertions, and range iteration execute directly with explicit receipts.",
+                "src/frontend/typechecker/check_expr/control_flow.rs",
+                "fn check_if_expr",
+                "fn lower_if",
+                "fn execute_loop",
+            ),
+            preserved_feature_at_boundary(
+                "language.numeric-and-scalar",
+                "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
+                "src/frontend/typechecker/check_expr/ops.rs",
+                "fn check_binary",
+                "fn lower_binary",
+                "fn evaluate_binary",
+            ),
+        ],
+        vec![
+            implementation_requirement(
+                "control.normalized-flow",
+                "Branches, loops, returns, assertions, and breaks execute from normalized Body IR.",
+                "Body IR lowering and replacement evaluator",
+                "replacement-body-v0 corpus",
+                "Normalized control nodes are implementation vocabulary.",
+            ),
+            implementation_requirement(
+                "runtime.scalar-values",
+                "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
+                "Body IR operands/rvalues and replacement evaluator",
+                "replacement-body-v0 scalar corpus",
+                "Scalar representation is an internal evaluator mechanism.",
+            ),
+        ],
+        Vec::new(),
+        vec![
+            feature_requirement_link("language.control-flow", "control.normalized-flow"),
+            feature_requirement_link("language.numeric-and-scalar", "runtime.scalar-values"),
+        ],
+    )
+}
+
 /// Render a unary operator as a compact source-level diagnostic label.
 const fn unary_label(operator: UnOp) -> &'static str {
     match operator {

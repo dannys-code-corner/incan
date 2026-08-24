@@ -34,6 +34,7 @@ pub mod oven;
 pub mod oven_interop;
 pub mod project_lifecycle;
 pub mod provider;
+pub mod replacement_compatibility;
 #[cfg(feature = "rust_inspect")]
 pub mod rust_inspect;
 pub(crate) mod semantics_registry;
