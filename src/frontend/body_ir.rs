@@ -44,6 +44,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use incan_core::lang::keywords::KeywordId;
+use incan_semantics_core::SurfaceFeatureKey;
 use incan_semantics_core::body_ir as bir;
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanCallableParam, IncanCallableParamKind,
@@ -211,6 +213,7 @@ fn lower_function_body(
         },
         runtime_requirements: builder.runtime_requirements,
         panic_facts: builder.panic_facts,
+        is_async: function.is_async(),
     }
 }
 
@@ -303,6 +306,7 @@ fn lower_method_body(
         },
         runtime_requirements: builder.runtime_requirements,
         panic_facts: builder.panic_facts,
+        is_async: method.is_async(),
     })
 }
 
@@ -2328,6 +2332,7 @@ impl<'a> BodyBuilder<'a> {
             ast::Expr::Closure(params, body) => self.lower_closure(params, body, expr.span, scope, out),
             ast::Expr::Partial(partial) => self.lower_partial(partial, expr.span, scope, out),
             ast::Expr::Match(subject, arms) => self.lower_match(subject, arms, expr.span, scope, out),
+            ast::Expr::Surface(surface) => self.lower_surface_expr(surface, expr.span, scope, out),
             other => self.unsupported_operand(unsupported_expr_label(other), scope, span, out),
         }
     }
@@ -3172,6 +3177,174 @@ impl<'a> BodyBuilder<'a> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         self.lower_nominal_construction(name, args, span, scope, out)
+    }
+
+    // ---- Async surface (#1164) ----
+
+    /// Lower an `ast::Expr::Surface` node, accepting only the async pair this issue owns.
+    ///
+    /// Dispatch is on the surface **key**, not the payload shape. `SurfaceExprPayload::PrefixUnary` is generic over
+    /// any prefix soft keyword and `await` merely happens to be the only one registered today, so matching the
+    /// payload alone would silently accept a future prefix keyword as an await. The typechecker
+    /// (`check_expr/mod.rs`) and the existing Rust-emission backend (`backend/ir/lower/expr/mod.rs`) both dispatch
+    /// on the key/payload pair for exactly this reason.
+    ///
+    /// Every other payload -- the scoped-DSL surface nodes -- keeps its existing named refusal. Those reach this
+    /// module only when a caller skips the desugar pass the legacy pipeline runs first, and they belong to the Body
+    /// IR input-contract issue, not to this one.
+    fn lower_surface_expr(
+        &mut self,
+        surface: &ast::SurfaceExpr,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        match (&surface.key, &surface.payload) {
+            (SurfaceFeatureKey::SoftKeyword(KeywordId::Await), ast::SurfaceExprPayload::PrefixUnary(awaited)) => {
+                self.lower_await(awaited, span, scope, out)
+            }
+            (_, ast::SurfaceExprPayload::RaceFor(race)) => self.lower_race_for(race, span, scope, out),
+            (_, payload) => self.unsupported_operand(surface_expr_label(payload), scope, hir_span(span), out),
+        }
+    }
+
+    /// Lower `await expr` into a [`bir::StatementKind::Await`] suspension point.
+    ///
+    /// The awaited operand is read through the ordinary ownership path, so the suspension carries the same
+    /// [`bir::OwnershipFact`]/last-use discipline as any other read. The resumed value lands in a fresh temporary,
+    /// which is what makes the suspension's destination explicit rather than implied by the surrounding statement.
+    ///
+    /// Records [`AbiV0RuntimeRequirement::AsyncRuntime`] on the enclosing body so a consumer reads the requirement
+    /// off the body it applies to instead of re-deriving it from the program's imports and declaration modifiers.
+    fn lower_await(
+        &mut self,
+        awaited: &ast::Spanned<ast::Expr>,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let operand = self.lower_expr_to_operand(awaited, scope, out);
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::AsyncRuntime);
+        let ty = self.resolve_ty(span);
+        let destination = self.new_temp(ty.clone(), scope, hir_span_value);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Await {
+                destination: Some(bir::Place::from_local(destination)),
+                awaited: operand,
+            },
+            span: hir_span_value,
+        });
+        self.temp_operand(destination, &ty)
+    }
+
+    /// Lower `race for value:` into a [`bir::StatementKind::Race`].
+    ///
+    /// Each arm's awaitable is lowered into the enclosing block *before* any arm body, which is what makes "every
+    /// awaitable is evaluated before selection" observable in the statement sequence rather than a claim in prose.
+    /// Each arm then gets its own scope and its own binding local: the source spells one shared name, but arms
+    /// re-scope it and can resolve it to different types, so one local per arm is the faithful shape.
+    ///
+    /// An arm body containing an unsupported construct keeps its own `Unsupported` node *inside* the represented
+    /// race rather than collapsing the whole expression, so a consumer loses only the construct it cannot handle.
+    fn lower_race_for(
+        &mut self,
+        race: &ast::RaceForExpr,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        self.record_runtime_requirement(AbiV0RuntimeRequirement::AsyncRuntime);
+
+        // Selection observes every awaitable, so all of them are evaluated first, in source order, into the
+        // enclosing block. Only the winning arm's body runs, so arm bodies are lowered into their own blocks below.
+        let mut awaitables = Vec::with_capacity(race.arms.len());
+        for arm in &race.arms {
+            awaitables.push(self.lower_expr_to_operand(&arm.awaitable, scope, out));
+        }
+
+        let mut arms = Vec::with_capacity(race.arms.len());
+        for (arm, awaitable) in race.arms.iter().zip(awaitables) {
+            let arm_scope = self.new_scope(Some(scope), hir_span_value);
+            let binding_ty = self.resolve_ty(arm.awaitable.span);
+            let binding = self.declare_new_local(race.binding.clone(), binding_ty, arm_scope, hir_span_value, &[]);
+            let shadowed = self.bindings.insert(race.binding.clone(), binding);
+
+            let mut arm_stmts = Vec::new();
+            let result = match &arm.body {
+                ast::RaceForBody::Expr(expr) => self.lower_expr_to_operand(expr, arm_scope, &mut arm_stmts),
+                ast::RaceForBody::Block(stmts) => self.lower_race_arm_block(stmts, arm_scope, &mut arm_stmts),
+            };
+
+            // The arm binding is scoped to its own arm, exactly like a closure parameter: code after the race must
+            // keep resolving the name to whatever it meant outside.
+            match shadowed {
+                Some(previous) => {
+                    self.bindings.insert(race.binding.clone(), previous);
+                }
+                None => {
+                    self.bindings.remove(&race.binding);
+                }
+            }
+
+            arms.push(bir::RaceArm {
+                awaitable,
+                binding,
+                body: bir::Block {
+                    scope: arm_scope,
+                    stmts: arm_stmts,
+                },
+                result,
+            });
+        }
+
+        let ty = self.resolve_ty(span);
+        let destination = self.new_temp(ty.clone(), scope, hir_span_value);
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Race {
+                destination: Some(bir::Place::from_local(destination)),
+                arms,
+            },
+            span: hir_span_value,
+        });
+        self.temp_operand(destination, &ty)
+    }
+
+    /// Lower a race arm's block body, whose value is its trailing expression statement.
+    ///
+    /// That trailing-expression convention is the source contract the typechecker already applies
+    /// (`check_race_arm_block_body`), so lowering follows it rather than inventing a second rule. A block whose last
+    /// statement is not an expression has no value to produce, and yields an explicit unknown operand.
+    fn lower_race_arm_block(
+        &mut self,
+        stmts: &[ast::Spanned<ast::Statement>],
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let Some((last, leading)) = stmts.split_last() else {
+            return self.unsupported_operand(
+                "empty race arm body".to_string(),
+                scope,
+                hir_span(ast::Span { start: 0, end: 0 }),
+                out,
+            );
+        };
+        for (index, stmt) in leading.iter().enumerate() {
+            self.lower_stmt_into(stmt, &stmts[index + 1..], scope, out);
+        }
+        match &last.node {
+            ast::Statement::Expr(expr) => self.lower_expr_to_operand(expr, scope, out),
+            _ => {
+                self.lower_stmt_into(last, &[], scope, out);
+                self.unsupported_operand(
+                    "race arm body whose last statement produces no value".to_string(),
+                    scope,
+                    hir_span(last.span),
+                    out,
+                )
+            }
+        }
     }
 
     // ---- Closures and partial callables (#1101 bucket B4) ----
@@ -7400,6 +7573,266 @@ mod tests {
             "lowering must name the unresolvable parameter rather than accepting it silently: {snapshot}"
         );
         Ok(())
+    }
+
+    // ========================================================================
+    // #1164 -- `await` and `race for`
+    // ========================================================================
+
+    const ASYNC_PRELUDE: &str =
+        "import std.async\n\nasync def fast() -> int:\n  return 1\n\nasync def slow() -> int:\n  return 2\n\n";
+
+    #[test]
+    fn lowers_await_as_an_explicit_suspension_point_with_a_destination() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!("{ASYNC_PRELUDE}async def f() -> int:\n  v = await fast()\n  return v\n");
+        let module = build(&source, &["m", "await_one"])?;
+        let snapshot = module.render_snapshot();
+        assert_eq!(
+            snapshot,
+            build(&source, &["m", "await_one"])?.render_snapshot(),
+            "lowering must be deterministic"
+        );
+
+        assert!(!snapshot.contains("unsupported("), "await must lower: {snapshot}");
+        // The suspension carries a destination and the awaited operand's own ownership fact -- the two facts that
+        // distinguish it from a generator `yield`, which produces outward and has no destination.
+        assert!(
+            snapshot.contains("_1 = await copy(_0, last_use)"),
+            "await must record its destination and the awaited read's ownership fact: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("yield"),
+            "await must not be represented as a generator yield: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn records_the_async_runtime_requirement_on_the_awaiting_body() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!("{ASYNC_PRELUDE}async def f() -> int:\n  return await fast()\n");
+        let module = build(&source, &["m", "await_req"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("async_runtime"),
+            "an awaiting body must record its async runtime requirement: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_async_body_without_any_await_is_still_marked_async() -> Result<(), Box<dyn std::error::Error>> {
+        // The reason `is_async` is a stored declaration fact rather than derived the way `is_generator` is: this
+        // body contains no `await` at all, yet its caller still gets an awaitable. Deriving async-ness by scanning
+        // for a suspension point would report this body as synchronous.
+        let source = "import std.async\n\nasync def f() -> int:\n  return 1\n";
+        let module = build(source, &["m", "async_plain"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("body async f"),
+            "an `async def` with no await must still be marked async: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("await "),
+            "this body genuinely contains no suspension point, so the async fact cannot have been derived from one: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_synchronous_body_is_not_marked_async() -> Result<(), Box<dyn std::error::Error>> {
+        let module = build("def f() -> int:\n  return 1\n", &["m", "sync"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("body f "),
+            "a plain function must render unmarked: {snapshot}"
+        );
+        assert!(
+            !snapshot.contains("body async"),
+            "a synchronous body must not be marked async: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn sequential_awaits_keep_their_effect_ordering_across_suspension() -> Result<(), Box<dyn std::error::Error>> {
+        let source =
+            format!("{ASYNC_PRELUDE}async def f() -> int:\n  x = await fast()\n  y = await slow()\n  return x + y\n");
+        let module = build(&source, &["m", "await_seq"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(!rendered.contains("unsupported("), "both awaits must lower: {rendered}");
+        let first = rendered.find("call fn:fast(").ok_or("missing first awaitable")?;
+        let first_await = rendered.find("await ").ok_or("missing first suspension")?;
+        let second = rendered.find("call fn:slow(").ok_or("missing second awaitable")?;
+        assert!(
+            first < first_await && first_await < second,
+            "statements before a suspension must precede it and statements after must follow it: {rendered}"
+        );
+        assert_eq!(
+            rendered.matches("await ").count(),
+            2,
+            "each source `await` must produce its own suspension point: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn await_inside_a_branch_stays_inside_that_branch() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f(flag: bool) -> int:\n  total = 0\n  if flag:\n    total = await fast()\n  else:\n    total = 7\n  return total\n"
+        );
+        let module = build(&source, &["m", "await_branch"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            !rendered.contains("unsupported("),
+            "await in a branch must lower: {rendered}"
+        );
+        let branch_line = rendered
+            .lines()
+            .find(|line| line.contains("await "))
+            .ok_or("missing suspension")?;
+        assert!(
+            branch_line.starts_with("    "),
+            "the suspension must stay nested inside the branch block: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn await_inside_a_loop_stays_inside_the_loop_body() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  total = 0\n  i = 0\n  while i < 3:\n    total = total + await fast()\n    i = i + 1\n  return total\n"
+        );
+        let module = build(&source, &["m", "await_loop"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            !rendered.contains("unsupported("),
+            "await in a loop must lower: {rendered}"
+        );
+        let await_line = rendered
+            .lines()
+            .find(|line| line.contains("await "))
+            .ok_or("missing suspension")?;
+        assert!(
+            await_line.starts_with("    "),
+            "the suspension must stay inside the loop body: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn lowers_a_two_arm_race_with_per_arm_bindings_and_pre_selection_awaitables()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  race for value:\n    await fast() => value\n    await slow() => value\n"
+        );
+        let module = build(&source, &["m", "race_two"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            !rendered.contains("unsupported("),
+            "a two-arm race must lower: {rendered}"
+        );
+        // Every awaitable is evaluated before selection, in source order -- observable here as both calls being
+        // emitted ahead of the race statement rather than inside an arm.
+        let fast_at = rendered.find("call fn:fast(").ok_or("missing first awaitable")?;
+        let slow_at = rendered.find("call fn:slow(").ok_or("missing second awaitable")?;
+        let race_at = rendered.find("race [").ok_or("missing race statement")?;
+        assert!(
+            fast_at < slow_at && slow_at < race_at,
+            "all arm awaitables must be evaluated, in source order, before selection: {rendered}"
+        );
+        // The source spells one binding name, but each arm re-scopes it, so each arm owns its own local.
+        assert_eq!(
+            rendered.matches("value : int [binding]").count(),
+            2,
+            "each arm must bind its own local rather than sharing one: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_race_arm_block_body_lowers_its_statements_and_trailing_value() -> Result<(), Box<dyn std::error::Error>> {
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  race for value:\n    await fast() => value\n    await slow() =>\n      doubled = value * 2\n      doubled\n"
+        );
+        let module = build(&source, &["m", "race_block"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            !rendered.contains("unsupported("),
+            "a block arm body must lower: {rendered}"
+        );
+        // The block arm's statements live inside that arm, not in the enclosing body: only the winning arm runs.
+        let race_line = rendered
+            .lines()
+            .find(|line| line.contains("race ["))
+            .ok_or("missing race statement")?;
+        assert!(
+            race_line.contains("* const(2)"),
+            "the arm body's own computation must stay inside the arm: {race_line}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The issue's explicit requirement: a construct Body IR cannot represent keeps its own node *inside* a
+        // represented race, so a consumer loses only that construct rather than the entire expression.
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  race for value:\n    await fast() => value\n    await slow() => value ** 2\n"
+        );
+        let module = build(&source, &["m", "race_partial"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            rendered.contains("race ["),
+            "the race itself must still be represented: {rendered}"
+        );
+        assert!(
+            rendered.contains("unsupported("),
+            "the unrepresentable arm construct must keep its own node: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_prefix_surface_keyword_that_is_not_await_is_refused_rather_than_treated_as_a_suspension() {
+        // `SurfaceExprPayload::PrefixUnary` is generic over any prefix soft keyword; `await` is merely the only one
+        // registered today. Dispatching on the payload alone would silently lower a future prefix keyword as a
+        // suspension point, so lowering matches the surface *key*. This pins that.
+        let type_info = TypeCheckInfo::default();
+        let mut builder = BodyBuilder::new(&type_info);
+        let scope = builder.new_scope(None, HirSourceSpan::new(0, 1));
+        let mut out = Vec::new();
+        let surface = ast::SurfaceExpr {
+            key: SurfaceFeatureKey::SoftKeyword(KeywordId::Async),
+            payload: ast::SurfaceExprPayload::PrefixUnary(Box::new(ast::Spanned::new(
+                ast::Expr::Ident("placeholder".to_string()),
+                ast::Span::new(0, 1),
+            ))),
+        };
+
+        let _ = builder.lower_surface_expr(&surface, ast::Span::new(0, 1), scope, &mut out);
+
+        assert!(
+            out.iter().any(|stmt| matches!(
+                &stmt.kind,
+                bir::StatementKind::Unsupported { description } if description.contains("prefix-keyword")
+            )),
+            "a non-`await` prefix keyword must keep the generic surface refusal, not become an await: {out:?}"
+        );
+        assert!(
+            !out.iter()
+                .any(|stmt| matches!(&stmt.kind, bir::StatementKind::Await { .. })),
+            "no suspension point may be emitted for a keyword that is not `await`: {out:?}"
+        );
     }
 }
 

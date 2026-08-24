@@ -94,6 +94,14 @@ pub struct Body {
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     /// Panic-interaction facts recorded for this body, without committing to a stable public panic strategy.
     pub panic_facts: Vec<PanicFact>,
+    /// Whether the source declaration was marked `async` (#1164).
+    ///
+    /// Deliberately a **stored** field, unlike the derived [`Self::is_generator`] next to it. Async-ness is a
+    /// declaration-level fact: an `async def` with no `await` in its body is still async, and its caller still gets
+    /// an awaitable. Deriving this by scanning for [`StatementKind::Await`] the way `is_generator` scans for
+    /// [`StatementKind::Yield`] would therefore be wrong, not merely a different implementation. This is the first
+    /// declaration-level fact `Body` carries; see [`Self::is_generator`]'s docs for why that one stayed derived.
+    pub is_async: bool,
 }
 
 impl Body {
@@ -143,9 +151,10 @@ impl Body {
     /// Render a deterministic maintainer-facing snapshot of this body.
     pub fn render_snapshot(&self) -> String {
         let mut out = String::new();
+        let async_marker = if self.is_async { " async" } else { "" };
         let _ = writeln!(
             &mut out,
-            "body {} {} span={}..{}",
+            "body{async_marker} {} {} span={}..{}",
             self.name, self.decl_id, self.span.start, self.span.end
         );
         for local in &self.locals {
@@ -198,6 +207,7 @@ fn render_runtime_requirement(req: &AbiV0RuntimeRequirement) -> String {
         AbiV0RuntimeRequirement::HostedStd => "hosted_std".to_string(),
         AbiV0RuntimeRequirement::Allocator => "allocator".to_string(),
         AbiV0RuntimeRequirement::PanicStrategy => "panic_strategy".to_string(),
+        AbiV0RuntimeRequirement::AsyncRuntime => "async_runtime".to_string(),
     }
 }
 
@@ -1277,6 +1287,46 @@ pub enum CallableTarget {
     Local(LocalCallableTarget),
 }
 
+/// One arm of a [`StatementKind::Race`].
+///
+/// The source spells a single binding name shared by every arm (`race for value:`), but each arm re-scopes it and
+/// arms may resolve it to different types, so each arm owns its own `binding` local rather than sharing one. The
+/// body is a full [`Block`] plus a `result` operand, mirroring how [`ClosureBody`] carries a nested statement
+/// sequence with an explicit value instead of relying on a trailing-statement convention.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RaceArm {
+    /// This arm's awaitable, evaluated before selection along with every other arm's.
+    pub awaitable: Operand,
+    /// The local this arm binds the winning value to, visible only inside `body`.
+    pub binding: LocalId,
+    /// Statements that run only if this arm wins.
+    pub body: Block,
+    /// This arm's result value, written to the race's destination when it wins.
+    pub result: Operand,
+}
+
+impl RaceArm {
+    /// Render a deterministic maintainer-facing spelling for this arm.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "await {} => _{} {{ {} }} -> {}",
+            self.awaitable.render_snapshot(),
+            self.binding.0,
+            self.body
+                .stmts
+                .iter()
+                .map(|stmt| {
+                    let mut rendered = String::new();
+                    render_statement(&mut rendered, stmt, "", 0);
+                    rendered.trim_end().to_string()
+                })
+                .collect::<Vec<_>>()
+                .join("; "),
+            self.result.render_snapshot()
+        )
+    }
+}
+
 /// A locally stored callable target and the resolved binding of its call arguments.
 ///
 /// The binding makes a local partial's two source-level call conventions explicit: positional arguments skip
@@ -1501,6 +1551,21 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
                 args_str.join(", ")
             );
         }
+        StatementKind::Await { destination, awaited } => {
+            let dest = destination
+                .as_ref()
+                .map(|place| format!("{} = ", place.render_snapshot()))
+                .unwrap_or_default();
+            let _ = writeln!(out, "{indent}{dest}await {}", awaited.render_snapshot());
+        }
+        StatementKind::Race { destination, arms } => {
+            let dest = destination
+                .as_ref()
+                .map(|place| format!("{} = ", place.render_snapshot()))
+                .unwrap_or_default();
+            let rendered: Vec<String> = arms.iter().map(RaceArm::render_snapshot).collect();
+            let _ = writeln!(out, "{indent}{dest}race [{}]", rendered.join(", "));
+        }
         StatementKind::Drop { local } => {
             let _ = writeln!(out, "{indent}drop _{}", local.0);
         }
@@ -1658,6 +1723,42 @@ pub enum StatementKind {
     Continue,
     /// Return from the body, optionally with a value.
     Return { value: Option<Operand> },
+    /// `await operand` — a suspension point in an async body.
+    ///
+    /// Deliberately **not** [`Self::Yield`]. A generator `yield` produces a value outward and has no destination;
+    /// an `await` consumes an awaitable and writes the resumed value into `destination`. Sharing one node would make
+    /// two different contracts indistinguishable, and a task runtime needs exactly the fact that separates them:
+    /// where the body suspends and what it resumes with.
+    ///
+    /// Effect ordering across this point is source-observable — statements before it run before suspension,
+    /// statements after it run after resumption — and is preserved by this statement's position in its block. The
+    /// awaited operand carries its own [`OwnershipFact`] and last-use marker like any other read.
+    ///
+    /// This node says a suspension happens here. It says nothing about *how*: task/frame state, wake/resume routing,
+    /// and scheduling are the executing backend's, tracked by #1155.
+    Await {
+        /// Where the resumed value is written. `None` when the awaited result is discarded.
+        destination: Option<Place>,
+        /// The awaitable being suspended on.
+        awaited: Operand,
+    },
+    /// `race for value:` — concurrent await over several arms, resuming on the first to complete.
+    ///
+    /// The contract this node fixes, which arm ordering alone could not express:
+    ///
+    /// - every arm's awaitable is evaluated **before** any selection happens, in source order;
+    /// - arm order is source order and carries **no** priority — a consumer must not treat `arms[0]` as preferred;
+    /// - exactly one arm's `body` runs, the one whose awaitable completed first;
+    /// - every non-winning arm's awaitable is cancelled at this statement's boundary.
+    ///
+    /// As with [`Self::Await`], this records what the race *means*, not how it is driven: concurrent polling,
+    /// first-completion detection, and the cancellation mechanism belong to #1155.
+    Race {
+        /// Where the winning arm's result is written. `None` when the race's value is discarded.
+        destination: Option<Place>,
+        /// The arms, in source order. Order is not priority — see this variant's docs.
+        arms: Vec<RaceArm>,
+    },
     /// `yield value` in statement position, suspending a generator body to produce one value.
     ///
     /// Only the statement-position form with a value is modeled -- see the module docs and
@@ -1831,6 +1932,7 @@ mod tests {
             },
             runtime_requirements: Vec::new(),
             panic_facts: Vec::new(),
+            is_async: false,
         }
     }
 

@@ -852,6 +852,11 @@ fn validate_statement_profile(
             validate_operand_profile(iterator, statement.span, tuple_iteration_locals)
         }
         StatementKind::Yield { .. } => Err(unsupported("generator yield", statement.span)),
+        // #1164 gave Body IR an async vocabulary. Executing it -- task state, suspension, wake/resume, arm
+        // selection, cancellation -- is #1155's. Until then these refuse by name at the original source span
+        // rather than leaving the executor unable to compile against the representation.
+        StatementKind::Await { .. } => Err(unsupported("async await suspension", statement.span)),
+        StatementKind::Race { .. } => Err(unsupported("async race selection", statement.span)),
         StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
         StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
         StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
@@ -1189,6 +1194,9 @@ impl BodyExecutor {
                 statement.span,
             )),
             StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
+            // See the matching arms in `validate_statement_profile`: representation is #1164's, execution is #1155's.
+            StatementKind::Await { .. } => Err(unsupported("async await suspension", statement.span)),
+            StatementKind::Race { .. } => Err(unsupported("async race selection", statement.span)),
             StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
             StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
         }
@@ -1940,6 +1948,7 @@ fn runtime_requirement_label(requirement: &AbiV0RuntimeRequirement) -> String {
         AbiV0RuntimeRequirement::HostedStd => "hosted_std".to_string(),
         AbiV0RuntimeRequirement::Allocator => "allocator".to_string(),
         AbiV0RuntimeRequirement::PanicStrategy => "panic_strategy".to_string(),
+        AbiV0RuntimeRequirement::AsyncRuntime => "async_runtime".to_string(),
     }
 }
 
