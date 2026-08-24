@@ -5289,9 +5289,12 @@ impl TypeChecker {
         let active_bounds = self.type_param_bound_details_from_type_params(&func.type_params);
         self.current_type_param_bound_details.push(active_bounds);
 
-        // Define parameters
-        for param in &func.params {
-            let ty = local_type_for_param(param.node.kind, self.resolve_type_checked(&param.node.ty));
+        let resolved_param_types = self.resolve_callable_parameter_types_and_check_defaults(&func.params);
+
+        // Define parameters after checking defaults so a declaration-owned default cannot resolve a callable-frame
+        // binding. The function body still receives its ordinary parameter locals below.
+        for (param, resolved_ty) in func.params.iter().zip(resolved_param_types) {
+            let ty = local_type_for_param(param.node.kind, resolved_ty);
             self.symbols.define(Symbol {
                 name: param.node.name.clone(),
                 kind: SymbolKind::Variable(VariableInfo {
@@ -5358,6 +5361,41 @@ impl TypeChecker {
         self.current_type_param_bound_details.pop();
         self.symbols.exit_scope();
         self.apply_user_defined_function_decorators(func, decl_span);
+    }
+
+    /// Resolve callable parameter annotations and validate source defaults before their execution-frame bindings exist.
+    ///
+    /// A default may use module-visible declarations and the current function or method's active generic bounds, but
+    /// it may not read `self` or another callable parameter. Keeping this check before the frame bindings makes the
+    /// source typechecker agree with call-time default materialization and records canonical expression facts for
+    /// compiler-owned consumers without requiring them to reconstruct source typing.
+    fn resolve_callable_parameter_types_and_check_defaults(&mut self, params: &[Spanned<Param>]) -> Vec<ResolvedType> {
+        params
+            .iter()
+            .map(|param| {
+                let param_ty = self.resolve_type_checked(&param.node.ty);
+                if param.node.kind != ParamKind::Normal {
+                    return param_ty;
+                }
+                let Some(default) = &param.node.default else {
+                    return param_ty;
+                };
+
+                let previous_callable_default_context = std::mem::replace(&mut self.checking_callable_default, true);
+                let default_ty = self.check_expr_with_expected(default, Some(&param_ty));
+                self.checking_callable_default = previous_callable_default_context;
+                if !self.types_compatible(&default_ty, &param_ty)
+                    && !self.record_validated_newtype_coercion_if_possible(&default_ty, &param_ty, default.span)
+                {
+                    self.errors.push(errors::type_mismatch(
+                        &param_ty.to_string(),
+                        &default_ty.to_string(),
+                        default.span,
+                    ));
+                }
+                param_ty
+            })
+            .collect()
     }
 
     /// Resolve generic type-parameter bounds while preserving trait type arguments for call-site checks.
@@ -5586,6 +5624,8 @@ impl TypeChecker {
         active_bounds.extend(self.type_param_bound_details_from_type_params(&method.type_params));
         self.current_type_param_bound_details.push(active_bounds);
 
+        let resolved_param_types = self.resolve_callable_parameter_types_and_check_defaults(&method.params);
+
         // Define self if present
         if let Some(receiver) = method.receiver {
             let is_mutable = matches!(receiver, Receiver::Mutable);
@@ -5612,8 +5652,7 @@ impl TypeChecker {
         // Define parameters, capturing each checked callable-parameter fact once so it can be recorded for Body IR
         // lowering below without re-resolving the annotation (and re-emitting any of its diagnostics) a second time.
         let mut checked_params = Vec::with_capacity(method.params.len());
-        for param in &method.params {
-            let resolved_ty = self.resolve_type_checked(&param.node.ty);
+        for (param, resolved_ty) in method.params.iter().zip(resolved_param_types) {
             checked_params.push(CallableParam::named_with_default(
                 param.node.name.clone(),
                 resolved_ty.clone(),

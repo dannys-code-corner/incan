@@ -340,6 +340,12 @@ pub struct TypeChecker {
     /// RFC 113 admits `Registry.entry(...)` only in this declaration context. Keeping the context explicit prevents a
     /// runtime call from masquerading as a complete compiler-checked catalogue entry.
     pub(crate) checking_registry_entry_static_initializer: bool,
+    /// Whether the active expression is a callable parameter default before an invocation frame exists.
+    ///
+    /// Method defaults are checked inside their enclosing nominal declaration scope, where fields and properties are
+    /// otherwise visible as bare names. The flag keeps those instance-only symbols out of default lookup while
+    /// preserving module declarations and active generic type parameters.
+    pub(crate) checking_callable_default: bool,
     /// Const evaluation state machine.
     pub(crate) const_eval_state: HashMap<String, const_eval::ConstEvalState>,
     /// Cached const evaluation results.
@@ -541,6 +547,7 @@ impl TypeChecker {
             unknown_source_type_names_emitted: HashSet::new(),
             static_decl_positions: HashMap::new(),
             checking_registry_entry_static_initializer: false,
+            checking_callable_default: false,
             const_eval_state: HashMap::new(),
             const_eval_cache: HashMap::new(),
             type_info: TypeCheckInfo::default(),
