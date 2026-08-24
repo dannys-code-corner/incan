@@ -21,6 +21,7 @@
 
 use incan::backend::IrCodegen;
 use incan::backend::replacement::ReplacementValue;
+use incan::frontend::body_ir::build_body_ir_module_v0;
 use incan::frontend::diagnostics::CompileError;
 use incan::frontend::{lexer, parser, typechecker};
 use std::path::PathBuf;
@@ -83,6 +84,46 @@ fn messages(errors: Vec<CompileError>) -> Vec<String> {
 /// Fold a `typecheck_err_messages` result (lex/parse failure or typecheck errors) into a `ComparisonOutcome`,
 /// given a predicate over the typechecker error messages that decides whether the observed shape still matches
 /// the case's documented expectation.
+/// Lower `src` to Body IR and report whether every construct in it is faithfully represented.
+///
+/// This is `EvidenceLane::DirectParserTypechecker` evidence: it exercises the frontend only, asserting that the
+/// source is accepted *and* that lowering produced no `unsupported(...)` placeholder. It deliberately proves nothing
+/// about execution — a `DirectReplacementBodyIr` row owns that, and neither lane establishes a receipt-aware
+/// comparison, which #1146 owns.
+fn outcome_from_body_ir(src: &str, expect_desc: &str) -> ComparisonOutcome {
+    let tokens = match lexer::lex(src) {
+        Ok(tokens) => tokens,
+        Err(errors) => {
+            return ComparisonOutcome::Incompatible {
+                reason: format!("expected {expect_desc}, but lexing failed: {errors:?}"),
+            };
+        }
+    };
+    let program = match parser::parse(&tokens) {
+        Ok(program) => program,
+        Err(errors) => {
+            return ComparisonOutcome::Incompatible {
+                reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
+            };
+        }
+    };
+    let module_path = vec!["parity_987_body_ir".to_string()];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    if let Err(errors) = checker.check_program(&program) {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("expected {expect_desc}, but typechecking reported {errors:?}"),
+        };
+    }
+    let snapshot = build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot();
+    if snapshot.contains("unsupported(") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("expected {expect_desc}, but Body IR still contains a placeholder:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
 fn outcome_from_typecheck(src: &str, expect: impl FnOnce(&[String]) -> bool, expect_desc: &str) -> ComparisonOutcome {
     match typecheck_err_messages(src) {
         Err(errs) => ComparisonOutcome::Incompatible {
@@ -237,6 +278,50 @@ fn case_supported_builtin_len_shadowing() -> ComparisonOutcome {
         CASE_5_SRC,
         |errs| errs.is_empty(),
         "a module `len` binding to shadow the ambient builtin without a diagnostic",
+    )
+}
+
+// ============================================================================
+// Cases 8 and 9 — Supported language contract: named call/construction binding reaches Body IR (#1158)
+// ============================================================================
+
+// Named field construction is the *only* spelling the typechecker accepts for a `model`/`class`: positional
+// construction is rejected outright. Before #1158 that spelling lowered to `unsupported(...)`, so no nominal value
+// was representable in Body IR at all — the canonical `User(id=..., email=...)` shape in this repository's own
+// README included. The cutover must keep both the named-only source rule and its faithful representation.
+const CASE_8_SRC: &str = r#"
+model Point:
+    x: int
+    y: int = 5
+
+def main() -> None:
+    p = Point(y=2, x=1)
+    println(p.x)
+"#;
+
+fn case_supported_named_construction_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_8_SRC,
+        "named `model` construction to lower to real Body IR rather than an unsupported placeholder",
+    )
+}
+
+// Named and defaulted arguments at an ordinary call site, including an argument written out of declaration order.
+// The binding is what makes the operand order meaningful; the written order is what makes effect ordering
+// meaningful. Both must survive the cutover.
+const CASE_9_SRC: &str = r#"
+def scale(value: int, factor: int = 2) -> int:
+    return value * factor
+
+def main() -> None:
+    println(scale(factor=3, value=4))
+    println(scale(5))
+"#;
+
+fn case_supported_named_call_arguments_reach_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_9_SRC,
+        "named, out-of-order, and defaulted call arguments to lower to real Body IR",
     )
 }
 
@@ -518,6 +603,28 @@ fn seed_corpus() -> Vec<ParityCase> {
             },
             source: CASE_7_SRC,
             evaluate: Some(case_diagnostic_statement_tuple_unpack_of_non_tuple),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0008",
+            title: "Named `model` construction lowers to Body IR with a resolved field binding",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1158; src/frontend/body_ir.rs::tests::named_construction_lowers_to_a_constructor_aggregate_with_a_resolved_field_binding",
+            disposition: Disposition::Preserved,
+            source: CASE_8_SRC,
+            evaluate: Some(case_supported_named_construction_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0009",
+            title: "Named, out-of-order, and defaulted call arguments lower to Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1158; src/frontend/body_ir.rs::tests::out_of_order_named_call_arguments_evaluate_in_written_source_order",
+            disposition: Disposition::Preserved,
+            source: CASE_9_SRC,
+            evaluate: Some(case_supported_named_call_arguments_reach_body_ir),
             replacement_execution: None,
         },
         ParityCase {

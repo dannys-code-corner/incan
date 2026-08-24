@@ -6,6 +6,7 @@ use crate::frontend::diagnostics::errors;
 use crate::frontend::resolved_type_subst::type_param_subst_map_call_site;
 use crate::frontend::symbols::{CallableParam, FieldInfo, ResolvedType, SymbolKind, TypeInfo, ValueEnumInfo};
 use crate::frontend::typechecker::helpers::option_ty;
+use crate::frontend::typechecker::type_info::ConstructorFieldBinding;
 use incan_core::lang::surface::types::{self as surface_types, SurfaceTypeId};
 
 const TYPE_CONSTRUCTOR_HOOK: &str = "__incan_new";
@@ -34,12 +35,16 @@ impl TypeChecker {
         // Track provided fields and validate existence/duplicates/type compatibility.
         let mut provided: std::collections::HashMap<String, Span> = std::collections::HashMap::new();
         let mut type_bindings: std::collections::HashMap<String, ResolvedType> = std::collections::HashMap::new();
+        // Canonical field bound by each written argument, in written source order, for #1158's Body IR binding fact.
+        // `None` marks an argument this check already rejected, which keeps the recorded binding fail-closed.
+        let mut bound_fields: Vec<Option<String>> = Vec::with_capacity(args.len());
         for arg in args {
             let CallArg::Named(field_name, expr) = arg else {
                 continue;
             };
 
             let Some((canonical_name, field_info)) = self.resolve_field_info(fields, field_name, true, true) else {
+                bound_fields.push(None);
                 // Still typecheck the expression exactly once so nested diagnostics are preserved.
                 self.check_expr(expr);
                 self.errors
@@ -55,9 +60,11 @@ impl TypeChecker {
                     canonical_name.as_str(),
                     expr.span,
                 ));
+                bound_fields.push(None);
                 continue;
             }
             provided.insert(canonical_name.clone(), expr.span);
+            bound_fields.push(Some(canonical_name.clone()));
 
             let is_model = matches!(self.lookup_type_info(type_name), Some(TypeInfo::Model(_)));
             if is_model && self.private_field_is_inaccessible(type_name, field_info) {
@@ -86,8 +93,10 @@ impl TypeChecker {
         }
 
         // Enforce required fields (those without defaults) are present.
+        let mut every_required_field_supplied = true;
         for (field_name, info) in fields {
             if !info.has_default && !provided.contains_key(field_name) {
+                every_required_field_supplied = false;
                 self.errors.push(errors::missing_required_constructor_field(
                     display_name,
                     field_name,
@@ -96,8 +105,63 @@ impl TypeChecker {
             }
         }
 
+        if every_required_field_supplied {
+            self.record_constructor_field_binding_for_lowering(type_name, &bound_fields, &provided, call_span);
+        }
+
         self.constructor_result_type_with_bindings(type_name, &type_bindings)
     }
+    /// Record the resolved argument-to-field binding for one `model`/`class` construction, for Body IR lowering.
+    ///
+    /// Declared field order lives in the symbol table (`ModelInfo::field_order` / `ClassInfo::field_order`), which
+    /// Body IR lowering cannot reach — it holds only a [`TypeCheckInfo`](crate::frontend::typechecker::TypeCheckInfo)
+    /// reference. Without this fact, lowering would have to re-resolve field aliases and re-derive field order from
+    /// AST spelling, duplicating a decision this check has already made.
+    ///
+    /// Deliberately fail-closed: nothing is recorded unless every written argument resolved to a declared field and
+    /// every declared field is either supplied or defaulted. A partial binding is worse than none, because lowering
+    /// would represent a construction the source never validly expressed; with no fact recorded, lowering refuses by
+    /// name instead.
+    fn record_constructor_field_binding_for_lowering(
+        &mut self,
+        type_name: &str,
+        bound_fields: &[Option<String>],
+        provided: &std::collections::HashMap<String, Span>,
+        call_span: Span,
+    ) {
+        let field_order: Vec<String> = match self.lookup_type_info(type_name) {
+            Some(TypeInfo::Model(info)) => info.field_order.clone(),
+            Some(TypeInfo::Class(info)) => info.field_order.clone(),
+            _ => return,
+        };
+
+        let mut argument_slots = Vec::with_capacity(bound_fields.len());
+        for bound in bound_fields {
+            let Some(field_name) = bound.as_deref() else {
+                return;
+            };
+            let Some(slot) = field_order.iter().position(|declared| declared == field_name) else {
+                return;
+            };
+            argument_slots.push(slot);
+        }
+
+        let defaulted_slots: Vec<usize> = field_order
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, field_name)| (!provided.contains_key(field_name)).then_some(slot))
+            .collect();
+
+        self.type_info.record_constructor_field_binding(
+            call_span,
+            ConstructorFieldBinding {
+                argument_slots,
+                defaulted_slots,
+                field_count: field_order.len(),
+            },
+        );
+    }
+
     /// Type-check a JSON/Query constructor call (`Json(...)` / `Query(...)`).
     ///
     /// NOTE: This method is called from multiple dispatch points in the typechecker because calls can be classified

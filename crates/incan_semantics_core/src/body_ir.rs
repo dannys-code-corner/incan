@@ -28,6 +28,16 @@
 //! "Method body" includes `class`/`model`/`trait` methods (#1102). A `self`/`mut self` receiver is an ordinary
 //! [`LocalOrigin::Receiver`] local and is always reference-shaped at the emission boundary, so a bare receiver
 //! read can never select [`OwnershipFact::Move`].
+//!
+//! #1158 makes a call site's argument binding explicit. A call's operand vector is in resolved declaration order --
+//! declared parameter order for a callable, declared field order for a nominal constructor -- while the statements
+//! computing those operands stay in written source order, and [`ArgumentBinding`] records both facts plus the slots
+//! a call site left to their declared defaults. One binding type serves direct calls, local callable values, method
+//! calls, and construction, so a consumer reads the same fact the same way regardless of the spelling. A default's
+//! *value* is deliberately not materialized at the call site: its computation stays owned by the declaration that
+//! introduced it, matching the contract [`ClosureParam`] already states. Resolved explicit call-site type arguments
+//! ride on the callee target rather than the argument list, because they are part of which callable was selected
+//! rather than what it was passed.
 
 use std::fmt::Write as _;
 
@@ -1066,7 +1076,7 @@ pub enum AggregateKind {
     /// `{v, ...}` set literal. Operands are the set's elements, one per entry -- the same flat shape as
     /// [`AggregateKind::List`].
     Set,
-    Constructor(String),
+    Constructor(ConstructorTarget),
 }
 
 impl AggregateKind {
@@ -1077,7 +1087,7 @@ impl AggregateKind {
             Self::List => "list".to_string(),
             Self::Dict => "dict".to_string(),
             Self::Set => "set".to_string(),
-            Self::Constructor(name) => format!("constructor({name})"),
+            Self::Constructor(target) => format!("constructor({}){}", target.name, target.binding.render_snapshot()),
         }
     }
 }
@@ -1085,6 +1095,112 @@ impl AggregateKind {
 // ============================================================================
 // Calls and runtime helpers
 // ============================================================================
+
+/// Resolved binding of one call site's arguments to the callee's declared parameters or a nominal type's declared
+/// fields.
+///
+/// Body IR keeps a call's operand vector in *resolved declaration order* — declared parameter order for a callable,
+/// declared field order for a nominal constructor — while the statements that compute those operands are emitted in
+/// *written source order*. The two orders differ whenever a caller writes named arguments out of declaration order,
+/// and both are part of the source contract: the binding decides which parameter receives which value, while the
+/// written order decides the order in which argument sub-expressions take effect. The operand vector alone can only
+/// express the first, so this type carries the second explicitly rather than leaving a consumer to recover it by
+/// correlating temporary numbering.
+///
+/// This is the single binding mechanism for every call shape. It replaces the per-target slot map #1124 introduced
+/// on [`LocalCallableTarget`]: local callables, direct named calls, method calls, and nominal construction all
+/// record their binding here, so a consumer learns the same fact the same way regardless of how the call was
+/// spelled.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ArgumentBinding {
+    /// One record per surrounding argument operand, in the same order as those operands.
+    pub arguments: Vec<BoundArgument>,
+    /// Declared slots the call site omitted, in ascending slot order.
+    ///
+    /// Each names a parameter or field whose *declared* default applies. Body IR records the fact without
+    /// materializing the value: a source-declared default's computation stays owned by the declaration that
+    /// introduced it, which is the contract [`ClosureParam`] already states for callable values. Recording the
+    /// omission here is still what keeps a consumer from having to diff the operand vector against the declaration
+    /// to discover which slots defaulted, and it is why no defaulted slot needs an [`OwnershipFact`]: this call site
+    /// evaluates nothing for it.
+    pub defaulted_slots: Vec<usize>,
+}
+
+impl ArgumentBinding {
+    /// Build the binding for a call whose arguments were all written positionally, in declaration order.
+    ///
+    /// This is the identity binding: operand `i` fills slot `i` and was written `i`-th. Every already-positional
+    /// lowering path uses it, including compiler-synthesized calls (a comprehension's `push`/`insert`) that have no
+    /// source-level call site of their own and therefore no other order to record.
+    pub fn positional(count: usize) -> Self {
+        Self {
+            arguments: (0..count)
+                .map(|index| BoundArgument {
+                    slot: index,
+                    written_position: index,
+                })
+                .collect(),
+            defaulted_slots: Vec::new(),
+        }
+    }
+
+    /// Render the non-trivial parts of this binding as snapshot suffixes.
+    ///
+    /// Slot and written-order lists are each emitted only when they differ from the identity mapping, and defaults
+    /// only when the call site actually omitted something, so existing positional snapshots stay unchanged.
+    fn render_snapshot(&self) -> String {
+        let mut out = String::new();
+        if self
+            .arguments
+            .iter()
+            .enumerate()
+            .any(|(index, argument)| argument.slot != index)
+        {
+            let slots: Vec<String> = self
+                .arguments
+                .iter()
+                .map(|argument| argument.slot.to_string())
+                .collect();
+            let _ = write!(out, " slots=[{}]", slots.join(", "));
+        }
+        if self
+            .arguments
+            .iter()
+            .enumerate()
+            .any(|(index, argument)| argument.written_position != index)
+        {
+            let written: Vec<String> = self
+                .arguments
+                .iter()
+                .map(|argument| argument.written_position.to_string())
+                .collect();
+            let _ = write!(out, " written=[{}]", written.join(", "));
+        }
+        if !self.defaulted_slots.is_empty() {
+            let defaults: Vec<String> = self.defaulted_slots.iter().map(usize::to_string).collect();
+            let _ = write!(out, " defaults=[{}]", defaults.join(", "));
+        }
+        out
+    }
+}
+
+/// One call argument's resolved declaration slot and its position in written source order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BoundArgument {
+    /// Declared parameter or field index this operand supplies.
+    pub slot: usize,
+    /// Zero-based position of this argument among the call site's written arguments.
+    pub written_position: usize,
+}
+
+/// Render a resolved call-site type-argument list as a snapshot suffix, or nothing when the call had none.
+fn render_type_arguments(type_args: &[IncanType]) -> String {
+    if type_args.is_empty() {
+        return String::new();
+    }
+    let rendered: Vec<String> = type_args.iter().map(IncanType::to_string).collect();
+    format!("[{}]", rendered.join(", "))
+}
 
 /// Call target for a [`StatementKind::Call`].
 #[derive(Debug, Clone, PartialEq)]
@@ -1100,7 +1216,7 @@ pub enum Callee {
     /// Also used for compiler-synthesized collection-growth calls a comprehension desugar introduces (`push`/
     /// `insert`) that have no source-level call site of their own -- see `lower_comprehension_terminal` in
     /// `src/frontend/body_ir.rs` for the synthesized case.
-    Method(String),
+    Method(MethodTarget),
     /// A compiler-owned runtime/helper operation, represented explicitly instead of as a generated-Rust helper-call
     /// idiom (#653 criterion 3).
     Helper(HelperOp),
@@ -1111,7 +1227,7 @@ impl Callee {
     fn render_snapshot(&self) -> String {
         match self {
             Self::Function(target) => target.render_snapshot(),
-            Self::Method(name) => format!("method:{name}"),
+            Self::Method(target) => target.render_snapshot(),
             Self::Helper(op) => format!("helper:{}", op.as_str()),
         }
     }
@@ -1130,7 +1246,7 @@ pub enum CallableTarget {
     /// Full call-target resolution (which physical declaration binds through imports/traits/overloads) mirrors the
     /// typechecker/backend resolution passes and is deferred past v0; Body IR records the source-level callee
     /// spelling plus argument ownership facts, which is enough to prove the model end-to-end.
-    Named(String),
+    Named(NamedCallableTarget),
     /// Invoke a callable value held in one local place.
     ///
     /// The [`PlaceOperand`] records the read's Duckborrower ownership fact and last-use marker exactly once, at the
@@ -1141,29 +1257,120 @@ pub enum CallableTarget {
     Local(LocalCallableTarget),
 }
 
-/// A locally stored callable target and the declaration slots occupied by its call arguments.
+/// A locally stored callable target and the resolved binding of its call arguments.
 ///
-/// `parameter_slots[i]` is the declared callable-parameter index supplied by the surrounding
-/// [`StatementKind::Call::args`]'s `i`-th operand. It makes a local partial's two source-level call conventions
-/// explicit: positional arguments skip preset-default slots, while named arguments may override them. Callers that
-/// lower an ordinary local closure use the identity mapping.
+/// The binding makes a local partial's two source-level call conventions explicit: positional arguments skip
+/// preset-default slots, while named arguments may override them. Callers that lower an ordinary local closure use
+/// [`ArgumentBinding::positional`].
 #[derive(Debug, Clone, PartialEq)]
 pub struct LocalCallableTarget {
     /// The local read that owns the callable value and its lexical environment.
     pub operand: PlaceOperand,
-    /// Declared parameter slot for each surrounding call argument, in the same order as `args`.
-    pub parameter_slots: Vec<usize>,
+    /// Resolved binding of the surrounding [`StatementKind::Call::args`] to this callable's declared parameters.
+    pub binding: ArgumentBinding,
+}
+
+/// A direct call to a named function, with its resolved call-site identity.
+///
+/// Explicit call-site type arguments are part of that identity rather than decoration: `decode_rows[Order](path)`
+/// and `decode_rows[Row](path)` are different calls, and a consumer that only saw the name could not tell them
+/// apart. `type_args` holds the *typechecker-resolved* arguments, so lowering never re-derives them from the source
+/// spelling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedCallableTarget {
+    /// Source-level function name.
+    pub name: String,
+    /// Resolved explicit call-site type arguments, in declared type-parameter order. Empty when the call site wrote
+    /// none.
+    pub type_args: Vec<IncanType>,
+    /// Resolved binding of the surrounding [`StatementKind::Call::args`] to this function's declared parameters.
+    pub binding: ArgumentBinding,
+}
+
+/// A method call target and its resolved call-site identity.
+///
+/// Carries the same resolved type arguments and argument binding as [`NamedCallableTarget`]; the receiver itself
+/// stays `args[0]` of the surrounding [`StatementKind::Call`] and is deliberately *not* part of the binding, whose
+/// slots index the method's own declared parameters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MethodTarget {
+    /// Source-level method name.
+    pub name: String,
+    /// Resolved explicit call-site type arguments, in declared type-parameter order. Empty when the call site wrote
+    /// none.
+    pub type_args: Vec<IncanType>,
+    /// Resolved binding of the surrounding call's arguments *after* the receiver to this method's declared
+    /// parameters.
+    pub binding: ArgumentBinding,
+}
+
+impl MethodTarget {
+    /// Build a method target for an already-positional call with no explicit type arguments.
+    ///
+    /// `arg_count` counts the method's own arguments, excluding the receiver.
+    pub fn positional(name: impl Into<String>, arg_count: usize) -> Self {
+        Self {
+            name: name.into(),
+            type_args: Vec::new(),
+            binding: ArgumentBinding::positional(arg_count),
+        }
+    }
+
+    /// Render this method target without losing its resolved type arguments or non-trivial argument binding.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "method:{}{}{}",
+            self.name,
+            render_type_arguments(&self.type_args),
+            self.binding.render_snapshot()
+        )
+    }
+}
+
+impl PartialEq<str> for MethodTarget {
+    /// Compare against a bare method name, ignoring resolved type arguments and argument binding.
+    ///
+    /// This keeps existing bounded consumers' direct method-name checks working without each having to reach into
+    /// the target's fields, mirroring [`CallableTarget`]'s own compatibility implementation.
+    fn eq(&self, other: &str) -> bool {
+        self.name == other
+    }
+}
+
+impl std::fmt::Display for MethodTarget {
+    /// Render the bare method name for concise diagnostics labels.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
+}
+
+/// A nominal `model`/`class` construction target and the resolved binding of its field arguments.
+///
+/// Source-level construction is named-only, so the binding is what records which declared field each operand fills.
+/// The surrounding [`Rvalue::Aggregate`] operand vector is in declared field order; the binding carries the written
+/// source order alongside it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConstructorTarget {
+    /// Source-level nominal type name.
+    pub name: String,
+    /// Resolved binding of the surrounding aggregate's operands to the type's declared fields.
+    pub binding: ArgumentBinding,
 }
 
 impl CallableTarget {
     /// Render this callable target without collapsing local values into named functions.
     fn render_snapshot(&self) -> String {
         match self {
-            Self::Named(name) => format!("fn:{name}"),
+            Self::Named(target) => format!(
+                "fn:{}{}{}",
+                target.name,
+                render_type_arguments(&target.type_args),
+                target.binding.render_snapshot()
+            ),
             Self::Local(target) => format!(
-                "local:{} slots={:?}",
+                "local:{}{}",
                 Operand::Place(target.operand.clone()).render_snapshot(),
-                target.parameter_slots
+                target.binding.render_snapshot()
             ),
         }
     }
@@ -1173,7 +1380,7 @@ impl PartialEq<str> for CallableTarget {
     /// A local callable can never compare equal to a direct function name. This compatibility implementation keeps
     /// existing bounded consumers' direct-function checks conservative while they visibly reject `Local`.
     fn eq(&self, other: &str) -> bool {
-        matches!(self, Self::Named(name) if name == other)
+        matches!(self, Self::Named(target) if target.name == other)
     }
 }
 
@@ -1181,7 +1388,7 @@ impl std::fmt::Display for CallableTarget {
     /// Render a concise diagnostics label without exposing a local callable as a function name.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Named(name) => f.write_str(name),
+            Self::Named(target) => f.write_str(&target.name),
             Self::Local(target) => write!(
                 f,
                 "<local:{}>",
@@ -1713,7 +1920,7 @@ mod tests {
                             fact: OwnershipFact::Copy,
                             last_use: false,
                         },
-                        parameter_slots: vec![0],
+                        binding: ArgumentBinding::positional(1),
                     })),
                     args: vec![Operand::Constant(Constant::Int(1))],
                     may_panic: false,
@@ -1724,7 +1931,7 @@ mod tests {
 
         let snapshot = body.render_snapshot();
         assert!(
-            snapshot.contains("call local:copy(_0) slots=[0](const(1))"),
+            snapshot.contains("call local:copy(_0)(const(1))"),
             "a local call target must retain its operand ownership fact: {snapshot}"
         );
         assert_eq!(
