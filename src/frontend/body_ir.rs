@@ -7804,23 +7804,20 @@ mod tests {
 
     #[test]
     fn a_block_arm_local_does_not_leak_past_its_arm() -> Result<(), Box<dyn std::error::Error>> {
-        // A block arm lowers ordinary statements, so `total = ...` inside it declares a local through the same path
-        // any assignment uses. Restoring only the shared race binding would leave that arm-local installed, and the
-        // trailing read of `total` would silently resolve to it instead of the outer binding -- a wrong value with
-        // no unsupported node to show for it.
+        // A block arm lowers ordinary statements, so `let total = ...` inside it declares a lexical local through
+        // the same path any assignment uses. Restoring only the shared race binding would leave that arm-local
+        // installed, and the trailing read of `total` would silently resolve to it instead of the outer binding --
+        // a wrong value with no unsupported node to show for it.
         let source = format!(
-            "{ASYNC_PRELUDE}async def f() -> int:\n  total = 100\n  winner = race for value:\n    await fast() => value\n    await slow() =>\n      total = value * 2\n      total\n  return total + winner\n"
+            "{ASYNC_PRELUDE}async def f() -> int:\n  let total = 100\n  winner = race for value:\n    await fast() => value\n    await slow() =>\n      let total = value * 2\n      total\n  return total + winner\n"
         );
         let module = build(&source, &["m", "race_arm_local"])?;
         let body = body_named(&module, "f")?;
         let rendered = body.render_snapshot();
 
-        // `total` is declared first, so the outer binding is local 0; the arm declares its own `total` separately.
+        // The outer binding is distinct from the arm's `total`, and the post-race expression must use that outer
+        // local regardless of earlier parameters or temporaries that might affect local numbering.
         let outer = local_for_binding(&rendered, "total").ok_or("missing outer binding")?;
-        assert_eq!(
-            outer, "_0",
-            "the outer binding should be the first declared local: {rendered}"
-        );
         assert!(
             rendered.matches("total : int [binding]").count() >= 2,
             "the arm must declare its own `total` rather than reusing the outer one: {rendered}"
@@ -7830,7 +7827,7 @@ mod tests {
             .find(|line| line.contains(" + ") && !line.starts_with("      "))
             .ok_or("missing the trailing sum")?;
         assert!(
-            sum_line.contains("copy(_0)"),
+            sum_line.contains(&format!("copy({outer})")),
             "a read after the race must resolve to the enclosing local, not one an arm body declared: {rendered}"
         );
         Ok(())
