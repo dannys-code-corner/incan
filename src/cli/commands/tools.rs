@@ -1,6 +1,6 @@
 //! Local toolchain inspection commands.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -18,6 +18,7 @@ use crate::frontend::api_metadata::{
     CheckedApiPackageIdentity, collect_checked_api_alias_metadata, collect_checked_api_metadata,
     materialize_api_alias_projections, materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
+use crate::frontend::capability_metadata::{PublicCapabilityDescriptor, public_capability_descriptors};
 use crate::frontend::contract_metadata::{
     CanonicalModelBundle, read_model_bundles_from_json, read_project_model_bundles,
 };
@@ -25,8 +26,8 @@ use crate::frontend::diagnostics;
 use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManifestIndexEntry};
 use crate::frontend::registry_metadata::{
     CHECKED_REGISTRY_METADATA_SCHEMA_VERSION, CheckedRegistryDefinition, CheckedRegistryEntry,
-    CheckedRegistryMetadataPackage, CheckedRegistryPackageIdentity, CheckedRegistryValue,
-    collect_checked_registry_metadata, materialize_registry_reexport_projections,
+    CheckedRegistryMetadataPackage, CheckedRegistryPackageIdentity, collect_checked_registry_metadata,
+    materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker;
 use crate::library_manifest::{LibraryManifest, ParamExport, ParamKindExport, TypeRef};
@@ -318,155 +319,11 @@ pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path)
     fs::write(path, output).map_err(|error| CliError::failure(format!("failed to write {}: {error}", path.display())))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CapabilityInventoryEntry {
-    id: String,
-    name: String,
-    category: String,
-    since: String,
-    rfc: String,
-    stability: String,
-    activation: String,
-    summary: String,
-    canonical_forms: Vec<String>,
-    prefer_over: String,
-    references: Vec<(String, String)>,
-}
+type CapabilityInventoryEntry = PublicCapabilityDescriptor;
 
 /// Decode the stable standard-library capability descriptor using only checked structural values.
 fn stdlib_capability_inventory(package: &CheckedRegistryMetadataPackage) -> CliResult<Vec<CapabilityInventoryEntry>> {
-    let Some(module) = package.modules.iter().find(|module| {
-        module
-            .registries
-            .iter()
-            .any(|registry| registry.identity == "capabilities::capabilities")
-    }) else {
-        return Err(CliError::failure("checked std.capabilities registry was not found"));
-    };
-    let entries = module
-        .entries
-        .iter()
-        .filter(|entry| entry.registry_identity == "capabilities::capabilities")
-        .map(capability_inventory_entry)
-        .collect::<CliResult<Vec<_>>>()?;
-    if entries.is_empty() {
-        return Err(CliError::failure(
-            "checked std.capabilities inventory must contain at least one entry",
-        ));
-    }
-    Ok(entries)
-}
-
-/// Decode one checked `CapabilityDescriptor` entry into the generator's presentation model.
-fn capability_inventory_entry(entry: &CheckedRegistryEntry) -> CliResult<CapabilityInventoryEntry> {
-    let fields = checked_model_fields(&entry.descriptor, "CapabilityDescriptor")?;
-    let id = checked_newtype_string(checked_required_field(&fields, "id")?, "CapabilityId")?;
-    let name = checked_string(checked_required_field(&fields, "name")?)?;
-    let category = checked_enum_variant(checked_required_field(&fields, "category")?, "CapabilityCategory")?;
-    let since = checked_string(checked_required_field(&fields, "since")?)?;
-    let rfc = checked_string(checked_required_field(&fields, "rfc")?)?;
-    let stability = checked_enum_variant(checked_required_field(&fields, "stability")?, "CapabilityStability")?;
-    let activation = checked_string(checked_required_field(&fields, "activation")?)?;
-    let summary = checked_string(checked_required_field(&fields, "summary")?)?;
-    let canonical_forms = checked_list(checked_required_field(&fields, "canonical_forms")?)?
-        .iter()
-        .map(checked_string)
-        .collect::<CliResult<Vec<_>>>()?;
-    let prefer_over = checked_string(checked_required_field(&fields, "prefer_over")?)?;
-    let references = checked_list(checked_required_field(&fields, "references")?)?
-        .iter()
-        .map(|reference| {
-            let fields = checked_model_fields(reference, "CapabilityReference")?;
-            Ok((
-                checked_string(checked_required_field(&fields, "label")?)?,
-                checked_string(checked_required_field(&fields, "path")?)?,
-            ))
-        })
-        .collect::<CliResult<Vec<_>>>()?;
-    Ok(CapabilityInventoryEntry {
-        id,
-        name,
-        category,
-        since,
-        rfc,
-        stability,
-        activation,
-        summary,
-        canonical_forms,
-        prefer_over,
-        references,
-    })
-}
-
-/// Return the named fields of a checked model value after confirming its descriptor type.
-fn checked_model_fields(
-    value: &CheckedRegistryValue,
-    expected_name: &str,
-) -> CliResult<BTreeMap<String, CheckedRegistryValue>> {
-    let CheckedRegistryValue::Model { name, fields } = value else {
-        return Err(CliError::failure(format!("expected {expected_name} descriptor model")));
-    };
-    if name != expected_name {
-        return Err(CliError::failure(format!(
-            "expected {expected_name} descriptor model, found {name}"
-        )));
-    }
-    Ok(fields
-        .iter()
-        .map(|field| (field.name.clone(), field.value.clone()))
-        .collect())
-}
-
-/// Return one required descriptor field or report the schema drift at the documentation boundary.
-fn checked_required_field<'a>(
-    fields: &'a BTreeMap<String, CheckedRegistryValue>,
-    name: &str,
-) -> CliResult<&'a CheckedRegistryValue> {
-    fields
-        .get(name)
-        .ok_or_else(|| CliError::failure(format!("CapabilityDescriptor is missing `{name}`")))
-}
-
-/// Extract a checked string value without coercing other structural shapes.
-fn checked_string(value: &CheckedRegistryValue) -> CliResult<String> {
-    match value {
-        CheckedRegistryValue::String(value) => Ok(value.clone()),
-        _ => Err(CliError::failure("expected checked string descriptor value")),
-    }
-}
-
-/// Extract the string payload of one checked newtype with the expected domain identity.
-fn checked_newtype_string(value: &CheckedRegistryValue, expected_name: &str) -> CliResult<String> {
-    let CheckedRegistryValue::Newtype { name, value } = value else {
-        return Err(CliError::failure(format!("expected {expected_name} newtype value")));
-    };
-    if name != expected_name {
-        return Err(CliError::failure(format!(
-            "expected {expected_name} newtype value, found {name}"
-        )));
-    }
-    checked_string(value)
-}
-
-/// Extract a checked enum variant and ensure that it belongs to the expected enum.
-fn checked_enum_variant(value: &CheckedRegistryValue, expected_enum: &str) -> CliResult<String> {
-    let CheckedRegistryValue::ConstRef(path) = value else {
-        return Err(CliError::failure(format!("expected {expected_enum} enum value")));
-    };
-    if path.first().map(String::as_str) != Some(expected_enum) {
-        return Err(CliError::failure(format!("expected {expected_enum} enum value")));
-    }
-    path.last()
-        .cloned()
-        .ok_or_else(|| CliError::failure(format!("expected {expected_enum} enum variant")))
-}
-
-/// Borrow a checked structural list without accepting a runtime-shaped substitute.
-fn checked_list(value: &CheckedRegistryValue) -> CliResult<&[CheckedRegistryValue]> {
-    match value {
-        CheckedRegistryValue::List(values) => Ok(values),
-        _ => Err(CliError::failure("expected checked descriptor list value")),
-    }
+    public_capability_descriptors(package).map_err(CliError::failure)
 }
 
 /// Escape table delimiters and line breaks in generated Markdown table cells.
