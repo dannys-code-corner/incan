@@ -1064,6 +1064,14 @@ pub struct CallArtifacts {
     /// Function-value calls can recover this from the callee expression type, but method calls need a snapshot because
     /// lowering does not retain the frontend method table.
     pub call_site_callable_params: HashMap<(usize, usize), Vec<CallableParam>>,
+    /// Resolved `model`/`class` construction field binding, keyed by full call expression span (#1158).
+    ///
+    /// Source-level construction is named-only, so the constructor check is the stage that decides which declared
+    /// field each written argument fills — including resolving a field alias to its canonical name. Recording that
+    /// decision here is what lets Body IR lowering represent construction faithfully: declared field order lives in
+    /// the symbol table (`ModelInfo::field_order`/`ClassInfo::field_order`), which lowering deliberately cannot
+    /// reach, and re-deriving the binding from AST spelling would duplicate alias resolution in a second place.
+    pub constructor_field_bindings: HashMap<(usize, usize), ConstructorFieldBinding>,
     /// RFC 028: User-defined operator dispatch resolved by the typechecker.
     ///
     /// Lowering consumes this map so `a + b`, `-a`, and `a[b]` can become direct dunder method calls without
@@ -1332,6 +1340,21 @@ pub struct FunctionBindingInfo {
     pub params: Vec<CallableParam>,
     /// Typechecker-resolved source return type.
     pub return_type: ResolvedType,
+}
+
+/// Typechecker-resolved binding of one `model`/`class` construction's arguments to the declared field layout.
+///
+/// Slots index the type's declared field order. `argument_slots` is in **written source order**, so a consumer sees
+/// both which field each argument fills and the order the argument expressions were written — the two facts that
+/// differ whenever a caller writes fields out of declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstructorFieldBinding {
+    /// Declared field slot filled by each written argument, in written source order.
+    pub argument_slots: Vec<usize>,
+    /// Declared field slots the call site omitted, ascending. Each takes its declared field default.
+    pub defaulted_slots: Vec<usize>,
+    /// Total declared field count, i.e. the construction's declaration-order arity.
+    pub field_count: usize,
 }
 
 /// Lowering metadata for one RFC 036 decorated function binding.
@@ -1681,6 +1704,18 @@ impl TypeCheckInfo {
             .call_site_callable_params
             .get(&(span.start, span.end))
             .map(Vec::as_slice)
+    }
+
+    /// Return the resolved `model`/`class` construction field binding recorded for `span`, if any (#1158).
+    pub fn constructor_field_binding(&self, span: Span) -> Option<&ConstructorFieldBinding> {
+        self.calls.constructor_field_bindings.get(&(span.start, span.end))
+    }
+
+    /// Record the resolved field binding for one `model`/`class` construction call site (#1158).
+    pub(crate) fn record_constructor_field_binding(&mut self, span: Span, binding: ConstructorFieldBinding) {
+        self.calls
+            .constructor_field_bindings
+            .insert((span.start, span.end), binding);
     }
 
     /// Return whether a canonical source `CallableN` bound supplied this closure's contextual parameter types.
