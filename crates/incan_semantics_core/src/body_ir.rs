@@ -1139,7 +1139,8 @@ pub enum ArgumentBinding {
         /// [`ClosureParam::preset_capture`] identifies, so a consumer reads the owning [`Rvalue::Closure`] rather
         /// than assuming the target declaration has a default of its own. Recording the omission here is still what
         /// frees a consumer from diffing the operand vector against the declaration, and it is why no defaulted slot
-        /// carries an [`OwnershipFact`]: this call site evaluates nothing for it.
+        /// carries an [`OwnershipFact`]: this call site evaluates nothing for it. Making those defaults evaluable is
+        /// #1172's own scope, and this fact is what tells it which slots need a value.
         defaulted_slots: Vec<usize>,
     },
 }
