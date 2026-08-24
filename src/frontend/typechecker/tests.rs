@@ -3517,7 +3517,7 @@ model Shelf[T]:
             .expr_type(Span::new(owner_list_start, owner_list_start + "[]".len())),
         Some(&ResolvedType::Generic(
             "List".to_string(),
-            vec![ResolvedType::TypeVar("T".to_string())],
+            vec![ResolvedType::Named("T".to_string())],
         )),
         "a generic owner default must retain the owner type parameter in its root fact"
     );
@@ -3528,7 +3528,7 @@ model Shelf[T]:
             .expr_type(Span::new(method_list_start, method_list_start + "[]".len())),
         Some(&ResolvedType::Generic(
             "List".to_string(),
-            vec![ResolvedType::TypeVar("U".to_string())],
+            vec![ResolvedType::Named("U".to_string())],
         )),
         "a generic method default must retain the method type parameter in its root fact"
     );
