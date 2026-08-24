@@ -781,7 +781,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     fn push_call_temp(
         &mut self,
         callee: bir::Callee,
-        args: Vec<bir::Operand>,
+        args: Vec<bir::ArgumentElement>,
         ty: IncanType,
         scope: bir::ScopeId,
         span: HirSourceSpan,
@@ -1815,7 +1815,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 kind: bir::StatementKind::Call {
                     destination: Some(bir::Place::from_local(iterator_local)),
                     callee: bir::Callee::Method(bir::MethodTarget::synthesized(p.iter_method.clone())),
-                    args: vec![bir::Operand::place(iterable_place, bir::OwnershipFact::Borrow, false)],
+                    args: fixed_elements(vec![bir::Operand::place(
+                        iterable_place,
+                        bir::OwnershipFact::Borrow,
+                        false,
+                    )]),
                     may_panic: false,
                 },
                 span,
@@ -2062,11 +2066,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 kind: bir::StatementKind::Call {
                     destination: Some(bir::Place::from_local(iterator_local)),
                     callee: bir::Callee::Method(bir::MethodTarget::synthesized(protocol.iter_method.clone())),
-                    args: vec![bir::Operand::place(
+                    args: fixed_elements(vec![bir::Operand::place(
                         bir::Place::from_local(source_local),
                         bir::OwnershipFact::Borrow,
                         false,
-                    )],
+                    )]),
                     may_panic: false,
                 },
                 span: hir_span_value,
@@ -2251,14 +2255,14 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     kind: bir::StatementKind::Call {
                         destination: None,
                         callee: bir::Callee::Method(bir::MethodTarget::synthesized("push")),
-                        args: vec![
+                        args: fixed_elements(vec![
                             bir::Operand::place(
                                 bir::Place::from_local(*list_local),
                                 bir::OwnershipFact::MutBorrow,
                                 false,
                             ),
                             element_operand,
-                        ],
+                        ]),
                         may_panic: false,
                     },
                     span,
@@ -2272,7 +2276,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     kind: bir::StatementKind::Call {
                         destination: None,
                         callee: bir::Callee::Method(bir::MethodTarget::synthesized("insert")),
-                        args: vec![
+                        args: fixed_elements(vec![
                             bir::Operand::place(
                                 bir::Place::from_local(*dict_local),
                                 bir::OwnershipFact::MutBorrow,
@@ -2280,7 +2284,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                             ),
                             key_operand,
                             value_operand,
-                        ],
+                        ]),
                         may_panic: false,
                     },
                     span,
@@ -2652,7 +2656,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
             return self.push_call_temp(
                 bir::Callee::Helper(helper),
-                vec![lhs_operand, rhs_operand],
+                fixed_elements(vec![lhs_operand, rhs_operand]),
                 result_ty,
                 scope,
                 span,
@@ -2964,7 +2968,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     name: name.to_string(),
                     binding,
                 }),
-                operands,
+                fixed_elements(operands),
             ),
             ty,
             scope,
@@ -3056,7 +3060,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 binding,
             }));
             let ty = self.resolve_ty(span);
-            return self.push_call_temp(callee, operands, ty, scope, hir_span_value, false, out);
+            return self.push_call_temp(callee, fixed_elements(operands), ty, scope, hir_span_value, false, out);
         }
 
         // A name that resolves to a nominal type but has no recorded field binding is a construction the checker
@@ -3094,7 +3098,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 type_args: resolved_type_args,
                 binding,
             })),
-            operands,
+            fixed_elements(operands),
             ty,
             scope,
             hir_span_value,
@@ -3179,7 +3183,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 type_args: resolved_type_args,
                 binding,
             }),
-            call_args,
+            fixed_elements(call_args),
             ty,
             scope,
             hir_span_value,
@@ -3208,7 +3212,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         if matches!(kind, bir::AggregateKind::List | bir::AggregateKind::Set) {
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
         }
-        self.push_assign_temp(bir::Rvalue::Aggregate(kind, operands), ty, scope, hir_span_value, out)
+        self.push_assign_temp(
+            bir::Rvalue::Aggregate(kind, fixed_elements(operands)),
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
     }
 
     /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Aggregate`] with [`bir::AggregateKind::Dict`], whose
@@ -3238,7 +3248,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let ty = self.resolve_ty(span);
         self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
         self.push_assign_temp(
-            bir::Rvalue::Aggregate(bir::AggregateKind::Dict, operands),
+            bir::Rvalue::Aggregate(bir::AggregateKind::Dict, fixed_elements(operands)),
             ty,
             scope,
             hir_span_value,
@@ -3838,7 +3848,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 type_args: Vec::new(),
                 binding: forwarding_binding,
             })),
-            call_args,
+            fixed_elements(call_args),
             ret_ty,
             closure_scope,
             hir_span_value,
@@ -4382,6 +4392,15 @@ fn plan_declared_args<'a>(
     // could not say which slot a later operand filled; `bir::ArgumentBinding` now records exactly that, so a sparse
     // call is representable rather than ambiguous.
     Ok(planned)
+}
+
+/// Wrap fixed operands as single-value element list entries.
+///
+/// Used by every lowering path that produces a known number of values -- the overwhelming majority. Only a source
+/// spread produces a [`bir::ArgumentElement::Spread`], so this keeps those call sites reading as they did before
+/// element lists became variable-arity.
+fn fixed_elements(operands: Vec<bir::Operand>) -> Vec<bir::ArgumentElement> {
+    operands.into_iter().map(bir::ArgumentElement::One).collect()
 }
 
 /// Whether a type is string-like enough to route binary operators through the compiler-owned string helpers
