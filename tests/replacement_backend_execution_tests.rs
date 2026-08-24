@@ -216,6 +216,289 @@ def main() -> int:
     Ok(())
 }
 
+/// A stored closure captures its lexical value at construction, executes in an isolated local frame, and contributes
+/// direct Body-IR evidence rather than routing through generated Rust.
+#[test]
+fn replacement_executes_a_captured_stored_closure_in_an_isolated_frame() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  offset = 2
+  add: (int) -> int = (value) => value + offset
+  return add(40)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(42));
+    assert!(
+        execution.body_snapshot.contains("closure(params=[value:"),
+        "direct evidence must retain the stored closure Body IR: {}",
+        execution.body_snapshot
+    );
+    assert!(
+        execution.body_snapshot.contains("executed stored callable frame"),
+        "the receipt-bound evidence must distinguish an invoked closure from construction: {}",
+        execution.body_snapshot
+    );
+    Ok(())
+}
+
+/// Partial presets stay construction-time captures, while an omitted source default runs at the call and a named
+/// argument overrides the preset's declaration slot.
+#[test]
+fn replacement_executes_partial_presets_source_defaults_and_named_overrides() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = r#"
+def route(method: int, path: int, content_type: int = 3) -> int:
+  return method * 100 + path * 10 + content_type
+
+def main() -> int:
+  mut method = 1
+  get = partial route(method=method)
+  normal = get(4)
+  overridden = get(method=7, path=2, content_type=5)
+  return normal + overridden
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(143 + 725));
+    assert!(
+        execution.body_snapshot.contains("body route"),
+        "the forwarding target must be direct Body-IR evidence, not generated Rust: {}",
+        execution.body_snapshot
+    );
+    assert!(
+        execution.body_snapshot.contains("executed source default frame"),
+        "the omitted declaration default must appear as an actually executed frame: {}",
+        execution.body_snapshot
+    );
+    Ok(())
+}
+
+/// Every directly dispatched sibling body passes the same fail-closed profile gate as the selected entrypoint.
+#[test]
+fn replacement_refuses_an_unsupported_sibling_body_at_its_original_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def unsupported_sibling() -> int:
+  values: list[int] = []
+  for value in values:
+    return value
+  return 42
+
+def main() -> int:
+  return unsupported_sibling()
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "an unsupported sibling must refuse before it executes directly, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("[]")
+        .ok_or("fixture must contain the sibling list literal")?;
+    let span = error
+        .primary_span()
+        .ok_or("sibling refusal must retain a source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(error.to_string().contains("list[tuple[scalar, scalar]]"));
+    Ok(())
+}
+
+/// An unresolved Body-IR `range` spelling cannot silently choose between the builtin and a same-module declaration.
+#[test]
+fn replacement_refuses_a_same_module_range_declaration_at_its_original_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = r#"
+def range(start: int, end: int) -> int:
+  return start + end
+
+def main() -> int:
+  return range(20, 22)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "the unresolved range target must not choose a source declaration as a builtin, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("def range")
+        .ok_or("fixture must contain the range declaration")?;
+    let span = error.primary_span().ok_or("range refusal must retain a source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(error.to_string().contains("canonical builtin target identity"));
+    Ok(())
+}
+
+/// A generator function resumes its retained loop cursor across yields without replaying its earlier elements.
+/// `.collect()` is only the selected consumer; the underlying runtime polls one persisted frame at a time.
+#[test]
+fn replacement_resumes_a_generator_function_without_replaying_its_prefix() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def counter() -> Generator[int]:
+  for value in range(1, 3):
+    yield value
+  yield 3
+
+def main() -> int:
+  values = counter().collect()
+  return values[0] * 100 + values[1] * 10 + values[2]
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[]).map_err(|error| {
+        format!(
+            "generator-function execution failed: {error}\n{}",
+            module.render_snapshot()
+        )
+    })?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(123));
+    assert!(
+        execution.body_snapshot.contains("body counter"),
+        "the generator-function body must be bound into direct execution evidence: {}",
+        execution.body_snapshot
+    );
+    assert!(
+        execution.body_snapshot.contains("executed generator-function frame"),
+        "the generator-function frame must be recorded only once polling begins: {}",
+        execution.body_snapshot
+    );
+    Ok(())
+}
+
+/// Constructing then dropping a generator function keeps its body out of execution evidence until a consumer polls
+/// the retained frame.
+#[test]
+fn replacement_keeps_an_unconsumed_generator_function_out_of_execution_evidence()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def counter() -> Generator[int]:
+  yield 1
+
+def main() -> int:
+  unused = counter()
+  return 42
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(42));
+    assert!(
+        !execution.body_snapshot.contains("body counter"),
+        "constructing a generator must not claim its body executed: {}",
+        execution.body_snapshot
+    );
+    assert!(
+        !execution.body_snapshot.contains("executed generator-function frame"),
+        "constructing a generator must not claim its frame was polled: {}",
+        execution.body_snapshot
+    );
+    Ok(())
+}
+
+/// Map and filter adapters retain an unpolled source and invoke local closures through the same callable-frame
+/// binder used by ordinary local calls.
+#[test]
+fn replacement_executes_lazy_generator_adapters_with_local_callbacks() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  offset = 1
+  increment: (int) -> int = (value) => value + offset
+  accepted: (int) -> bool = (value) => value > 2
+  values = (value for value in range(1, 5)).map(increment).filter(accepted).collect()
+  return values[0] * 10 + values[1]
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])
+        .map_err(|error| format!("adapter execution failed: {error}\n{}", module.render_snapshot()))?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(34));
+    assert!(execution.body_snapshot.contains("method:map"));
+    assert!(execution.body_snapshot.contains("method:filter"));
+    assert!(execution.body_snapshot.contains("executed generator-expression frame"));
+    assert!(
+        execution
+            .body_snapshot
+            .contains("executed generator-adapter callback frame")
+    );
+    Ok(())
+}
+
+/// An omitted non-evaluable source default must refuse at the default expression rather than execute a legacy path
+/// or publish an untruthful receipt.
+#[test]
+fn replacement_refuses_an_unsupported_callable_default_at_its_original_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = r#"
+def keep(payload: bytes = b"x") -> bytes:
+  return payload
+
+def main() -> int:
+  keep()
+  return 1
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("bytes default must refuse directly, got {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
+    let default_start = source
+        .find("b\"x\"")
+        .ok_or("default fixture must contain bytes literal")?;
+    let span = error.primary_span().ok_or("default refusal must retain source span")?;
+    assert_eq!(span.start, default_start);
+    assert_eq!(span.end, default_start + "b\"x\"".len());
+    assert!(error.to_string().contains("bytes literal"));
+    Ok(())
+}
+
+/// A missing direct-entry argument refuses at the original declaration body, whose call is the selected entrypoint.
+#[test]
+fn replacement_refuses_a_missing_required_callable_argument_at_the_declaration_body_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def needs(value: int) -> int:
+  return value
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "needs", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "the required callable parameter must refuse when omitted, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source.find("def needs").ok_or("fixture must contain the declaration")?;
+    let span = error
+        .primary_span()
+        .ok_or("missing parameter refusal must retain a source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error
+            .to_string()
+            .contains("missing required callable parameter `value`"),
+        "unexpected missing-parameter refusal: {error}"
+    );
+    Ok(())
+}
+
 /// Execute the selected plain builtin-collection loop over scalar tuple values.
 #[test]
 fn replacement_executes_plain_scalar_tuple_collection_loop() -> Result<(), Box<dyn std::error::Error>> {
@@ -272,6 +555,37 @@ def main() -> int:
     Ok(())
 }
 
+/// Refuse an async declaration even without an explicit suspension; it creates a task rather than a scalar value.
+#[test]
+fn replacement_refuses_an_async_body_without_an_await_at_its_declaration_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = r#"
+import std.async
+
+async def main() -> int:
+  return 42
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("async body executed synchronously as {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("async def main")
+        .ok_or("async fixture must contain its declaration")?;
+    let span = error
+        .primary_span()
+        .ok_or("async body refusal must retain its declaration span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error.to_string().contains("async task body"),
+        "async declarations must refuse as task bodies before #1155: {error}"
+    );
+    Ok(())
+}
+
 /// Refuse an index projection outside the selected tuple-field loop profile at its original source span.
 #[test]
 fn replacement_refuses_collection_index_projection_with_the_original_source_span()
@@ -296,6 +610,39 @@ def main() -> int:
     assert!(
         error.to_string().contains("nested place projection"),
         "collection index projection must remain visible: {error}"
+    );
+    Ok(())
+}
+
+/// Refuse ordinary collection indexing; only generator `.collect()` values admit one index projection.
+#[test]
+fn replacement_refuses_plain_collection_index_projection_with_the_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def main() -> int:
+  pairs = [(1, 2)]
+  pair = pairs[0]
+  return 0
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!("plain collection index executed as {:?}", execution.value).into());
+        }
+        Err(error) => error,
+    };
+    let expected_start = source
+        .find("pair = pairs[0]")
+        .ok_or("plain collection index fixture must contain its source assignment")?;
+    let span = error
+        .primary_span()
+        .ok_or("plain collection index refusal must retain its source span")?;
+    assert_eq!(span.start, expected_start);
+    assert!(
+        error
+            .to_string()
+            .contains("outside the generator-expression collect profile"),
+        "plain collection index must stay outside the generator collect profile: {error}"
     );
     Ok(())
 }
@@ -329,7 +676,7 @@ def main() -> int:
     Ok(())
 }
 
-/// Refuse a lexical shadowing shape until Body IR carries a binding-equivalence fact the direct executor can honor.
+/// Refuse lexical shadowing until Body IR carries an explicit binding-equivalence fact direct frames can honor.
 #[test]
 fn replacement_refuses_lexically_shadowed_bindings() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
@@ -342,11 +689,7 @@ def main() -> int:
     let module = lower_typed_body_ir(source)?;
     let error = match execute_free_function(&module, "main", &[]) {
         Ok(execution) => {
-            return Err(format!(
-                "lexically shadowed source must refuse instead of executing as {:?}",
-                execution.value
-            )
-            .into());
+            return Err(format!("shadowing must refuse directly, got {:?}", execution.value).into());
         }
         Err(error) => error,
     };
@@ -357,11 +700,11 @@ def main() -> int:
         .primary_span()
         .ok_or("shadowing refusal must retain the inner binding span")?;
     assert_eq!(span.start, expected_start);
-    assert!(error.to_string().contains("lexical shadowing"));
+    assert!(error.to_string().contains("repeated user binding"));
     Ok(())
 }
 
-/// Refuse same-scope reassignment until Body IR carries a binding-equivalence fact the executor can honor.
+/// Refuse same-scope reassignment until Body IR carries an explicit binding-equivalence fact.
 #[test]
 fn replacement_refuses_reassignment_with_a_repeated_user_binding_name() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
@@ -373,11 +716,7 @@ def main() -> int:
     let module = lower_typed_body_ir(source)?;
     let error = match execute_free_function(&module, "main", &[]) {
         Ok(execution) => {
-            return Err(format!(
-                "reassignment must refuse until binding equivalence is available, but executed as {:?}",
-                execution.value
-            )
-            .into());
+            return Err(format!("reassignment must refuse directly, got {:?}", execution.value).into());
         }
         Err(error) => error,
     };
@@ -389,7 +728,6 @@ def main() -> int:
         .ok_or("reassignment refusal must retain the second binding span")?;
     assert_eq!(span.start, expected_start);
     assert!(error.to_string().contains("repeated user binding"));
-    assert!(error.to_string().contains("reassignment"));
     Ok(())
 }
 
@@ -764,8 +1102,112 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
         "refusal must not enter legacy generation: {combined}"
     );
     assert!(
-        !temporary.path().join("target/incan").exists(),
-        "unsupported replacement input must not create a legacy generated-project directory"
+        !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "unsupported replacement input must not create legacy output or a replacement receipt"
+    );
+    Ok(())
+}
+
+/// A selected entrypoint must not publish a receipt when an invoked sibling fails the same direct profile gate.
+#[test]
+fn replacement_cli_refuses_an_unsupported_sibling_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    fs::write(
+        &entrypoint,
+        r#"def unsupported_sibling() -> int:
+  values: list[int] = []
+  for value in values:
+    return value
+  return 42
+
+def main() -> int:
+  return unsupported_sibling()
+"#,
+    )?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(!output.status.success(), "unsupported sibling must visibly refuse");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("list[tuple[scalar, scalar]]") && combined.contains("original Incan source span"),
+        "the sibling refusal must preserve its direct profile boundary: {combined}"
+    );
+    assert!(
+        !combined.contains("Generated Rust project")
+            && !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "an unsupported sibling must not generate legacy output or publish a replacement receipt"
+    );
+    Ok(())
+}
+
+/// Refuse an unsupported declaration default at the default's original source span before a selection can become an
+/// execution receipt.
+#[test]
+fn replacement_cli_refuses_unsupported_callable_default_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    let source = r#"def keep(payload: bytes = b"x") -> bytes:
+  return payload
+
+def main() -> int:
+  keep()
+  return 1
+"#;
+    fs::write(&entrypoint, source)?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(
+        !output.status.success(),
+        "a non-evaluable callable default must refuse instead of falling back"
+    );
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let default_start = source.find("b\"x\"").ok_or("fixture must contain bytes default")?;
+    let default_end = default_start + "b\"x\"".len();
+    assert!(
+        combined.contains("bytes literal"),
+        "refusal must name the unsupported default: {combined}"
+    );
+    assert!(
+        combined.contains(&format!(
+            "primary Incan source location: {}:{default_start}..{default_end}",
+            entrypoint.display()
+        )),
+        "refusal must preserve the declaration-default span: {combined}"
+    );
+    assert!(
+        !combined.contains("Generated Rust project")
+            && !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "an unsupported default must not generate legacy output or publish a replacement receipt"
     );
     Ok(())
 }
@@ -962,19 +1404,22 @@ fn replacement_cli_refuses_module_boundaries_with_primary_spans() -> Result<(), 
     Ok(())
 }
 
-/// Refuse an unsupported sibling function before a source-wide replacement receipt can be published.
+/// A selected entrypoint may call an admitted sibling body directly, and its receipt must still name only the
+/// replacement execution that actually happened.
 #[test]
-fn replacement_cli_refuses_additional_free_functions_before_writing_a_receipt() -> Result<(), Box<dyn std::error::Error>>
+fn replacement_cli_executes_direct_named_callable_with_a_replacement_receipt() -> Result<(), Box<dyn std::error::Error>>
 {
     let temporary = tempfile::tempdir()?;
     let entrypoint = temporary.path().join("main.incn");
     fs::write(
         &entrypoint,
-        r#"def main() -> int:
-  return 42
+        r#"def route(method: int, path: int, content_type: int = 3) -> int:
+  return method * 100 + path * 10 + content_type
 
-def unused() -> list[int]:
-  return [1]
+def main() -> int:
+  method = 1
+  get = partial route(method=method)
+  return get(4)
 "#,
     )?;
 
@@ -989,22 +1434,30 @@ def unused() -> list[int]:
         ])
         .output()?;
     assert!(
-        !output.status.success(),
-        "a source-wide replacement receipt must not ignore an unsupported sibling function"
-    );
-    let combined = format!(
-        "{}\n{}",
+        output.status.success(),
+        "an admitted direct sibling call must execute. stdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("additional free function `unused`"),
-        "the rejected sibling function must be visible: {combined}"
+        String::from_utf8_lossy(&output.stdout).contains("replacement backend executed `main`: 143"),
+        "the receipt-producing direct path must observe the callable result"
+    );
+    let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        temporary.path().join(".incan/backend/receipt.json"),
+    )?)?;
+    assert_eq!(receipt["executed_backend"], "replacement");
+    assert_eq!(receipt["selection"]["selected_backend"], "replacement");
+    assert_eq!(receipt["fallback_outcome"], "not_needed");
+    assert!(
+        receipt["identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:")),
+        "successful direct execution must produce a verifiable replacement receipt: {receipt}"
     );
     assert!(
-        !temporary.path().join("target/incan").exists()
-            && !temporary.path().join(".incan/backend/receipt.json").exists(),
-        "a source-wide profile refusal must not produce legacy output or a replacement receipt"
+        !temporary.path().join("target/incan").exists(),
+        "direct callable execution must not create a legacy generated-project directory"
     );
     Ok(())
 }

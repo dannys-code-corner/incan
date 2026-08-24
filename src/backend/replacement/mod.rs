@@ -5,11 +5,13 @@
 //! first free-function profile with the original Body-IR source span. The profile is intentionally limited to
 //! scalar local values, scalar tuple collections, arithmetic, compiler-owned string concatenation, branches,
 //! normalized loops, returns, and assertions. It admits only the one-level `.0`/`.1` tuple projections Body IR
-//! emits for `for a, b in pairs`, where `pairs` is `list[tuple[scalar, scalar]]`; packages, Rust interop, callable
-//! values, generator functions, generator adapters, general destructuring, and other projections remain visible
-//! refusals for later #988 extensions. A generator expression with the selected `range` source profile may be
-//! materialized by its `.collect()` consumer: construction records its source/captures without running the deferred
-//! body, and collection executes that body in this interpreter rather than falling back to generated Rust.
+//! emits for `for a, b in pairs`, where `pairs` is `list[tuple[scalar, scalar]]`. It also consumes the retained
+//! callable vocabulary directly: captured local closures, partial presets, source-evaluable defaults, resolved
+//! local or same-module named calls, generator expressions and generator functions, and their bounded lazy
+//! `map`/`filter` adapters. Packages, Rust interop, unsupported callable/default forms, general destructuring, and
+//! other projections remain visible refusals. Its enclosing declaration snapshot retains a deferred generator's
+//! shape, but the frame executes and adds execution-frame evidence only when collection polls it; no path falls
+//! back to generated Rust.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -19,8 +21,10 @@ use incan_core::{
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
-    AggregateKind, BinOp, Body, BodyIrModule, Callee, Constant, GeneratorBody, HelperOp, IterProtocol, LocalId,
-    LocalOrigin, Operand, OwnershipFact, Place, PlaceElem, Rvalue, Statement, StatementKind, UnOp,
+    AggregateKind, ArgumentBinding, BinOp, Body, BodyIrModule, CallableParam, CallableParamDefault, CallableTarget,
+    Callee, ClosureBody, Constant, DefaultComputation, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget,
+    LocalId, LocalOrigin, NamedCallableTarget, Operand, OwnershipFact, Place, PlaceElem, Rvalue, Statement,
+    StatementKind, UnOp,
 };
 use incan_semantics_core::{AbiV0RuntimeRequirement, HirSourceSpan, IncanPrimitiveType, IncanType};
 
@@ -55,10 +59,14 @@ pub enum ReplacementValue {
     },
     /// A two-element scalar tuple, retained only as one element of an admitted replacement list value.
     Tuple(Vec<ReplacementValue>),
-    /// A generator expression whose source and lexical captures were evaluated at construction time, while its body
-    /// remains deferred until an admitted consumer asks for its values.
+    /// A closure or partial application whose lexical captures were evaluated when the value was constructed.
+    Callable(Box<ReplacementCallable>),
+    /// A generator expression or generator function whose frame remains deferred until an admitted consumer polls
+    /// it. The frame owns its locals and continuation, so resuming never replays preceding statements.
     Generator(Box<ReplacementGenerator>),
-    /// Values materialized by the bounded generator-expression `.collect()` profile.
+    /// A lazy map or filter adapter around another admitted iterator value.
+    Adapter(Box<ReplacementAdapter>),
+    /// Values materialized by an admitted lazy generator consumer such as `.collect()`.
     ///
     /// This is deliberately distinct from [`Self::List`]: the latter remains the existing scalar-pair collection
     /// profile, while this variant makes the narrow generator consumer explicit and lets its scalar results be
@@ -69,16 +77,100 @@ pub enum ReplacementValue {
     },
 }
 
-/// Deferred state for a bounded replacement generator expression.
+/// A stored closure or partial-callable environment.
 ///
-/// `source` and `captures` hold the values observed when the surrounding body constructed the generator. `body`
-/// contains only compiler-owned Body-IR statements and is interpreted when `.collect()` consumes this value. The
-/// fields are private so callers cannot construct a replacement generator without the executor's ownership reads.
+/// Parameters, captures, and the closure body come exclusively from Body IR. A call creates a fresh local frame
+/// from this immutable environment; mutable execution state can therefore never leak between invocations.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplacementCallable {
+    params: Vec<CallableParam>,
+    captures: Vec<(LocalId, ReplacementValue)>,
+    body: ClosureBody,
+}
+
+/// Deferred state for a replacement generator expression or generator function.
+///
+/// The frame contains the local bindings and nested-block continuation needed to stop at one `yield` and resume at
+/// the following statement. It intentionally owns cloned Body-IR statements rather than consulting source or
+/// generated Rust after construction.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplacementGenerator {
+    frame: GeneratorFrame,
+    /// A named generator declaration contributes its Body-IR snapshot and runtime requirements only after polling
+    /// starts; expression generators are already represented by their enclosing body's rvalue snapshot.
+    named_body: Option<Body>,
+    /// Stable evidence that one retained generator frame actually began direct execution.
+    frame_evidence: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeneratorFrame {
+    locals: BTreeMap<LocalId, ReplacementValue>,
+    cursors: Vec<GeneratorCursor>,
+    exhausted: bool,
+    steps: usize,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct GeneratorCursor {
+    statements: Vec<Statement>,
+    next: usize,
+    is_loop: bool,
+}
+
+/// A lazy adapter whose callback remains a stored Body-IR callable value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplacementAdapter {
     source: ReplacementValue,
-    captures: Vec<(LocalId, ReplacementValue)>,
-    body: GeneratorBody,
+    callback: ReplacementCallable,
+    kind: ReplacementAdapterKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacementAdapterKind {
+    Map,
+    Filter,
+}
+
+impl GeneratorFrame {
+    /// Start a deferred generator at the first statement of its already-lowered Body-IR program.
+    fn new(locals: BTreeMap<LocalId, ReplacementValue>, statements: Vec<Statement>) -> Self {
+        Self {
+            locals,
+            cursors: vec![GeneratorCursor::block(statements)],
+            exhausted: false,
+            steps: 0,
+        }
+    }
+
+    /// Return the cumulative execution budget a resumed frame must inherit from its caller.
+    ///
+    /// A generator retains the last count it observed between polls, while its parent may execute other statements
+    /// before polling it again. Resumption must therefore start from whichever count is greater; choosing the
+    /// frame count alone would let deferred work reset the direct execution budget.
+    fn resume_step_budget(&self, caller_steps: usize) -> usize {
+        caller_steps.max(self.steps)
+    }
+}
+
+impl GeneratorCursor {
+    /// A one-shot nested block entered from an `if` branch or the generator root.
+    fn block(statements: Vec<Statement>) -> Self {
+        Self {
+            statements,
+            next: 0,
+            is_loop: false,
+        }
+    }
+
+    /// A normalized loop body that restarts only after its stored cursor reaches the end.
+    fn loop_body(statements: Vec<Statement>) -> Self {
+        Self {
+            statements,
+            next: 0,
+            is_loop: true,
+        }
+    }
 }
 
 impl ReplacementValue {
@@ -107,7 +199,9 @@ impl ReplacementValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Callable(_) => "<callable>".to_string(),
             Self::Generator(_) => "<generator>".to_string(),
+            Self::Adapter(_) => "<generator-adapter>".to_string(),
             Self::CollectedGenerator { elements, .. } => format!(
                 "[{}]",
                 elements
@@ -278,29 +372,70 @@ pub fn prepare_free_function_execution<'module, 'args>(
     args: &'args [ReplacementValue],
 ) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
     let body = named_free_function(module, name)?;
-    validate_single_function_module(module, name)?;
     if body.is_generator() {
         return Err(unsupported("generator body", body.span));
     }
-    if body.param_locals.len() != args.len() {
+    if args.len() > body.params.len() {
         return Err(ReplacementExecutionError::ArgumentCount {
             name: name.to_string(),
-            expected: body.param_locals.len(),
+            expected: body.params.len(),
             actual: args.len(),
         });
     }
     validate_scalar_arguments(args, body.span)?;
-    validate_binding_identity(body)?;
-    let range_iterator_locals = range_iterator_locals(&body.block);
-    validate_collection_local_types(body, &body.block, &range_iterator_locals)?;
-    let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
-    let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
-    validate_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)?;
+    validate_unambiguous_range_builtin(module)?;
+    validate_direct_body_profile(body)?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
         args,
     })
+}
+
+/// Reject a same-module `range` declaration until Body IR carries a canonical builtin-target identity.
+///
+/// The bounded iterator profile may execute the unresolved source spelling `range(...)` as the builtin. A user
+/// declaration with that name would make the same spelling ambiguous, so accepting it could silently choose the
+/// builtin instead of the declared callable. Refusal preserves source authority rather than reconstructing name
+/// resolution in the runtime.
+fn validate_unambiguous_range_builtin(module: &BodyIrModule) -> Result<(), ReplacementExecutionError> {
+    if let Some(body) = module.bodies.iter().find(|body| body.name == "range") {
+        return Err(unsupported(
+            "same-module `range` declaration; Body IR has no canonical builtin target identity",
+            body.span,
+        ));
+    }
+    Ok(())
+}
+
+/// Validate every direct-execution invariant of one body before it is executed or stored as a lazy frame.
+///
+/// The selected entrypoint and every same-module named callee use this one gate. Applying it only at the entrypoint
+/// would let an otherwise admitted call dispatch an unvalidated sibling body and publish a receipt for a profile the
+/// runtime promises to refuse.
+fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
+    // An `async def` produces an awaitable even when its body has no explicit `await`. Executing its statements as
+    // an ordinary scalar body would erase task construction, suspension, wake, cancellation, and receipt semantics
+    // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
+    // executor may infer by scanning the block for an await statement.
+    if body.is_async {
+        return Err(unsupported("async task body", body.span));
+    }
+    validate_binding_identity(body)?;
+    let range_iterator_locals = range_iterator_locals(&body.block);
+    validate_collection_local_types(body, &body.block, &range_iterator_locals)?;
+    let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
+    let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
+    validate_callable_params_profile(&body.params)?;
+    if body.is_generator() {
+        validate_generator_statements_profile(
+            &body.block.stmts,
+            &tuple_iteration_locals,
+            &scalar_tuple_collection_locals,
+        )
+    } else {
+        validate_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)
+    }
 }
 
 /// Execute one named, free-function Body IR body with concrete scalar arguments.
@@ -325,7 +460,7 @@ pub fn execute_prevalidated_free_function(
 ) -> Result<ReplacementExecution, ReplacementExecutionError> {
     let body = named_free_function(execution.module, &execution.name)?;
 
-    let mut executor = BodyExecutor::new(body, execution.args);
+    let mut executor = BodyExecutor::new(execution.module, body, execution.args)?;
     let flow = executor.execute_block(&body.block)?;
     let value = match flow {
         Flow::Return(value) => match value {
@@ -338,9 +473,9 @@ pub fn execute_prevalidated_free_function(
         }
     };
     ensure_scalar_result(&value, body.span)?;
-    let body_snapshot = body.render_snapshot();
+    let body_snapshot = executor.body_snapshot();
     let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
-    let requirements_summary = canonical_runtime_requirements_summary(&body.runtime_requirements);
+    let requirements_summary = canonical_runtime_requirements_summary(&executor.runtime_requirements);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
@@ -351,7 +486,7 @@ pub fn execute_prevalidated_free_function(
         value,
         body_snapshot,
         ownership_reads: executor.ownership_reads,
-        runtime_requirements: body.runtime_requirements.clone(),
+        runtime_requirements: executor.runtime_requirements,
         output_identity,
     })
 }
@@ -363,20 +498,6 @@ fn named_free_function<'a>(module: &'a BodyIrModule, name: &str) -> Result<&'a B
         .iter()
         .find(|body| body.name == name)
         .ok_or_else(|| ReplacementExecutionError::MissingFunction { name: name.to_string() })
-}
-
-/// Reject any additional free function because this first CLI profile admits exactly one selected entrypoint body.
-fn validate_single_function_module(module: &BodyIrModule, name: &str) -> Result<(), ReplacementExecutionError> {
-    if let Some(extra) = module.bodies.iter().find(|body| body.name != name) {
-        return Err(unsupported(
-            format!(
-                "additional free function `{}` outside the selected replacement entrypoint",
-                extra.name
-            ),
-            extra.span,
-        ));
-    }
-    Ok(())
 }
 
 /// Reject non-scalar direct API arguments before they can widen the first replacement profile.
@@ -395,11 +516,15 @@ fn validate_scalar_arguments(args: &[ReplacementValue], span: HirSourceSpan) -> 
     Ok(())
 }
 
-/// Reject repeated user-binding spellings because Body IR v0 cannot distinguish shadowing from reassignment safely.
+/// Refuse repeated user-binding spellings until Body IR carries an explicit binding-equivalence fact.
+///
+/// A local id is sufficient to address an already-selected value, but it is not enough to prove that every later
+/// source read saw a reassignment rather than a fresh shadowing declaration. This runtime therefore keeps the
+/// existing fail-closed boundary and does not repair that source-representation gap here.
 fn validate_binding_identity(body: &Body) -> Result<(), ReplacementExecutionError> {
     let mut declared = BTreeMap::new();
     for local in &body.locals {
-        if !matches!(local.origin, LocalOrigin::Parameter | LocalOrigin::UserBinding) {
+        if !matches!(local.origin, LocalOrigin::UserBinding) {
             continue;
         }
         let Some(name) = local.name.as_deref() else {
@@ -408,13 +533,52 @@ fn validate_binding_identity(body: &Body) -> Result<(), ReplacementExecutionErro
         if declared.insert(name, local.span).is_some() {
             return Err(unsupported(
                 format!(
-                    "repeated user binding `{name}` (lexical shadowing or reassignment); Body IR v0 does not yet carry binding-equivalence facts for direct execution"
+                    "repeated user binding `{name}` (lexical shadowing or reassignment); Body IR does not yet carry binding-equivalence facts for direct execution"
                 ),
                 local.span,
             ));
         }
     }
     Ok(())
+}
+
+/// Validate the stored call-time default contracts without consulting source or declaration structures.
+fn validate_callable_params_profile(params: &[CallableParam]) -> Result<(), ReplacementExecutionError> {
+    let mut locals = BTreeSet::new();
+    for parameter in params {
+        if !locals.insert(parameter.local) {
+            return Err(unsupported("duplicate callable parameter local", parameter.span));
+        }
+        if let CallableParamDefault::Source(computation) = &parameter.default {
+            for statement in &computation.stmts {
+                validate_statement_profile(statement, &BTreeSet::new(), &BTreeSet::new())?;
+            }
+            validate_operand_profile(&computation.result, computation.span, &BTreeSet::new())?;
+        }
+    }
+    Ok(())
+}
+
+/// Validate a stored closure/partial shape using its explicit capture and parameter contracts.
+fn validate_closure_profile(
+    params: &[CallableParam],
+    captured_operands: &[Operand],
+    body: &ClosureBody,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    if captured_operands.len() != body.capture_locals.len() {
+        return Err(unsupported("callable capture metadata mismatch", span));
+    }
+    validate_callable_params_profile(params)?;
+    for operand in captured_operands {
+        validate_operand_profile(operand, span, tuple_iteration_locals)?;
+    }
+    for statement in &body.stmts {
+        validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+    }
+    validate_operand_profile(&body.result, span, tuple_iteration_locals)
 }
 
 /// Validate every list, tuple, and builtin-iteration local against the typed Body IR profile.
@@ -501,12 +665,12 @@ fn validate_collection_local_types(
 
 /// Collect builtin iterator locals admitted by the current `range` source-spelling rule.
 ///
-/// Body IR v0 records [`Callee::Function`] by source spelling, not resolved builtin identity. The current replacement
-/// CLI profile rejects imports and sibling free functions before it reaches this executor, so its one source-local
-/// `main` cannot supply an alternate `range` binding. Within that boundary, `range(...)` enters normalized general
-/// iteration as a `Call`, then passes through plain temporary aliases before `IterNext` polls it. The executor
-/// materializes that admitted spelling as [`ReplacementValue::Range`] without treating an arbitrary `list[int]` as
-/// a collection the new profile admits. Canonical call-target identity is deferred to #1042.
+/// Body IR v0 records [`Callee::Function`] by source spelling, not resolved builtin identity. The direct profile
+/// therefore rejects a same-module declaration named `range` before reaching this executor. Within that boundary,
+/// `range(...)` enters normalized general iteration as a `Call`, then passes through plain temporary aliases before
+/// `IterNext` polls it. The executor materializes that admitted spelling as [`ReplacementValue::Range`] without
+/// treating an arbitrary `list[int]` as a collection the new profile admits. Canonical call-target identity is
+/// deferred to #1042.
 fn range_iterator_locals(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
     let mut locals = BTreeSet::new();
     while collect_range_iterator_locals(block, &mut locals) {}
@@ -872,11 +1036,27 @@ fn validate_call_profile(
 ) -> Result<(), ReplacementExecutionError> {
     let supported = match callee {
         Callee::Helper(HelperOp::StrConcat) => true,
-        // Body IR v0 has only this source spelling. The one-function, import-free CLI profile makes it unambiguous
-        // for #988; canonical call-target identity belongs to #1042.
-        Callee::Function(name) => name == "range",
-        Callee::Method(name) => name == "collect",
+        // Named calls remain direct module dispatches. Their target/binding facts are Body-IR values, not a source
+        // lookup reconstructed by this executor.
+        Callee::Function(CallableTarget::Named(target)) if target.name == "range" => true,
+        Callee::Function(CallableTarget::Named(target)) => validate_argument_binding_profile(&target.binding),
+        Callee::Function(CallableTarget::Local(target)) => {
+            validate_operand_profile(&Operand::Place(target.operand.clone()), span, tuple_iteration_locals)?;
+            validate_argument_binding_profile(&target.binding)
+        }
+        Callee::Method(target) if target.name == "collect" => args.len() == 1,
+        // The compiler currently records the iterator-adapter receiver and callback in source order but leaves
+        // their stdlib method signature as `UnresolvedPositional`. That is sufficient for this deliberately
+        // positional two-argument profile: neither adapter has named arguments or callable defaults to bind.
+        Callee::Method(target) if matches!(target.name.as_str(), "map" | "filter") => {
+            args.len() == 2
+                && match &target.binding {
+                    ArgumentBinding::UnresolvedPositional => true,
+                    binding @ ArgumentBinding::Resolved { .. } => validate_argument_binding_profile(binding),
+                }
+        }
         Callee::Helper(_) => false,
+        _ => false,
     };
     if !supported {
         return Err(unsupported(format!("call to {}", callee_label(callee)), span));
@@ -885,6 +1065,18 @@ fn validate_call_profile(
         validate_operand_profile(arg, span, tuple_iteration_locals)?;
     }
     Ok(())
+}
+
+/// Validate only the structural facts every direct callable dispatcher can enforce before execution.
+fn validate_argument_binding_profile(binding: &ArgumentBinding) -> bool {
+    let ArgumentBinding::Resolved { arguments, .. } = binding else {
+        return false;
+    };
+    let mut slots = BTreeSet::new();
+    let mut written_positions = BTreeSet::new();
+    arguments
+        .iter()
+        .all(|argument| slots.insert(argument.slot) && written_positions.insert(argument.written_position))
 }
 
 /// Validate one rvalue before it can be evaluated by the bounded executor.
@@ -912,7 +1104,18 @@ fn validate_rvalue_profile(
             destination,
         ),
         Rvalue::Format(_) => Err(unsupported("f-string", span)),
-        Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
+        Rvalue::Closure {
+            params,
+            captured_operands,
+            body,
+        } => validate_closure_profile(
+            params,
+            captured_operands,
+            body,
+            span,
+            tuple_iteration_locals,
+            scalar_tuple_collection_locals,
+        ),
         Rvalue::Generator {
             source,
             captured_operands,
@@ -1089,20 +1292,223 @@ fn validate_read_place(
 
 /// Mutable interpreter state for one Body-IR execution.
 struct BodyExecutor {
+    module: BodyIrModule,
     locals: BTreeMap<LocalId, ReplacementValue>,
     ownership_reads: Vec<OwnershipRead>,
+    runtime_requirements: Vec<AbiV0RuntimeRequirement>,
+    body_snapshots: Vec<String>,
     steps: usize,
 }
 
 impl BodyExecutor {
     /// Bind the already-typechecked call arguments to their Body-IR parameter locals.
-    fn new(body: &Body, args: &[ReplacementValue]) -> Self {
-        let locals = body.param_locals.iter().copied().zip(args.iter().cloned()).collect();
+    fn new(module: &BodyIrModule, body: &Body, args: &[ReplacementValue]) -> Result<Self, ReplacementExecutionError> {
+        let mut executor = Self {
+            module: module.clone(),
+            locals: BTreeMap::new(),
+            ownership_reads: Vec::new(),
+            runtime_requirements: Vec::new(),
+            body_snapshots: Vec::new(),
+            steps: 0,
+        };
+        executor.record_body(body);
+        executor.locals = executor.bind_direct_arguments(body, args)?;
+        Ok(executor)
+    }
+
+    /// Build an isolated executor for a nested callable, default computation, or suspended generator frame.
+    fn with_locals(module: &BodyIrModule, locals: BTreeMap<LocalId, ReplacementValue>, steps: usize) -> Self {
         Self {
+            module: module.clone(),
             locals,
             ownership_reads: Vec::new(),
-            steps: 0,
+            runtime_requirements: Vec::new(),
+            body_snapshots: Vec::new(),
+            steps,
         }
+    }
+
+    /// Record a directly consumed declaration body as evidence and preserve its runtime requirements in first-seen
+    /// order.
+    fn record_body(&mut self, body: &Body) {
+        self.body_snapshots.push(body.render_snapshot());
+        for requirement in &body.runtime_requirements {
+            if !self.runtime_requirements.contains(requirement) {
+                self.runtime_requirements.push(requirement.clone());
+            }
+        }
+    }
+
+    /// Record a stable marker for a non-declaration frame whose precise Body IR is nested in an already-recorded
+    /// declaration snapshot.
+    fn record_frame_evidence(&mut self, evidence: String) {
+        self.body_snapshots.push(evidence);
+    }
+
+    /// Render every directly consumed Body-IR declaration and nested execution frame for the receipt-bound identity.
+    fn body_snapshot(&self) -> String {
+        self.body_snapshots.join("\n-- direct execution frame --\n")
+    }
+
+    /// Merge an isolated nested frame's runtime evidence into its caller after that frame actually executed.
+    fn merge_child(&mut self, child: Self) {
+        self.ownership_reads.extend(child.ownership_reads);
+        for requirement in child.runtime_requirements {
+            if !self.runtime_requirements.contains(&requirement) {
+                self.runtime_requirements.push(requirement);
+            }
+        }
+        self.body_snapshots.extend(child.body_snapshots);
+        self.steps = child.steps;
+    }
+
+    /// Bind direct API arguments in declaration order, applying stored defaults only to omitted trailing slots.
+    fn bind_direct_arguments(
+        &mut self,
+        body: &Body,
+        args: &[ReplacementValue],
+    ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
+        let mut supplied = args.iter().cloned().map(Some).collect::<Vec<_>>();
+        supplied.resize_with(body.params.len(), || None);
+        self.bind_parameter_values(&body.params, supplied, &BTreeMap::new(), body.span)
+    }
+
+    /// Evaluate a resolved call site's operands in written source order and bind them to declared parameter slots.
+    fn bind_call_arguments(
+        &mut self,
+        params: &[CallableParam],
+        args: &[Operand],
+        binding: &ArgumentBinding,
+        captures: &BTreeMap<LocalId, ReplacementValue>,
+        span: HirSourceSpan,
+    ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
+        let ArgumentBinding::Resolved {
+            arguments,
+            defaulted_slots,
+        } = binding
+        else {
+            return Err(unsupported(
+                "call with unresolved parameter binding outside the callable replacement profile",
+                span,
+            ));
+        };
+        if arguments.len() != args.len() {
+            return Err(unsupported("call argument-binding metadata mismatch", span));
+        }
+        let mut supplied = vec![None; params.len()];
+        let mut argument_indices: Vec<usize> = (0..arguments.len()).collect();
+        argument_indices.sort_by_key(|index| arguments[*index].written_position);
+        for index in argument_indices {
+            let argument = arguments[index];
+            if argument.slot >= params.len()
+                || supplied[argument.slot].is_some()
+                || arguments
+                    .iter()
+                    .filter(|other| other.written_position == argument.written_position)
+                    .count()
+                    != 1
+            {
+                return Err(unsupported("invalid resolved callable argument binding", span));
+            }
+            supplied[argument.slot] = Some(self.evaluate_operand(&args[index], span)?);
+        }
+        let defaulted = defaulted_slots.iter().copied().collect::<BTreeSet<_>>();
+        for (slot, value) in supplied.iter().enumerate() {
+            if value.is_none() && !defaulted.contains(&slot) {
+                return Err(unsupported(
+                    format!(
+                        "call omitted parameter `{}` without a default-binding fact",
+                        params[slot].name
+                    ),
+                    span,
+                ));
+            }
+        }
+        if defaulted
+            .iter()
+            .any(|slot| *slot >= params.len() || supplied[*slot].is_some())
+        {
+            return Err(unsupported("invalid defaulted callable parameter binding", span));
+        }
+        self.bind_parameter_values(params, supplied, captures, span)
+    }
+
+    /// Materialize supplied values, source defaults, and construction-time partial presets into one isolated frame.
+    fn bind_parameter_values(
+        &mut self,
+        params: &[CallableParam],
+        supplied: Vec<Option<ReplacementValue>>,
+        captures: &BTreeMap<LocalId, ReplacementValue>,
+        call_span: HirSourceSpan,
+    ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
+        if supplied.len() != params.len() {
+            return Err(unsupported("callable parameter binding arity mismatch", call_span));
+        }
+        let mut locals = captures.clone();
+        for (parameter, supplied) in params.iter().zip(supplied) {
+            let value = match supplied {
+                Some(value) => value,
+                None => match &parameter.default {
+                    CallableParamDefault::Required => {
+                        return Err(unsupported(
+                            format!("missing required callable parameter `{}`", parameter.name),
+                            call_span,
+                        ));
+                    }
+                    CallableParamDefault::Source(computation) => self.evaluate_default(computation)?,
+                    CallableParamDefault::PartialPreset { capture } => {
+                        captures.get(capture).cloned().ok_or_else(|| {
+                            unsupported(
+                                format!("missing construction-time preset for parameter `{}`", parameter.name),
+                                parameter.span,
+                            )
+                        })?
+                    }
+                    CallableParamDefault::Unsupported { span, description } => {
+                        return Err(unsupported(
+                            format!("unsupported default for parameter `{}`: {description}", parameter.name),
+                            *span,
+                        ));
+                    }
+                },
+            };
+            if locals.contains_key(&parameter.local) {
+                return Err(unsupported(
+                    "callable parameter aliases a captured local",
+                    parameter.span,
+                ));
+            }
+            locals.insert(parameter.local, value);
+        }
+        Ok(locals)
+    }
+
+    /// Run a declaration-owned source-default computation before its callable frame receives that parameter.
+    fn evaluate_default(
+        &mut self,
+        computation: &DefaultComputation,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut default_executor = Self::with_locals(&self.module, BTreeMap::new(), self.steps);
+        for statement in &computation.stmts {
+            match default_executor.execute_statement(statement)? {
+                Flow::Next => {}
+                Flow::Return(_) | Flow::Break | Flow::Continue => {
+                    return Err(unsupported(
+                        "control flow in a callable default computation",
+                        statement.span,
+                    ));
+                }
+            }
+        }
+        let result = default_executor.evaluate_operand(&computation.result, computation.span)?;
+        self.merge_child(default_executor);
+        self.record_frame_evidence(format!(
+            "executed source default frame span={}..{} statements={}",
+            computation.span.start,
+            computation.span.end,
+            computation.stmts.len()
+        ));
+        Ok(result)
     }
 
     /// Execute one normalized Body-IR block until it falls through or produces control flow.
@@ -1202,8 +1608,10 @@ impl BodyExecutor {
         }
     }
 
-    /// Evaluate a supported helper, the profile's admitted `range` source-spelling call, or a lazy generator
-    /// materialization. Generator construction itself is an rvalue; this call is the first supported consumer.
+    /// Evaluate a direct Body-IR call without invoking generated Rust or a legacy backend.
+    ///
+    /// Local callable values own their capture environment; named bodies are looked up only in this typed module;
+    /// and generator adapters retain an unpolled source value until a consumer asks for the next element.
     fn execute_call(
         &mut self,
         destination: Option<&Place>,
@@ -1222,18 +1630,165 @@ impl BodyExecutor {
                 let right = self.evaluate_operand(right, span)?.into_string(span)?;
                 ReplacementValue::Str(format!("{left}{right}"))
             }
-            Callee::Function(name) if name == "range" => self.evaluate_range(args, span)?,
-            Callee::Method(name) if name == "collect" => {
+            Callee::Function(CallableTarget::Named(target)) if target.name == "range" => {
+                self.evaluate_range(args, span)?
+            }
+            Callee::Function(CallableTarget::Named(target)) => self.execute_named_callable(target, args, span)?,
+            Callee::Function(CallableTarget::Local(target)) => self.execute_local_callable(target, args, span)?,
+            Callee::Method(target) if target.name == "collect" => {
                 let [receiver] = args else {
                     return Err(unsupported("generator collect call arity", span));
                 };
-                let generator = self.take_generator_receiver(receiver, span)?;
-                self.collect_generator(generator, span)?
+                let iterator = self.take_generator_receiver(receiver, span)?;
+                self.collect_generator(iterator, span)?
+            }
+            Callee::Method(target) if matches!(target.name.as_str(), "map" | "filter") => {
+                self.construct_generator_adapter(target.name.as_str(), args, span)?
             }
             _ => return Err(unsupported(format!("call to {}", callee_label(callee)), span)),
         };
         self.assign_local(local, value);
         Ok(Flow::Next)
+    }
+
+    /// Invoke a stored closure or partial through its resolved call-site binding in a fresh frame.
+    fn execute_local_callable(
+        &mut self,
+        target: &LocalCallableTarget,
+        args: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let callable = self.take_callable_receiver(&target.operand, span)?;
+        let captures = callable.captures.iter().cloned().collect::<BTreeMap<_, _>>();
+        if captures.len() != callable.captures.len() {
+            return Err(unsupported("duplicate callable capture local", span));
+        }
+        let locals = self.bind_call_arguments(&callable.params, args, &target.binding, &captures, span)?;
+        self.execute_callable_frame(&callable, locals, span, "stored callable")
+    }
+
+    /// Execute one callable expression body in a fresh local frame and retain evidence only after it completed.
+    fn execute_callable_frame(
+        &mut self,
+        callable: &ReplacementCallable,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        span: HirSourceSpan,
+        frame_kind: &str,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut child = Self::with_locals(&self.module, locals, self.steps);
+        for statement in &callable.body.stmts {
+            match child.execute_statement(statement)? {
+                Flow::Next => {}
+                Flow::Return(_) | Flow::Break | Flow::Continue => {
+                    return Err(unsupported(
+                        "control flow in a callable expression body",
+                        statement.span,
+                    ));
+                }
+            }
+        }
+        let result = child.evaluate_operand(&callable.body.result, span)?;
+        self.merge_child(child);
+        self.record_frame_evidence(format!(
+            "executed {frame_kind} frame call_span={}..{} params={} captures={} statements={}",
+            span.start,
+            span.end,
+            callable.params.len(),
+            callable.captures.len(),
+            callable.body.stmts.len()
+        ));
+        Ok(result)
+    }
+
+    /// Invoke an in-module named function, creating a lazy frame instead when the target body yields.
+    fn execute_named_callable(
+        &mut self,
+        target: &NamedCallableTarget,
+        args: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let body = self
+            .module
+            .bodies
+            .iter()
+            .find(|body| body.name == target.name)
+            .cloned()
+            .ok_or_else(|| {
+                unsupported(
+                    format!("named callable `{}` outside this Body-IR module", target.name),
+                    span,
+                )
+            })?;
+        if self
+            .module
+            .bodies
+            .iter()
+            .filter(|candidate| candidate.name == target.name)
+            .nth(1)
+            .is_some()
+        {
+            return Err(unsupported(
+                format!("ambiguous named callable `{}` in Body IR", target.name),
+                span,
+            ));
+        }
+        validate_direct_body_profile(&body)?;
+        let locals = self.bind_call_arguments(&body.params, args, &target.binding, &BTreeMap::new(), span)?;
+        if body.is_generator() {
+            let named_body = body.clone();
+            let name = named_body.name.clone();
+            let statement_count = named_body.block.stmts.len();
+            return Ok(ReplacementValue::Generator(Box::new(ReplacementGenerator {
+                frame: GeneratorFrame::new(locals, body.block.stmts),
+                named_body: Some(named_body),
+                frame_evidence: Some(format!(
+                    "executed generator-function frame name={} call_span={}..{} statements={}",
+                    name, span.start, span.end, statement_count
+                )),
+            })));
+        }
+        let mut child = Self::with_locals(&self.module, locals, self.steps);
+        child.record_body(&body);
+        let flow = child.execute_block(&body.block)?;
+        let value = match flow {
+            Flow::Return(Some(value)) => value,
+            Flow::Return(None) | Flow::Next => ReplacementValue::Unit,
+            Flow::Break | Flow::Continue => {
+                return Err(unsupported("loop control outside a nested callable loop", body.span));
+            }
+        };
+        self.merge_child(child);
+        Ok(value)
+    }
+
+    /// Capture one admitted map or filter adapter without polling its source or callback.
+    fn construct_generator_adapter(
+        &mut self,
+        name: &str,
+        args: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let [receiver, callback] = args else {
+            return Err(unsupported(format!("generator {name} adapter arity"), span));
+        };
+        let source = self.take_iterable_receiver(receiver, span)?;
+        let callback = self.evaluate_operand(callback, span)?;
+        let ReplacementValue::Callable(callback) = callback else {
+            return Err(unsupported(
+                format!("generator {name} adapter callback is not a stored callable"),
+                span,
+            ));
+        };
+        let kind = match name {
+            "map" => ReplacementAdapterKind::Map,
+            "filter" => ReplacementAdapterKind::Filter,
+            _ => return Err(unsupported(format!("generator {name} adapter"), span)),
+        };
+        Ok(ReplacementValue::Adapter(Box::new(ReplacementAdapter {
+            source,
+            callback: *callback,
+            kind,
+        })))
     }
 
     /// Materialize the admitted `range` source-spelling call before its normalized loop.
@@ -1280,28 +1835,14 @@ impl BodyExecutor {
             fact: iterator.fact,
             last_use: iterator.last_use,
         });
-        let value = match self.locals.get_mut(&iterator_local) {
-            Some(ReplacementValue::Range { next, end, step })
-                if (*step > 0 && *next < *end) || (*step < 0 && *next > *end) =>
-            {
-                let value = *next;
-                *next += *step;
-                ReplacementValue::Int(value)
-            }
-            Some(ReplacementValue::Range { .. }) => return Ok(Flow::Break),
-            Some(ReplacementValue::List { elements, next }) if *next < elements.len() => {
-                let value = elements[*next].clone();
-                *next += 1;
-                value
-            }
-            Some(ReplacementValue::List { .. }) => return Ok(Flow::Break),
-            Some(value) => return Err(unsupported(format!("iteration over {}", value_kind(value)), span)),
-            None => {
-                return Err(runtime_failure(
-                    "read of an unavailable builtin iterator".to_string(),
-                    span,
-                ));
-            }
+        let mut iterator_value = self
+            .locals
+            .remove(&iterator_local)
+            .ok_or_else(|| runtime_failure("read of an unavailable builtin iterator".to_string(), span))?;
+        let next = self.poll_iterator(&mut iterator_value, span)?;
+        self.locals.insert(iterator_local, iterator_value);
+        let Some(value) = next else {
+            return Ok(Flow::Break);
         };
         self.assign_local(bare_local(destination, span)?, value);
         Ok(Flow::Next)
@@ -1349,7 +1890,11 @@ impl BodyExecutor {
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
-            Rvalue::Closure { .. } => Err(unsupported("callable value", span)),
+            Rvalue::Closure {
+                params,
+                captured_operands,
+                body,
+            } => self.construct_callable(params, captured_operands, body, span),
             Rvalue::Generator {
                 source,
                 captured_operands,
@@ -1357,6 +1902,29 @@ impl BodyExecutor {
             } => self.construct_generator(source, captured_operands, body, span),
             Rvalue::Match { .. } => Err(unsupported("match expression", span)),
         }
+    }
+
+    /// Capture a closure or partial environment exactly once at its construction point.
+    fn construct_callable(
+        &mut self,
+        params: &[CallableParam],
+        captured_operands: &[Operand],
+        body: &ClosureBody,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if captured_operands.len() != body.capture_locals.len() {
+            return Err(unsupported("callable capture metadata mismatch", span));
+        }
+        let captures = captured_operands
+            .iter()
+            .zip(&body.capture_locals)
+            .map(|(operand, local)| self.evaluate_operand(operand, span).map(|value| (*local, value)))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ReplacementValue::Callable(Box::new(ReplacementCallable {
+            params: params.to_vec(),
+            captures,
+            body: body.clone(),
+        })))
     }
 
     /// Capture a generator expression's construction-time source and free values without executing its body.
@@ -1376,46 +1944,37 @@ impl BodyExecutor {
             .zip(&body.capture_locals)
             .map(|(operand, local)| self.evaluate_operand(operand, span).map(|value| (*local, value)))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(ReplacementValue::Generator(Box::new(ReplacementGenerator {
-            source,
-            captures,
-            body: body.clone(),
-        })))
-    }
-
-    /// Consume an admitted generator expression by running only its deferred Body-IR body.
-    ///
-    /// The child executor receives the source and captures already observed at construction time. It intentionally
-    /// does not inherit any other outer locals, preventing deferred evaluation from reaching mutable construction
-    /// scope state by name. Its ownership evidence and bounded step count are merged back into the caller only after
-    /// the consumer has actually asked for collection.
-    fn collect_generator(
-        &mut self,
-        generator: ReplacementGenerator,
-        span: HirSourceSpan,
-    ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let mut locals = BTreeMap::new();
-        locals.insert(generator.body.source_local, generator.source);
-        for (local, value) in generator.captures {
+        locals.insert(body.source_local, source);
+        for (local, value) in captures {
             if locals.insert(local, value).is_some() {
                 return Err(unsupported("generator capture aliases its source local", span));
             }
         }
-        let mut deferred = Self {
-            locals,
-            ownership_reads: Vec::new(),
-            steps: self.steps,
-        };
+        Ok(ReplacementValue::Generator(Box::new(ReplacementGenerator {
+            frame: GeneratorFrame::new(locals, body.stmts.clone()),
+            named_body: None,
+            frame_evidence: Some(format!(
+                "executed generator-expression frame span={}..{} source_local=_{} captures={} statements={}",
+                span.start,
+                span.end,
+                body.source_local.0,
+                body.capture_locals.len(),
+                body.stmts.len()
+            )),
+        })))
+    }
+
+    /// Consume an admitted generator by resuming its retained frame until exhaustion.
+    fn collect_generator(
+        &mut self,
+        mut iterator: ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let mut elements = Vec::new();
-        match deferred.collect_generator_statements(&generator.body.stmts, &mut elements)? {
-            Flow::Next => {}
-            Flow::Break | Flow::Continue => {
-                return Err(unsupported("generator loop control outside a normalized loop", span));
-            }
-            Flow::Return(_) => return Err(unsupported("return from a generator expression", span)),
+        while let Some(value) = self.poll_iterator(&mut iterator, span)? {
+            elements.push(value);
         }
-        self.steps = deferred.steps;
-        self.ownership_reads.extend(deferred.ownership_reads);
         Ok(ReplacementValue::CollectedGenerator { elements, next: 0 })
     }
 
@@ -1428,7 +1987,7 @@ impl BodyExecutor {
         &mut self,
         receiver: &Operand,
         span: HirSourceSpan,
-    ) -> Result<ReplacementGenerator, ReplacementExecutionError> {
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let Operand::Place(place_operand) = receiver else {
             return Err(unsupported("non-place generator collect receiver", span));
         };
@@ -1442,80 +2001,262 @@ impl BodyExecutor {
             .locals
             .remove(&local)
             .ok_or_else(|| runtime_failure("read of an unavailable generator receiver".to_string(), span))?;
-        let ReplacementValue::Generator(generator) = value else {
+        if !matches!(value, ReplacementValue::Generator(_) | ReplacementValue::Adapter(_)) {
             return Err(unsupported(
-                format!(
-                    "collecting {} outside the generator-expression profile",
-                    value_kind(&value)
-                ),
+                format!("collecting {} outside the generator profile", value_kind(&value)),
+                span,
+            ));
+        }
+        Ok(value)
+    }
+
+    /// Consume a stored callable target while honoring the compiler-recorded ownership read on the target itself.
+    fn take_callable_receiver(
+        &mut self,
+        operand: &incan_semantics_core::body_ir::PlaceOperand,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementCallable, ReplacementExecutionError> {
+        let local = bare_local(&operand.place, span)?;
+        self.ownership_reads.push(OwnershipRead {
+            span,
+            fact: operand.fact,
+            last_use: operand.last_use,
+        });
+        let value = match operand.fact {
+            OwnershipFact::Move => self.locals.remove(&local),
+            OwnershipFact::Clone | OwnershipFact::Copy | OwnershipFact::Borrow | OwnershipFact::MutBorrow => {
+                self.locals.get(&local).cloned()
+            }
+            OwnershipFact::Unknown => None,
+        }
+        .ok_or_else(|| runtime_failure("read of an unavailable callable receiver".to_string(), span))?;
+        let ReplacementValue::Callable(callable) = value else {
+            return Err(unsupported(
+                format!("calling {} outside the stored-callable profile", value_kind(&value)),
                 span,
             ));
         };
-        Ok(*generator)
+        Ok(*callable)
     }
 
-    /// Execute deferred generator statements, appending each explicit Body-IR `yield` and continuing its loop.
-    fn collect_generator_statements(
+    /// Consume an iterator receiver for a lazy adapter, preserving its source-owned read fact.
+    fn take_iterable_receiver(
         &mut self,
-        statements: &[Statement],
-        elements: &mut Vec<ReplacementValue>,
-    ) -> Result<Flow, ReplacementExecutionError> {
-        for statement in statements {
-            self.record_step(statement.span)?;
-            let flow = match &statement.kind {
-                StatementKind::Yield { value } => {
-                    elements.push(self.evaluate_operand(value, statement.span)?);
-                    Flow::Next
+        receiver: &Operand,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let Operand::Place(place_operand) = receiver else {
+            return Err(unsupported("non-place generator adapter receiver", span));
+        };
+        let local = bare_local(&place_operand.place, span)?;
+        self.ownership_reads.push(OwnershipRead {
+            span,
+            fact: place_operand.fact,
+            last_use: place_operand.last_use,
+        });
+        let value = self
+            .locals
+            .remove(&local)
+            .ok_or_else(|| runtime_failure("read of an unavailable generator adapter receiver".to_string(), span))?;
+        if matches!(value, ReplacementValue::Generator(_) | ReplacementValue::Adapter(_)) {
+            Ok(value)
+        } else {
+            Err(unsupported(
+                format!("{} adapter outside the generator profile", value_kind(&value)),
+                span,
+            ))
+        }
+    }
+
+    /// Resume a generator frame until one yield or exhaustion, merging its actual execution evidence into the caller.
+    fn resume_generator(
+        &mut self,
+        generator: &mut ReplacementGenerator,
+        span: HirSourceSpan,
+    ) -> Result<Option<ReplacementValue>, ReplacementExecutionError> {
+        let named_body = generator.named_body.take();
+        let frame_evidence = generator.frame_evidence.take();
+        let locals = std::mem::take(&mut generator.frame.locals);
+        let resume_steps = generator.frame.resume_step_budget(self.steps);
+        let mut deferred = Self::with_locals(&self.module, locals, resume_steps);
+        if let Some(body) = &named_body {
+            deferred.record_body(body);
+        }
+        if let Some(evidence) = frame_evidence {
+            deferred.record_frame_evidence(evidence);
+        }
+        let value = deferred.resume_generator_frame(&mut generator.frame, span)?;
+        generator.frame.locals = std::mem::take(&mut deferred.locals);
+        generator.frame.steps = deferred.steps;
+        self.merge_child(deferred);
+        Ok(value)
+    }
+
+    /// Poll an iterator value once. This single surface is shared by normalized `for` lowering and lazy adapters.
+    fn poll_iterator(
+        &mut self,
+        value: &mut ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<Option<ReplacementValue>, ReplacementExecutionError> {
+        match value {
+            ReplacementValue::Range { next, end, step }
+                if (*step > 0 && *next < *end) || (*step < 0 && *next > *end) =>
+            {
+                let value = ReplacementValue::Int(*next);
+                *next += *step;
+                Ok(Some(value))
+            }
+            ReplacementValue::Range { .. } => Ok(None),
+            ReplacementValue::List { elements, next } | ReplacementValue::CollectedGenerator { elements, next }
+                if *next < elements.len() =>
+            {
+                let value = elements[*next].clone();
+                *next += 1;
+                Ok(Some(value))
+            }
+            ReplacementValue::List { .. } | ReplacementValue::CollectedGenerator { .. } => Ok(None),
+            ReplacementValue::Generator(generator) => self.resume_generator(generator, span),
+            ReplacementValue::Adapter(adapter) => self.poll_adapter(adapter, span),
+            value => Err(unsupported(format!("iteration over {}", value_kind(value)), span)),
+        }
+    }
+
+    /// Poll one map/filter adapter without materializing its upstream source.
+    fn poll_adapter(
+        &mut self,
+        adapter: &mut ReplacementAdapter,
+        span: HirSourceSpan,
+    ) -> Result<Option<ReplacementValue>, ReplacementExecutionError> {
+        loop {
+            let Some(candidate) = self.poll_iterator(&mut adapter.source, span)? else {
+                return Ok(None);
+            };
+            let callback_result = self.invoke_callable_value(&adapter.callback, vec![Some(candidate.clone())], span)?;
+            match adapter.kind {
+                ReplacementAdapterKind::Map => return Ok(Some(callback_result)),
+                ReplacementAdapterKind::Filter => {
+                    if callback_result.into_bool(span)? {
+                        return Ok(Some(candidate));
+                    }
                 }
+            }
+        }
+    }
+
+    /// Invoke a captured callable with already-evaluated values, used by lazy adapters while polling.
+    fn invoke_callable_value(
+        &mut self,
+        callable: &ReplacementCallable,
+        supplied: Vec<Option<ReplacementValue>>,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let captures = callable.captures.iter().cloned().collect::<BTreeMap<_, _>>();
+        if captures.len() != callable.captures.len() {
+            return Err(unsupported("duplicate callable capture local", span));
+        }
+        let locals = self.bind_parameter_values(&callable.params, supplied, &captures, span)?;
+        self.execute_callable_frame(callable, locals, span, "generator-adapter callback")
+    }
+
+    /// Interpret a persisted nested-block cursor until the first yield or final exhaustion.
+    fn resume_generator_frame(
+        &mut self,
+        frame: &mut GeneratorFrame,
+        span: HirSourceSpan,
+    ) -> Result<Option<ReplacementValue>, ReplacementExecutionError> {
+        if frame.exhausted {
+            return Ok(None);
+        }
+        loop {
+            let Some(cursor) = frame.cursors.last_mut() else {
+                frame.exhausted = true;
+                return Ok(None);
+            };
+            if cursor.next == cursor.statements.len() {
+                if cursor.is_loop {
+                    cursor.next = 0;
+                    continue;
+                }
+                frame.cursors.pop();
+                continue;
+            }
+            let statement = cursor.statements[cursor.next].clone();
+            cursor.next += 1;
+            self.record_step(statement.span)?;
+            match &statement.kind {
+                StatementKind::Yield { value } => return self.evaluate_operand(value, statement.span).map(Some),
                 StatementKind::If {
                     cond,
                     then_block,
                     else_block,
                 } => {
-                    if self.evaluate_operand(cond, statement.span)?.into_bool(statement.span)? {
-                        self.collect_generator_statements(&then_block.stmts, elements)?
-                    } else if let Some(else_block) = else_block {
-                        self.collect_generator_statements(&else_block.stmts, elements)?
+                    let selected = if self.evaluate_operand(cond, statement.span)?.into_bool(statement.span)? {
+                        Some(then_block)
                     } else {
-                        Flow::Next
+                        else_block.as_ref()
+                    };
+                    if let Some(block) = selected {
+                        frame.cursors.push(GeneratorCursor::block(block.stmts.clone()));
                     }
                 }
-                StatementKind::Loop { body } => self.collect_generator_loop(&body.stmts, elements, statement.span)?,
-                StatementKind::Return { .. } => {
-                    return Err(unsupported("return from a generator expression", statement.span));
+                StatementKind::Loop { body } => frame.cursors.push(GeneratorCursor::loop_body(body.stmts.clone())),
+                StatementKind::Break { value: Some(_) } => {
+                    return Err(unsupported("value-carrying loop break in generator", statement.span));
                 }
-                _ => self.execute_statement(statement)?,
-            };
-            match flow {
-                Flow::Next => {}
-                flow => return Ok(flow),
+                StatementKind::Break { value: None } => self.break_generator_loop(frame, statement.span)?,
+                StatementKind::Continue => self.continue_generator_loop(frame, statement.span)?,
+                StatementKind::Return { value: Some(_) } => {
+                    return Err(unsupported("value-carrying return from generator", statement.span));
+                }
+                StatementKind::Return { value: None } => {
+                    frame.cursors.clear();
+                    frame.exhausted = true;
+                    return Ok(None);
+                }
+                _ => match self.execute_statement(&statement)? {
+                    Flow::Next => {}
+                    Flow::Break => self.break_generator_loop(frame, statement.span)?,
+                    Flow::Continue => self.continue_generator_loop(frame, statement.span)?,
+                    Flow::Return(_) => {
+                        return Err(unsupported("unsupported generator return flow", statement.span));
+                    }
+                },
             }
-        }
-        Ok(Flow::Next)
-    }
-
-    /// Execute one normalized loop nested in a deferred generator body.
-    fn collect_generator_loop(
-        &mut self,
-        statements: &[Statement],
-        elements: &mut Vec<ReplacementValue>,
-        span: HirSourceSpan,
-    ) -> Result<Flow, ReplacementExecutionError> {
-        loop {
-            match self.collect_generator_statements(statements, elements)? {
-                Flow::Next | Flow::Continue => {}
-                Flow::Break => return Ok(Flow::Next),
-                Flow::Return(value) => return Ok(Flow::Return(value)),
-            }
-            if self.steps >= MAX_EXECUTION_STEPS {
+            frame.steps = self.steps;
+            if frame.steps >= MAX_EXECUTION_STEPS {
                 return Err(runtime_failure(
-                    format!(
-                        "normalized generator loop exceeded the {MAX_EXECUTION_STEPS}-step replacement profile limit"
-                    ),
+                    format!("generator exceeded the {MAX_EXECUTION_STEPS}-step replacement profile limit"),
                     span,
                 ));
             }
         }
+    }
+
+    /// Leave the innermost persisted loop after a generator `break` without replaying its parent cursor.
+    fn break_generator_loop(
+        &mut self,
+        frame: &mut GeneratorFrame,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        let Some(index) = frame.cursors.iter().rposition(|cursor| cursor.is_loop) else {
+            return Err(unsupported("generator break outside a loop", span));
+        };
+        frame.cursors.truncate(index);
+        Ok(())
+    }
+
+    /// Restart the innermost persisted loop after a generator `continue`, retaining its locals and parent cursor.
+    fn continue_generator_loop(
+        &mut self,
+        frame: &mut GeneratorFrame,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        let Some(index) = frame.cursors.iter().rposition(|cursor| cursor.is_loop) else {
+            return Err(unsupported("generator continue outside a loop", span));
+        };
+        frame.cursors.truncate(index + 1);
+        frame.cursors[index].next = 0;
+        Ok(())
     }
 
     /// Materialize only scalar two-tuples and lists composed of those tuples for the selected loop profile.
@@ -2096,7 +2837,9 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Range { .. } => "range",
         ReplacementValue::List { .. } => "list",
         ReplacementValue::Tuple(_) => "tuple",
+        ReplacementValue::Callable(_) => "callable",
         ReplacementValue::Generator(_) => "generator",
+        ReplacementValue::Adapter(_) => "generator adapter",
         ReplacementValue::CollectedGenerator { .. } => "collected generator list",
     }
 }
@@ -2109,5 +2852,47 @@ fn constant_value(constant: &Constant) -> ReplacementValue {
         Constant::Str(value) => ReplacementValue::Str(value.clone()),
         Constant::Unit | Constant::None => ReplacementValue::Unit,
         Constant::Float(value) => ReplacementValue::Float(value.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use incan_semantics_core::CompilerNodeId;
+
+    use super::{
+        BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, MAX_EXECUTION_STEPS, Operand,
+        ReplacementExecutionError, ReplacementGenerator, Statement, StatementKind,
+    };
+
+    /// A resumed generator must retain the steps its parent spent before the first poll.
+    #[test]
+    fn generator_resume_counts_the_parent_budget_before_polling_its_frame() {
+        let span = HirSourceSpan::new(0, 1);
+        let module = BodyIrModule {
+            module_id: CompilerNodeId::module("replacement.generator_budget_test"),
+            bodies: Vec::new(),
+        };
+        let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS);
+        let mut generator = ReplacementGenerator {
+            frame: GeneratorFrame::new(
+                BTreeMap::new(),
+                vec![Statement {
+                    kind: StatementKind::Yield {
+                        value: Operand::Constant(Constant::Int(1)),
+                    },
+                    span,
+                }],
+            ),
+            named_body: None,
+            frame_evidence: None,
+        };
+
+        let result = executor.resume_generator(&mut generator, span);
+        assert!(
+            matches!(result, Err(ReplacementExecutionError::RuntimeFailure { .. })),
+            "the first generator poll must consume the caller's already-exhausted execution budget"
+        );
     }
 }
