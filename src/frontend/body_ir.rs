@@ -31,8 +31,8 @@
 //! so the model stays total over real programs. That residue is not a short tail, and #1101 tracks it as named
 //! remaining work rather than as an implied "almost everything" claim: a spread in a `model`/`class` construction,
 //! which refuses as an unresolved field layout because the typechecker records no field binding for it; a spread
-//! against a callee whose fixed signature *is* resolvable, which the shaped-unpack plan could expand but does not
-//! yet; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
+//! with no statically proven shape against a callee whose fixed signature *is* resolvable, whose arity no stage can
+//! establish; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
 //! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
 //! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
 //! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
@@ -59,7 +59,7 @@ use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 use crate::frontend::ast;
 use crate::frontend::symbols::{CallableParam, ResolvedType};
-use crate::frontend::typechecker::{TypeCheckInfo, semantic_type_from_resolved};
+use crate::frontend::typechecker::{FixedUnpackPlan, TypeCheckInfo, semantic_type_from_resolved};
 
 /// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
 /// typechecked module.
@@ -2819,7 +2819,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             let elements = self.lower_spread_capable_args(args, scope, out);
             return Ok((elements, bir::ArgumentBinding::UnresolvedPositional));
         };
-        let planned = plan_declared_args(callee, &slots, args)?;
+        // A spread whose shape the typechecker proved is an ordinary fixed-arity call in disguise: `add(*(1, 2))`
+        // really is `add(1, 2)`. Expanding it here means it binds through the same declaration-slot planner as any
+        // other call, instead of being pushed onto the runtime-arity path it does not belong on.
+        let expanded: Vec<ast::CallArg> = args
+            .iter()
+            .flat_map(|arg| match expand_shaped_spread(self.type_info, arg) {
+                Some(expansion) => expansion,
+                None => vec![arg.clone()],
+            })
+            .collect();
+        let planned = plan_declared_args(callee, &slots, &expanded)?;
         let (operands, binding) = self
             .lower_planned_args(&planned, slots.len(), scope, out)
             .map_err(|description| format!("{callee}: {description}"))?;
@@ -4369,6 +4379,80 @@ impl DeclaredSlot {
             is_partial_preset: param.is_partial_preset,
             is_rest: param.kind != ast::ParamKind::Normal,
         }
+    }
+}
+
+/// Expand a statically shaped spread argument into the ordinary arguments it stands for.
+///
+/// The typechecker proves a spread's shape when its operand is written as a literal whose arity is visible before
+/// lowering -- `f(*(1, 2))`, `f(**{"a": 1})` -- and records the result as a
+/// [`FixedUnpackPlan`](crate::frontend::typechecker::FixedUnpackPlan). Those calls have a perfectly ordinary fixed
+/// arity, so they bind through the same declaration-slot planner as any other call rather than being pushed onto
+/// the runtime-arity path; a `*(1, 2)` against `def add(a, b)` really is `add(1, 2)`.
+///
+/// Returns `None` when the spread has no proven shape, which is the ordinary case (`f(*xs)` for a list variable):
+/// its arity is a runtime fact and it belongs on the unresolved-arity path. Also returns `None` when a plan exists
+/// but the operand is not a destructurable literal -- the plan is recorded for tuple-*typed* operands too, and
+/// those have no written elements to expand.
+///
+/// Parentheses are transparent here exactly as they are for the typechecker's own shape check, so the two stages
+/// agree on which spellings count as shaped.
+fn expand_shaped_spread(type_info: &TypeCheckInfo, arg: &ast::CallArg) -> Option<Vec<ast::CallArg>> {
+    /// Look through any number of parenthesis layers to the expression they wrap.
+    ///
+    /// The typechecker's own shape check treats parentheses as transparent, so this must too, or the two stages
+    /// would disagree about which spellings count as statically shaped.
+    fn unparenthesized(expr: &ast::Spanned<ast::Expr>) -> &ast::Spanned<ast::Expr> {
+        match &expr.node {
+            ast::Expr::Paren(inner) => unparenthesized(inner),
+            _ => expr,
+        }
+    }
+
+    match arg {
+        ast::CallArg::PositionalUnpack(source) => {
+            if !matches!(
+                type_info.fixed_unpack_plan(source.span),
+                Some(FixedUnpackPlan::Positional(_))
+            ) {
+                return None;
+            }
+            match &unparenthesized(source).node {
+                ast::Expr::Tuple(items) => Some(items.iter().cloned().map(ast::CallArg::Positional).collect()),
+                ast::Expr::List(entries) => entries
+                    .iter()
+                    .map(|entry| match entry {
+                        ast::ListEntry::Element(value) => Some(ast::CallArg::Positional(value.clone())),
+                        ast::ListEntry::Spread(_) => None,
+                    })
+                    .collect(),
+                _ => None,
+            }
+        }
+        ast::CallArg::KeywordUnpack(source) => {
+            if !matches!(
+                type_info.fixed_unpack_plan(source.span),
+                Some(FixedUnpackPlan::Keyword(_))
+            ) {
+                return None;
+            }
+            let ast::Expr::Dict(entries) = &unparenthesized(source).node else {
+                return None;
+            };
+            entries
+                .iter()
+                .map(|entry| match entry {
+                    ast::DictEntry::Pair(key, value) => match &unparenthesized(key).node {
+                        ast::Expr::Literal(ast::Literal::String(name)) => {
+                            Some(ast::CallArg::Named(name.clone(), value.clone()))
+                        }
+                        _ => None,
+                    },
+                    ast::DictEntry::Spread(_) => None,
+                })
+                .collect()
+        }
+        ast::CallArg::Positional(_) | ast::CallArg::Named(_, _) => None,
     }
 }
 
@@ -8921,6 +9005,59 @@ mod tests {
         assert!(
             snapshot.contains("list[const(1), *move(_0, last_use)]"),
             "a spread written last must stay last: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_statically_shaped_spread_binds_as_an_ordinary_fixed_arity_call() -> Result<(), Box<dyn std::error::Error>> {
+        // `add(*(1, 2))` really is `add(1, 2)`: the typechecker proves the arity before lowering, so this belongs
+        // on the declaration-slot path, not on the runtime-arity path a genuine spread needs. Its operands must
+        // land in declared slots with no spread element and no `unbound` marker.
+        for (label, source) in [
+            (
+                "tuple",
+                "def add(a: int, b: int) -> int:\n  return a + b\n\ndef m() -> int:\n  return add(*(1, 2))\n",
+            ),
+            (
+                "list",
+                "def add(a: int, b: int) -> int:\n  return a + b\n\ndef m() -> int:\n  return add(*[1, 2])\n",
+            ),
+            (
+                "dict",
+                "def add(a: int, b: int) -> int:\n  return a + b\n\ndef m() -> int:\n  return add(**{\"a\": 1, \"b\": 2})\n",
+            ),
+        ] {
+            let module = build(source, &["m", "shaped"])?;
+            let rendered = body_named(&module, "m")?.render_snapshot();
+
+            assert!(
+                !rendered.contains("unsupported("),
+                "{label} spread must lower: {rendered}"
+            );
+            assert!(
+                rendered.contains("call fn:add(const(1), const(2))"),
+                "a {label} spread with a proven shape must bind to declared slots: {rendered}"
+            );
+            assert!(
+                !rendered.contains("unbound") && !rendered.contains("*const"),
+                "a proven-shape spread must not be represented as runtime-arity: {rendered}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_spread_with_no_proven_shape_stays_on_the_runtime_arity_path() -> Result<(), Box<dyn std::error::Error>> {
+        // The contrast case for the test above: a list *variable* has no statically visible arity, so it must keep
+        // its spread element rather than being expanded into slots that cannot be counted.
+        let source = "def log(*items: int) -> None:\n  return\n\ndef m(xs: list[int]) -> None:\n  log(*xs)\n  return\n";
+        let module = build(source, &["m", "unshaped"])?;
+        let rendered = body_named(&module, "m")?.render_snapshot();
+
+        assert!(
+            rendered.contains("call fn:log unbound(*move(_0, last_use))"),
+            "an unproven spread must stay a spread element on the unresolved-arity path: {rendered}"
         );
         Ok(())
     }
