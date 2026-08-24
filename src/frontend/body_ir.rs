@@ -3282,9 +3282,14 @@ impl<'a> BodyBuilder<'a> {
                 .race_arm_binding_type(arm.awaitable.span)
                 .map(semantic_type_from_resolved)
                 .unwrap_or(IncanType::Unknown);
-            // Capture the enclosing binding *before* declaring: `declare_new_local` installs the new local itself,
-            // so reading `self.bindings` afterwards would capture the arm's own local and destroy the outer one.
-            let shadowed = self.bindings.get(&race.binding).copied();
+            // Snapshot the whole binding environment before the arm, not just the shared race binding. A block arm
+            // lowers ordinary statements, and every `x = ...` in it declares a local that
+            // `declare_new_local_with_reads` installs into `self.bindings`. Restoring only `race.binding`
+            // would leave those arm-locals visible to later arms and to code after the race, so a trailing
+            // read of a name an arm happened to shadow would silently resolve to the arm's local.
+            // `insert_scope_drops` handles the *drop* obligation; it does not touch name resolution, which
+            // is what this restores.
+            let enclosing_bindings = self.bindings.clone();
             let reads = match &arm.body {
                 ast::RaceForBody::Expr(expr) => count_reads_in_expr(&race.binding, &expr.node),
                 ast::RaceForBody::Block(stmts) => count_reads_in_stmts(&race.binding, stmts),
@@ -3301,16 +3306,10 @@ impl<'a> BodyBuilder<'a> {
             };
             self.insert_scope_drops(&mut arm_stmts, arm_scope);
 
-            // The arm binding is scoped to its own arm, exactly like a closure parameter: code after the race must
-            // keep resolving the name to whatever it meant outside.
-            match shadowed {
-                Some(previous) => {
-                    self.bindings.insert(race.binding.clone(), previous);
-                }
-                None => {
-                    self.bindings.remove(&race.binding);
-                }
-            }
+            // Every name an arm bound -- its winner binding and any local its block body declared -- is scoped to
+            // that arm, exactly like a closure body's. Code after the race, and each later arm, must keep resolving
+            // every name to whatever it meant outside.
+            self.bindings = enclosing_bindings;
 
             arms.push(bir::RaceArm {
                 awaitable,
@@ -7799,6 +7798,40 @@ mod tests {
         assert!(
             sum_line.contains("copy(_0)"),
             "a read after the race must resolve to the enclosing binding, not an arm local: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_block_arm_local_does_not_leak_past_its_arm() -> Result<(), Box<dyn std::error::Error>> {
+        // A block arm lowers ordinary statements, so `total = ...` inside it declares a local through the same path
+        // any assignment uses. Restoring only the shared race binding would leave that arm-local installed, and the
+        // trailing read of `total` would silently resolve to it instead of the outer binding -- a wrong value with
+        // no unsupported node to show for it.
+        let source = format!(
+            "{ASYNC_PRELUDE}async def f() -> int:\n  total = 100\n  winner = race for value:\n    await fast() => value\n    await slow() =>\n      total = value * 2\n      total\n  return total + winner\n"
+        );
+        let module = build(&source, &["m", "race_arm_local"])?;
+        let body = body_named(&module, "f")?;
+        let rendered = body.render_snapshot();
+
+        // `total` is declared first, so the outer binding is local 0; the arm declares its own `total` separately.
+        let outer = local_for_binding(&rendered, "total").ok_or("missing outer binding")?;
+        assert_eq!(
+            outer, "_0",
+            "the outer binding should be the first declared local: {rendered}"
+        );
+        assert!(
+            rendered.matches("total : int [binding]").count() >= 2,
+            "the arm must declare its own `total` rather than reusing the outer one: {rendered}"
+        );
+        let sum_line = rendered
+            .lines()
+            .find(|line| line.contains(" + ") && !line.starts_with("      "))
+            .ok_or("missing the trailing sum")?;
+        assert!(
+            sum_line.contains("copy(_0)"),
+            "a read after the race must resolve to the enclosing local, not one an arm body declared: {rendered}"
         );
         Ok(())
     }
