@@ -180,8 +180,8 @@ fn run_incan_with_env_and_removed(
 ///
 /// The compiler suite may inject a leased direct-rustc closure so its own test roots can execute without copying
 /// that closure into each fixture. A nested command that models a user's ordinary source/receipt path must not
-/// consume that test-only capability; it keeps the fixture's Oven home and source overrides while removing only
-/// the scheduler handoffs.
+/// consume that test-only capability. It retains the suite's read-only, prewarmed SDK inventory, but removes the
+/// mutable provider-store override and all scheduler execution handoffs.
 fn run_incan_as_normal_oven_consumer(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
     run_incan_with_env_and_removed(
         current_dir,
@@ -194,7 +194,7 @@ fn run_incan_as_normal_oven_consumer(current_dir: &Path, args: &[&str]) -> Resul
             "INCAN_INTERNAL_OVEN_LOAF_EXECUTION",
             "INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT",
             "INCAN_INTERNAL_OVEN_RUNTIME_ROOT",
-            "INCAN_SDK_INVENTORY",
+            "INCAN_INTERNAL_SDK_PROVIDER_STORE",
         ],
     )
 }
