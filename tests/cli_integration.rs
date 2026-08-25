@@ -7451,9 +7451,27 @@ fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn st
     fs::create_dir_all(&src_dir)?;
     fs::write(
         tmp.path().join("incan.toml"),
-        "[project]\nname = \"cli_unbaked_script_target\"\nversion = \"0.1.0\"\n",
+        "[project]\nname = \"cli_unbaked_script_target\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
     )?;
-    fs::write(src_dir.join("lib.incn"), "pub def value() -> int:\n    return 1\n")?;
+    fs::write(
+        src_dir.join("lib.incn"),
+        "from std.fs import Path\n\npub def value() -> int:\n    return 1\n",
+    )?;
+    let vocab_root = tmp.path().join("vocab_companion");
+    fs::create_dir_all(vocab_root.join("src"))?;
+    fs::write(
+        vocab_root.join("Cargo.toml"),
+        format!(
+            "[package]\nname = \"cli_unbaked_script_vocab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\ncrate-type = [\"rlib\", \"cdylib\"]\n\n[dependencies]\nincan_vocab = {{ path = \"{}\" }}\n",
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("crates/incan_vocab")
+                .display()
+        ),
+    )?;
+    fs::write(
+        vocab_root.join("src/lib.rs"),
+        "pub fn library_vocab() -> incan_vocab::VocabRegistration {\n    incan_vocab::VocabRegistration::new()\n}\n",
+    )?;
     let scripts_dir = tmp.path().join("scripts");
     fs::create_dir_all(&scripts_dir)?;
     let metadata_path = scripts_dir.join("metadata.incn");
