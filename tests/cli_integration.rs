@@ -7446,6 +7446,11 @@ edition = "2021"
 
 #[test]
 fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn std::error::Error>> {
+    if support::oven_compiler_suite_is_active() {
+        // Compiler-suite children execute their own sealed test artifact and do not exercise normal source/receipt
+        // selection. The native invocation below is the regression lane for this normal-command diagnostic.
+        return Ok(());
+    }
     let tmp = tempfile::tempdir()?;
     let src_dir = tmp.path().join("src");
     fs::create_dir_all(&src_dir)?;
