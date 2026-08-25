@@ -6361,7 +6361,7 @@ mod tests {
         // A source default can construct a closure or generator, or evaluate a match, whose structured Body IR owns
         // more statements than the outer assignment exposes. Those statement sequences are still part of the direct
         // default contract: a consumer must receive their original refusal span instead of a misleading `Source`.
-        let unsupported = |span, description| bir::Statement {
+        let unsupported = |span: HirSourceSpan, description: &str| bir::Statement {
             kind: bir::StatementKind::Unsupported {
                 description: description.to_string(),
             },
@@ -6481,7 +6481,7 @@ mod tests {
         let second = choose
             .locals
             .iter()
-            .find(|local| local.name == "second")
+            .find(|local| local.name.as_deref() == Some("second"))
             .ok_or("expected second binding after refused default")?;
         assert!(
             choose.block.stmts.iter().any(|statement| matches!(
@@ -8773,7 +8773,8 @@ mod tests {
         // registered today. Dispatching on the payload alone would silently lower a future prefix keyword as a
         // suspension point, so lowering matches the surface *key*. This pins that.
         let type_info = TypeCheckInfo::default();
-        let mut builder = BodyBuilder::new(&type_info);
+        let default_sources = FunctionDefaultSources::new();
+        let mut builder = BodyBuilder::new(&type_info, &default_sources);
         let scope = builder.new_scope(None, HirSourceSpan::new(0, 1));
         let mut out = Vec::new();
         let surface = ast::SurfaceExpr {
