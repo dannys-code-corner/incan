@@ -272,6 +272,15 @@ fn is_module_span_declaration_id(module: &BodyIrModule, id: &CompilerNodeId) -> 
     )
 }
 
+/// Return whether a body retains precisely the source-span identity lowering derives for its own declaration.
+///
+/// A caller's direct identity is not enough to establish a dispatch target: malformed Body IR could copy a valid
+/// same-module identity onto an unrelated body. Direct execution therefore requires both a unique target match and
+/// this body-local canonicality check before it enters the child frame.
+fn has_canonical_direct_call_id(module: &BodyIrModule, body: &Body) -> bool {
+    body.direct_call_id == CompilerNodeId::declaration_span(module.module_id.path(), body.span.start, body.span.end)
+}
+
 impl ReplacementValue {
     /// Render a deterministic source-observable result spelling for replacement receipts and CLI output.
     pub fn observable_text(&self) -> String {
@@ -2205,21 +2214,39 @@ impl BodyExecutor {
                 span,
             ));
         }
-        let body = self
+        let mut matching_bodies = self
             .module
             .bodies
             .iter()
-            .find(|body| body.direct_call_id == *direct_call_id)
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(
-                    format!(
-                        "named callable `{}` targets a declaration outside this Body-IR module",
-                        target.name
-                    ),
-                    span,
-                )
-            })?;
+            .filter(|body| body.direct_call_id == *direct_call_id);
+        let body = matching_bodies.next().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "named callable `{}` targets a declaration outside this Body-IR module",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        if matching_bodies.next().is_some() {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` declaration identity selects multiple Body-IR bodies",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        if !has_canonical_direct_call_id(&self.module, body) {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` body does not retain its canonical declaration identity",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        let body = body.clone();
         if body.name != target.name {
             return Err(unsupported(
                 format!(

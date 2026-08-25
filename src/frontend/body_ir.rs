@@ -3456,10 +3456,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
 
         // `Ok` and `Err` are intrinsic Result constructors, not ordinary direct calls. Retain that checked
-        // distinction explicitly: a same-spelled local function or imported target must remain on the normal call
-        // path and refuse unless its own direct callable facts are available. The direct runtime never resolves a
-        // constructor name dynamically.
-        if !self.local_function_declarations.contains_key(&name)
+        // distinction explicitly: a same-spelled source binding (a local callable, local function, or imported
+        // target) must remain on the normal call path and refuse unless its own direct callable facts are available.
+        // The direct runtime never resolves a constructor name dynamically.
+        if !self.bindings.contains_key(&name)
+            && !self.local_function_declarations.contains_key(&name)
             && self.type_info.source_target(span).is_none()
             && type_args.is_empty()
             && let Some(kind) = result_variant_kind(&name)
@@ -7464,6 +7465,31 @@ mod tests {
                 && snapshot.contains("result_err("),
             "Result constructors and exact error routing must stay explicit in Body IR: {snapshot}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_local_callable_named_ok_shadows_the_intrinsic_result_constructor() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "enum Failure:\n  Shadowed\n\ndef main(Ok: (int) -> Result[int, Failure]) -> Result[int, Failure]:\n  return Ok(42)\n";
+        let module = build(source, &["m", "result_constructor_shadow"])?;
+        let main = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "main")
+            .ok_or("the main body must be retained")?;
+        let call = single_call(main)?;
+        let bir::StatementKind::Call {
+            callee: bir::Callee::Function(bir::CallableTarget::Local(target)),
+            ..
+        } = call
+        else {
+            return Err("a callable parameter named Ok must remain a local Body-IR call".into());
+        };
+        let parameter = main
+            .param_locals
+            .first()
+            .ok_or("the callable parameter must retain a local id")?;
+        assert_eq!(target.operand.place, bir::Place::from_local(*parameter));
         Ok(())
     }
 

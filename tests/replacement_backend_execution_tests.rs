@@ -1177,6 +1177,123 @@ def main() -> int:
     Ok(())
 }
 
+/// Refuse duplicate same-module named-call identities instead of selecting the first malformed body as a decoy.
+#[test]
+fn replacement_refuses_duplicate_named_call_identities_at_the_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def helper() -> int:
+  return 42
+
+def main() -> int:
+  return helper()
+"#;
+    let mut module = lower_typed_body_ir(source)?;
+    let decoy = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "helper")
+        .cloned()
+        .ok_or("fixture must lower the helper body")?;
+    module.bodies.insert(0, decoy);
+
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "duplicate named-call identities must refuse instead of selecting a body, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let call_start = source
+        .find("return helper()")
+        .map(|start| start + "return ".len())
+        .ok_or("fixture must contain the rejected helper call")?;
+    let span = error
+        .primary_span()
+        .ok_or("duplicate named-call identity refusal must retain a source span")?;
+    assert_eq!(span.start, call_start);
+    assert_eq!(span.end, call_start + "helper()".len());
+    assert!(
+        error
+            .to_string()
+            .contains("declaration identity selects multiple Body-IR bodies"),
+        "the refusal must identify the duplicate direct-call target: {error}"
+    );
+    Ok(())
+}
+
+/// Refuse a same-module identity whose retained helper body does not match its own declaration span.
+#[test]
+fn replacement_refuses_a_noncanonical_same_module_named_call_identity_at_the_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def helper() -> int:
+  return 42
+
+def main() -> int:
+  return helper()
+"#;
+    let mut module = lower_typed_body_ir(source)?;
+    let noncanonical_id = CompilerNodeId::declaration_span(module.module_id.path(), 0, 0);
+    let helper = module
+        .bodies
+        .iter_mut()
+        .find(|body| body.name == "helper")
+        .ok_or("fixture must lower the helper body")?;
+    helper.direct_call_id = noncanonical_id.clone();
+    let main = module
+        .bodies
+        .iter_mut()
+        .find(|body| body.name == "main")
+        .ok_or("fixture must lower the main body")?;
+    let target =
+        main.block
+            .stmts
+            .iter_mut()
+            .find_map(|statement| match &mut statement.kind {
+                StatementKind::Call {
+                    callee:
+                        incan_semantics_core::body_ir::Callee::Function(
+                            incan_semantics_core::body_ir::CallableTarget::Named(target),
+                        ),
+                    ..
+                } if target.name == "helper" => Some(target),
+                _ => None,
+            })
+            .ok_or("fixture must lower the helper call as a named Body-IR target")?;
+    target.direct_call_id = Some(noncanonical_id);
+
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "a noncanonical same-module identity must refuse instead of dispatching, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let call_start = source
+        .find("return helper()")
+        .map(|start| start + "return ".len())
+        .ok_or("fixture must contain the rejected helper call")?;
+    let span = error
+        .primary_span()
+        .ok_or("noncanonical named-call identity refusal must retain a source span")?;
+    assert_eq!(span.start, call_start);
+    assert_eq!(span.end, call_start + "helper()".len());
+    assert!(
+        error
+            .to_string()
+            .contains("body does not retain its canonical declaration identity"),
+        "the refusal must identify the malformed retained body identity: {error}"
+    );
+    Ok(())
+}
+
 /// Refuse an id-less `range` call unless lowering retained the explicit compiler-builtin target fact.
 #[test]
 fn replacement_refuses_an_idless_range_call_without_the_explicit_builtin_fact() -> Result<(), Box<dyn std::error::Error>>
