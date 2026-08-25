@@ -296,11 +296,11 @@ fetch-release-support-workspace-sources:
 	@bash workspaces/release/toolchain/fetch_release_support_workspace_sources.sh
 
 .PHONY: test-oven
-test-oven: test-prewarm-oven-loafs
+test-oven: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
 	@$(MAKE) --no-print-directory test-oven-replay
 
 .PHONY: test-oven-partition  ## test - Replay one deterministic prewarmed Oven compiler-suite partition
-test-oven-partition:
+test-oven-partition: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_INDEX)" || { echo "INCAN_TEST_OVEN_PARTITION_INDEX is required" >&2; exit 2; }
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_COUNT)" || { echo "INCAN_TEST_OVEN_PARTITION_COUNT is required" >&2; exit 2; }
 	@partition_display=$$(( $(INCAN_TEST_OVEN_PARTITION_INDEX) + 1 )); \
@@ -338,6 +338,7 @@ test-oven-replay:
 		PATH="$$suite_output/cargo-guard:$$PATH" \
 			INCAN_OVEN_CARGO_GUARD_LOG="$$suite_output/cargo-guard/invocations.log" TMPDIR="$$suite_tmp" \
 			$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" CARGO_NET_OFFLINE=true INCAN_NO_BANNER=1 \
+			INCAN_INTERNAL_OVEN_NORMAL_CONSUMER_BIN="$(INCAN_TEST_OVEN_RELEASE_TOOLCHAIN_ROOT)/bin/incan" \
 			INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
 			./target/debug/incan oven compiler-libtests \
 				--compiler-root "$(CURDIR)" --rustc "$$rustc_path" --fixture-cargo "$$fixture_cargo_path" \
