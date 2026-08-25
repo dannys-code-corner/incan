@@ -7447,16 +7447,31 @@ edition = "2021"
 #[test]
 fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let _main_path = write_minimal_project(tmp.path(), "cli_unbaked_script_target", "")?;
+    let src_dir = tmp.path().join("src");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        "[project]\nname = \"cli_unbaked_script_target\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(src_dir.join("lib.incn"), "pub def value() -> int:\n    return 1\n")?;
     let scripts_dir = tmp.path().join("scripts");
     fs::create_dir_all(&scripts_dir)?;
     let metadata_path = scripts_dir.join("metadata.incn");
-    fs::write(&metadata_path, "def main() -> None:\n    pass\n")?;
+    // Match the IncQL registry checker shape: a library-root bake seals no conventional executable, while this
+    // separate script requires an additional stdlib component and therefore has no compatible executable plan to reuse.
+    fs::write(
+        &metadata_path,
+        "from std.fs import Path\n\ndef main() -> None:\n    pass\n",
+    )?;
 
     let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(&bake_output, "explicit Oven bake for the library project");
+
+    // IncQL inspects checked API metadata before executing its registry-checker script, so retain that command order.
+    let metadata_output = run_incan(tmp.path(), &["tools", "metadata", "api", ".", "--format", "json"])?;
     assert_success(
-        &bake_output,
-        "explicit Oven bake for the conventional executable target",
+        &metadata_output,
+        "API metadata inspection after an explicit project bake",
     );
 
     let run_output = run_incan(
