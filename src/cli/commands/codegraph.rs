@@ -1982,11 +1982,7 @@ impl CodegraphBuilder {
 
     /// Return a declaration record id for a compiler-proven source target at `span`.
     fn source_target_id(&self, module: &ParsedModule, span: Span) -> Option<String> {
-        let module_identity = if module.path_segments.is_empty() {
-            "<module>".to_string()
-        } else {
-            module.path_segments.join("::")
-        };
+        let module_identity = incan_semantics_core::module_identity_for_path(&module.path_segments);
         let subject = CompilerNodeId::expression_span(&module_identity, span.start, span.end);
         let target = self
             .semantic_snapshots_by_path

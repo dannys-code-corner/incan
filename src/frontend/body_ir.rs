@@ -51,8 +51,8 @@ use incan_core::lang::keywords::KeywordId;
 use incan_semantics_core::SurfaceFeatureKey;
 use incan_semantics_core::body_ir as bir;
 use incan_semantics_core::{
-    AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanCallableParam, IncanCallableParamKind,
-    IncanPrimitiveType, IncanType, rust_tuple_arity,
+    AbiV0RuntimeRequirement, CanonicalSymbolId, CompilerNodeId, HirSourceSpan, IncanCallableParam,
+    IncanCallableParamKind, IncanPrimitiveType, IncanType, SemanticSourceTargetKind, rust_tuple_arity,
 };
 
 use incan_core::lang::surface::constructors::{self, ConstructorId};
@@ -106,6 +106,7 @@ pub fn build_body_ir_module_v0(
         local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
         local_value_enum_declarations: &local_value_enum_declarations,
         module_identity: &module_identity,
+        module_path,
     };
     let bodies = program
         .declarations
@@ -194,6 +195,7 @@ struct BodyIrLoweringFacts<'type_info, 'source> {
     local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
     local_value_enum_declarations: &'source LocalValueEnumDeclarations,
     module_identity: &'source str,
+    module_path: &'source [String],
 }
 
 /// Source facts a synthesized local partial needs for one target parameter.
@@ -450,11 +452,7 @@ fn lower_owner_method_bodies(
 /// Render a module path into the same module identity spelling [`crate::frontend::hir`] uses, so declaration ids
 /// line up between the two representations.
 fn body_ir_module_identity(module_path: &[String]) -> String {
-    if module_path.is_empty() {
-        "<module>".to_string()
-    } else {
-        module_path.join("::")
-    }
+    incan_semantics_core::module_identity_for_path(module_path)
 }
 
 /// Convert an AST byte-offset span into a Body IR source span.
@@ -736,6 +734,8 @@ struct BodyBuilder<'type_info, 'source> {
     local_value_enum_declarations: &'source LocalValueEnumDeclarations,
     /// Owning module identity used to construct a source-span declaration identity without consulting a backend.
     module_identity: &'source str,
+    /// Owning module path, used to build the RFC 120 origin of a declaration this module owns.
+    module_path: &'source [String],
     /// Checked return type of the function/method currently being lowered, used only to retain `?` error routing.
     owner_return_type: IncanType,
     locals: Vec<bir::LocalDecl>,
@@ -778,6 +778,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             local_fieldless_enum_declarations: lowering_facts.local_fieldless_enum_declarations,
             local_value_enum_declarations: lowering_facts.local_value_enum_declarations,
             module_identity: lowering_facts.module_identity,
+            module_path: lowering_facts.module_path,
             owner_return_type,
             locals: Vec::new(),
             scopes: Vec::new(),
@@ -3117,6 +3118,35 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         ))
     }
 
+    /// Build the RFC 120 identity of a declaration *this* module owns, from the declaration the call selected.
+    ///
+    /// The span is the one the caller already resolved to build [`DirectCallDeclaration::direct_call_id`], so the two
+    /// facts on a `NamedCallableTarget` are derived from one decision and cannot name different declarations. That
+    /// matters because locality must not be inferred from the recorded source target: an import binding of the same
+    /// spelling wins in `TypeChecker::source_target_for_symbol` regardless of what the call actually bound, so a local
+    /// declaration shadowed by a same-name import would otherwise be given the *import's* identity.
+    fn local_callable_identity(&self, declared_name: &str, declaration_span: ast::Span) -> CanonicalSymbolId {
+        CanonicalSymbolId::module_declaration(
+            self.module_path.to_vec(),
+            declared_name,
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(declaration_span.start, declaration_span.end),
+        )
+    }
+
+    /// Return the RFC 120 identity of an imported callable, when import resolution proved one.
+    ///
+    /// Only reached when this module declares no function of that spelling, so there is no local declaration for an
+    /// import to be confused with. The proven identity carries its own declaration kind, so a binding that resolved to
+    /// something other than a function yields nothing rather than a function identity.
+    ///
+    /// An overloaded import is refused upstream, in `TypeChecker::dependency_member_identity`: an overloaded symbol
+    /// keeps only the first candidate's span, so an identity minted from it would name an arbitrary overload.
+    fn imported_callable_identity(&self, call_site_name: &str) -> Option<CanonicalSymbolId> {
+        let identity = self.type_info.resolved_import_identity(call_site_name)?;
+        (identity.kind == SemanticSourceTargetKind::Function).then(|| identity.clone())
+    }
+
     /// Resolve the declaration surface and exact local identity for a direct named call.
     ///
     /// A direct executable target must be physically represented by this Body-IR module. Imports and unresolved
@@ -3146,6 +3176,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     && !declarations.function_bindings.contains_key(name)
                     && !declarations.function_overloads.contains_key(name))
                 .then_some(bir::NamedCallableBuiltin::Range),
+                canonical: self.imported_callable_identity(name),
             });
         };
         let is_overloaded = local_declarations.len() > 1;
@@ -3183,6 +3214,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     selected_span.end,
                 )),
                 builtin: None,
+                // The identity anchors to the declaration span, so the selected overload is as nameable as any other
+                // declaration; it is the *spelling* that cannot separate them, and the spelling is not the identity.
+                canonical: Some(self.local_callable_identity(name, *selected_span)),
             });
         }
 
@@ -3207,6 +3241,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 declaration_span.end,
             )),
             builtin: None,
+            canonical: Some(self.local_callable_identity(name, *declaration_span)),
         })
     }
 
@@ -3643,6 +3678,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             bir::Callee::Function(bir::CallableTarget::Named(bir::NamedCallableTarget {
                 name,
                 direct_call_id: declaration.direct_call_id,
+                canonical: declaration.canonical,
                 builtin: declaration.builtin,
                 type_args: resolved_type_args,
                 binding,
@@ -4487,6 +4523,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 name: target_name,
                 direct_call_id,
                 builtin: None,
+                // A compiler-synthesized forwarding call has no source call site, so it has no spelling or import
+                // provenance to record; the declaration it forwards to is already named by `direct_call_id`.
+                canonical: None,
                 type_args: Vec::new(),
                 binding: forwarding_binding,
             })),
@@ -4988,10 +5027,15 @@ fn count_reads_in_comprehension_clauses(name: &str, clauses: &[ast::Comprehensio
 /// `direct_call_id` is present only for a declaration physically represented by this module. Keeping the target
 /// separate from its parameter slots prevents a future consumer from treating a successfully planned argument list
 /// as proof that an imported callable is executable here.
+///
+/// `canonical` answers a deliberately different question: *which declaration* this call selected, in a form that
+/// survives an import or a rename. An imported callable therefore has no `direct_call_id` but may still have a
+/// canonical identity, and the two must not be read as substitutes for one another.
 struct DirectCallDeclaration {
     slots: Option<Vec<DeclaredSlot>>,
     direct_call_id: Option<CompilerNodeId>,
     builtin: Option<bir::NamedCallableBuiltin>,
+    canonical: Option<CanonicalSymbolId>,
 }
 
 /// One declared callable parameter or nominal field, reduced to the facts call-site binding actually needs.
@@ -6184,6 +6228,52 @@ mod tests {
     use super::*;
     use crate::frontend::typechecker::TypeChecker;
     use crate::frontend::{lexer, parser};
+
+    /// Lower a module that imports from other modules, so cross-module call facts can be asserted.
+    fn build_with_imports(
+        source: &str,
+        module_path: &[&str],
+        imports: &[(&str, &str)],
+    ) -> Result<bir::BodyIrModule, Box<dyn std::error::Error>> {
+        let mut import_programs = Vec::new();
+        for (name, import_source) in imports {
+            let tokens = lexer::lex(import_source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+            let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+            import_programs.push((*name, program));
+        }
+        let import_refs: Vec<(&str, &ast::Program)> =
+            import_programs.iter().map(|(name, program)| (*name, program)).collect();
+
+        let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let module_path: Vec<String> = module_path.iter().map(|s| s.to_string()).collect();
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_with_imports(&program, &import_refs)
+            .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
+    }
+
+    /// Collect the named-callable targets called directly in one lowered body, in statement order.
+    fn named_targets<'module>(
+        module: &'module bir::BodyIrModule,
+        body_name: &str,
+    ) -> Vec<&'module bir::NamedCallableTarget> {
+        module
+            .bodies
+            .iter()
+            .filter(|body| body.name == body_name)
+            .flat_map(|body| &body.block.stmts)
+            .filter_map(|stmt| match &stmt.kind {
+                bir::StatementKind::Call {
+                    callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+                    ..
+                } => Some(target),
+                _ => None,
+            })
+            .collect()
+    }
 
     fn build(source: &str, module_path: &[&str]) -> Result<bir::BodyIrModule, Box<dyn std::error::Error>> {
         let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
@@ -9769,6 +9859,7 @@ mod tests {
         let local_nominal_declarations = LocalNominalDeclarations::new();
         let local_fieldless_enum_declarations = LocalFieldlessEnumDeclarations::new();
         let local_value_enum_declarations = LocalValueEnumDeclarations::new();
+        let module_path = vec!["m".to_string()];
         let lowering_facts = BodyIrLoweringFacts {
             type_info: &type_info,
             function_default_sources: &function_default_sources,
@@ -9777,6 +9868,7 @@ mod tests {
             local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
             local_value_enum_declarations: &local_value_enum_declarations,
             module_identity: "m",
+            module_path: &module_path,
         };
         let mut builder = BodyBuilder::new(&lowering_facts, IncanType::Unknown);
         let scope = builder.new_scope(None, HirSourceSpan::new(0, 1));
@@ -10107,6 +10199,453 @@ mod tests {
                 .contains("call helper:str_concat("),
             "string concatenation must stay a compiler-owned helper call"
         );
+        Ok(())
+    }
+
+    /// RFC 120's guide-level example: one declaration reached four ways is one identity.
+    ///
+    /// A local call, a plain import, an import alias, and a re-export through a facade are all *bindings to* one
+    /// declaration. None of them creates a second identity for the thing it names, and the facade in particular must
+    /// not be recorded as an owner of what it merely re-exports.
+    #[test]
+    fn one_declaration_keeps_one_identity_across_local_imported_aliased_and_reexported_calls()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render() -> int:
+  return 1
+
+def use_local() -> int:
+  return render()
+"#;
+        let facade_source = r#"
+from helpers import render
+"#;
+        let app_source = r#"
+from helpers import render
+from helpers import render as draw
+from facade import render as relayed
+
+def use_imported() -> int:
+  return render()
+
+def use_alias() -> int:
+  return draw()
+
+def use_reexport() -> int:
+  return relayed()
+"#;
+        let helpers = build(helpers_source, &["helpers"])?;
+        let app = build_with_imports(
+            app_source,
+            &["app"],
+            &[("helpers", helpers_source), ("facade", facade_source)],
+        )?;
+
+        let mut facts = Vec::new();
+        for (module, body) in [
+            (&helpers, "use_local"),
+            (&app, "use_imported"),
+            (&app, "use_alias"),
+            (&app, "use_reexport"),
+        ] {
+            let targets = named_targets(module, body);
+            let [target] = targets.as_slice() else {
+                return Err(Box::from(format!(
+                    "expected one named call in `{body}`, got {}",
+                    targets.len()
+                )));
+            };
+            let Some(fact) = &target.canonical else {
+                return Err(Box::from(format!("`{body}` must carry a canonical identity")));
+            };
+            facts.push((body, target.name.clone(), fact.clone()));
+        }
+
+        // One declaration, one identity, however each call site spelled it.
+        let (_, _, first) = &facts[0];
+        for (body, _, fact) in &facts {
+            assert_eq!(fact, first, "`{body}` must resolve to the one declaration identity");
+        }
+
+        // The identity describes the declaration, never the reference.
+        assert_eq!(first.declaration_name, "render");
+        assert_eq!(first.kind, SemanticSourceTargetKind::Function);
+        assert_eq!(first.namespace, incan_semantics_core::SymbolNamespace::OrdinaryLexical);
+        assert_eq!(
+            first.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["helpers".to_string()]),
+            "the origin is the declaring module, never the importing or re-exporting one"
+        );
+        assert_eq!(
+            first.scope_discriminant, None,
+            "a module-level declaration is unique within its origin"
+        );
+
+        // It anchors to the one declaration site, not to any call site.
+        let render_body = helpers
+            .bodies
+            .iter()
+            .find(|body| body.name == "render")
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("lowered `render` body missing"))?;
+        assert_eq!(first.declaration_span, render_body.span);
+
+        // The call-site spellings genuinely differ; only the identity collapses them.
+        let spellings: Vec<&str> = facts.iter().map(|(_, name, _)| name.as_str()).collect();
+        assert_eq!(spellings, vec!["render", "render", "draw", "relayed"]);
+        Ok(())
+    }
+
+    /// A local declaration shadowed by a same-name import must be identified as the *local* declaration.
+    ///
+    /// `source_target_for_symbol` consults import bindings first and unconditionally, so the recorded source target
+    /// names the import regardless of what the call bound. Inferring locality from that target gave one
+    /// `NamedCallableTarget` two facts naming two different declarations.
+    #[test]
+    fn a_local_declaration_shadowed_by_a_same_name_import_is_identified_locally()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render() -> int:
+  return 1
+"#;
+        let app_source = r#"
+from helpers import render
+
+def render(value: int) -> int:
+  return value
+
+def run() -> int:
+  return render(7)
+"#;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from(
+                "the call bound a local declaration and must carry its identity".to_string(),
+            ));
+        };
+
+        assert_eq!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["app".to_string()]),
+            "the shadowing local declaration owns this call, not the import it shadows"
+        );
+        // The two facts on one target must never name different declarations.
+        let resolved = app.body_for_canonical_target(fact).ok_or_else(|| {
+            Box::<dyn std::error::Error>::from("this module owns the declaration and must resolve it")
+        })?;
+        assert_eq!(resolved.name, "render");
+        assert_eq!(
+            Some(&resolved.direct_call_id),
+            target.direct_call_id.as_ref(),
+            "the canonical identity and the span identity must select one declaration"
+        );
+        Ok(())
+    }
+
+    /// Bodies do not carry owner-qualified names, so one module can hold a class method `render` and a free function
+    /// `render`. The consumer seam must separate them by declaration span; matching on the declared name would hand
+    /// back whichever body came first, silently, for an identity that names the other one.
+    #[test]
+    fn the_consumer_seam_separates_same_named_bodies_by_declaration_span() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+class Canvas:
+  def render(self) -> int:
+    return 1
+
+def render() -> int:
+  return 2
+
+def run() -> int:
+  return render()
+"#;
+        let module = build(source, &["app"])?;
+
+        let same_named: Vec<&bir::Body> = module.bodies.iter().filter(|body| body.name == "render").collect();
+        assert_eq!(
+            same_named.len(),
+            2,
+            "this fixture is only meaningful while the module really holds two bodies named `render`"
+        );
+
+        let targets = named_targets(&module, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from("the free function call must carry an identity".to_string()));
+        };
+
+        let resolved = module
+            .body_for_canonical_target(fact)
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("the owning module must resolve its own identity"))?;
+        assert_eq!(resolved.span, fact.declaration_span);
+        assert_eq!(
+            resolved.block.stmts.len(),
+            module
+                .bodies
+                .iter()
+                .find(|body| body.span == fact.declaration_span)
+                .map(|body| body.block.stmts.len())
+                .unwrap_or_default()
+        );
+        // The method body shares the spelling and must not be what the seam returns.
+        let method_span = same_named
+            .iter()
+            .map(|body| body.span)
+            .find(|span| *span != fact.declaration_span)
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("expected a second, differently-spanned `render`"))?;
+        assert_ne!(resolved.span, method_span);
+        Ok(())
+    }
+
+    /// A re-export chain longer than one hop, with a rename in the middle. Exercises the recursion in
+    /// `dependency_member_identity_from` and proves a rename never leaks into `declaration_name`.
+    #[test]
+    fn a_renamed_multi_hop_re_export_still_resolves_to_the_original_declaration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render() -> int:
+  return 1
+"#;
+        let inner_source = r#"
+from helpers import render as painted
+"#;
+        let facade_source = r#"
+from inner import painted
+"#;
+        let app_source = r#"
+from facade import painted as relayed
+
+def run() -> int:
+  return relayed()
+"#;
+        let app = build_with_imports(
+            app_source,
+            &["app"],
+            &[
+                ("helpers", helpers_source),
+                ("inner", inner_source),
+                ("facade", facade_source),
+            ],
+        )?;
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from(
+                "a multi-hop re-export resolves to a declaration and must carry an identity".to_string(),
+            ));
+        };
+        assert_eq!(
+            fact.declaration_name, "render",
+            "neither `painted` nor `relayed` may become the declared name"
+        );
+        assert_eq!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["helpers".to_string()]),
+            "the origin is the declaring module, not either facade"
+        );
+        assert_eq!(target.name, "relayed", "the call site keeps its own spelling");
+        Ok(())
+    }
+
+    /// Import resolution tries the sibling-relative candidate before the bare one, so the path written at an import is
+    /// not necessarily the module it bound. An identity built from the written path would name the root module's
+    /// declaration here — a different function that merely shares the name.
+    #[test]
+    fn a_sibling_relative_import_is_owned_by_the_module_resolution_actually_selected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Distinguishable by arity: the zero-argument call below only typechecks against the sibling.
+        let root_helpers = r#"
+pub def render(first: int, second: int) -> int:
+  return first + second
+"#;
+        let sibling_helpers = r#"
+pub def render() -> int:
+  return 1
+"#;
+        let app_source = r#"
+from helpers import render
+
+def run() -> int:
+  return render()
+"#;
+        let app = build_with_imports(
+            app_source,
+            &["pkg", "app"],
+            &[("helpers", root_helpers), ("pkg_helpers", sibling_helpers)],
+        )?;
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from(
+                "a sibling-relative import resolves to a proven declaration and must carry an identity".to_string(),
+            ));
+        };
+
+        assert_eq!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["pkg".to_string(), "helpers".to_string()]),
+            "the origin must be the module resolution selected, not the path the import spelled"
+        );
+        assert_ne!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["helpers".to_string()]),
+            "naming the written path would collide with the root module's unrelated `render`"
+        );
+        // Origin alone would still pass if a name-keyed span lookup picked the wrong file's declaration.
+        assert_eq!(
+            fact.declaration_span,
+            HirSourceSpan::new(1, 37),
+            "the span must be the sibling's zero-argument declaration, not the root's two-argument one"
+        );
+        Ok(())
+    }
+
+    /// Pins the overload guard in `canonical_callable_target` itself. The local-overload test below cannot: it takes
+    /// the separate `is_overloaded` branch, whose `canonical` is a hardcoded `None`, so it stays green even with the
+    /// guard deleted.
+    #[test]
+    fn an_imported_overloaded_binding_has_no_canonical_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render(value: int) -> int:
+  return value
+
+pub def render(value: str) -> int:
+  return 1
+"#;
+        let app_source = r#"
+from helpers import render
+from helpers import render as draw
+
+def use_imported() -> int:
+  return render(2)
+
+def use_alias() -> int:
+  return draw(3)
+"#;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+
+        for body in ["use_imported", "use_alias"] {
+            let targets = named_targets(&app, body);
+            let [target] = targets.as_slice() else {
+                return Err(Box::from(format!(
+                    "expected one named call in `{body}`, got {}",
+                    targets.len()
+                )));
+            };
+            assert!(
+                target.canonical.is_none(),
+                "`{body}` calls an overloaded import, which a name-based identity cannot separate"
+            );
+        }
+        Ok(())
+    }
+
+    /// The consumer seam: an identity resolves to a declaration, or to nothing. It must never be satisfied by a
+    /// same-named declaration that happens to live in the consuming module.
+    #[test]
+    fn a_canonical_identity_resolves_to_its_declaration_only_in_the_owning_module()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render() -> int:
+  return 1
+"#;
+        // `app` declares its own same-named `render`, so a seam keyed on the spelling would wrongly match it.
+        let app_source = r#"
+from helpers import render as draw
+
+def render() -> int:
+  return 2
+
+def run() -> int:
+  return draw()
+"#;
+        let helpers = build(helpers_source, &["helpers"])?;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from("the aliased import must carry an identity".to_string()));
+        };
+
+        let owning = helpers
+            .body_for_canonical_target(fact)
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("owning module must resolve the identity"))?;
+        assert_eq!(owning.name, "render");
+        assert!(
+            app.body_for_canonical_target(fact).is_none(),
+            "the consuming module's own same-named `render` must not satisfy an identity it does not own"
+        );
+        Ok(())
+    }
+
+    /// Two same-name declarations in one module get two identities, because the identity anchors to a declaration
+    /// span rather than to the spelling. The *spelling* cannot separate overloads; the identity can, and the
+    /// typechecker's per-call-site overload selection is what tells them apart.
+    #[test]
+    fn each_local_overload_gets_its_own_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+def render(value: int) -> int:
+  return value
+
+def render(value: str) -> int:
+  return 1
+
+def use_int() -> int:
+  return render(2)
+
+def use_str() -> int:
+  return render("x")
+"#;
+        let module = build(source, &["app"])?;
+
+        let mut facts = Vec::new();
+        for body in ["use_int", "use_str"] {
+            let targets = named_targets(&module, body);
+            let [target] = targets.as_slice() else {
+                return Err(Box::from(format!(
+                    "expected one named call in `{body}`, got {}",
+                    targets.len()
+                )));
+            };
+            let Some(fact) = &target.canonical else {
+                return Err(Box::from(format!(
+                    "`{body}` selected one overload and must carry its identity"
+                )));
+            };
+            // Refusing to name an overload must not cost the span dispatch, and the two must agree.
+            assert!(target.direct_call_id.is_some());
+            facts.push(fact.clone());
+        }
+
+        assert_ne!(
+            facts[0], facts[1],
+            "two overloads are two declarations and must not collapse to one identity"
+        );
+        assert_eq!(facts[0].declaration_name, "render");
+        assert_eq!(facts[1].declaration_name, "render");
+
+        // Each identity resolves to the declaration whose signature that call actually selected.
+        for fact in &facts {
+            let resolved = module
+                .body_for_canonical_target(fact)
+                .ok_or_else(|| Box::<dyn std::error::Error>::from("this module owns both overloads"))?;
+            assert_eq!(resolved.name, "render");
+            assert_eq!(resolved.span, fact.declaration_span);
+        }
         Ok(())
     }
 }

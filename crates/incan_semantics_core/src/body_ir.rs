@@ -41,7 +41,9 @@
 
 use std::fmt::Write as _;
 
-use crate::{AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanType};
+use crate::{
+    AbiV0RuntimeRequirement, CanonicalSymbolId, CompilerNodeId, HirSourceSpan, IncanType, module_identity_for_path,
+};
 
 // ============================================================================
 // Module / body containers
@@ -80,6 +82,26 @@ pub struct BodyIrModule {
 }
 
 impl BodyIrModule {
+    /// Resolve a canonical callable identity to the body that declares it, when this module owns the declaration.
+    ///
+    /// This is the consumer seam for [`CanonicalSymbolId`]: a backend asks *which declaration was selected* and gets
+    /// the declaration itself or nothing. It never consults the *reference site's* spelling or an emitted Rust name,
+    /// so a consumer cannot dispatch on the text at a call site.
+    ///
+    /// Matching is on the declaration span, which is unique within a module. The declared name deliberately does not
+    /// participate: bodies do not carry owner-qualified names, so a class method and a free function in one module can
+    /// both be named `render`, and a name match would hand back whichever came first.
+    ///
+    /// `None` has three distinct causes and is never permission to fall back to [`NamedCallableTarget::name`]: the
+    /// identity is owned by another module; its origin is not a project source module at all (a package, a `rust::`
+    /// crate, or a builtin); or this module owns it but it has no lowered body, as for a model or a `const`.
+    pub fn body_for_canonical_target(&self, target: &CanonicalSymbolId) -> Option<&Body> {
+        if module_identity_for_path(target.module_path()?) != self.module_id.path() {
+            return None;
+        }
+        self.bodies.iter().find(|body| body.span == target.declaration_span)
+    }
+
     /// Render a deterministic maintainer-facing snapshot of every body in the module.
     pub fn render_snapshot(&self) -> String {
         let mut out = String::new();
@@ -1835,11 +1857,13 @@ impl Callee {
 /// [`Self::Local`] operand, carrying the lexical-environment ownership decision the caller made.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallableTarget {
-    /// A direct call to a named Incan function, by its source-level spelling.
+    /// A direct call to a named Incan function.
     ///
-    /// Full call-target resolution (which physical declaration binds through imports/traits/overloads) mirrors the
-    /// typechecker/backend resolution passes and is deferred past v0; Body IR records the source-level callee
-    /// spelling plus argument ownership facts, which is enough to prove the model end-to-end.
+    /// The callee's source-level spelling is always present. Which physical declaration that spelling binds is
+    /// carried separately and only where it is proven: [`NamedCallableTarget::canonical`] for the declaration
+    /// identity, [`NamedCallableTarget::direct_call_id`] for a same-module span identity. Resolution through traits,
+    /// and through overloads whose candidates a name cannot separate, remains deferred past v0, so both facts are
+    /// absent for those and the spelling alone is never a dispatch key.
     Named(NamedCallableTarget),
     /// Invoke a callable value held in one local place.
     ///
@@ -1919,13 +1943,22 @@ pub struct NamedCallableTarget {
     /// Compiler-recognized builtin target, if the typechecker proved this call did not resolve to a source binding.
     ///
     /// This is `None` for every same-module, imported, unresolved, or otherwise external target. Consumers must
-    /// reject an absent `direct_call_id` and absent `builtin` rather than using [`Self::name`] as a dispatch key.
+    /// reject an absent `direct_call_id` and absent `builtin` rather than using [`Self::name`] as a dispatch key —
+    /// or resolve [`Self::canonical`] through [`BodyIrModule::body_for_canonical_target`], which is the only route
+    /// that also reaches a declaration this module does not own.
     pub builtin: Option<NamedCallableBuiltin>,
     /// Resolved explicit call-site type arguments, in declared type-parameter order. Empty when the call site wrote
     /// none.
     pub type_args: Vec<IncanType>,
     /// Resolved binding of the surrounding [`StatementKind::Call::args`] to this function's declared parameters.
     pub binding: ArgumentBinding,
+    /// RFC 120 canonical identity of the declaration this call selected, independent of the call site's spelling.
+    ///
+    /// [`Self::direct_call_id`] is a *span* identity and so exists only for a declaration physically present in this
+    /// module. This answers the different question of *which declaration* was selected, in a form that survives an
+    /// import, an alias, or a re-export, and is `None` whenever that answer is not proven. [`Self::name`] remains the
+    /// call site's own spelling, so the pair records both what was written and what it means.
+    pub canonical: Option<CanonicalSymbolId>,
 }
 
 /// A method call target and its resolved call-site identity.

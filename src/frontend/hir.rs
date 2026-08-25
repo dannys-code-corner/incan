@@ -88,11 +88,7 @@ fn hir_decl_kind_and_name(decl: &Declaration) -> (HirDeclarationKind, Option<Str
 
 /// Render a module path into the semantic module identity used by HIR v0.
 fn hir_module_identity(module_path: &[String]) -> String {
-    if module_path.is_empty() {
-        "<module>".to_string()
-    } else {
-        module_path.join("::")
-    }
+    incan_semantics_core::module_identity_for_path(module_path)
 }
 
 /// Build the HIR declaration identity for a named declaration.

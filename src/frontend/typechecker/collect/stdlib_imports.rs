@@ -958,7 +958,25 @@ impl TypeChecker {
         false
     }
 
-    /// Record source origin metadata for an imported binding whose symbol was already materialized earlier.
+    /// Retain the canonical identity proven for an imported binding, keyed by the local name the import introduced.
+    ///
+    /// Recorded only when import resolution proves the declaration, so a consumer gets a correct identity or none at
+    /// all. It is deliberately separate from [`crate::frontend::typechecker::SourceTargetInfo::module_path`], which
+    /// keeps its existing meaning of the path as written at the import.
+    fn record_resolved_import_owner(&mut self, module: &ImportPath, item: &ImportItem, local_name: &str) {
+        if let Some(identity) = self.dependency_member_identity(module, &item.name) {
+            self.type_info
+                .declarations
+                .resolved_import_identities
+                .insert(local_name.to_string(), identity);
+        }
+    }
+
+    /// Record the codegraph source target an import makes visible under `local_name`.
+    ///
+    /// The recorded `module_path` is the import path as *written*, which is the codegraph's existing contract. The
+    /// module that resolution actually selected is recorded separately by [`Self::record_resolved_import_owner`],
+    /// because the two are not always the same and only the latter may back a declaration identity.
     fn record_source_import_target(
         &mut self,
         module: &ImportPath,
@@ -975,6 +993,7 @@ impl TypeChecker {
                     kind: target_kind.to_string(),
                 },
             );
+            self.record_resolved_import_owner(module, item, local_name);
         }
     }
 
@@ -1031,6 +1050,7 @@ impl TypeChecker {
                     kind: target_kind.to_string(),
                 },
             );
+            self.record_resolved_import_owner(module, item, &local_name);
         }
         if let SymbolKind::FunctionOverloads(overloads) = &kind {
             self.record_function_overload_binding(&local_name, overloads, true);
@@ -1494,6 +1514,7 @@ impl TypeChecker {
         if let Some(target_kind) = Self::source_target_kind(&kind) {
             let mut target_path = vec!["pub".to_string(), library.to_string()];
             target_path.extend(member.source_module_path.clone());
+
             self.source_import_targets.insert(
                 local_name.clone(),
                 crate::frontend::typechecker::SourceTargetInfo {

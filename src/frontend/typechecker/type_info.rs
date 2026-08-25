@@ -17,9 +17,9 @@ use incan_core::interop::{CoercionPolicy, RustFunctionSig};
 use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId, link_capability_as_str, scalar_type_as_str};
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
 use incan_semantics_core::{
-    CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, SemanticFact,
-    SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind,
-    SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind,
+    CanonicalSymbolId, CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType,
+    SemanticFact, SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry,
+    SemanticRegistrySubjectKind, SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind,
 };
 
 use super::{ConstValue, const_eval};
@@ -780,6 +780,14 @@ pub struct DeclarationArtifacts {
     /// Lowering consumes this instead of re-lowering raw AST annotations so aliases such as
     /// `type Expr = Union[...]` do not produce a different callable surface from typechecked call sites.
     pub function_bindings: HashMap<String, FunctionBindingInfo>,
+    /// Canonical identity proven for each imported binding, keyed by the local name the import introduced.
+    ///
+    /// [`SourceTargetInfo::module_path`] records the import path *as written*, which is not necessarily the module
+    /// resolution selected: sibling-relative candidates are tried before bare ones, so a written path can name a
+    /// different module that merely declares the same leaf name. A declaration identity must never be built from the
+    /// written path, so the proven identity is recorded here and is simply absent when resolution did not prove one.
+    /// A re-export resolves to the identity of the module that *declares* the member, never to the facade.
+    pub resolved_import_identities: HashMap<String, CanonicalSymbolId>,
     /// Module-local function declarations keyed by declaration span, preserving same-name overloads.
     pub function_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
     /// Concrete class/model/trait method declarations keyed by declaration span (#1121).
@@ -1251,7 +1259,11 @@ pub enum IdentKind {
 /// Compiler-proven source declaration target for codegraph call/reference records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceTargetInfo {
-    /// Canonical source module path segments that own the target declaration.
+    /// Import path segments **as written** at the reference site.
+    ///
+    /// Not necessarily the module that owns the declaration: resolution tries sibling-relative candidates before bare
+    /// ones, so this can name a different module that merely declares the same leaf name. The proven owner lives in
+    /// [`DeclarationArtifacts::resolved_import_identities`].
     pub module_path: Vec<String>,
     /// Source declaration name in the owning module.
     pub name: String,
@@ -1549,6 +1561,14 @@ impl TypeCheckInfo {
     /// Return how the identifier expression at `span` resolved in the symbol table.
     pub fn ident_kind(&self, span: Span) -> Option<IdentKind> {
         self.expressions.ident_kinds.get(&(span.start, span.end)).copied()
+    }
+
+    /// Return the canonical identity proven for an imported binding, if import resolution proved one.
+    ///
+    /// Absent means unproven, never "assume the written import path": see
+    /// [`DeclarationArtifacts::resolved_import_identities`].
+    pub fn resolved_import_identity(&self, local_name: &str) -> Option<&CanonicalSymbolId> {
+        self.declarations.resolved_import_identities.get(local_name)
     }
 
     /// Return a compiler-proven source target for the expression at `span`, if one was recorded.
@@ -1931,11 +1951,7 @@ fn callable_param_needs_boundary_snapshot(ty: &ResolvedType) -> bool {
 
 /// Render the compiler-owned module identity used by semantic fact subjects.
 fn semantic_module_identity(module_path: &[String]) -> String {
-    if module_path.is_empty() {
-        "<module>".to_string()
-    } else {
-        module_path.join("::")
-    }
+    incan_semantics_core::module_identity_for_path(module_path)
 }
 
 /// Convert a typechecker source-target artifact into the backend-neutral fact payload.
