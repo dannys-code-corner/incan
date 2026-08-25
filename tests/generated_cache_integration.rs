@@ -8,10 +8,6 @@ use std::sync::{Arc, Barrier};
 
 mod support;
 
-fn configured_incan_command(project_root: &Path, incan_home: &Path) -> Command {
-    configured_incan_command_with_binary(support::incan_binary(), project_root, incan_home)
-}
-
 /// Configure a project command with one caller-selected compiler binary.
 ///
 /// A compiler-suite test normally launches its receipt-selected direct-Rustc CLI. These probes deliberately remove
@@ -72,8 +68,17 @@ fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
 }
 
 /// Prepare the one explicit project-bake command that owns the Cargo fixture capability.
+///
+/// Its later normal commands use the staged release CLI, so the bake must select that exact release Loaf envelope
+/// too. The compiler-suite contributes only the narrowly scoped Cargo publisher capability; it must not supply the
+/// compiler-suite data-root authority that would make the persisted receipt incompatible with its normal consumer.
 fn baker_incan_command(project_root: &Path, incan_home: &Path) -> Command {
-    configured_incan_command(project_root, incan_home)
+    let mut command = configured_incan_command_with_binary(normal_consumer_incan_binary(), project_root, incan_home);
+    command
+        .env_remove("INCAN_INTERNAL_OVEN_LOAF_EXECUTION")
+        .env_remove("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
+        .env_remove("INCAN_INTERNAL_OVEN_RUNTIME_ROOT");
+    command
 }
 
 fn run_checked(mut command: Command, label: &str) -> Result<Output, Box<dyn std::error::Error>> {
