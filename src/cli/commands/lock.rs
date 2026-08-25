@@ -988,9 +988,21 @@ impl PreparedOvenProjectRegistrySourceAuthorities {
         if !project_inspection_test_dependency_envelope_supports_dependencies(&self.authority.payload, &promoted)
             .map_err(|error| CliError::failure(error.to_string()))?
         {
-            return Err(CliError::failure(
-                "Oven Alpha project inspection authority has a missing, stale, or incompatible test dependency root; rerun `incan oven bake --project .`",
-            ));
+            let expected = self
+                .authority
+                .payload
+                .test_dependency_envelope
+                .as_ref()
+                .map(|envelope| envelope.dependency_roots.keys().cloned().collect::<Vec<_>>().join(", "))
+                .unwrap_or_default();
+            let actual = promoted
+                .iter()
+                .map(|dependency| dependency.crate_name.replace('-', "_"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::failure(format!(
+                "Oven Alpha project inspection authority has a missing, stale, or incompatible test dependency root (sealed aliases: [{expected}]; requested aliases: [{actual}]); rerun `incan oven bake --project .`"
+            )));
         }
         self.test_dependency_plan.as_ref().map(Some).ok_or_else(|| {
             CliError::failure(

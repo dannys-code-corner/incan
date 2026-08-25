@@ -96,7 +96,7 @@ use crate::oven::store::{
 use crate::oven::{
     OvenGeneratedProjectRequest, digest_bytes, digest_dependency_specs, digest_project_source_tree,
     generated_project_source_evidence, receipt_generated_project, receipt_generated_project_with_source_evidence,
-    write_receipt,
+    receipt_without_build_unit_input, write_receipt,
 };
 use crate::oven_interop::locked_oven_interop_targets;
 use crate::provider::{
@@ -1217,8 +1217,7 @@ fn project_extension_execution_plan_from_selected(
     receipt: &crate::oven::OvenReceipt,
 ) -> CliResult<OvenProjectExtensionExecutionPlan> {
     let (manifest, artifact_root, _payload, lease) = selected.into_parts();
-    let base = resolve_toolchain_loaf_by_identity(receipt, &extension_payload.base_loaf_identity)
-        .map_err(|error| CliError::failure(error.to_string()))?
+    let base = resolve_compiler_owned_loaf_by_identity(receipt, &extension_payload.base_loaf_identity)?
         .ok_or_else(|| {
             CliError::failure(format!(
                 "selected Oven project extension Loaf requires base `{}`, but that exact installed standard-library Loaf is unavailable; rebake the project for this Incan release",
@@ -5515,6 +5514,82 @@ fn ensure_loaf_stdlib_features(stdlib_features: &mut Vec<String>, loaf: bool) {
     stdlib_features.dedup();
 }
 
+/// Return whether a project receipt requests the source-compiler vocabulary capability.
+///
+/// The marker distinguishes source-built project plans that had to publish their own helper when no compatible
+/// compiler Loaf was installed. It does not change provider, target, toolchain, or runtime authority, so it may be
+/// omitted only while selecting a compiler-owned Loaf that independently proves the same helper capability.
+fn receipt_requests_source_compiler_vocab_support(receipt: &crate::oven::OvenReceipt) -> bool {
+    receipt
+        .sources
+        .build_unit_inputs
+        .get(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .is_some_and(|value| value == "v1")
+}
+
+/// Return whether a compiler-owned Loaf seals the vocabulary helper required by a source-built project.
+fn compiler_loaf_supplies_source_compiler_vocab_support(
+    loaf: &OvenToolchainLoaf,
+    intent: &crate::oven::OvenBuildIntent,
+) -> bool {
+    loaf.artifacts.vocab_auxiliary_targets.iter().any(|target| {
+        target.target == intent.target
+            && ["incan_vocab", "serde_json"]
+                .into_iter()
+                .all(|crate_name| target.externs.iter().any(|artifact| artifact.crate_name == crate_name))
+    })
+}
+
+/// Resolve a compiler-owned Loaf for a project receipt without treating its source-only helper marker as a runtime
+/// cohort change.
+///
+/// The normal exact/compatible selection remains first. The narrowly derived receipt is considered only for the
+/// source-built vocabulary marker and only when the candidate itself seals the helper. Project outputs retain their
+/// original receipt and can never use this path to acquire a generic dependency build.
+fn resolve_compiler_owned_loaf_for_registry_dependencies(
+    receipt: &crate::oven::OvenReceipt,
+    registry_dependencies: &[DependencySpec],
+) -> CliResult<Option<OvenToolchainLoaf>> {
+    let selected = resolve_toolchain_loaf_for_registry_dependencies(
+        receipt,
+        OvenLoafSelection::CompilerOwnedProviderSuperset,
+        registry_dependencies,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    if selected.is_some() || !receipt_requests_source_compiler_vocab_support(receipt) {
+        return Ok(selected);
+    }
+    let base_receipt = receipt_without_build_unit_input(receipt, SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    let selected = resolve_toolchain_loaf_for_registry_dependencies(
+        &base_receipt,
+        OvenLoafSelection::CompilerOwnedProviderSuperset,
+        registry_dependencies,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)))
+}
+
+/// Resolve the exact compiler-owned base recorded by a project extension.
+///
+/// See [`resolve_compiler_owned_loaf_for_registry_dependencies`] for why the source-built vocabulary marker is
+/// excluded only for capability selection. The base identity is still fixed by the extension payload.
+fn resolve_compiler_owned_loaf_by_identity(
+    receipt: &crate::oven::OvenReceipt,
+    loaf_identity: &str,
+) -> CliResult<Option<OvenToolchainLoaf>> {
+    let selected = resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    if selected.is_some() || !receipt_requests_source_compiler_vocab_support(receipt) {
+        return Ok(selected);
+    }
+    let base_receipt = receipt_without_build_unit_input(receipt, SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    let selected = resolve_toolchain_loaf_by_identity(&base_receipt, loaf_identity)
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)))
+}
+
 /// Return the receipt-compatible direct-Rustc selection for one normal command.
 ///
 /// The compiler-suite scheduler marks nested commands explicitly and supplies a read-only compiler-data root whose
@@ -5553,12 +5628,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
             .ok_or_else(|| {
                 CliError::failure("compiler-suite native execution requires a readable immutable toolchain-data root")
             })?;
-        let native = resolve_toolchain_loaf_for_registry_dependencies(
-            receipt,
-            OvenLoafSelection::CompilerOwnedProviderSuperset,
-            registry_dependencies,
-        )
-        .map_err(|error| CliError::failure(error.to_string()))?;
+        let native = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)?;
         if let Some(native) = native {
             if !native.artifact_root.starts_with(&toolchain_data_root) {
                 return Err(CliError::failure(
@@ -5587,13 +5657,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
     if let Some(selected) = select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)? {
         return Ok(Some(selected));
     }
-    if let Some(native) = resolve_toolchain_loaf_for_registry_dependencies(
-        receipt,
-        OvenLoafSelection::CompilerOwnedProviderSuperset,
-        registry_dependencies,
-    )
-    .map_err(|error| CliError::failure(error.to_string()))?
-    {
+    if let Some(native) = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)? {
         return Ok(Some(OvenDirectRustcPlanPreparation {
             plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(native)),
             materialization: OvenToolchainMaterialization::ToolchainLoaf,
@@ -5684,8 +5748,7 @@ fn remove_completed_generated_cargo_lock(generated_project: &Path) -> CliResult<
 /// registry units, and vocabulary auxiliaries inherit this exact release base. Normal consumers still require a
 /// compatible prebuilt Loaf or stored project plan and never invoke this helper as a fallback.
 fn project_extension_base_loaf(receipt: &crate::oven::OvenReceipt) -> CliResult<Option<OvenToolchainLoaf>> {
-    resolve_toolchain_loaf(receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
-        .map_err(|error| CliError::failure(error.to_string()))
+    resolve_compiler_owned_loaf_for_registry_dependencies(receipt, &[])
 }
 
 /// The complete checked Rust dependency surface used to select one project Loaf.
@@ -5948,12 +6011,7 @@ fn prepare_oven_test_dependency_envelope(
     let plan_selection = if publisher_dependencies
         .iter()
         .all(|dependency| matches!(dependency.source, DependencySource::Registry))
-        && let Some(loaf) = resolve_toolchain_loaf_for_registry_dependencies(
-            &receipt,
-            OvenLoafSelection::CompilerOwnedProviderSuperset,
-            &publisher_dependencies,
-        )
-        .map_err(|error| CliError::failure(error.to_string()))?
+        && let Some(loaf) = resolve_compiler_owned_loaf_for_registry_dependencies(&receipt, &publisher_dependencies)?
     {
         OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(loaf))
     } else {
@@ -6015,12 +6073,8 @@ fn select_or_bake_generated_project_plan(
             .selection
             .iter()
             .all(|dependency| matches!(dependency.source, DependencySource::Registry))
-            && let Some(loaf) = resolve_toolchain_loaf_for_registry_dependencies(
-                receipt,
-                OvenLoafSelection::CompilerOwnedProviderSuperset,
-                dependency_surface.selection,
-            )
-            .map_err(|error| CliError::failure(error.to_string()))?
+            && let Some(loaf) =
+                resolve_compiler_owned_loaf_for_registry_dependencies(receipt, dependency_surface.selection)?
         {
             return Ok(Some(OvenDirectRustcPlanPreparation {
                 plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(loaf)),
@@ -11177,11 +11231,13 @@ fn baked_project_lock_dependencies_fingerprint(project_root: &Path) -> CliResult
         .map_err(|error| CliError::failure(error.to_string()))
 }
 
-/// Hash the canonical lock fields that can change build meaning while excluding its derived freshness checksum.
+/// Hash the canonical lock fields that can change build meaning while excluding derived and structural fields.
+///
+/// Lock format 1 and 2 decode into the same semantic authority projection. An explicit bake is allowed to migrate
+/// that representation, so recording the format here would make the publisher reject the state it just wrote.
 fn digest_baked_project_lock_authority(lock_path: &Path) -> CliResult<String> {
     let lock = IncanLock::load(lock_path).map_err(|error| CliError::failure(error.to_string()))?;
     let projection = serde_json::json!({
-        "format": lock.format,
         "incan_version": lock.incan_version,
         "cargo_features": lock.cargo_features,
         "semantic": lock.semantic,
@@ -13986,6 +14042,36 @@ headers = ["interop/include/bridge.h"]
             changed_lock,
             digest_baked_project_source_authority(&member)?,
             "workspace-inherited Rust path source must remain part of completed-output authority"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn baked_project_source_authority_ignores_lock_format_migration_issue1194() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("src"))?;
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"lock_migration_fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::write(project.path().join("src/main.incn"), "def main() -> None:\n    pass\n")?;
+        let lock_path = project.path().join("incan.lock");
+        let mut lock = IncanLock::new(
+            "sha256:lock-migration".to_string(),
+            CargoFeatureSelection::default(),
+            "version = 4\n".to_string(),
+        );
+        lock.format = 1;
+        lock.write(&lock_path)?;
+        let format_one = digest_baked_project_source_authority(project.path())?;
+
+        lock.format = 2;
+        lock.write(&lock_path)?;
+        assert_eq!(
+            format_one,
+            digest_baked_project_source_authority(project.path())?,
+            "a structural lock migration must not invalidate unchanged authored project input"
         );
         Ok(())
     }
