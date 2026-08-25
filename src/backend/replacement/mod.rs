@@ -28,8 +28,8 @@ use incan_core::{
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
-    AggregateKind, ArgumentBinding, BinOp, Body, BodyIrModule, CallableParam, CallableParamDefault, CallableTarget,
-    Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation, FieldlessEnumDeclaration,
+    AggregateKind, ArgumentBinding, ArgumentElement, BinOp, Body, BodyIrModule, CallableParam, CallableParamDefault,
+    CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation, FieldlessEnumDeclaration,
     FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp, IterProtocol,
     LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget, NominalDeclaration,
     NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem, ResultVariant,
@@ -1355,7 +1355,9 @@ fn collect_scalar_tuple_collection_locals(
                 rvalue: Rvalue::Aggregate(AggregateKind::List, operands),
                 ..
             } => {
-                for operand in operands {
+                // A spread element is skipped rather than refused here: this only collects candidate locals, and
+                // `validate_collection_local_types` has already refused any spread-bearing list aggregate.
+                for operand in operands.iter().filter_map(ArgumentElement::as_one) {
                     if let Operand::Place(place_operand) = operand
                         && place_operand.place.projection.is_empty()
                     {
@@ -1554,10 +1556,18 @@ fn validate_statement_profile(
 /// Validate one Body-IR call before the executor dispatches it.
 fn validate_call_profile(
     callee: &Callee,
-    args: &[Operand],
+    args: &[ArgumentElement],
     span: HirSourceSpan,
     tuple_iteration_locals: &BTreeSet<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
+    // Representation is #1159's; executing a spliced argument belongs to the execution owner. Refuse by name at
+    // the original source span rather than counting the spread as one value.
+    let Some(args) = fixed_operands(args) else {
+        return Err(unsupported(
+            format!("call to {} with a spread argument", callee_label(callee)),
+            span,
+        ));
+    };
     let supported = match callee {
         Callee::Helper(HelperOp::StrConcat) => true,
         // Named calls remain direct module dispatches. Their target/binding facts are Body-IR values, not a source
@@ -1626,6 +1636,7 @@ fn validate_rvalue_profile(
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
         }
+        Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
         Rvalue::Aggregate(kind, operands) => validate_aggregate_profile(
             kind,
             operands,
@@ -1871,12 +1882,21 @@ fn validate_generator_statements_profile(
 /// identity, complete checked bindings, and structural field values before the executor materializes a model value.
 fn validate_aggregate_profile(
     kind: &AggregateKind,
-    operands: &[Operand],
+    operands: &[ArgumentElement],
     span: HirSourceSpan,
     tuple_iteration_locals: &BTreeSet<LocalId>,
     _scalar_tuple_collection_locals: &BTreeSet<LocalId>,
     _destination: Option<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
+    // A spread makes the element count a runtime fact, so every arity guard below would be counting the wrong
+    // thing. Refuse before any of them run.
+    let Some(operands) = fixed_operands(operands) else {
+        return Err(unsupported(
+            format!("{} aggregate with a spread element", aggregate_label(kind)),
+            span,
+        ));
+    };
+    let operands = operands.as_slice();
     match kind {
         AggregateKind::Tuple | AggregateKind::List => {
             for operand in operands {
@@ -2239,7 +2259,7 @@ impl BodyExecutor {
     fn bind_call_arguments(
         &mut self,
         params: &[CallableParam],
-        args: &[Operand],
+        args: &[&Operand],
         binding: &ArgumentBinding,
         captures: &BTreeMap<LocalId, ReplacementValue>,
         span: HirSourceSpan,
@@ -2485,9 +2505,18 @@ impl BodyExecutor {
         &mut self,
         destination: Option<&Place>,
         callee: &Callee,
-        args: &[Operand],
+        args: &[ArgumentElement],
         span: HirSourceSpan,
     ) -> Result<Flow, ReplacementExecutionError> {
+        // Mirrors `validate_call_profile`: validation already refused a spread-bearing call, and refusing again
+        // here keeps the executor fail-closed rather than relying on that ordering.
+        let Some(args) = fixed_operands(args) else {
+            return Err(unsupported(
+                format!("call to {} with a spread argument", callee_label(callee)),
+                span,
+            ));
+        };
+        let args = args.as_slice();
         let destination = destination.ok_or_else(|| unsupported("discarded string-concatenation result", span))?;
         let local = bare_local(destination, span)?;
         let value = match callee {
@@ -2628,7 +2657,7 @@ impl BodyExecutor {
     fn execute_local_callable(
         &mut self,
         target: &LocalCallableTarget,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let callable = self.take_callable_receiver(&target.operand, span)?;
@@ -2677,7 +2706,7 @@ impl BodyExecutor {
     fn execute_named_callable(
         &mut self,
         target: &NamedCallableTarget,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let direct_call_id = target.direct_call_id.as_ref().ok_or_else(|| {
@@ -2776,7 +2805,7 @@ impl BodyExecutor {
     fn construct_generator_adapter(
         &mut self,
         name: &str,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let [receiver, callback] = args else {
@@ -2805,7 +2834,7 @@ impl BodyExecutor {
     /// Materialize the admitted `range` source-spelling call before its normalized loop.
     fn evaluate_range(
         &mut self,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let values = args
@@ -2899,6 +2928,7 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
+            Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::FieldlessEnumVariant(target) => self.evaluate_fieldless_enum_variant(target, span),
             Rvalue::ValueEnumVariant(target) => self.evaluate_value_enum_variant(target, span),
@@ -3278,9 +3308,17 @@ impl BodyExecutor {
     fn evaluate_aggregate(
         &mut self,
         kind: &AggregateKind,
-        operands: &[Operand],
+        operands: &[ArgumentElement],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        // Validation already refused a spread-bearing aggregate; refuse again rather than trusting that ordering.
+        let Some(operands) = fixed_operands(operands) else {
+            return Err(unsupported(
+                format!("{} aggregate with a spread element", aggregate_label(kind)),
+                span,
+            ));
+        };
+        let operands = operands.as_slice();
         if let AggregateKind::Constructor(target) = kind {
             return self.evaluate_nominal_constructor(target, operands, span);
         }
@@ -3646,7 +3684,7 @@ impl BodyExecutor {
     fn evaluate_nominal_constructor(
         &mut self,
         target: &ConstructorTarget,
-        operands: &[Operand],
+        operands: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let declaration = self.local_nominal_declaration(target, span)?;
@@ -3884,7 +3922,7 @@ impl BodyExecutor {
     fn extract_value_enum_scalar(
         &mut self,
         target: &incan_semantics_core::body_ir::MethodTarget,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         if !target.type_args.is_empty() {
@@ -4562,6 +4600,17 @@ fn project_tuple_field(
     }
 }
 
+/// Return the fixed operands of an element list, or `None` when any element splices.
+///
+/// #1159 made Body IR's aggregate and call element lists variable-arity: an element may splice a source whose
+/// length is only known at runtime. Every profile check and every executor path here assumes a fixed, countable
+/// arity -- slice patterns, `len() == 2` guards, positional `range` arguments -- so each one calls this first and
+/// refuses by name rather than counting a spread as a single value, which would validate and then execute the
+/// wrong arity. Executing a spliced element is the execution owner's work, not this boundary's.
+fn fixed_operands(elements: &[ArgumentElement]) -> Option<Vec<&Operand>> {
+    elements.iter().map(ArgumentElement::as_one).collect()
+}
+
 /// Construct a source-span-preserving unsupported-profile error.
 fn unsupported(description: impl Into<String>, span: HirSourceSpan) -> ReplacementExecutionError {
     ReplacementExecutionError::Unsupported {
@@ -4732,7 +4781,6 @@ fn aggregate_label(kind: &incan_semantics_core::body_ir::AggregateKind) -> &'sta
     match kind {
         incan_semantics_core::body_ir::AggregateKind::Tuple => "tuple",
         incan_semantics_core::body_ir::AggregateKind::List => "list",
-        incan_semantics_core::body_ir::AggregateKind::Dict => "dict",
         incan_semantics_core::body_ir::AggregateKind::Set => "set",
         incan_semantics_core::body_ir::AggregateKind::Constructor(_) => "constructor",
     }

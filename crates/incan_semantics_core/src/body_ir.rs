@@ -703,7 +703,17 @@ pub enum Rvalue {
     UnaryOp(UnOp, Operand),
     BinaryOp(BinOp, Operand, Operand),
     /// Build a tuple, list, or nominal-constructor value from its element/field operands.
-    Aggregate(AggregateKind, Vec<Operand>),
+    Aggregate(AggregateKind, Vec<ArgumentElement>),
+    /// `{k: v, ...}` dict literal, as an ordered list of entries.
+    ///
+    /// Separate from [`Self::Aggregate`] because a dict entry is a *pair*, not a single element, and a `**source`
+    /// spread is neither. Flattening keys and values into one element list would make a mis-paired list
+    /// representable and leave the pairing enforceable only by convention; this shape makes it unrepresentable.
+    ///
+    /// Entries take effect in order, and **a later entry overwrites an earlier one with the same key**. That
+    /// precedence is a property of dict construction rather than of any one call site, which is why it is stated
+    /// here rather than recorded per call site.
+    Dict(Vec<DictEntry>),
     /// Materialize one exact source-local RFC 032 value-enum member.
     ///
     /// This stores declaration identities rather than a raw scalar so a direct runtime can revalidate enum/member
@@ -815,21 +825,12 @@ impl Rvalue {
             Self::BinaryOp(op, lhs, rhs) => {
                 format!("{} {} {}", lhs.render_snapshot(), op.as_str(), rhs.render_snapshot())
             }
-            Self::Aggregate(AggregateKind::Dict, operands) => {
-                // `AggregateKind::Dict`'s operands alternate key, value, key, value, ...; render as `k: v` pairs
-                // rather than a flat list so the snapshot stays readable for dict literals specifically.
-                let pairs: Vec<String> = operands
-                    .chunks(2)
-                    .map(|pair| match pair {
-                        [key, value] => format!("{}: {}", key.render_snapshot(), value.render_snapshot()),
-                        [key] => key.render_snapshot(),
-                        _ => String::new(),
-                    })
-                    .collect();
-                format!("dict[{}]", pairs.join(", "))
+            Self::Dict(entries) => {
+                let rendered: Vec<String> = entries.iter().map(DictEntry::render_snapshot).collect();
+                format!("dict[{}]", rendered.join(", "))
             }
-            Self::Aggregate(kind, operands) => {
-                let items: Vec<String> = operands.iter().map(Operand::render_snapshot).collect();
+            Self::Aggregate(kind, elements) => {
+                let items: Vec<String> = elements.iter().map(ArgumentElement::render_snapshot).collect();
                 format!("{}[{}]", kind.as_str(), items.join(", "))
             }
             Self::ValueEnumVariant(target) => target.render_snapshot(),
@@ -1524,17 +1525,124 @@ impl BinOp {
     }
 }
 
+/// One element of an aggregate's element list or a call's argument list.
+///
+/// Body IR's element lists were fixed-arity until #1159: a `Vec<Operand>` says "exactly these values, in these
+/// positions", which cannot express "splice this sequence in here, with a length known only at runtime". This enum
+/// is what makes arity a represented fact rather than an assumption.
+///
+/// It is deliberately a change to the element *type* rather than a parallel marker list or a sibling spread-aware
+/// statement kind. A parallel list would leave the spread invisible to any consumer that reads the operand vector
+/// without also reading the markers — a consumer that did nothing wrong would silently compute the wrong arity. A
+/// sibling statement kind would re-fork exactly what [`ArgumentBinding`] unified. Changing the element type instead
+/// makes every reader of an element list a compile error at precisely the place a wrong answer would be produced,
+/// while readers that never inspect elements are untouched.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ArgumentElement {
+    /// Exactly one value at this position.
+    One(Operand),
+    /// A value written with an argument name, at a call whose declared parameters were not statically resolved.
+    ///
+    /// Only meaningful in a *call* element list. Nothing in the type prevents one appearing in an aggregate, where
+    /// it would be meaningless; lowering never constructs one there.
+    ///
+    /// A call with a resolved signature never produces this: its named arguments are bound to declared slots and
+    /// recorded in [`ArgumentBinding::Resolved`], so they appear as [`Self::One`] in slot order. This form exists
+    /// for the case where a spread makes the arity a runtime fact — a callee with a rest parameter — so the name
+    /// cannot be resolved to a slot here but must not be discarded either.
+    Named { name: String, operand: Operand },
+    /// Splice the elements of one source in at this position. Its length is a runtime fact.
+    Spread(SpreadElement),
+}
+
+impl ArgumentElement {
+    /// The single operand at this position, or `None` when this element splices.
+    ///
+    /// Consumers that only handle fixed arity should refuse on `None` rather than treating a spread as one value.
+    pub fn as_one(&self) -> Option<&Operand> {
+        match self {
+            Self::One(operand) => Some(operand),
+            Self::Named { .. } | Self::Spread(_) => None,
+        }
+    }
+
+    /// Render a deterministic maintainer-facing spelling.
+    ///
+    /// A non-spread element renders exactly as its operand did before #1159, so every existing snapshot is
+    /// unchanged and a spread stands out by its marker alone.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::One(operand) => operand.render_snapshot(),
+            Self::Named { name, operand } => format!("{name}={}", operand.render_snapshot()),
+            Self::Spread(spread) => spread.render_snapshot(),
+        }
+    }
+}
+
+/// A source whose elements are spliced into the surrounding element list at this position.
+///
+/// The ownership decision for reading the source lives on `source` itself, like any other operand read — a
+/// [`Operand::Place`] carries its own [`OwnershipFact`] and last-use marker. This type adds no separate ownership
+/// field; what it adds is that the read is *identified as a splice*, so a consumer distributing the source's
+/// elements can see that its length is a runtime fact rather than one value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpreadElement {
+    /// The sequence or mapping being spliced.
+    pub source: Operand,
+    /// Which spread form the source spelled.
+    pub kind: SpreadKind,
+}
+
+impl SpreadElement {
+    /// Render a deterministic maintainer-facing spelling, marked by the source spread form.
+    fn render_snapshot(&self) -> String {
+        let marker = match self.kind {
+            SpreadKind::Sequence => "*",
+            SpreadKind::Mapping => "**",
+        };
+        format!("{marker}{}", self.source.render_snapshot())
+    }
+}
+
+/// Which spread form a [`SpreadElement`] was spelled with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SpreadKind {
+    /// `*source` — splices a sequence's elements positionally.
+    Sequence,
+    /// `**source` — splices a mapping's entries by key.
+    Mapping,
+}
+
+/// One entry of a dict literal, in written source order.
+///
+/// A dict is built from an ordered sequence of *effects*, not from a finished mapping: keys are expressions
+/// evaluated at runtime, their evaluation order is observable, and a duplicate key is legal and meaningful
+/// (a later entry overwrites an earlier one). That is why [`Rvalue::Dict`] carries this ordered list rather than a
+/// map — a map would have to collapse duplicates at construction, which is exactly the override semantics that
+/// must survive, and it could not hold a spread whose keys are unknown until runtime.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DictEntry {
+    /// A `key: value` pair. Both operands are evaluated, key first.
+    Pair(Operand, Operand),
+    /// A `**source` spread. Its entries are spliced in at this position, and its key set is a runtime fact.
+    Spread(SpreadElement),
+}
+
+impl DictEntry {
+    /// Render a deterministic maintainer-facing spelling.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Pair(key, value) => format!("{}: {}", key.render_snapshot(), value.render_snapshot()),
+            Self::Spread(spread) => spread.render_snapshot(),
+        }
+    }
+}
+
 /// Aggregate value shape built by [`Rvalue::Aggregate`].
 #[derive(Debug, Clone, PartialEq)]
 pub enum AggregateKind {
     Tuple,
     List,
-    /// `{k: v, ...}` dict literal. The paired [`Rvalue::Aggregate`] operand vector alternates key, value, key,
-    /// value, ... (`operands[2*i]` is the i-th entry's key, `operands[2*i + 1]` is its value), so a single flat
-    /// operand vector can carry key/value pairs without a second `Rvalue` shape. Callers must always push keys and
-    /// values in matching pairs; this doc comment is the single source of truth for that invariant, since
-    /// [`Rvalue::Aggregate`] itself carries no static arity guarantee.
-    Dict,
     /// `{v, ...}` set literal. Operands are the set's elements, one per entry -- the same flat shape as
     /// [`AggregateKind::List`].
     Set,
@@ -1547,7 +1655,6 @@ impl AggregateKind {
         match self {
             Self::Tuple => "tuple".to_string(),
             Self::List => "list".to_string(),
-            Self::Dict => "dict".to_string(),
             Self::Set => "set".to_string(),
             Self::Constructor(target) => format!("constructor({}){}", target.name, target.binding.render_snapshot()),
         }
@@ -1580,13 +1687,17 @@ impl AggregateKind {
 /// their binding here, so a consumer learns the same fact the same way regardless of how the call was spelled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ArgumentBinding {
-    /// Arguments were supplied positionally and this stage resolved no declared parameter slots for them.
+    /// No declared parameter slots were resolved for this call's arguments.
     ///
-    /// Operand `i` is simply the `i`-th written argument; **no declared-slot claim is made**. This is the honest
-    /// representation for a callee whose declared surface Body IR did not resolve — a builtin, a compiler-
-    /// synthesized collection-growth call, or a signature with a `*args`/`**kwargs` rest parameter, where a written
-    /// argument does not correspond one-to-one with a declared slot. Recording an identity slot map for those would
-    /// assert a binding nobody checked.
+    /// **No declared-slot claim is made, and elements are in written source order — not slot order.** A consumer
+    /// must inspect each [`ArgumentElement`] rather than assume element `i` fills parameter `i`: an element may be
+    /// a single value, a value written with a name, or a spread whose length is only known at runtime. Reading this
+    /// as a positional argument vector is the mistake this variant exists to prevent.
+    ///
+    /// This is the honest representation for a callee whose declared surface Body IR did not resolve — a builtin, a
+    /// compiler-synthesized collection-growth call, or a signature with a `*args`/`**kwargs` rest parameter — and
+    /// for any call carrying a spread, where a written argument does not correspond one-to-one with a declared
+    /// slot. Recording an identity slot map for those would assert a binding nobody checked.
     UnresolvedPositional,
     /// Arguments were resolved against the callee's declared parameters or the type's declared fields.
     Resolved {
@@ -2007,7 +2118,7 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
                 .as_ref()
                 .map(|p| format!("{} = ", p.render_snapshot()))
                 .unwrap_or_default();
-            let args_str: Vec<String> = args.iter().map(Operand::render_snapshot).collect();
+            let args_str: Vec<String> = args.iter().map(ArgumentElement::render_snapshot).collect();
             let panic_marker = if *may_panic { " may_panic" } else { "" };
             let _ = writeln!(
                 out,
@@ -2175,7 +2286,7 @@ pub enum StatementKind {
     Call {
         destination: Option<Place>,
         callee: Callee,
-        args: Vec<Operand>,
+        args: Vec<ArgumentElement>,
         /// Whether this call is known to be able to panic (helper operations that check preconditions).
         may_panic: bool,
     },
@@ -2530,6 +2641,55 @@ mod tests {
     }
 
     #[test]
+    fn a_dict_spread_cannot_be_mispaired_with_the_following_key() {
+        // With a flattened key/value list, `{**base, "x": 1}` had to be walked carefully or the spread source
+        // would pair with the following key. Structured entries make that state unrepresentable; this pins the
+        // rendering that proves the entries stay distinct.
+        let entries = vec![
+            DictEntry::Spread(SpreadElement {
+                source: Operand::Constant(Constant::Str("base".to_string())),
+                kind: SpreadKind::Mapping,
+            }),
+            DictEntry::Pair(
+                Operand::Constant(Constant::Str("x".to_string())),
+                Operand::Constant(Constant::Int(1)),
+            ),
+        ];
+
+        assert_eq!(
+            Rvalue::Dict(entries).render_snapshot(),
+            "dict[**const(\"base\"), const(\"x\"): const(1)]"
+        );
+    }
+
+    #[test]
+    fn a_non_spread_element_renders_exactly_as_its_operand_did() {
+        // Every pre-existing snapshot assertion depends on this: wrapping operands in `ArgumentElement` must not
+        // change how an ordinary aggregate or call renders.
+        let operand = Operand::Constant(Constant::Int(7));
+        assert_eq!(
+            ArgumentElement::One(operand.clone()).render_snapshot(),
+            operand.render_snapshot()
+        );
+        assert_eq!(
+            ArgumentElement::Spread(SpreadElement {
+                source: operand.clone(),
+                kind: SpreadKind::Sequence,
+            })
+            .render_snapshot(),
+            format!("*{}", operand.render_snapshot())
+        );
+        assert_eq!(
+            ArgumentElement::Spread(SpreadElement {
+                source: operand.clone(),
+                kind: SpreadKind::Mapping,
+            })
+            .render_snapshot(),
+            format!("**{}", operand.render_snapshot())
+        );
+    }
+
+    #[test]
     fn helper_call_and_runtime_requirements_render() {
         let mut body = sample_body();
         body.block.stmts.insert(
@@ -2538,7 +2698,7 @@ mod tests {
                 kind: StatementKind::Call {
                     destination: Some(Place::from_local(LocalId(2))),
                     callee: Callee::Helper(HelperOp::StrConcat),
-                    args: vec![Operand::Constant(Constant::Str("a".to_string()))],
+                    args: vec![ArgumentElement::One(Operand::Constant(Constant::Str("a".to_string())))],
                     may_panic: false,
                 },
                 span: HirSourceSpan::new(0, 1),
@@ -2578,7 +2738,7 @@ mod tests {
                         },
                         binding: ArgumentBinding::resolved_positional(1),
                     })),
-                    args: vec![Operand::Constant(Constant::Int(1))],
+                    args: vec![ArgumentElement::One(Operand::Constant(Constant::Int(1)))],
                     may_panic: false,
                 },
                 span: HirSourceSpan::new(0, 1),
@@ -2666,13 +2826,10 @@ mod tests {
             Statement {
                 kind: StatementKind::Assign {
                     place: Place::from_local(LocalId(2)),
-                    rvalue: Rvalue::Aggregate(
-                        AggregateKind::Dict,
-                        vec![
-                            Operand::Constant(Constant::Str("a".to_string())),
-                            Operand::Constant(Constant::Int(1)),
-                        ],
-                    ),
+                    rvalue: Rvalue::Dict(vec![DictEntry::Pair(
+                        Operand::Constant(Constant::Str("a".to_string())),
+                        Operand::Constant(Constant::Int(1)),
+                    )]),
                 },
                 span: HirSourceSpan::new(0, 1),
             },
@@ -2692,7 +2849,10 @@ mod tests {
             Statement {
                 kind: StatementKind::Assign {
                     place: Place::from_local(LocalId(2)),
-                    rvalue: Rvalue::Aggregate(AggregateKind::Set, vec![Operand::Constant(Constant::Int(1))]),
+                    rvalue: Rvalue::Aggregate(
+                        AggregateKind::Set,
+                        vec![ArgumentElement::One(Operand::Constant(Constant::Int(1)))],
+                    ),
                 },
                 span: HirSourceSpan::new(0, 1),
             },
