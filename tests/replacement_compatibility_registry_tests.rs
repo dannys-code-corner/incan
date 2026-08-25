@@ -93,7 +93,8 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
         executor.feature_ids,
         vec![
             "language.control-flow".to_string(),
-            "language.numeric-and-scalar".to_string()
+            "language.numeric-and-scalar".to_string(),
+            "async.tasks".to_string(),
         ]
     );
     let bootstrap = registry
@@ -102,7 +103,7 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
         .find(|source| source.id == "replacement-compatibility.migration-bootstrap")
         .ok_or("missing migration bootstrap registration source")?;
     assert_eq!(bootstrap.lifecycle.as_str(), "MigrationBootstrap");
-    assert_eq!(bootstrap.feature_ids.len(), 23);
+    assert_eq!(bootstrap.feature_ids.len(), 22);
     assert!(
         bootstrap
             .retirement_condition

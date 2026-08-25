@@ -2492,24 +2492,43 @@ fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> 
             HirSourceSpan::new(rust_module.span.start, rust_module.span.end),
         ));
     }
-    program.declarations.iter().find_map(|declaration| {
+    let mut async_activation_seen = false;
+    for declaration in &program.declarations {
         if matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_))
             || matches!(&declaration.node, Declaration::Model(model) if is_direct_replacement_plain_model(model))
             || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_fieldless_enum(enum_decl))
             || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_value_enum(enum_decl))
         {
-            return None;
+            continue;
         }
-        let description = if matches!(declaration.node, Declaration::Import(_)) {
-            "import declaration"
-        } else {
-            "non-function top-level declaration"
-        };
-        Some(ReplacementExecutionError::unsupported_profile(
-            description,
+        if let Declaration::Import(import) = &declaration.node {
+            let exact_async_activation = matches!(
+                (&import.visibility, &import.kind, &import.alias),
+                (Visibility::Private, ImportKind::Module(path), None)
+                    if !path.is_absolute
+                        && path.parent_levels == 0
+                        && path.segments == ["std", "async"]
+            );
+            if exact_async_activation && !async_activation_seen {
+                async_activation_seen = true;
+                continue;
+            }
+            let description = if exact_async_activation {
+                "duplicate `import std.async` replacement activation"
+            } else {
+                "import declaration"
+            };
+            return Some(ReplacementExecutionError::unsupported_profile(
+                description,
+                HirSourceSpan::new(declaration.span.start, declaration.span.end),
+            ));
+        }
+        return Some(ReplacementExecutionError::unsupported_profile(
+            "non-function top-level declaration",
             HirSourceSpan::new(declaration.span.start, declaration.span.end),
-        ))
-    })
+        ));
+    }
+    None
 }
 
 /// Refuse one unsupported replacement profile through the canonical #986 selection boundary.
@@ -2647,6 +2666,7 @@ fn build_replacement_file_report(
             "body_snapshot": execution.body_snapshot,
             "ownership_reads": execution.ownership_evidence(),
             "runtime_requirements": execution.runtime_requirement_evidence(),
+            "task_lifecycle": execution.task_lifecycle_evidence(),
         },
         "timings_ms": { "total": elapsed_ms(start) },
     }))

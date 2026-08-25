@@ -16,7 +16,11 @@
 //! declaration snapshot retains a deferred generator's shape, but the frame executes and adds execution-frame
 //! evidence only when collection polls it; no path falls back to generated Rust.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    cell::RefCell,
+    collections::{BTreeMap, BTreeSet},
+    rc::Rc,
+};
 
 use incan_core::{
     lang::surface::constructors::{ConstructorId, as_str as constructor_name},
@@ -29,8 +33,8 @@ use incan_semantics_core::body_ir::{
     FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp, IterProtocol,
     LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget, NominalDeclaration,
     NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem, ResultVariant,
-    ResultVariantKind, Rvalue, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration,
-    ValueEnumVariantDeclaration, ValueEnumVariantTarget,
+    ResultVariantKind, Rvalue, ScopeId, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking,
+    ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
@@ -119,6 +123,12 @@ pub enum ReplacementValue {
     /// A generator expression or generator function whose frame remains deferred until an admitted consumer polls
     /// it. The frame owns its locals and continuation, so resuming never replays preceding statements.
     Generator(Box<ReplacementGenerator>),
+    /// A source-local async function invocation retained as one direct Body-IR task frame.
+    ///
+    /// The shared cell is intentional: the source typechecker currently exposes a direct async call at its output
+    /// type, so the executor must preserve task identity beneath a copy-shaped Body-IR read without duplicating its
+    /// frame. Only an admitted `await` or `race for` may consume this value.
+    Task(Rc<RefCell<ReplacementTask>>),
     /// A lazy map or filter adapter around another admitted iterator value.
     Adapter(Box<ReplacementAdapter>),
     /// Values materialized by an admitted lazy generator consumer such as `.collect()`.
@@ -156,6 +166,33 @@ pub struct ReplacementGenerator {
     named_body: Option<Body>,
     /// Stable evidence that one retained generator frame actually began direct execution.
     frame_evidence: Option<String>,
+}
+
+/// One unpolled or terminal source-local async function frame.
+///
+/// This is deliberately separate from [`GeneratorFrame`]. A generator yields values through iterator polling;
+/// this frame carries one awaited return value and can be cancelled by a selected `race for` boundary.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplacementTask {
+    id: usize,
+    body: Body,
+    locals: BTreeMap<LocalId, ReplacementValue>,
+    state: ReplacementTaskState,
+}
+
+/// Lifecycle state for one direct replacement task frame.
+#[derive(Debug, Clone, PartialEq)]
+enum ReplacementTaskState {
+    Constructed,
+    Running,
+    Completed(ReplacementValue),
+    /// The frame stopped at a source-observable failure and may never be polled or cancelled again.
+    ///
+    /// This stays distinct from [`Self::Cancelled`]: a failed source-order race winner did not lose the race. The
+    /// original execution error is returned immediately, so retaining a second error payload in the task is neither
+    /// needed nor a receipt authority.
+    Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -329,6 +366,7 @@ impl ReplacementValue {
             Self::Result { kind, payload, .. } => format!("{}({})", kind.as_str(), payload.observable_text()),
             Self::Callable(_) => "<callable>".to_string(),
             Self::Generator(_) => "<generator>".to_string(),
+            Self::Task(_) => "<task>".to_string(),
             Self::Adapter(_) => "<generator-adapter>".to_string(),
             Self::CollectedGenerator { elements, .. } => format!(
                 "[{}]",
@@ -378,6 +416,29 @@ pub struct RuntimeRequirementProjection {
     pub requirement: String,
 }
 
+/// Canonical lifecycle evidence for one direct replacement async task transition.
+///
+/// This is report-only execution evidence, bound into [`ReplacementExecution::output_identity`]. The generic
+/// backend receipt remains deliberately unaware of runtime-specific task implementation details.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TaskLifecycleProjection {
+    /// Stable per-execution task-frame identity in construction order.
+    pub task_id: usize,
+    /// Stable lifecycle transition label.
+    pub event: &'static str,
+    /// Original source span that caused the transition.
+    pub span_start: usize,
+    /// Original source span that caused the transition.
+    pub span_end: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TaskLifecycleEvent {
+    task_id: usize,
+    event: &'static str,
+    span: HirSourceSpan,
+}
+
 /// Successful replacement execution evidence for one free function.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReplacementExecution {
@@ -389,6 +450,8 @@ pub struct ReplacementExecution {
     pub ownership_reads: Vec<OwnershipRead>,
     /// Runtime/helper requirements carried through from the consumed Body IR.
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
+    /// Every direct task-frame transition observed during this successful execution, in source execution order.
+    task_lifecycle: Vec<TaskLifecycleEvent>,
     /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, and observed result.
     pub output_identity: String,
 }
@@ -415,6 +478,12 @@ impl ReplacementExecution {
     #[must_use]
     pub fn runtime_requirement_evidence(&self) -> Vec<RuntimeRequirementProjection> {
         runtime_requirement_projection(&self.runtime_requirements)
+    }
+
+    /// Return the stable direct-task lifecycle evidence bound into this execution's output identity and CLI report.
+    #[must_use]
+    pub fn task_lifecycle_evidence(&self) -> Vec<TaskLifecycleProjection> {
+        task_lifecycle_projection(&self.task_lifecycle)
     }
 }
 
@@ -530,7 +599,7 @@ fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionE
     // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
     // executor may infer by scanning the block for an await statement.
     if body.is_async {
-        return Err(unsupported("async task body", body.span));
+        return validate_direct_async_body_profile(body);
     }
     validate_binding_identity(body)?;
     let range_iterator_locals = range_iterator_locals(&body.block);
@@ -547,6 +616,95 @@ fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionE
         )
     } else {
         validate_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)
+    }
+}
+
+/// Validate the deliberately source-local async subset without treating a task frame as a synchronous body.
+///
+/// Race-arm scopes are explicit in Body IR, so this may admit the same binding spelling independently in each arm
+/// while retaining the normal fail-closed rejection for shadowing outside an arm. Every ordinary statement still
+/// passes through the existing direct profile validator.
+fn validate_direct_async_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
+    if body.is_generator() {
+        return Err(unsupported("async generator body", body.span));
+    }
+    validate_async_binding_identity(body)?;
+    let range_iterator_locals = range_iterator_locals(&body.block);
+    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals)?;
+    validate_nested_structural_aggregate_types(body)?;
+    let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
+    let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
+    validate_callable_params_profile(&body.params)?;
+    validate_async_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)
+}
+
+/// Keep ordinary same-name refusal outside a Race while honoring the retained lexical arm scopes.
+fn validate_async_binding_identity(body: &Body) -> Result<(), ReplacementExecutionError> {
+    let mut race_scopes = BTreeSet::new();
+    collect_race_arm_scopes(&body.block, &mut race_scopes);
+    let scope_parents = body
+        .scopes
+        .iter()
+        .map(|scope| (scope.id, scope.parent))
+        .collect::<BTreeMap<_, _>>();
+    let mut declared = BTreeMap::new();
+    for local in &body.locals {
+        if !matches!(local.origin, LocalOrigin::UserBinding)
+            || scope_descends_from_race_arm(local.scope, &race_scopes, &scope_parents)
+        {
+            continue;
+        }
+        let Some(name) = local.name.as_deref() else {
+            continue;
+        };
+        if declared.insert(name, local.span).is_some() {
+            return Err(unsupported(
+                format!("repeated user binding `{name}` without a direct binding-equivalence fact"),
+                local.span,
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Collect every lexical scope owned by a Race arm, including blocks nested inside that arm.
+fn collect_race_arm_scopes(block: &incan_semantics_core::body_ir::Block, scopes: &mut BTreeSet<ScopeId>) {
+    for statement in &block.stmts {
+        match &statement.kind {
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                collect_race_arm_scopes(then_block, scopes);
+                if let Some(else_block) = else_block {
+                    collect_race_arm_scopes(else_block, scopes);
+                }
+            }
+            StatementKind::Loop { body } => collect_race_arm_scopes(body, scopes),
+            StatementKind::Race { arms, .. } => {
+                for arm in arms {
+                    scopes.insert(arm.body.scope);
+                    collect_race_arm_scopes(&arm.body, scopes);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Return whether one Body-IR scope is nested below a collected Race-arm scope.
+fn scope_descends_from_race_arm(
+    mut scope: ScopeId,
+    race_scopes: &BTreeSet<ScopeId>,
+    parents: &BTreeMap<ScopeId, Option<ScopeId>>,
+) -> bool {
+    loop {
+        if race_scopes.contains(&scope) {
+            return true;
+        }
+        let Some(Some(parent)) = parents.get(&scope) else {
+            return false;
+        };
+        scope = *parent;
     }
 }
 
@@ -573,32 +731,40 @@ pub fn execute_prevalidated_free_function(
     let body = named_free_function(execution.module, &execution.name)?;
 
     let mut executor = BodyExecutor::new(execution.module, body, execution.args)?;
-    let flow = executor.execute_block(&body.block)?;
-    let value = match flow {
-        Flow::Return(value) => match value {
-            Some(value) => value,
-            None => ReplacementValue::Unit,
-        },
-        Flow::Next => ReplacementValue::Unit,
-        Flow::Break | Flow::Continue => {
-            return Err(unsupported("loop control outside a normalized loop", body.span));
+    let value = if body.is_async {
+        let task = executor.construct_task(body.clone(), executor.locals.clone(), body.span)?;
+        executor.drive_task(&task, body.span)?
+    } else {
+        let flow = executor.execute_block(&body.block)?;
+        match flow {
+            Flow::Return(value) => match value {
+                Some(value) => value,
+                None => ReplacementValue::Unit,
+            },
+            Flow::Next => ReplacementValue::Unit,
+            Flow::Break | Flow::Continue => {
+                return Err(unsupported("loop control outside a normalized loop", body.span));
+            }
         }
     };
     ensure_scalar_result(&value, body.span)?;
     let body_snapshot = executor.body_snapshot();
     let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
     let requirements_summary = canonical_runtime_requirements_summary(&executor.runtime_requirements);
+    let task_summary = canonical_task_lifecycle_summary(&executor.task_lifecycle);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
         ownership_summary.as_str(),
         requirements_summary.as_str(),
+        task_summary.as_str(),
     ]);
     Ok(ReplacementExecution {
         value,
         body_snapshot,
         ownership_reads: executor.ownership_reads,
         runtime_requirements: executor.runtime_requirements,
+        task_lifecycle: executor.task_lifecycle,
         output_identity,
     })
 }
@@ -1234,6 +1400,55 @@ fn validate_block_profile(
     Ok(())
 }
 
+/// Validate one async block, delegating every non-suspension statement to the existing direct profile.
+fn validate_async_block_profile(
+    block: &incan_semantics_core::body_ir::Block,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    for statement in &block.stmts {
+        match &statement.kind {
+            StatementKind::Await { destination, awaited } => {
+                let destination = destination
+                    .as_ref()
+                    .ok_or_else(|| unsupported("await without a destination", statement.span))?;
+                validate_bare_local(destination, statement.span)?;
+                validate_operand_profile(awaited, statement.span, tuple_iteration_locals)?;
+            }
+            StatementKind::Race { destination, arms } => {
+                let destination = destination
+                    .as_ref()
+                    .ok_or_else(|| unsupported("race without a destination", statement.span))?;
+                validate_bare_local(destination, statement.span)?;
+                if arms.is_empty() {
+                    return Err(unsupported("race without an arm", statement.span));
+                }
+                for arm in arms {
+                    validate_operand_profile(&arm.awaitable, statement.span, tuple_iteration_locals)?;
+                    validate_async_block_profile(&arm.body, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+                    validate_operand_profile(&arm.result, statement.span, tuple_iteration_locals)?;
+                }
+            }
+            StatementKind::If {
+                cond,
+                then_block,
+                else_block,
+            } => {
+                validate_operand_profile(cond, statement.span, tuple_iteration_locals)?;
+                validate_async_block_profile(then_block, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+                if let Some(else_block) = else_block {
+                    validate_async_block_profile(else_block, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+                }
+            }
+            StatementKind::Loop { body } => {
+                validate_async_block_profile(body, tuple_iteration_locals, scalar_tuple_collection_locals)?
+            }
+            _ => validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?,
+        }
+    }
+    Ok(())
+}
+
 /// Validate one statement against the deliberately narrow #988 direct-execution profile.
 fn validate_statement_profile(
     statement: &Statement,
@@ -1777,6 +1992,13 @@ struct BodyExecutor {
     runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     body_snapshots: Vec<String>,
     steps: usize,
+    /// The next task-frame identity. Child executors inherit and return this counter so direct task construction
+    /// stays globally ordered for one receipt-bound execution.
+    next_task_id: usize,
+    /// Direct task transitions observed in execution order and bound into the output identity.
+    task_lifecycle: Vec<TaskLifecycleEvent>,
+    /// The task whose Body IR this executor is currently polling, if any.
+    active_task: Option<usize>,
     /// A structured match expression may execute an arm whose body returns, breaks, or continues before the
     /// enclosing assignment has a value to store. Keep that flow explicit rather than assigning a placeholder and
     /// accidentally continuing execution after source-level control flow.
@@ -1793,6 +2015,9 @@ impl BodyExecutor {
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
             steps: 0,
+            next_task_id: 0,
+            task_lifecycle: Vec::new(),
+            active_task: None,
             pending_flow: None,
         };
         executor.record_body(body);
@@ -1809,8 +2034,18 @@ impl BodyExecutor {
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
             steps,
+            next_task_id: 0,
+            task_lifecycle: Vec::new(),
+            active_task: None,
             pending_flow: None,
         }
+    }
+
+    /// Build one isolated child frame while preserving execution-wide task identity allocation.
+    fn child_with_locals(&self, locals: BTreeMap<LocalId, ReplacementValue>, steps: usize) -> Self {
+        let mut child = Self::with_locals(&self.module, locals, steps);
+        child.next_task_id = self.next_task_id;
+        child
     }
 
     /// Record a directly consumed declaration body as evidence and preserve its runtime requirements in first-seen
@@ -1821,6 +2056,13 @@ impl BodyExecutor {
             if !self.runtime_requirements.contains(requirement) {
                 self.runtime_requirements.push(requirement.clone());
             }
+        }
+        if body.is_async
+            && !self
+                .runtime_requirements
+                .contains(&AbiV0RuntimeRequirement::AsyncRuntime)
+        {
+            self.runtime_requirements.push(AbiV0RuntimeRequirement::AsyncRuntime);
         }
     }
 
@@ -1845,6 +2087,141 @@ impl BodyExecutor {
         }
         self.body_snapshots.extend(child.body_snapshots);
         self.steps = child.steps;
+        self.next_task_id = self.next_task_id.max(child.next_task_id);
+        self.task_lifecycle.extend(child.task_lifecycle);
+    }
+
+    /// Construct one unpolled task directly from an identity-selected async Body-IR body.
+    fn construct_task(
+        &mut self,
+        body: Body,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        span: HirSourceSpan,
+    ) -> Result<Rc<RefCell<ReplacementTask>>, ReplacementExecutionError> {
+        if !body.is_async || body.is_generator() {
+            return Err(unsupported("non-task callable construction", span));
+        }
+        let id = self.next_task_id;
+        self.next_task_id = self.next_task_id.saturating_add(1);
+        self.record_task_event(id, "constructed", span);
+        Ok(Rc::new(RefCell::new(ReplacementTask {
+            id,
+            body,
+            locals,
+            state: ReplacementTaskState::Constructed,
+        })))
+    }
+
+    /// Record one source-span-preserving task transition for receipt-bound execution evidence.
+    fn record_task_event(&mut self, task_id: usize, event: &'static str, span: HirSourceSpan) {
+        self.task_lifecycle.push(TaskLifecycleEvent { task_id, event, span });
+    }
+
+    /// Poll an admitted task to its direct Body-IR completion.
+    ///
+    /// The initially admitted source-local profile has no external wake source: a task can only suspend on another
+    /// direct task. Its frame is nevertheless explicit and shared, so its construction, poll, await/resume, result,
+    /// and cancellation never collapse into a synchronous named-call result or a generator frame.
+    fn drive_task(
+        &mut self,
+        task: &Rc<RefCell<ReplacementTask>>,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let (id, body, locals) = {
+            let mut task = task.borrow_mut();
+            match &task.state {
+                ReplacementTaskState::Completed(value) => return Ok(value.clone()),
+                ReplacementTaskState::Cancelled => {
+                    return Err(unsupported("await of a race-cancelled task", span));
+                }
+                ReplacementTaskState::Running => {
+                    return Err(unsupported("recursive task poll", span));
+                }
+                ReplacementTaskState::Failed => {
+                    return Err(unsupported("await of a failed direct task", span));
+                }
+                ReplacementTaskState::Constructed => {}
+            }
+            task.state = ReplacementTaskState::Running;
+            (task.id, task.body.clone(), task.locals.clone())
+        };
+        self.record_task_event(id, "polled", span);
+        let mut child = self.child_with_locals(locals, self.steps);
+        child.active_task = Some(id);
+        child.record_body(&body);
+        let result = child.execute_block(&body.block).and_then(|flow| match flow {
+            Flow::Return(Some(value)) => Ok(value),
+            Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
+            Flow::Break | Flow::Continue => Err(unsupported("loop control outside a direct task loop", body.span)),
+        });
+        self.merge_child(child);
+        let value = match result {
+            Ok(value) => value,
+            Err(error) => {
+                task.borrow_mut().state = ReplacementTaskState::Failed;
+                return Err(error);
+            }
+        };
+        task.borrow_mut().state = ReplacementTaskState::Completed(value.clone());
+        self.record_task_event(id, "completed", span);
+        Ok(value)
+    }
+
+    /// Cancel one losing `race for` task at the selection boundary.
+    fn cancel_task(
+        &mut self,
+        task: &Rc<RefCell<ReplacementTask>>,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        let id = {
+            let mut task = task.borrow_mut();
+            match &task.state {
+                ReplacementTaskState::Cancelled => return Ok(()),
+                ReplacementTaskState::Running => {
+                    return Err(unsupported("cancellation of a running direct task", span));
+                }
+                ReplacementTaskState::Failed => {
+                    return Err(unsupported("cancellation of a failed direct task", span));
+                }
+                ReplacementTaskState::Constructed | ReplacementTaskState::Completed(_) => {
+                    task.state = ReplacementTaskState::Cancelled;
+                    task.id
+                }
+            }
+        };
+        self.record_task_event(id, "cancelled", span);
+        Ok(())
+    }
+
+    /// Cancel every still-constructed losing race frame after the selected frame has failed.
+    ///
+    /// The source-local profile constructs all race arms before it polls the first source-order arm. A winner error
+    /// must therefore close those unpolled losers before it escapes. This helper is intentionally total and only
+    /// changes `Constructed` frames: a malformed repeated/running/terminal handle cannot replace the selected
+    /// frame's original diagnostic or be relabelled as cancellation.
+    fn cancel_constructed_race_losers_after_failure(
+        &mut self,
+        tasks: &[Rc<RefCell<ReplacementTask>>],
+        winner_index: usize,
+        span: HirSourceSpan,
+    ) {
+        for (index, task) in tasks.iter().enumerate() {
+            if index == winner_index {
+                continue;
+            }
+            let id = {
+                let mut task = task.borrow_mut();
+                if matches!(task.state, ReplacementTaskState::Constructed) {
+                    task.state = ReplacementTaskState::Cancelled;
+                    Some(task.id)
+                } else {
+                    None
+                }
+            };
+            if let Some(id) = id {
+                self.record_task_event(id, "cancelled", span);
+            }
+        }
     }
 
     /// Bind direct API arguments in declaration order, applying stored defaults only to omitted trailing slots.
@@ -1973,7 +2350,7 @@ impl BodyExecutor {
         &mut self,
         computation: &DefaultComputation,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let mut default_executor = Self::with_locals(&self.module, BTreeMap::new(), self.steps);
+        let mut default_executor = self.child_with_locals(BTreeMap::new(), self.steps);
         for statement in &computation.stmts {
             match default_executor.execute_statement(statement)? {
                 Flow::Next => {}
@@ -2091,9 +2468,10 @@ impl BodyExecutor {
                 operand,
                 error_routing,
             } => self.execute_try_propagate(destination, operand, error_routing, statement.span),
-            // See the matching arms in `validate_statement_profile`: representation is #1164's, execution is #1155's.
-            StatementKind::Await { .. } => Err(unsupported("async await suspension", statement.span)),
-            StatementKind::Race { .. } => Err(unsupported("async race selection", statement.span)),
+            StatementKind::Await { destination, awaited } => {
+                self.execute_await(destination.as_ref(), awaited, statement.span)
+            }
+            StatementKind::Race { destination, arms } => self.execute_race(destination.as_ref(), arms, statement.span),
             StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
             StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
         }
@@ -2143,6 +2521,109 @@ impl BodyExecutor {
         Ok(Flow::Next)
     }
 
+    /// Suspend the active direct task on one source-local task value and resume it with that task's result.
+    fn execute_await(
+        &mut self,
+        destination: Option<&Place>,
+        awaited: &Operand,
+        span: HirSourceSpan,
+    ) -> Result<Flow, ReplacementExecutionError> {
+        let destination = destination.ok_or_else(|| unsupported("await without a destination", span))?;
+        let destination = bare_local(destination, span)?;
+        let awaited = self.evaluate_operand(awaited, span)?;
+        let ReplacementValue::Task(task) = awaited else {
+            return Err(unsupported(
+                format!("await of {} outside the direct task profile", value_kind(&awaited)),
+                span,
+            ));
+        };
+        if let Some(task_id) = self.active_task {
+            self.record_task_event(task_id, "await_suspended", span);
+        }
+        let value = self.drive_task(&task, span)?;
+        if let Some(task_id) = self.active_task {
+            self.record_task_event(task_id, "await_resumed", span);
+        }
+        self.assign_local(destination, value);
+        Ok(Flow::Next)
+    }
+
+    /// Poll source-order race arms until one is ready, then select it and cancel every loser.
+    fn execute_race(
+        &mut self,
+        destination: Option<&Place>,
+        arms: &[incan_semantics_core::body_ir::RaceArm],
+        span: HirSourceSpan,
+    ) -> Result<Flow, ReplacementExecutionError> {
+        let destination = destination.ok_or_else(|| unsupported("race without a destination", span))?;
+        let destination = bare_local(destination, span)?;
+        if arms.is_empty() {
+            return Err(unsupported("race without an arm", span));
+        }
+
+        // The lowering emits construction calls before this Race statement. Reading the retained operands here
+        // therefore captures each already-constructed frame before a poll can select a winner.
+        let tasks = arms
+            .iter()
+            .map(|arm| {
+                let awaitable = self.evaluate_operand(&arm.awaitable, span)?;
+                let ReplacementValue::Task(task) = awaitable else {
+                    return Err(unsupported(
+                        format!("race over {} outside the direct task profile", value_kind(&awaitable)),
+                        span,
+                    ));
+                };
+                Ok(task)
+            })
+            .collect::<Result<Vec<_>, ReplacementExecutionError>>()?;
+
+        if let Some(task_id) = self.active_task {
+            self.record_task_event(task_id, "race_suspended", span);
+        }
+        // This follows `std.async::race::scoped_race`: arms are polled in source order and the first ready arm wins
+        // immediately. All awaitables were already constructed above; every later arm remains unpolled and is
+        // cancelled below, so a loser cannot execute just because it appears in this direct scheduler round.
+        let winner_index = 0;
+        let winner_task = tasks
+            .first()
+            .ok_or_else(|| unsupported("race without a ready arm", span))?;
+        let winner_value = match self.drive_task(winner_task, span) {
+            Ok(value) => value,
+            Err(error) => {
+                self.cancel_constructed_race_losers_after_failure(&tasks, winner_index, span);
+                return Err(error);
+            }
+        };
+        let winner_id = tasks[winner_index].borrow().id;
+        self.record_task_event(winner_id, "race_winner", span);
+        for (index, task) in tasks.iter().enumerate() {
+            if index != winner_index {
+                self.cancel_task(task, span)?;
+            }
+        }
+        if let Some(task_id) = self.active_task {
+            self.record_task_event(task_id, "race_resumed", span);
+        }
+
+        let arm = &arms[winner_index];
+        let prior_locals = self.locals.clone();
+        self.assign_local(arm.binding, winner_value);
+        let arm_outcome = (|| -> Result<Result<ReplacementValue, Flow>, ReplacementExecutionError> {
+            match self.execute_block(&arm.body)? {
+                Flow::Next => Ok(Ok(self.evaluate_operand(&arm.result, span)?)),
+                flow => Ok(Err(flow)),
+            }
+        })();
+        self.locals = prior_locals;
+        match arm_outcome? {
+            Ok(value) => {
+                self.assign_local(destination, value);
+                Ok(Flow::Next)
+            }
+            Err(flow) => Ok(flow),
+        }
+    }
+
     /// Invoke a stored closure or partial through its resolved call-site binding in a fresh frame.
     fn execute_local_callable(
         &mut self,
@@ -2167,7 +2648,7 @@ impl BodyExecutor {
         span: HirSourceSpan,
         frame_kind: &str,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let mut child = Self::with_locals(&self.module, locals, self.steps);
+        let mut child = self.child_with_locals(locals, self.steps);
         for statement in &callable.body.stmts {
             match child.execute_statement(statement)? {
                 Flow::Next => {}
@@ -2257,7 +2738,13 @@ impl BodyExecutor {
             ));
         }
         validate_direct_body_profile(&body)?;
+        if body.is_async && !target.type_args.is_empty() {
+            return Err(unsupported("generic async callable target", span));
+        }
         let locals = self.bind_call_arguments(&body.params, args, &target.binding, &BTreeMap::new(), span)?;
+        if body.is_async {
+            return self.construct_task(body, locals, span).map(ReplacementValue::Task);
+        }
         if body.is_generator() {
             let named_body = body.clone();
             let name = named_body.name.clone();
@@ -2271,7 +2758,7 @@ impl BodyExecutor {
                 )),
             })));
         }
-        let mut child = Self::with_locals(&self.module, locals, self.steps);
+        let mut child = self.child_with_locals(locals, self.steps);
         child.record_body(&body);
         let flow = child.execute_block(&body.block)?;
         let value = match flow {
@@ -2605,7 +3092,7 @@ impl BodyExecutor {
         let frame_evidence = generator.frame_evidence.take();
         let locals = std::mem::take(&mut generator.frame.locals);
         let resume_steps = generator.frame.resume_step_budget(self.steps);
-        let mut deferred = Self::with_locals(&self.module, locals, resume_steps);
+        let mut deferred = self.child_with_locals(locals, resume_steps);
         if let Some(body) = &named_body {
             deferred.record_body(body);
         }
@@ -3971,7 +4458,7 @@ impl ReplacementValue {
     const fn is_copy_shaped(&self) -> bool {
         matches!(
             self,
-            Self::Int(_) | Self::Bool(_) | Self::Unit | Self::FieldlessEnum { .. }
+            Self::Int(_) | Self::Bool(_) | Self::Unit | Self::FieldlessEnum { .. } | Self::Task(_)
         )
     }
 
@@ -4143,6 +4630,19 @@ fn runtime_requirement_projection(requirements: &[AbiV0RuntimeRequirement]) -> V
         .collect()
 }
 
+/// Project direct task lifecycle events into the stable receipt/report vocabulary.
+fn task_lifecycle_projection(events: &[TaskLifecycleEvent]) -> Vec<TaskLifecycleProjection> {
+    events
+        .iter()
+        .map(|event| TaskLifecycleProjection {
+            task_id: event.task_id,
+            event: event.event,
+            span_start: event.span.start,
+            span_end: event.span.end,
+        })
+        .collect()
+}
+
 /// Render ownership evidence as one deterministic digest component without relying on `Debug` formatting.
 fn canonical_ownership_summary(reads: &[OwnershipRead]) -> String {
     ownership_read_projection(reads)
@@ -4162,6 +4662,20 @@ fn canonical_runtime_requirements_summary(requirements: &[AbiV0RuntimeRequiremen
     runtime_requirement_projection(requirements)
         .into_iter()
         .map(|requirement| requirement.requirement)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Render task transitions as a deterministic output-identity component without relying on debug formatting.
+fn canonical_task_lifecycle_summary(events: &[TaskLifecycleEvent]) -> String {
+    task_lifecycle_projection(events)
+        .into_iter()
+        .map(|event| {
+            format!(
+                "task={};event={};span={}..{}",
+                event.task_id, event.event, event.span_start, event.span_end
+            )
+        })
         .collect::<Vec<_>>()
         .join("|")
 }
@@ -4227,14 +4741,38 @@ fn aggregate_label(kind: &incan_semantics_core::body_ir::AggregateKind) -> &'sta
 /// Register the bounded scalar/control profile beside the replacement executor that implements it.
 ///
 /// The compatibility collector reports this contribution but does not own its feature definitions. In particular,
-/// successful direct execution remains non-green until aggregate source contracts have their own paired comparison
-/// evidence; the single `replacement-body-v0-001` match stays case-scoped.
+/// successful direct execution remains non-green until each admitted source contract has paired comparison evidence;
+/// every individual corpus match stays case-scoped.
 pub(crate) fn replacement_compatibility_direct_execution_contribution()
 -> crate::replacement_compatibility::ReplacementCompatibilityContribution {
     use crate::replacement_compatibility::{
-        feature_requirement_link, implementation_requirement, local_implementation_contribution,
-        preserved_feature_at_boundary,
+        ComparisonEvidence, OutstandingComparisonEvidence, feature_requirement_link, implementation_requirement,
+        local_implementation_contribution, preserved_feature_at_boundary,
     };
+
+    let mut async_tasks = preserved_feature_at_boundary(
+        "async.tasks",
+        "One exact source-local `std.async` activation executes same-module async calls, direct await, and source-order ready-tie races through receipt-bound task frames.",
+        "src/frontend/typechecker/check_expr/control_flow.rs",
+        "fn check_await",
+        "fn lower_race_for",
+        "fn execute_race",
+    );
+    async_tasks.owner_issue = Some(1155);
+    async_tasks.migration_or_blocker = Some(
+        "#1155 owns the bounded source-local task profile and its remaining paired source-observable comparison evidence."
+            .to_string(),
+    );
+    if let ComparisonEvidence::Unavailable {
+        outstanding_evidence, ..
+    } = &mut async_tasks.evidence.surfaces.independent_comparison
+    {
+        *outstanding_evidence = OutstandingComparisonEvidence::Scheduled {
+            owner_issue: 1155,
+            note: "#1155 owns exact paired source-observable evidence through #1146's completed route; direct task execution alone remains non-green."
+                .to_string(),
+        };
+    }
 
     local_implementation_contribution(
         "backend.replacement.bounded-scalar-control",
@@ -4257,6 +4795,7 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
                 "fn lower_binary",
                 "fn evaluate_binary",
             ),
+            async_tasks,
         ],
         vec![
             implementation_requirement(
@@ -4273,11 +4812,20 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
                 "replacement-body-v0 scalar corpus",
                 "Scalar representation is an internal evaluator mechanism.",
             ),
+            implementation_requirement(
+                "async.runtime",
+                "Source-local direct tasks preserve construction, polling, source-order race ties, cancellation, and receipt-bound lifecycle evidence.",
+                "source-local Body IR plus replacement task runtime",
+                "replacement-body-v0-018 and replacement-body-v0-019 corpus probes",
+                "Task frames are private direct-execution machinery, not a general scheduler claim.",
+            ),
         ],
         Vec::new(),
         vec![
             feature_requirement_link("language.control-flow", "control.normalized-flow"),
             feature_requirement_link("language.numeric-and-scalar", "runtime.scalar-values"),
+            feature_requirement_link("async.tasks", "async.runtime"),
+            feature_requirement_link("async.tasks", "receipts.comparison"),
         ],
     )
 }
@@ -4328,6 +4876,7 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Result { .. } => "Result",
         ReplacementValue::Callable(_) => "callable",
         ReplacementValue::Generator(_) => "generator",
+        ReplacementValue::Task(_) => "direct task",
         ReplacementValue::Adapter(_) => "generator adapter",
         ReplacementValue::CollectedGenerator { .. } => "collected generator list",
     }
@@ -4359,13 +4908,17 @@ fn direct_pattern_constant(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-    use incan_semantics_core::CompilerNodeId;
+    use incan_semantics_core::{
+        CompilerNodeId,
+        body_ir::{Block, RaceArm},
+    };
 
     use super::{
-        BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, MAX_EXECUTION_STEPS, Operand,
-        ReplacementExecutionError, ReplacementGenerator, Statement, StatementKind,
+        Body, BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, LocalId, MAX_EXECUTION_STEPS,
+        Operand, OwnershipFact, Place, ReplacementExecutionError, ReplacementGenerator, ReplacementTask,
+        ReplacementTaskState, ReplacementValue, ScopeId, Statement, StatementKind,
     };
 
     /// A resumed generator must retain the steps its parent spent before the first poll.
@@ -4399,5 +4952,143 @@ mod tests {
             matches!(result, Err(ReplacementExecutionError::RuntimeFailure { .. })),
             "the first generator poll must consume the caller's already-exhausted execution budget"
         );
+    }
+
+    /// A failed selected race frame becomes terminal while every still-constructed loser is cancelled before the
+    /// original child failure can escape the direct executor.
+    #[test]
+    fn failed_race_winner_terminalizes_before_constructed_losers_are_cancelled() {
+        let span = HirSourceSpan::new(4, 10);
+        let module = BodyIrModule {
+            module_id: CompilerNodeId::module("replacement.race_failure_test"),
+            nominal_declarations: Vec::new(),
+            fieldless_enum_declarations: Vec::new(),
+            value_enum_declarations: Vec::new(),
+            bodies: Vec::new(),
+        };
+        let body = Body {
+            decl_id: CompilerNodeId::declaration("replacement.race_failure_test", "child"),
+            direct_call_id: CompilerNodeId::declaration_span("replacement.race_failure_test", span.start, span.end),
+            name: "child".to_string(),
+            span,
+            locals: Vec::new(),
+            params: Vec::new(),
+            param_locals: Vec::new(),
+            scopes: Vec::new(),
+            block: Block {
+                scope: ScopeId(0),
+                stmts: vec![Statement {
+                    kind: StatementKind::Break { value: None },
+                    span,
+                }],
+            },
+            runtime_requirements: Vec::new(),
+            panic_facts: Vec::new(),
+            is_async: true,
+        };
+        let winner = Rc::new(RefCell::new(ReplacementTask {
+            id: 0,
+            body: body.clone(),
+            locals: BTreeMap::new(),
+            state: ReplacementTaskState::Constructed,
+        }));
+        let loser = Rc::new(RefCell::new(ReplacementTask {
+            id: 1,
+            body: body.clone(),
+            locals: BTreeMap::new(),
+            state: ReplacementTaskState::Constructed,
+        }));
+        let later_loser = Rc::new(RefCell::new(ReplacementTask {
+            id: 2,
+            body,
+            locals: BTreeMap::new(),
+            state: ReplacementTaskState::Constructed,
+        }));
+        let winner_local = LocalId(0);
+        let loser_local = LocalId(1);
+        let later_loser_local = LocalId(2);
+        let destination = LocalId(3);
+        let arm_binding = LocalId(4);
+        let mut locals = BTreeMap::new();
+        locals.insert(winner_local, ReplacementValue::Task(winner.clone()));
+        locals.insert(loser_local, ReplacementValue::Task(loser.clone()));
+        locals.insert(later_loser_local, ReplacementValue::Task(later_loser.clone()));
+        let mut executor = BodyExecutor::with_locals(&module, locals, 0);
+        let arms = [
+            RaceArm {
+                awaitable: Operand::place(Place::from_local(winner_local), OwnershipFact::Borrow, false),
+                binding: arm_binding,
+                body: Block {
+                    scope: ScopeId(0),
+                    stmts: Vec::new(),
+                },
+                result: Operand::Constant(Constant::Unit),
+            },
+            RaceArm {
+                awaitable: Operand::place(Place::from_local(loser_local), OwnershipFact::Borrow, false),
+                binding: LocalId(5),
+                body: Block {
+                    scope: ScopeId(0),
+                    stmts: Vec::new(),
+                },
+                result: Operand::Constant(Constant::Unit),
+            },
+            RaceArm {
+                awaitable: Operand::place(Place::from_local(later_loser_local), OwnershipFact::Borrow, false),
+                binding: LocalId(6),
+                body: Block {
+                    scope: ScopeId(0),
+                    stmts: Vec::new(),
+                },
+                result: Operand::Constant(Constant::Unit),
+            },
+        ];
+
+        let result = executor.execute_race(Some(&Place::from_local(destination)), &arms, span);
+        assert_eq!(
+            result.as_ref().err().and_then(ReplacementExecutionError::primary_span),
+            Some(span)
+        );
+        assert!(matches!(&winner.borrow().state, ReplacementTaskState::Failed));
+        assert!(matches!(&loser.borrow().state, ReplacementTaskState::Cancelled));
+        assert!(matches!(&later_loser.borrow().state, ReplacementTaskState::Cancelled));
+        let winner_id = winner.borrow().id;
+        let loser_ids = [loser.borrow().id, later_loser.borrow().id];
+        let winner_poll = executor
+            .task_lifecycle
+            .iter()
+            .position(|event| event.task_id == winner_id && event.event == "polled");
+        assert!(
+            matches!(
+                (
+                    winner_poll,
+                    executor
+                        .task_lifecycle
+                        .iter()
+                        .position(|event| event.task_id == loser_ids[0] && event.event == "cancelled")
+                ),
+                (Some(winner_poll), Some(loser_cancellation)) if winner_poll < loser_cancellation
+            ),
+            "the selected winner must be polled before source-order loser cancellation: {:?}",
+            executor.task_lifecycle
+        );
+        for loser_id in loser_ids {
+            assert!(
+                executor
+                    .task_lifecycle
+                    .iter()
+                    .any(|event| event.task_id == loser_id && event.event == "cancelled"),
+                "every constructed loser must record cancellation before the winner failure escapes: {:?}",
+                executor.task_lifecycle
+            );
+            assert!(
+                !executor
+                    .task_lifecycle
+                    .iter()
+                    .any(|event| event.task_id == loser_id && matches!(event.event, "polled" | "completed")),
+                "a cancelled race loser must never be polled or completed: {:?}",
+                executor.task_lifecycle
+            );
+        }
     }
 }

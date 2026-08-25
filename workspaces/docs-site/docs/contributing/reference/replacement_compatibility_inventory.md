@@ -20,15 +20,15 @@ The `v0.5.0` source is a frozen migration baseline, not the beginning of a versi
 
 | Contributor | Lifecycle | Features | Private requirements | Location | Retirement condition |
 |---|---|---|---|---|---|
-| `backend.replacement.bounded-scalar-control` | LocalImplementation | 2 | 2 | `src/backend/replacement/mod.rs::fn replacement_compatibility_direct_execution_contribution` | - |
+| `backend.replacement.bounded-scalar-control` | LocalImplementation | 3 | 3 | `src/backend/replacement/mod.rs::fn replacement_compatibility_direct_execution_contribution` | - |
 | `frontend.body-ir.callable-values` | LocalImplementation | 2 | 2 | `src/frontend/body_ir.rs::fn replacement_compatibility_body_ir_contribution` | - |
-| `replacement-compatibility.migration-bootstrap` | MigrationBootstrap | 23 | 17 | `src/replacement_compatibility.rs::fn migration_bootstrap_compatibility_contribution` | Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it. |
+| `replacement-compatibility.migration-bootstrap` | MigrationBootstrap | 22 | 16 | `src/replacement_compatibility.rs::fn migration_bootstrap_compatibility_contribution` | Retire this contributor when every remaining feature and requirement has moved to the module that implements its coherent mechanism; then retain the v0.5 source only as an explicitly historical regression fixture if a later migration needs it. |
 
 ## Compatibility features
 
 | Feature | Source contract | Legacy run | Body IR | Direct replacement | #987 | Feature comparison | Scoped case comparisons | Disposition | Owner |
 |---|---|---|---|---|---|---|---|---|---|
-| `async.tasks` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-async.tasks | NonGreenShadowUnavailable | - | Planned | #1155 |
+| `async.tasks` | Checked | Unknown | Represented | Executable | registered replacement-body-v0-018, replacement-body-v0-019 | NonGreenShadowUnavailable | - | Preserved | #1155 |
 | `call.named-and-variadic` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-call.named-and-variadic | NonGreenShadowUnavailable | - | Planned | #1152 |
 | `call.partial-binding` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-call.partial-binding | NonGreenShadowUnavailable | - | Planned | #1152 |
 | `call.stored-callables` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-call.stored-callables | NonGreenShadowUnavailable | - | Planned | #1152 |
@@ -132,7 +132,7 @@ The `v0.5.0` source is a frozen migration baseline, not the beginning of a versi
 
 | Requirement | Owning boundary | Enabled features | Verification anchor |
 |---|---|---|---|
-| `async.runtime` | frontend Body IR plus replacement runtime | `async.tasks` | async typechecker and Body-IR tests |
+| `async.runtime` | source-local Body IR plus replacement task runtime | `async.tasks` | replacement-body-v0-018 and replacement-body-v0-019 corpus probes |
 | `call.argument-binder` | typechecker partial projection and replacement call runtime | `call.named-and-variadic`, `call.partial-binding` | partial/default typechecker and Body-IR tests |
 | `call.frames` | replacement runtime call dispatcher | `call.named-and-variadic`, `call.stored-callables`, `generator.functions`, `iteration.protocol-and-adapters` | stored-callable Body-IR tests and #1152 execution probes |
 | `captures.lexical-environments` | Body IR closure lowering and replacement runtime | `call.partial-binding`, `call.stored-callables` | closure/partial capture timing regressions |
@@ -174,17 +174,17 @@ Every planned feature below has a currently open mechanism owner. #1146 is compl
 
 ### `async.tasks`
 
-Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.
+One exact source-local `std.async` activation executes same-module async calls, direct await, and source-order ready-tie races through receipt-bound task frames.
 
-- `probe:async.tasks:binding-and-refusal` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AsyncAwait`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
-  - Positive contract: Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.
-  - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
+- `probe:async.tasks:bounded-direct-profile` — positive AcceptedBehavior at Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AsyncAwait`; negative IntentionalRefusal at Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
+  - Positive contract: One exact source-local `std.async` activation executes same-module async calls, direct await, and source-order ready-tie races through receipt-bound task frames.
+  - Negative contract: Inputs outside the bounded direct profile refuse visibly with their source span.
 - Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::AsyncAwait`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/control_flow.rs::fn check_await`
-- Body IR: Planned `src/frontend/body_ir.rs::fn lower_yield`; owner #1155
-- Replacement executor: Planned `src/backend/replacement/mod.rs::ReplacementGenerator`; owner #1155
-- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1155: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
-- Blocker/migration: Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state.
+- Body IR: Observed `src/frontend/body_ir.rs::fn lower_race_for`
+- Replacement executor: Observed `src/backend/replacement/mod.rs::fn execute_race`
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1155: #1155 owns exact paired source-observable evidence through #1146's completed route; direct task execution alone remains non-green.
+- Blocker/migration: #1155 owns the bounded source-local task profile and its remaining paired source-observable comparison evidence.
 
 ### `call.named-and-variadic`
 

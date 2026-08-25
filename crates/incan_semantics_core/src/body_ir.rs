@@ -2225,8 +2225,8 @@ pub enum StatementKind {
     /// The contract this node fixes, which arm ordering alone could not express:
     ///
     /// - every arm's awaitable is evaluated **before** any selection happens, in source order;
-    /// - arm order is source order and carries **no** priority — a consumer must not treat `arms[0]` as preferred;
-    /// - exactly one arm's `body` runs, the one whose awaitable completed first;
+    /// - when two or more awaitables become ready in the same scheduler turn, the earliest source-order arm wins;
+    /// - exactly one arm's `body` runs, the one whose awaitable completed first after applying that ready-tie rule;
     /// - every non-winning arm's awaitable is cancelled at this statement's boundary.
     ///
     /// As with [`Self::Await`], this records what the race *means*, not how it is driven: concurrent polling,
@@ -2235,7 +2235,7 @@ pub enum StatementKind {
         /// Where the winning arm's result is written. Always supplied by frontend lowering today, for the same
         /// reason as [`StatementKind::Await::destination`].
         destination: Option<Place>,
-        /// The arms, in source order. Order is not priority — see this variant's docs.
+        /// The arms, in source order. Order resolves only same-turn ready ties — see this variant's docs.
         arms: Vec<RaceArm>,
     },
     /// `yield value` in statement position, suspending a generator body to produce one value.
