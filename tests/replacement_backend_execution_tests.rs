@@ -1108,6 +1108,75 @@ def main() -> int:
     Ok(())
 }
 
+/// Refuse a coherent-looking named call/body pair whose declaration identity was corrupted to another module.
+#[test]
+fn replacement_refuses_a_foreign_named_call_identity_at_its_original_source_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def helper() -> int:
+  return 42
+
+def main() -> int:
+  return helper()
+"#;
+    let mut module = lower_typed_body_ir(source)?;
+    let foreign_direct_call_id = CompilerNodeId::declaration_span("foreign", 0, 23);
+    let helper = module
+        .bodies
+        .iter_mut()
+        .find(|body| body.name == "helper")
+        .ok_or("fixture must lower the helper body")?;
+    helper.direct_call_id = foreign_direct_call_id.clone();
+    let main = module
+        .bodies
+        .iter_mut()
+        .find(|body| body.name == "main")
+        .ok_or("fixture must lower the main body")?;
+    let target =
+        main.block
+            .stmts
+            .iter_mut()
+            .find_map(|statement| match &mut statement.kind {
+                StatementKind::Call {
+                    callee:
+                        incan_semantics_core::body_ir::Callee::Function(
+                            incan_semantics_core::body_ir::CallableTarget::Named(target),
+                        ),
+                    ..
+                } if target.name == "helper" => Some(target),
+                _ => None,
+            })
+            .ok_or("fixture must lower the helper call as a named Body-IR target")?;
+    target.direct_call_id = Some(foreign_direct_call_id);
+
+    let error = match execute_free_function(&module, "main", &[]) {
+        Ok(execution) => {
+            return Err(format!(
+                "a foreign named-call identity must refuse instead of dispatching, got {:?}",
+                execution.value
+            )
+            .into());
+        }
+        Err(error) => error,
+    };
+    let call_start = source
+        .find("return helper()")
+        .map(|start| start + "return ".len())
+        .ok_or("fixture must contain the rejected helper call")?;
+    let span = error
+        .primary_span()
+        .ok_or("foreign named-call identity refusal must retain a source span")?;
+    assert_eq!(span.start, call_start);
+    assert_eq!(span.end, call_start + "helper()".len());
+    assert!(
+        error
+            .to_string()
+            .contains("named callable declaration identity is not scoped to this Body-IR module"),
+        "the refusal must name the foreign declaration identity: {error}"
+    );
+    Ok(())
+}
+
 /// Refuse an id-less `range` call unless lowering retained the explicit compiler-builtin target fact.
 #[test]
 fn replacement_refuses_an_idless_range_call_without_the_explicit_builtin_fact() -> Result<(), Box<dyn std::error::Error>>

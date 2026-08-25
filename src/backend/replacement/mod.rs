@@ -2199,6 +2199,12 @@ impl BodyExecutor {
                 span,
             )
         })?;
+        if !is_module_span_declaration_id(&self.module, direct_call_id) {
+            return Err(unsupported(
+                "named callable declaration identity is not scoped to this Body-IR module",
+                span,
+            ));
+        }
         let body = self
             .module
             .bodies
@@ -2801,9 +2807,7 @@ impl BodyExecutor {
             ResultVariantKind::Ok => &variant.ok_type,
             ResultVariantKind::Err => &variant.error_type,
         };
-        if !payload.is_direct_result_payload()
-            || !self.value_matches_direct_result_type(&payload, payload_type, span)?
-        {
+        if !payload.is_direct_result_payload() || !self.value_matches_direct_result_type(&payload, payload_type) {
             return Err(unsupported(
                 format!(
                     "Result construction with {} payload incompatible with retained type `{payload_type}`",
@@ -2923,73 +2927,67 @@ impl BodyExecutor {
     /// Named values are accepted only after their runtime identity re-resolves to a declaration of the same source
     /// name in this module. This prevents malformed Body IR from placing an arbitrary enum/model carrier in a
     /// Result solely because both happen to be `Named` types.
-    fn value_matches_direct_result_type(
-        &self,
-        value: &ReplacementValue,
-        ty: &IncanType,
-        span: HirSourceSpan,
-    ) -> Result<bool, ReplacementExecutionError> {
+    fn value_matches_direct_result_type(&self, value: &ReplacementValue, ty: &IncanType) -> bool {
         match (value, ty) {
             (ReplacementValue::Int(_), IncanType::Primitive(IncanPrimitiveType::Int))
             | (ReplacementValue::Bool(_), IncanType::Primitive(IncanPrimitiveType::Bool))
             | (ReplacementValue::Str(_), IncanType::Primitive(IncanPrimitiveType::Str))
-            | (ReplacementValue::Unit, IncanType::Primitive(IncanPrimitiveType::Unit)) => Ok(true),
+            | (ReplacementValue::Unit, IncanType::Primitive(IncanPrimitiveType::Unit)) => true,
             (ReplacementValue::Tuple(values), IncanType::Tuple(types)) => {
                 if values.len() != types.len() {
-                    return Ok(false);
+                    return false;
                 }
-                values.iter().zip(types).try_fold(true, |matches, (value, ty)| {
-                    self.value_matches_direct_result_type(value, ty, span)
-                        .map(|next| matches && next)
-                })
+                values
+                    .iter()
+                    .zip(types)
+                    .all(|(value, ty)| self.value_matches_direct_result_type(value, ty))
             }
             (ReplacementValue::Tuple(values), IncanType::Generic { base, args })
                 if collections::from_str(base) == Some(CollectionTypeId::Tuple) =>
             {
                 if values.len() != args.len() {
-                    return Ok(false);
+                    return false;
                 }
-                values.iter().zip(args).try_fold(true, |matches, (value, ty)| {
-                    self.value_matches_direct_result_type(value, ty, span)
-                        .map(|next| matches && next)
-                })
+                values
+                    .iter()
+                    .zip(args)
+                    .all(|(value, ty)| self.value_matches_direct_result_type(value, ty))
             }
             (ReplacementValue::List { elements, .. }, IncanType::Generic { base, args })
                 if collections::from_str(base) == Some(CollectionTypeId::List) =>
             {
                 let [element_type] = args.as_slice() else {
-                    return Ok(false);
+                    return false;
                 };
-                elements.iter().try_fold(true, |matches, element| {
-                    self.value_matches_direct_result_type(element, element_type, span)
-                        .map(|next| matches && next)
-                })
+                elements
+                    .iter()
+                    .all(|element| self.value_matches_direct_result_type(element, element_type))
             }
             (
                 ReplacementValue::Nominal {
                     direct_declaration_id, ..
                 },
                 IncanType::Named(expected),
-            ) => Ok(self.module.nominal_declarations.iter().any(|declaration| {
+            ) => self.module.nominal_declarations.iter().any(|declaration| {
                 declaration.direct_declaration_id == *direct_declaration_id && declaration.name == *expected
-            })),
+            }),
             (
                 ReplacementValue::FieldlessEnum {
                     enum_declaration_id, ..
                 },
                 IncanType::Named(expected),
-            ) => Ok(self.module.fieldless_enum_declarations.iter().any(|declaration| {
+            ) => self.module.fieldless_enum_declarations.iter().any(|declaration| {
                 declaration.direct_declaration_id == *enum_declaration_id && declaration.name == *expected
-            })),
+            }),
             (
                 ReplacementValue::ValueEnum {
                     enum_declaration_id, ..
                 },
                 IncanType::Named(expected),
-            ) => Ok(self.module.value_enum_declarations.iter().any(|declaration| {
+            ) => self.module.value_enum_declarations.iter().any(|declaration| {
                 declaration.direct_declaration_id == *enum_declaration_id && declaration.name == *expected
-            })),
-            _ => Ok(false),
+            }),
+            _ => false,
         }
     }
 

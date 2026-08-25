@@ -93,59 +93,40 @@ pub fn build_body_ir_module_v0(
         .iter()
         .map(|declaration| (declaration.name.clone(), declaration.clone()))
         .collect::<LocalValueEnumDeclarations>();
+    let lowering_facts = BodyIrLoweringFacts {
+        type_info,
+        function_default_sources: &function_default_sources,
+        local_function_declarations: &local_function_declarations,
+        local_nominal_declarations: &local_nominal_declarations,
+        local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
+        local_value_enum_declarations: &local_value_enum_declarations,
+        module_identity: &module_identity,
+    };
     let bodies = program
         .declarations
         .iter()
         .flat_map(|decl| -> Vec<bir::Body> {
             match &decl.node {
                 ast::Declaration::Function(function) => {
-                    vec![lower_function_body(
-                        function,
-                        decl.span,
-                        &module_identity,
-                        type_info,
-                        &function_default_sources,
-                        &local_function_declarations,
-                        &local_nominal_declarations,
-                        &local_fieldless_enum_declarations,
-                        &local_value_enum_declarations,
-                    )]
+                    vec![lower_function_body(function, decl.span, &lowering_facts)]
                 }
                 ast::Declaration::Model(model) => lower_owner_method_bodies(
                     &model.methods,
                     &model.name,
                     owner_self_type(&model.name, &model.type_params),
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
-                    &local_function_declarations,
-                    &local_nominal_declarations,
-                    &local_fieldless_enum_declarations,
-                    &local_value_enum_declarations,
+                    &lowering_facts,
                 ),
                 ast::Declaration::Class(class) => lower_owner_method_bodies(
                     &class.methods,
                     &class.name,
                     owner_self_type(&class.name, &class.type_params),
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
-                    &local_function_declarations,
-                    &local_nominal_declarations,
-                    &local_fieldless_enum_declarations,
-                    &local_value_enum_declarations,
+                    &lowering_facts,
                 ),
                 ast::Declaration::Trait(trait_decl) => lower_owner_method_bodies(
                     &trait_decl.methods,
                     &trait_decl.name,
                     IncanType::SelfType,
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
-                    &local_function_declarations,
-                    &local_nominal_declarations,
-                    &local_fieldless_enum_declarations,
-                    &local_value_enum_declarations,
+                    &lowering_facts,
                 ),
                 _ => Vec::new(),
             }
@@ -194,6 +175,21 @@ type LocalFieldlessEnumDeclarations = HashMap<String, bir::FieldlessEnumDeclarat
 /// enum/member identities there, so imports, aliases, ordinary enums, and non-retained same-spelling forms never
 /// become direct runtime targets.
 type LocalValueEnumDeclarations = HashMap<String, bir::ValueEnumDeclaration>;
+
+/// Borrowed module facts shared by every body lowerer.
+///
+/// These facts are collected once from checked source and remain frontend-only: emitted Body IR carries only the
+/// identities and representations a later direct executor needs. Keeping the bundle explicit avoids widening any
+/// individual lowering helper's parameter surface as profiles add one bounded source-local fact at a time.
+struct BodyIrLoweringFacts<'type_info, 'source> {
+    type_info: &'type_info TypeCheckInfo,
+    function_default_sources: &'source FunctionDefaultSources,
+    local_function_declarations: &'source LocalFunctionDeclarations,
+    local_nominal_declarations: &'source LocalNominalDeclarations,
+    local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
+    local_value_enum_declarations: &'source LocalValueEnumDeclarations,
+    module_identity: &'source str,
+}
 
 /// Source facts a synthesized local partial needs for one target parameter.
 #[derive(Clone)]
@@ -438,31 +434,11 @@ fn lower_owner_method_bodies(
     methods: &[ast::Spanned<ast::MethodDecl>],
     owner_name: &str,
     receiver_ty: IncanType,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
-    local_function_declarations: &LocalFunctionDeclarations,
-    local_nominal_declarations: &LocalNominalDeclarations,
-    local_fieldless_enum_declarations: &LocalFieldlessEnumDeclarations,
-    local_value_enum_declarations: &LocalValueEnumDeclarations,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> Vec<bir::Body> {
     methods
         .iter()
-        .filter_map(|method| {
-            lower_method_body(
-                &method.node,
-                method.span,
-                owner_name,
-                &receiver_ty,
-                module_identity,
-                type_info,
-                function_default_sources,
-                local_function_declarations,
-                local_nominal_declarations,
-                local_fieldless_enum_declarations,
-                local_value_enum_declarations,
-            )
-        })
+        .filter_map(|method| lower_method_body(&method.node, method.span, owner_name, &receiver_ty, lowering_facts))
         .collect()
 }
 
@@ -516,19 +492,15 @@ fn result_variant_kind(name: &str) -> Option<bir::ResultVariantKind> {
 fn lower_function_body(
     function: &ast::FunctionDecl,
     decl_span: ast::Span,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
-    local_function_declarations: &LocalFunctionDeclarations,
-    local_nominal_declarations: &LocalNominalDeclarations,
-    local_fieldless_enum_declarations: &LocalFieldlessEnumDeclarations,
-    local_value_enum_declarations: &LocalValueEnumDeclarations,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> bir::Body {
-    let decl_id = CompilerNodeId::declaration(module_identity, &function.name);
-    let direct_call_id = CompilerNodeId::declaration_span(module_identity, decl_span.start, decl_span.end);
+    let decl_id = CompilerNodeId::declaration(lowering_facts.module_identity, &function.name);
+    let direct_call_id =
+        CompilerNodeId::declaration_span(lowering_facts.module_identity, decl_span.start, decl_span.end);
     // The bare-name map is a compatibility projection and collapses top-level overloads. A body is one physical
     // declaration, so its parameter types must come from the same span-keyed fact the direct-call identity uses.
-    let binding = type_info
+    let binding = lowering_facts
+        .type_info
         .declarations
         .function_bindings_by_span
         .get(&(decl_span.start, decl_span.end));
@@ -536,16 +508,7 @@ fn lower_function_body(
         .map(|binding| semantic_type_from_resolved(&binding.return_type))
         .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(
-        type_info,
-        function_default_sources,
-        local_function_declarations,
-        local_nominal_declarations,
-        local_fieldless_enum_declarations,
-        local_value_enum_declarations,
-        module_identity,
-        owner_return_type,
-    );
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut param_locals = Vec::with_capacity(function.params.len());
@@ -632,22 +595,21 @@ fn lower_method_body(
     decl_span: ast::Span,
     owner_name: &str,
     receiver_ty: &IncanType,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
-    local_function_declarations: &LocalFunctionDeclarations,
-    local_nominal_declarations: &LocalNominalDeclarations,
-    local_fieldless_enum_declarations: &LocalFieldlessEnumDeclarations,
-    local_value_enum_declarations: &LocalValueEnumDeclarations,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> Option<bir::Body> {
     let body_stmts = method.body.as_ref()?;
 
     // Method names are not unique across a module the way top-level function names are (two classes can each
     // declare a method named `new`), so the method's CompilerNodeId is scoped under its owning declaration's name
     // rather than reusing `CompilerNodeId::declaration(module_identity, &method.name)` directly.
-    let decl_id = CompilerNodeId::declaration(module_identity, &format!("{owner_name}::{}", method.name));
-    let direct_call_id = CompilerNodeId::declaration_span(module_identity, decl_span.start, decl_span.end);
-    let binding = type_info
+    let decl_id = CompilerNodeId::declaration(
+        lowering_facts.module_identity,
+        &format!("{owner_name}::{}", method.name),
+    );
+    let direct_call_id =
+        CompilerNodeId::declaration_span(lowering_facts.module_identity, decl_span.start, decl_span.end);
+    let binding = lowering_facts
+        .type_info
         .declarations
         .method_bindings_by_span
         .get(&(decl_span.start, decl_span.end));
@@ -655,16 +617,7 @@ fn lower_method_body(
         .map(|binding| semantic_type_from_resolved(&binding.return_type))
         .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(
-        type_info,
-        function_default_sources,
-        local_function_declarations,
-        local_nominal_declarations,
-        local_fieldless_enum_declarations,
-        local_value_enum_declarations,
-        module_identity,
-        owner_return_type,
-    );
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut params = Vec::with_capacity(method.params.len() + 1);
@@ -811,24 +764,15 @@ struct BodyBuilder<'type_info, 'source> {
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Start a fresh builder for one function body, with no locals, scopes, or accumulated facts yet.
-    fn new(
-        type_info: &'type_info TypeCheckInfo,
-        function_default_sources: &'source FunctionDefaultSources,
-        local_function_declarations: &'source LocalFunctionDeclarations,
-        local_nominal_declarations: &'source LocalNominalDeclarations,
-        local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
-        local_value_enum_declarations: &'source LocalValueEnumDeclarations,
-        module_identity: &'source str,
-        owner_return_type: IncanType,
-    ) -> Self {
+    fn new(lowering_facts: &BodyIrLoweringFacts<'type_info, 'source>, owner_return_type: IncanType) -> Self {
         Self {
-            type_info,
-            function_default_sources,
-            local_function_declarations,
-            local_nominal_declarations,
-            local_fieldless_enum_declarations,
-            local_value_enum_declarations,
-            module_identity,
+            type_info: lowering_facts.type_info,
+            function_default_sources: lowering_facts.function_default_sources,
+            local_function_declarations: lowering_facts.local_function_declarations,
+            local_nominal_declarations: lowering_facts.local_nominal_declarations,
+            local_fieldless_enum_declarations: lowering_facts.local_fieldless_enum_declarations,
+            local_value_enum_declarations: lowering_facts.local_value_enum_declarations,
+            module_identity: lowering_facts.module_identity,
             owner_return_type,
             locals: Vec::new(),
             scopes: Vec::new(),
@@ -9584,16 +9528,16 @@ mod tests {
         let local_nominal_declarations = LocalNominalDeclarations::new();
         let local_fieldless_enum_declarations = LocalFieldlessEnumDeclarations::new();
         let local_value_enum_declarations = LocalValueEnumDeclarations::new();
-        let mut builder = BodyBuilder::new(
-            &type_info,
-            &function_default_sources,
-            &local_function_declarations,
-            &local_nominal_declarations,
-            &local_fieldless_enum_declarations,
-            &local_value_enum_declarations,
-            "m",
-            IncanType::Unknown,
-        );
+        let lowering_facts = BodyIrLoweringFacts {
+            type_info: &type_info,
+            function_default_sources: &function_default_sources,
+            local_function_declarations: &local_function_declarations,
+            local_nominal_declarations: &local_nominal_declarations,
+            local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
+            local_value_enum_declarations: &local_value_enum_declarations,
+            module_identity: "m",
+        };
+        let mut builder = BodyBuilder::new(&lowering_facts, IncanType::Unknown);
         let scope = builder.new_scope(None, HirSourceSpan::new(0, 1));
         let mut out = Vec::new();
         let surface = ast::SurfaceExpr {
