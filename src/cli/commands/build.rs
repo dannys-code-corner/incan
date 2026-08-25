@@ -13001,7 +13001,10 @@ pub(crate) fn bake_oven_project_targets(
     }
     // Keep every sibling output and the authority leased through completion. A tight policy must fail this bake
     // rather than prune an earlier target/profile and then report a partial project as successfully prepared.
-    let _complete_publication_set = (inspection_authority, published_outputs);
+    // The inspection authority names the debug test dependency envelope's exact plan. Retain that selection until
+    // every output Loaf is visible: otherwise a later output admission can prune the now-unleased constituent and
+    // leave a source-current authority that points at a missing closure.
+    let _complete_publication_set = (test_dependency_envelope, inspection_authority, published_outputs);
     Ok(OvenProjectBakeReport {
         project: project_root,
         generated_sources,
