@@ -915,6 +915,11 @@ impl TypeChecker {
         path.rsplit_once('.').map_or(path, |(owner, _method)| owner)
     }
 
+    /// Split a Rust display into its nominal path and the Incan-visible generic type arguments.
+    ///
+    /// Rust lifetimes are erased at the language boundary, while nested type arguments keep their normal display
+    /// form and are resolved for nominal comparison. The returned base is also normalized from Incan's synthetic
+    /// `rust::` namespace to the inspector's crate-rooted path.
     fn rust_path_base_and_args(&self, path: &str) -> (String, Vec<ResolvedType>) {
         let trimmed = path.trim();
         if let Some(start) = trimmed.find('<')
