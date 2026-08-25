@@ -8,7 +8,7 @@
 //!
 //! Run with: `cargo test --test parity_corpus_tests`
 //!
-//! ## Why these twelve cases
+//! ## Why these cases
 //!
 //! Per #987's own plan step 3 ("add a narrow source-only seed corpus before public package or Rust-interop
 //! rows"), every seed case here uses a direct-parser/typechecker, generated-project-run, or codegen-snapshot
@@ -508,6 +508,103 @@ def generator_adapters() -> int:
     return values[0] * 10 + values[1]
 "#;
 
+const REPLACEMENT_BODY_V0_012_SRC: &str = r#"
+def score(mut values: list[int]) -> int:
+    values[0] = 40
+    pair = (values[0], 2)
+    return pair.0 + pair.1
+
+def structural_values() -> int:
+    values = [1, 2]
+    return score(values)
+"#;
+
+const REPLACEMENT_BODY_V0_013_SRC: &str = r#"
+model Pair:
+    left: int
+    right: int
+
+def score(pair: Pair) -> int:
+    return pair.left + pair.right
+
+def nominal_values() -> int:
+    pair = Pair(right=2, left=40)
+    return score(pair)
+"#;
+
+const REPLACEMENT_BODY_V0_014_SRC: &str = r#"
+enum HttpStatus(int):
+    Ok = 200
+    NotFound = 404
+
+def status_code(status: HttpStatus) -> int:
+    return status.value()
+
+def value_enum_values() -> int:
+    return status_code(HttpStatus.NotFound)
+"#;
+
+const REPLACEMENT_BODY_V0_015_SRC: &str = r#"
+enum Signal:
+    Ready
+    Stop
+
+def score(left: Signal, right: Signal) -> int:
+    if left == Signal.Ready and right != Signal.Ready:
+        return 42
+    return 0
+
+def fieldless_enum_values() -> int:
+    return score(Signal.Ready, Signal.Stop)
+"#;
+
+const REPLACEMENT_BODY_V0_016_SRC: &str = r#"
+model Pair:
+    left: int
+    right: int
+
+enum Signal:
+    Ready
+    Stop
+
+def classify(pair: Pair, signal: Signal) -> int:
+    match pair:
+        case Pair(left=40, right=2):
+            match signal:
+                case Signal.Ready:
+                    return 42
+                case Signal.Stop:
+                    return 0
+        case _:
+            return 0
+    return 0
+
+def direct_patterns() -> int:
+    return classify(Pair(left=40, right=2), Signal.Ready)
+"#;
+
+const REPLACEMENT_BODY_V0_017_SRC: &str = r#"
+enum Failure:
+    Odd
+
+def half(value: int) -> Result[int, Failure]:
+    if value % 2 != 0:
+        return Err(Failure.Odd)
+    return Ok(value // 2)
+
+def quarter(value: int) -> Result[int, Failure]:
+    half_value = half(value)?
+    return half(half_value)
+
+def direct_result_routing() -> int:
+    match quarter(8):
+        case Ok(value):
+            return value
+        case Err(_):
+            return 0
+    return 0
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -594,6 +691,54 @@ fn replacement_body_v0_011_arguments() -> Vec<ReplacementValue> {
 
 fn replacement_body_v0_011_expected() -> ReplacementValue {
     ReplacementValue::Int(34)
+}
+
+fn replacement_body_v0_012_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_012_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_013_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_013_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_014_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_014_expected() -> ReplacementValue {
+    ReplacementValue::Int(404)
+}
+
+fn replacement_body_v0_015_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_015_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_016_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_016_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_017_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_017_expected() -> ReplacementValue {
+    ReplacementValue::Int(2)
 }
 
 // ============================================================================
@@ -953,6 +1098,102 @@ fn seed_corpus() -> Vec<ParityCase> {
                 shadow_comparison: false,
             }),
         },
+        ParityCase {
+            id: "replacement-body-v0-012",
+            title: "Source-local tuple/list values and exact sibling dispatch execute through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_source_local_tuple_list_index_and_mutation_through_a_direct_callable; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_012_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "structural_values",
+                arguments: replacement_body_v0_012_arguments,
+                expected: replacement_body_v0_012_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-013",
+            title: "Source-local plain model values and canonical field reads execute through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_source_local_nominal_model_values_through_a_direct_callable; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_013_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "nominal_values",
+                arguments: replacement_body_v0_013_arguments,
+                expected: replacement_body_v0_013_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-014",
+            title: "Source-local RFC 032 value-enum members extract scalar values through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_source_local_value_enum_members_through_a_direct_callable; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_014_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "value_enum_values",
+                arguments: replacement_body_v0_014_arguments,
+                expected: replacement_body_v0_014_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-015",
+            title: "Source-local fieldless normal-enum values compare through retained Body IR identities",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_source_local_fieldless_enum_values_through_a_direct_callable; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_015_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "fieldless_enum_values",
+                arguments: replacement_body_v0_015_arguments,
+                expected: replacement_body_v0_015_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-016",
+            title: "Source-local nominal and fieldless-enum patterns dispatch through retained Body IR identities",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_identity_selected_nominal_and_fieldless_enum_match_patterns; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_016_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "direct_patterns",
+                arguments: replacement_body_v0_016_arguments,
+                expected: replacement_body_v0_016_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-017",
+            title: "Intrinsic Result construction, same-error propagation, and pattern dispatch execute through Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1154; tests/replacement_backend_execution_tests.rs::replacement_executes_same_error_result_routing_and_pattern_dispatch; comparison remains non-green until #1154 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_017_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "direct_result_routing",
+                arguments: replacement_body_v0_017_arguments,
+                expected: replacement_body_v0_017_expected,
+                shadow_comparison: false,
+            }),
+        },
     ]
 }
 
@@ -1266,8 +1507,72 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        11,
-        "the six #988 cases, #1123's lazy-generator case, and #1152's four callable/runtime cases must stay stable in #987"
+        17,
+        "the six #988 cases, #1123's lazy-generator case, #1152's four callable/runtime cases, and #1154's structural, nominal, enum, pattern, and Result cases must stay stable in #987"
+    );
+    let nominal_row = replacement_rows
+        .iter()
+        .find(|row| row.id == "replacement-body-v0-013")
+        .ok_or("the #1154 nominal Body-IR row must remain in the corpus")?;
+    let ReceiptRef::ReplacementExecuted { body_snapshot, .. } = &nominal_row.receipt else {
+        return Err("the #1154 nominal Body-IR row must retain a direct execution receipt".into());
+    };
+    assert!(
+        body_snapshot.contains("executed nominal constructor name=Pair id=decl:")
+            && body_snapshot.contains("fields=[left, right]"),
+        "the #1154 nominal row must bind its receipt evidence to the retained declaration identity and canonical layout: {body_snapshot}"
+    );
+    let value_enum_row = replacement_rows
+        .iter()
+        .find(|row| row.id == "replacement-body-v0-014")
+        .ok_or("the #1154 value-enum Body-IR row must remain in the corpus")?;
+    let ReceiptRef::ReplacementExecuted { body_snapshot, .. } = &value_enum_row.receipt else {
+        return Err("the #1154 value-enum Body-IR row must retain a direct execution receipt".into());
+    };
+    assert!(
+        body_snapshot.contains("executed value-enum variant name=HttpStatus::NotFound enum_id=decl:")
+            && body_snapshot.contains("raw=404")
+            && body_snapshot.contains("extracted value-enum scalar name=HttpStatus::NotFound"),
+        "the #1154 value-enum row must bind receipt evidence to retained enum/member identities and scalar extraction: {body_snapshot}"
+    );
+    let fieldless_enum_row = replacement_rows
+        .iter()
+        .find(|row| row.id == "replacement-body-v0-015")
+        .ok_or("the #1154 fieldless-enum Body-IR row must remain in the corpus")?;
+    let ReceiptRef::ReplacementExecuted { body_snapshot, .. } = &fieldless_enum_row.receipt else {
+        return Err("the #1154 fieldless-enum Body-IR row must retain a direct execution receipt".into());
+    };
+    assert!(
+        body_snapshot.contains("executed fieldless-enum variant name=Signal::Ready enum_id=decl:")
+            && body_snapshot.contains("executed fieldless-enum variant name=Signal::Stop enum_id=decl:"),
+        "the #1154 fieldless-enum row must bind receipt evidence to retained enum/member identities: {body_snapshot}"
+    );
+    let pattern_row = replacement_rows
+        .iter()
+        .find(|row| row.id == "replacement-body-v0-016")
+        .ok_or("the #1154 direct-pattern Body-IR row must remain in the corpus")?;
+    let ReceiptRef::ReplacementExecuted { body_snapshot, .. } = &pattern_row.receipt else {
+        return Err("the #1154 direct-pattern Body-IR row must retain a direct execution receipt".into());
+    };
+    assert!(
+        body_snapshot.contains("nominal Pair id=decl:")
+            && body_snapshot.contains("fieldless fieldless_enum_variant(Signal::Ready")
+            && body_snapshot.contains("executed direct match arm"),
+        "the #1154 pattern row must bind receipt evidence to retained targets and a selected direct arm: {body_snapshot}"
+    );
+    let result_row = replacement_rows
+        .iter()
+        .find(|row| row.id == "replacement-body-v0-017")
+        .ok_or("the #1154 direct-Result Body-IR row must remain in the corpus")?;
+    let ReceiptRef::ReplacementExecuted { body_snapshot, .. } = &result_row.receipt else {
+        return Err("the #1154 direct-Result Body-IR row must retain a direct execution receipt".into());
+    };
+    assert!(
+        body_snapshot.contains("result_ok(")
+            && body_snapshot.contains("same_error_type=Failure")
+            && body_snapshot.contains("executed Result::ok construction")
+            && body_snapshot.contains("executed Result try route=ok"),
+        "the #1154 Result row must bind receipt evidence to explicit construction and same-error routing: {body_snapshot}"
     );
 
     for row in replacement_rows {

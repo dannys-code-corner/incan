@@ -52,11 +52,12 @@ use incan_semantics_core::{
     IncanPrimitiveType, IncanType, rust_tuple_arity,
 };
 
+use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 use crate::frontend::ast;
 use crate::frontend::symbols::{CallableParam, ResolvedType};
-use crate::frontend::typechecker::{TypeCheckInfo, semantic_type_from_resolved};
+use crate::frontend::typechecker::{IdentKind, TypeCheckInfo, semantic_type_from_resolved};
 
 /// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
 /// typechecked module.
@@ -76,49 +77,68 @@ pub fn build_body_ir_module_v0(
     let module_identity = body_ir_module_identity(module_path);
     let module_id = CompilerNodeId::module(module_identity.clone());
     let function_default_sources = collect_function_default_sources(program);
+    let local_function_declarations = collect_local_function_declarations(program);
+    let nominal_declarations = collect_local_nominal_declarations(program, &module_identity);
+    let local_nominal_declarations = nominal_declarations
+        .iter()
+        .map(|declaration| (declaration.name.clone(), declaration.clone()))
+        .collect::<LocalNominalDeclarations>();
+    let fieldless_enum_declarations = collect_local_fieldless_enum_declarations(program, &module_identity);
+    let local_fieldless_enum_declarations = fieldless_enum_declarations
+        .iter()
+        .map(|declaration| (declaration.name.clone(), declaration.clone()))
+        .collect::<LocalFieldlessEnumDeclarations>();
+    let value_enum_declarations = collect_local_value_enum_declarations(program, &module_identity);
+    let local_value_enum_declarations = value_enum_declarations
+        .iter()
+        .map(|declaration| (declaration.name.clone(), declaration.clone()))
+        .collect::<LocalValueEnumDeclarations>();
+    let lowering_facts = BodyIrLoweringFacts {
+        type_info,
+        function_default_sources: &function_default_sources,
+        local_function_declarations: &local_function_declarations,
+        local_nominal_declarations: &local_nominal_declarations,
+        local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
+        local_value_enum_declarations: &local_value_enum_declarations,
+        module_identity: &module_identity,
+    };
     let bodies = program
         .declarations
         .iter()
         .flat_map(|decl| -> Vec<bir::Body> {
             match &decl.node {
                 ast::Declaration::Function(function) => {
-                    vec![lower_function_body(
-                        function,
-                        decl.span,
-                        &module_identity,
-                        type_info,
-                        &function_default_sources,
-                    )]
+                    vec![lower_function_body(function, decl.span, &lowering_facts)]
                 }
                 ast::Declaration::Model(model) => lower_owner_method_bodies(
                     &model.methods,
                     &model.name,
                     owner_self_type(&model.name, &model.type_params),
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
+                    &lowering_facts,
                 ),
                 ast::Declaration::Class(class) => lower_owner_method_bodies(
                     &class.methods,
                     &class.name,
                     owner_self_type(&class.name, &class.type_params),
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
+                    &lowering_facts,
                 ),
                 ast::Declaration::Trait(trait_decl) => lower_owner_method_bodies(
                     &trait_decl.methods,
                     &trait_decl.name,
                     IncanType::SelfType,
-                    &module_identity,
-                    type_info,
-                    &function_default_sources,
+                    &lowering_facts,
                 ),
                 _ => Vec::new(),
             }
         })
         .collect();
-    bir::BodyIrModule { module_id, bodies }
+    bir::BodyIrModule {
+        module_id,
+        nominal_declarations,
+        fieldless_enum_declarations,
+        value_enum_declarations,
+        bodies,
+    }
 }
 
 /// Source-declared ordinary default expressions for each top-level function in this module.
@@ -127,6 +147,49 @@ pub fn build_body_ir_module_v0(
 /// closure: the checked callable signature retains availability but not the executable default expression. The map
 /// never leaves this frontend boundary; the resulting [`bir::CallableParamDefault::Source`] stores only Body IR.
 type FunctionDefaultSources = HashMap<String, Vec<FunctionDefaultSource>>;
+
+/// Exact spans of this source module's top-level function declarations, grouped by source spelling.
+///
+/// The typechecker exposes an intentionally wider overload surface that can include imports and aliases. Direct
+/// Body-IR dispatch only admits a declaration physically represented by this module, so lowering retains this
+/// small source-local map long enough to attach the chosen declaration identity to each named call.
+type LocalFunctionDeclarations = HashMap<String, Vec<ast::Span>>;
+
+/// Plain source-local models whose checked declaration layout is retained for direct nominal execution.
+///
+/// This frontend map intentionally contains only non-generic, behavior-free models. It is used only while lowering
+/// a checked constructor call to attach an exact declaration identity; the resulting [`bir::NominalDeclaration`]
+/// records are the direct executor's sole layout authority. Classes, trait-adopting models, and models carrying
+/// methods/properties/aliases are absent rather than being approximated as inert field bags.
+type LocalNominalDeclarations = HashMap<String, bir::NominalDeclaration>;
+
+/// Source-local fieldless normal enums whose canonical unit variants are retained for direct comparison.
+///
+/// This map exists only while lowering. The executor receives `BodyIrModule::fieldless_enum_declarations` and
+/// revalidates exact enum/member identities there, so a source spelling never selects an imported or aliased enum.
+type LocalFieldlessEnumDeclarations = HashMap<String, bir::FieldlessEnumDeclaration>;
+
+/// Source-local RFC 032 value enums whose canonical scalar members are retained for direct execution.
+///
+/// This map is lowering-only. The executor receives `BodyIrModule::value_enum_declarations` and verifies retained
+/// enum/member identities there, so imports, aliases, ordinary enums, and non-retained same-spelling forms never
+/// become direct runtime targets.
+type LocalValueEnumDeclarations = HashMap<String, bir::ValueEnumDeclaration>;
+
+/// Borrowed module facts shared by every body lowerer.
+///
+/// These facts are collected once from checked source and remain frontend-only: emitted Body IR carries only the
+/// identities and representations a later direct executor needs. Keeping the bundle explicit avoids widening any
+/// individual lowering helper's parameter surface as profiles add one bounded source-local fact at a time.
+struct BodyIrLoweringFacts<'type_info, 'source> {
+    type_info: &'type_info TypeCheckInfo,
+    function_default_sources: &'source FunctionDefaultSources,
+    local_function_declarations: &'source LocalFunctionDeclarations,
+    local_nominal_declarations: &'source LocalNominalDeclarations,
+    local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
+    local_value_enum_declarations: &'source LocalValueEnumDeclarations,
+    module_identity: &'source str,
+}
 
 /// Source facts a synthesized local partial needs for one target parameter.
 #[derive(Clone)]
@@ -159,6 +222,204 @@ fn collect_function_default_sources(program: &ast::Program) -> FunctionDefaultSo
         .collect()
 }
 
+/// Collect the exact source spans eligible for same-module direct named-call dispatch.
+fn collect_local_function_declarations(program: &ast::Program) -> LocalFunctionDeclarations {
+    let mut declarations = LocalFunctionDeclarations::new();
+    for declaration in &program.declarations {
+        if let ast::Declaration::Function(function) = &declaration.node {
+            declarations
+                .entry(function.name.clone())
+                .or_default()
+                .push(declaration.span);
+        }
+    }
+    declarations
+}
+
+/// Determine whether a model can carry the small direct-replacement declaration fact.
+///
+/// This is deliberately a source-local data-model shape, not a general nominal-semantics predicate. The replacement
+/// runtime cannot execute model decorators, trait behavior, methods, field aliases, or generic substitution without
+/// facts that Body IR does not retain. Field defaults remain represented by each construction's checked binding, so a
+/// fully supplied construction may execute while any omitted default still refuses at that constructor's span.
+pub(crate) fn is_direct_replacement_plain_model(model: &ast::ModelDecl) -> bool {
+    model.decorators.is_empty()
+        && model.type_params.is_empty()
+        && model.traits.is_empty()
+        && model.method_aliases.is_empty()
+        && model.method_partials.is_empty()
+        && model.properties.is_empty()
+        && model.methods.is_empty()
+        && model.fields.iter().all(|field| field.node.metadata.alias.is_none())
+}
+
+/// Retain directly executable model declarations in source order.
+///
+/// Constructor argument binding already comes from the typechecker; this adds only the source-local declaration
+/// identity and canonical raw field order the direct runtime otherwise could not establish without reopening AST or
+/// typechecker state. This deliberately does not retain a general nominal registry.
+fn collect_local_nominal_declarations(program: &ast::Program, module_identity: &str) -> Vec<bir::NominalDeclaration> {
+    program
+        .declarations
+        .iter()
+        .filter_map(|declaration| {
+            let ast::Declaration::Model(model) = &declaration.node else {
+                return None;
+            };
+            is_direct_replacement_plain_model(model).then(|| bir::NominalDeclaration {
+                direct_declaration_id: CompilerNodeId::declaration_span(
+                    module_identity,
+                    declaration.span.start,
+                    declaration.span.end,
+                ),
+                name: model.name.clone(),
+                fields: model.fields.iter().map(|field| field.node.name.clone()).collect(),
+                type_parameter_count: model.type_params.len(),
+            })
+        })
+        .collect()
+}
+
+/// Determine whether an enum carries the narrow source-local fieldless normal-enum declaration fact.
+///
+/// This excludes every declaration form whose behavior needs additional semantic representation: scalar value enums,
+/// payload construction, aliases, trait dispatch, custom methods, decorators, and generic substitution. The direct
+/// runtime can therefore materialize only a canonical unit carrier and compare its retained identity.
+pub(crate) fn is_direct_replacement_fieldless_enum(enum_decl: &ast::EnumDecl) -> bool {
+    enum_decl.decorators.is_empty()
+        && enum_decl.type_params.is_empty()
+        && enum_decl.value_type.is_none()
+        && enum_decl.traits.is_empty()
+        && enum_decl.variant_aliases.is_empty()
+        && enum_decl.methods.is_empty()
+        && enum_decl
+            .variants
+            .iter()
+            .all(|variant| variant.node.fields.is_empty() && variant.node.value.is_none())
+}
+
+/// Retain exact source-local fieldless normal-enum declaration and unit-member facts in source order.
+///
+/// Only this registry reaches the direct runtime. It deliberately has no payload layouts, aliases, match facts, or
+/// source-symbol lookup facility, so its existence cannot widen into general enum execution by spelling alone.
+fn collect_local_fieldless_enum_declarations(
+    program: &ast::Program,
+    module_identity: &str,
+) -> Vec<bir::FieldlessEnumDeclaration> {
+    program
+        .declarations
+        .iter()
+        .filter_map(|declaration| {
+            let ast::Declaration::Enum(enum_decl) = &declaration.node else {
+                return None;
+            };
+            is_direct_replacement_fieldless_enum(enum_decl).then(|| bir::FieldlessEnumDeclaration {
+                direct_declaration_id: CompilerNodeId::declaration_span(
+                    module_identity,
+                    declaration.span.start,
+                    declaration.span.end,
+                ),
+                name: enum_decl.name.clone(),
+                variants: enum_decl
+                    .variants
+                    .iter()
+                    .map(|variant| bir::FieldlessEnumVariantDeclaration {
+                        direct_declaration_id: CompilerNodeId::declaration_span(
+                            module_identity,
+                            variant.span.start,
+                            variant.span.end,
+                        ),
+                        name: variant.node.name.clone(),
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
+}
+
+/// Determine whether an enum carries the narrow source-local RFC 032 scalar declaration fact.
+///
+/// This predicate intentionally excludes aliases and all behavior-bearing forms even when they are source-valid:
+/// the direct executor may validate only a canonical literal member and the compiler-provided `.value()` extraction,
+/// not trait dispatch, custom methods, alias canonicalization, generic substitution, or payload construction.
+pub(crate) fn is_direct_replacement_value_enum(enum_decl: &ast::EnumDecl) -> bool {
+    enum_decl.decorators.is_empty()
+        && enum_decl.type_params.is_empty()
+        && enum_decl.value_type.is_some()
+        && enum_decl.traits.is_empty()
+        && enum_decl.variant_aliases.is_empty()
+        && enum_decl.methods.is_empty()
+        && enum_decl.variants.iter().all(|variant| {
+            variant.node.fields.is_empty()
+                && matches!(
+                    variant.node.value.as_ref().map(|value| &value.node),
+                    Some(ast::ValueEnumLiteral::Int(_) | ast::ValueEnumLiteral::Str(_))
+                )
+        })
+}
+
+/// Retain exact source-local RFC 032 value-enum declaration and canonical literal-member facts in source order.
+///
+/// A later direct executor receives only this Body-IR registry. It does not reopen AST/typechecker state to resolve
+/// a `Name.Member` spelling, so lowering returns no record for imports, aliases, ordinary enums, or declarations
+/// whose shape cannot truthfully support the generated scalar `.value()` surface.
+fn collect_local_value_enum_declarations(
+    program: &ast::Program,
+    module_identity: &str,
+) -> Vec<bir::ValueEnumDeclaration> {
+    program
+        .declarations
+        .iter()
+        .filter_map(|declaration| {
+            let ast::Declaration::Enum(enum_decl) = &declaration.node else {
+                return None;
+            };
+            if !is_direct_replacement_value_enum(enum_decl) {
+                return None;
+            }
+            let backing = match enum_decl.value_type.as_ref().map(|value| value.node) {
+                Some(ast::ValueEnumType::Int) => bir::ValueEnumBacking::Int,
+                Some(ast::ValueEnumType::Str) => bir::ValueEnumBacking::Str,
+                None => return None,
+            };
+            let variants = enum_decl
+                .variants
+                .iter()
+                .filter_map(|variant| {
+                    let raw_value = match variant.node.value.as_ref().map(|value| &value.node) {
+                        Some(ast::ValueEnumLiteral::Int(value)) if matches!(backing, bir::ValueEnumBacking::Int) => {
+                            bir::Constant::Int(value.value)
+                        }
+                        Some(ast::ValueEnumLiteral::Str(value)) if matches!(backing, bir::ValueEnumBacking::Str) => {
+                            bir::Constant::Str(value.clone())
+                        }
+                        _ => return None,
+                    };
+                    Some(bir::ValueEnumVariantDeclaration {
+                        direct_declaration_id: CompilerNodeId::declaration_span(
+                            module_identity,
+                            variant.span.start,
+                            variant.span.end,
+                        ),
+                        name: variant.node.name.clone(),
+                        raw_value,
+                    })
+                })
+                .collect::<Vec<_>>();
+            (variants.len() == enum_decl.variants.len()).then(|| bir::ValueEnumDeclaration {
+                direct_declaration_id: CompilerNodeId::declaration_span(
+                    module_identity,
+                    declaration.span.start,
+                    declaration.span.end,
+                ),
+                name: enum_decl.name.clone(),
+                backing,
+                variants,
+            })
+        })
+        .collect()
+}
+
 /// Lower every non-abstract method in `methods` (owned by the class/model/trait named `owner_name`) into one
 /// [`bir::Body`] each, skipping abstract methods (`body: None`). `receiver_ty` is the typechecker-equivalent type
 /// for a declared receiver: a concrete nominal type for models/classes or [`IncanType::SelfType`] for trait defaults.
@@ -173,23 +434,11 @@ fn lower_owner_method_bodies(
     methods: &[ast::Spanned<ast::MethodDecl>],
     owner_name: &str,
     receiver_ty: IncanType,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> Vec<bir::Body> {
     methods
         .iter()
-        .filter_map(|method| {
-            lower_method_body(
-                &method.node,
-                method.span,
-                owner_name,
-                &receiver_ty,
-                module_identity,
-                type_info,
-                function_default_sources,
-            )
-        })
+        .filter_map(|method| lower_method_body(&method.node, method.span, owner_name, &receiver_ty, lowering_facts))
         .collect()
 }
 
@@ -208,18 +457,58 @@ const fn hir_span(span: ast::Span) -> HirSourceSpan {
     HirSourceSpan::new(span.start, span.end)
 }
 
+/// Return the checked payload types of an intrinsic `Result[ok, error]` carrier.
+///
+/// This is deliberately a narrow query over the typechecker-owned semantic type. The Body-IR lowerer uses it only
+/// to retain facts which direct execution cannot reconstruct: which intrinsic constructor is being formed, which
+/// pattern payload is being bound, and whether `?` preserves the enclosing error type exactly. It does not infer
+/// a conversion or admit a differently shaped generic carrier.
+fn result_type_parts(ty: &IncanType) -> Option<(&IncanType, &IncanType)> {
+    let IncanType::Generic { base, args } = ty else {
+        return None;
+    };
+    (collections::from_str(base) == Some(CollectionTypeId::Result)).then_some(())?;
+    match args.as_slice() {
+        [ok_type, error_type] => Some((ok_type, error_type)),
+        _ => None,
+    }
+}
+
+/// Return just the checked error channel for an intrinsic `Result` carrier.
+fn result_error_type(ty: &IncanType) -> Option<&IncanType> {
+    result_type_parts(ty).map(|(_, error_type)| error_type)
+}
+
+/// Map only the compiler-owned intrinsic constructor spellings to Body-IR result variants.
+fn result_variant_kind(name: &str) -> Option<bir::ResultVariantKind> {
+    match constructors::from_str(name) {
+        Some(ConstructorId::Ok) => Some(bir::ResultVariantKind::Ok),
+        Some(ConstructorId::Err) => Some(bir::ResultVariantKind::Err),
+        _ => None,
+    }
+}
+
 /// Lower one function declaration's body into Body IR v0.
 fn lower_function_body(
     function: &ast::FunctionDecl,
     decl_span: ast::Span,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> bir::Body {
-    let decl_id = CompilerNodeId::declaration(module_identity, &function.name);
-    let binding = type_info.declarations.function_bindings.get(&function.name);
+    let decl_id = CompilerNodeId::declaration(lowering_facts.module_identity, &function.name);
+    let direct_call_id =
+        CompilerNodeId::declaration_span(lowering_facts.module_identity, decl_span.start, decl_span.end);
+    // The bare-name map is a compatibility projection and collapses top-level overloads. A body is one physical
+    // declaration, so its parameter types must come from the same span-keyed fact the direct-call identity uses.
+    let binding = lowering_facts
+        .type_info
+        .declarations
+        .function_bindings_by_span
+        .get(&(decl_span.start, decl_span.end));
+    let owner_return_type = binding
+        .map(|binding| semantic_type_from_resolved(&binding.return_type))
+        .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(type_info, function_default_sources);
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut param_locals = Vec::with_capacity(function.params.len());
@@ -265,6 +554,7 @@ fn lower_function_body(
 
     bir::Body {
         decl_id,
+        direct_call_id,
         name: function.name.clone(),
         span: hir_span(decl_span),
         locals: builder.locals,
@@ -305,22 +595,29 @@ fn lower_method_body(
     decl_span: ast::Span,
     owner_name: &str,
     receiver_ty: &IncanType,
-    module_identity: &str,
-    type_info: &TypeCheckInfo,
-    function_default_sources: &FunctionDefaultSources,
+    lowering_facts: &BodyIrLoweringFacts<'_, '_>,
 ) -> Option<bir::Body> {
     let body_stmts = method.body.as_ref()?;
 
     // Method names are not unique across a module the way top-level function names are (two classes can each
     // declare a method named `new`), so the method's CompilerNodeId is scoped under its owning declaration's name
     // rather than reusing `CompilerNodeId::declaration(module_identity, &method.name)` directly.
-    let decl_id = CompilerNodeId::declaration(module_identity, &format!("{owner_name}::{}", method.name));
-    let binding = type_info
+    let decl_id = CompilerNodeId::declaration(
+        lowering_facts.module_identity,
+        &format!("{owner_name}::{}", method.name),
+    );
+    let direct_call_id =
+        CompilerNodeId::declaration_span(lowering_facts.module_identity, decl_span.start, decl_span.end);
+    let binding = lowering_facts
+        .type_info
         .declarations
         .method_bindings_by_span
         .get(&(decl_span.start, decl_span.end));
+    let owner_return_type = binding
+        .map(|binding| semantic_type_from_resolved(&binding.return_type))
+        .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(type_info, function_default_sources);
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut params = Vec::with_capacity(method.params.len() + 1);
@@ -381,6 +678,7 @@ fn lower_method_body(
 
     Some(bir::Body {
         decl_id,
+        direct_call_id,
         name: method.name.clone(),
         span: hir_span(decl_span),
         locals: builder.locals,
@@ -423,6 +721,18 @@ struct BodyBuilder<'type_info, 'source> {
     type_info: &'type_info TypeCheckInfo,
     /// Source defaults for top-level partial targets, retained only until they lower into Body IR.
     function_default_sources: &'source FunctionDefaultSources,
+    /// Exact declarations physically present in this module, used only to retain same-module call identities.
+    local_function_declarations: &'source LocalFunctionDeclarations,
+    /// Source-local plain-model declarations, used only to retain an exact constructor target identity.
+    local_nominal_declarations: &'source LocalNominalDeclarations,
+    /// Source-local fieldless normal-enum declarations, used only to retain exact unit-member target identities.
+    local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
+    /// Source-local RFC 032 value-enum declarations, used only to retain an exact member target identity.
+    local_value_enum_declarations: &'source LocalValueEnumDeclarations,
+    /// Owning module identity used to construct a source-span declaration identity without consulting a backend.
+    module_identity: &'source str,
+    /// Checked return type of the function/method currently being lowered, used only to retain `?` error routing.
+    owner_return_type: IncanType,
     locals: Vec<bir::LocalDecl>,
     scopes: Vec<bir::ScopeInfo>,
     /// Current source-name -> local binding. Later bindings of the same name (new `let`/`mut` assignments) shadow
@@ -454,10 +764,16 @@ struct BodyBuilder<'type_info, 'source> {
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Start a fresh builder for one function body, with no locals, scopes, or accumulated facts yet.
-    fn new(type_info: &'type_info TypeCheckInfo, function_default_sources: &'source FunctionDefaultSources) -> Self {
+    fn new(lowering_facts: &BodyIrLoweringFacts<'type_info, 'source>, owner_return_type: IncanType) -> Self {
         Self {
-            type_info,
-            function_default_sources,
+            type_info: lowering_facts.type_info,
+            function_default_sources: lowering_facts.function_default_sources,
+            local_function_declarations: lowering_facts.local_function_declarations,
+            local_nominal_declarations: lowering_facts.local_nominal_declarations,
+            local_fieldless_enum_declarations: lowering_facts.local_fieldless_enum_declarations,
+            local_value_enum_declarations: lowering_facts.local_value_enum_declarations,
+            module_identity: lowering_facts.module_identity,
+            owner_return_type,
             locals: Vec::new(),
             scopes: Vec::new(),
             bindings: HashMap::new(),
@@ -2461,6 +2777,24 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             },
             ast::Expr::Paren(inner) => self.lower_expr_to_operand(inner, scope, out),
             ast::Expr::Field(base, name) => {
+                if let Some(target) = self.local_fieldless_enum_variant_target(base, name) {
+                    return self.push_assign_temp(
+                        bir::Rvalue::FieldlessEnumVariant(target),
+                        self.resolve_ty(expr.span),
+                        scope,
+                        span,
+                        out,
+                    );
+                }
+                if let Some(target) = self.local_value_enum_variant_target(base, name) {
+                    return self.push_assign_temp(
+                        bir::Rvalue::ValueEnumVariant(target),
+                        self.resolve_ty(expr.span),
+                        scope,
+                        span,
+                        out,
+                    );
+                }
                 let mut place = self.lower_expr_to_place(base, scope, out);
                 place.projection.push(bir::PlaceElem::Field(name.clone()));
                 let ty = self.resolve_ty(expr.span);
@@ -2759,10 +3093,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         ))
     }
 
-    /// Resolve the declared parameter surface for a direct named call, or describe why it cannot be represented.
+    /// Resolve the declaration surface and exact local identity for a direct named call.
     ///
-    /// `Ok(None)` means "no resolved signature" — a builtin or any callee this module carries no declaration for.
-    /// That is not an error: positional arguments still lower faithfully, they simply carry no declared-slot claim.
+    /// A direct executable target must be physically represented by this Body-IR module. Imports and unresolved
+    /// names deliberately retain their existing call representation with no direct declaration identity, so this
+    /// frontend does not turn a source-representation gap into a new source diagnostic. The replacement executor
+    /// then refuses those targets at the original call span; only compiler-recognized `range` has a separate
+    /// explicit Body-IR builtin target fact.
     ///
     /// Overloads are why this is resolved per call site rather than per name. `function_bindings` is keyed by bare
     /// source name, so for two same-name declarations it holds only one of them; binding a call against the wrong
@@ -2770,10 +3107,24 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// answer. The typechecker already records which overload it selected for this call span, so this follows that
     /// decision to the declaration and reads that declaration's own signature. If a name is overloaded but no
     /// selection was recorded, this fails closed rather than picking one.
-    fn declared_slots_for_direct_call(&self, name: &str, span: ast::Span) -> Result<Option<Vec<DeclaredSlot>>, String> {
+    fn declared_slots_for_direct_call(&self, name: &str, span: ast::Span) -> Result<DirectCallDeclaration, String> {
         let declarations = &self.type_info.declarations;
-        let overloads = declarations.function_overloads.get(name);
-        let is_overloaded = overloads.is_some_and(|candidates| candidates.len() > 1);
+        let local_declarations = self.local_function_declarations.get(name);
+        let Some(local_declarations) = local_declarations else {
+            return Ok(DirectCallDeclaration {
+                slots: declarations
+                    .function_bindings
+                    .get(name)
+                    .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect()),
+                direct_call_id: None,
+                builtin: (name == "range"
+                    && self.type_info.source_target(span).is_none()
+                    && !declarations.function_bindings.contains_key(name)
+                    && !declarations.function_overloads.contains_key(name))
+                .then_some(bir::NamedCallableBuiltin::Range),
+            });
+        };
+        let is_overloaded = local_declarations.len() > 1;
 
         if is_overloaded {
             let Some(selected) = self.type_info.selected_function_emitted_name(span) else {
@@ -2781,20 +3132,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     "call to overloaded function `{name}` whose selected declaration was not resolved"
                 ));
             };
-            let Some(candidates) = overloads else {
-                return Err(format!(
-                    "call to overloaded function `{name}` with no candidate declarations"
-                ));
-            };
-            let selected_span = candidates
-                .iter()
-                .map(|candidate| candidate.span)
-                .find(|candidate_span| {
-                    declarations
-                        .function_emitted_names
-                        .get(&(candidate_span.start, candidate_span.end))
-                        .is_some_and(|emitted| emitted == selected)
-                });
+            let selected_span = local_declarations.iter().find(|candidate_span| {
+                declarations
+                    .function_emitted_names
+                    .get(&(candidate_span.start, candidate_span.end))
+                    .is_some_and(|emitted| emitted == selected)
+            });
             let Some(selected_span) = selected_span else {
                 return Err(format!(
                     "call to overloaded function `{name}` whose selected declaration could not be located"
@@ -2808,15 +3151,39 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     "call to overloaded function `{name}` whose selected declaration has no checked signature"
                 ));
             };
-            return Ok(Some(
-                binding.params.iter().map(DeclaredSlot::from_checked_param).collect(),
-            ));
+            return Ok(DirectCallDeclaration {
+                slots: Some(binding.params.iter().map(DeclaredSlot::from_checked_param).collect()),
+                direct_call_id: Some(CompilerNodeId::declaration_span(
+                    self.module_identity,
+                    selected_span.start,
+                    selected_span.end,
+                )),
+                builtin: None,
+            });
         }
 
-        Ok(declarations
-            .function_bindings
-            .get(name)
-            .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect()))
+        let [declaration_span] = local_declarations.as_slice() else {
+            return Err(format!(
+                "direct call to `{name}` has no unambiguous same-module declaration identity"
+            ));
+        };
+        let Some(binding) = declarations
+            .function_bindings_by_span
+            .get(&(declaration_span.start, declaration_span.end))
+        else {
+            return Err(format!(
+                "same-module declaration `{name}` has no checked callable signature"
+            ));
+        };
+        Ok(DirectCallDeclaration {
+            slots: Some(binding.params.iter().map(DeclaredSlot::from_checked_param).collect()),
+            direct_call_id: Some(CompilerNodeId::declaration_span(
+                self.module_identity,
+                declaration_span.start,
+                declaration_span.end,
+            )),
+            builtin: None,
+        })
     }
 
     /// Bind a call's arguments against a declared parameter surface, falling back to positional lowering when there
@@ -2958,10 +3325,18 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             }
         };
         let ty = self.resolve_ty(span);
+        // A constructor field binding proves argument slots, but not that this constructor names one of the plain
+        // source-local models this Body-IR module retained. Preserve an identity only from that local registry;
+        // imports, aliases, classes, generic models, and absent/malformed names remain represented with `None` so
+        // a direct executor can refuse at this construction span rather than guessing from `name`.
+        let direct_declaration_id = self.local_nominal_declarations.get(name).and_then(|declaration| {
+            (declaration.fields.len() == field_binding.field_count).then(|| declaration.direct_declaration_id.clone())
+        });
         self.push_assign_temp(
             bir::Rvalue::Aggregate(
                 bir::AggregateKind::Constructor(bir::ConstructorTarget {
                     name: name.to_string(),
+                    direct_declaration_id,
                     binding,
                 }),
                 operands,
@@ -2971,6 +3346,71 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             hir_span_value,
             out,
         )
+    }
+
+    /// Return the exact retained target for a qualified local fieldless normal-enum member, if safe to materialize.
+    ///
+    /// A bare type-name receiver and source-local registry membership are both required. This leaves ordinary forms
+    /// not represented by the registry as generic field accesses that the direct executor visibly refuses, while
+    /// preserving exact declaration identities for the one bounded unit-variant carrier profile.
+    fn local_fieldless_enum_variant_target(
+        &self,
+        base: &ast::Spanned<ast::Expr>,
+        variant_name: &str,
+    ) -> Option<bir::FieldlessEnumVariantTarget> {
+        let ast::Expr::Ident(enum_name) = &base.node else {
+            return None;
+        };
+        if self.bindings.contains_key(enum_name)
+            || !matches!(self.type_info.ident_kind(base.span), Some(IdentKind::TypeName))
+        {
+            return None;
+        }
+        let declaration = self.local_fieldless_enum_declarations.get(enum_name)?;
+        let variant = declaration
+            .variants
+            .iter()
+            .find(|variant| variant.name == variant_name)?;
+        Some(bir::FieldlessEnumVariantTarget {
+            enum_declaration_id: declaration.direct_declaration_id.clone(),
+            variant_declaration_id: variant.direct_declaration_id.clone(),
+            enum_name: declaration.name.clone(),
+            variant_name: variant.name.clone(),
+        })
+    }
+
+    /// Return the exact retained target for a qualified local RFC 032 value-enum member, if this spelling is safe to
+    /// materialize directly.
+    ///
+    /// The source-local registry is deliberately the only lookup used here. A function-local binding wins over a
+    /// same-spelling declaration, and any import, alias, ordinary enum, payload member, or behavior-bearing enum is
+    /// absent from the registry. The resulting rvalue stores both declaration identities for runtime revalidation;
+    /// it does not make the spelling itself an execution authority.
+    fn local_value_enum_variant_target(
+        &self,
+        base: &ast::Spanned<ast::Expr>,
+        variant_name: &str,
+    ) -> Option<bir::ValueEnumVariantTarget> {
+        let ast::Expr::Ident(enum_name) = &base.node else {
+            return None;
+        };
+        if self.bindings.contains_key(enum_name) {
+            return None;
+        }
+        if !matches!(self.type_info.ident_kind(base.span), Some(IdentKind::TypeName)) {
+            return None;
+        }
+        let declaration = self.local_value_enum_declarations.get(enum_name)?;
+        let variant = declaration
+            .variants
+            .iter()
+            .find(|variant| variant.name == variant_name)?;
+        Some(bir::ValueEnumVariantTarget {
+            enum_declaration_id: declaration.direct_declaration_id.clone(),
+            variant_declaration_id: variant.direct_declaration_id.clone(),
+            enum_name: declaration.name.clone(),
+            variant_name: variant.name.clone(),
+        })
     }
 
     /// Lower a call to a locally held callable value, a nominal construction, or a direct named function.
@@ -3013,6 +3453,48 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // construction cannot be generic.
         if self.type_info.constructor_field_binding(span).is_some() {
             return self.lower_nominal_construction(&name, args, span, scope, out);
+        }
+
+        // `Ok` and `Err` are intrinsic Result constructors, not ordinary direct calls. Retain that checked
+        // distinction explicitly: a same-spelled source binding (a local callable, local function, or imported
+        // target) must remain on the normal call path and refuse unless its own direct callable facts are available.
+        // The direct runtime never resolves a constructor name dynamically.
+        if !self.bindings.contains_key(&name)
+            && !self.local_function_declarations.contains_key(&name)
+            && self.type_info.source_target(span).is_none()
+            && type_args.is_empty()
+            && let Some(kind) = result_variant_kind(&name)
+        {
+            let result_ty = self.resolve_ty(span);
+            let Some((ok_type, error_type)) = result_type_parts(&result_ty) else {
+                return self.unsupported_operand(
+                    format!("intrinsic Result constructor `{name}` without a resolved Result carrier"),
+                    scope,
+                    hir_span_value,
+                    out,
+                );
+            };
+            let [ast::CallArg::Positional(payload)] = args else {
+                return self.unsupported_operand(
+                    format!("intrinsic Result constructor `{name}` requires one positional payload"),
+                    scope,
+                    hir_span_value,
+                    out,
+                );
+            };
+            let payload = self.lower_expr_to_operand(payload, scope, out);
+            return self.push_assign_temp(
+                bir::Rvalue::ResultVariant(bir::ResultVariant {
+                    kind,
+                    payload,
+                    ok_type: ok_type.clone(),
+                    error_type: error_type.clone(),
+                }),
+                result_ty,
+                scope,
+                hir_span_value,
+                out,
+            );
         }
 
         let resolved_type_args = match self.call_site_type_arguments(span, type_args) {
@@ -3073,14 +3555,14 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             );
         }
 
-        let declared = match self.declared_slots_for_direct_call(&name, span) {
-            Ok(declared) => declared,
+        let declaration = match self.declared_slots_for_direct_call(&name, span) {
+            Ok(declaration) => declaration,
             Err(description) => {
                 return self.unsupported_operand(description, scope, hir_span_value, out);
             }
         };
         let (operands, binding) =
-            match self.bind_declared_args(&format!("function `{name}`"), declared, args, scope, out) {
+            match self.bind_declared_args(&format!("function `{name}`"), declaration.slots, args, scope, out) {
                 Ok(bound) => bound,
                 Err(description) => {
                     return self.unsupported_operand(description, scope, hir_span_value, out);
@@ -3091,6 +3573,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         self.push_call_temp(
             bir::Callee::Function(bir::CallableTarget::Named(bir::NamedCallableTarget {
                 name,
+                direct_call_id: declaration.direct_call_id,
+                builtin: declaration.builtin,
                 type_args: resolved_type_args,
                 binding,
             })),
@@ -3158,8 +3642,14 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // receiver place first. Method receivers are treated as borrowed rather than moved/cloned, mirroring how the
         // existing Rust-emission backend's ownership planner treats most method receivers
         // (`src/backend/ir/ownership.rs`) -- see this module's rustdoc for the full precedent discussion.
-        let recv_place = self.lower_expr_to_place(recv, scope, out);
-        let receiver_operand = bir::Operand::place(recv_place, bir::OwnershipFact::Borrow, false);
+        let receiver_operand = if let ast::Expr::Field(base, member) = &recv.node
+            && self.local_value_enum_variant_target(base, member).is_some()
+        {
+            self.lower_expr_to_operand(recv, scope, out)
+        } else {
+            let recv_place = self.lower_expr_to_place(recv, scope, out);
+            bir::Operand::place(recv_place, bir::OwnershipFact::Borrow, false)
+        };
 
         let (mut arg_operands, binding) =
             match self.bind_declared_args(&format!("method `{name}`"), declared, args, scope, out) {
@@ -3330,6 +3820,22 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let hir_span_value = hir_span(outer_span);
+        let operand_result_type = self.resolve_ty(inner.span);
+        let error_routing = match (
+            result_error_type(&operand_result_type),
+            result_error_type(&self.owner_return_type),
+        ) {
+            (Some(source_error_type), Some(destination_error_type)) if source_error_type == destination_error_type => {
+                bir::TryErrorRouting::SameType {
+                    error_type: source_error_type.clone(),
+                }
+            }
+            (Some(source_error_type), Some(destination_error_type)) => bir::TryErrorRouting::ConversionRequired {
+                source_error_type: source_error_type.clone(),
+                destination_error_type: destination_error_type.clone(),
+            },
+            _ => bir::TryErrorRouting::Unresolved,
+        };
         let operand = self.lower_expr_to_operand(inner, scope, out);
         let ty = self.resolve_ty(outer_span);
         let destination = self.new_temp(ty.clone(), scope, hir_span_value);
@@ -3337,6 +3843,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             kind: bir::StatementKind::TryPropagate {
                 destination: bir::Place::from_local(destination),
                 operand,
+                error_routing,
             },
             span: hir_span_value,
         });
@@ -3752,6 +4259,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             );
         }
         let target_name = target_name.clone();
+        let direct_call_id = self
+            .local_function_declarations
+            .get(&target_name)
+            .and_then(|candidates| match candidates.as_slice() {
+                [target_span] => Some(CompilerNodeId::declaration_span(
+                    self.module_identity,
+                    target_span.start,
+                    target_span.end,
+                )),
+                _ => None,
+            });
         let target_default_sources = self.function_default_sources.get(&target_name).cloned();
         let closure_scope = self.new_scope(Some(scope), hir_span_value);
 
@@ -3835,6 +4353,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let result = self.push_call_temp(
             bir::Callee::Function(bir::CallableTarget::Named(bir::NamedCallableTarget {
                 name: target_name,
+                direct_call_id,
+                builtin: None,
                 type_args: Vec::new(),
                 binding: forwarding_binding,
             })),
@@ -4069,6 +4589,76 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 bir::Pattern::Tuple(fields)
             }
             ast::Pattern::Constructor(name, args) => {
+                // Preserve exact source-local pattern targets instead of asking the executor to recover a
+                // declaration from the printed constructor spelling. The direct profile accepts only canonical
+                // named fields of a plain model; every other structurally lowered constructor remains the
+                // name-only fallback below and is visibly refused by replacement execution.
+                if let Some(declaration) = self.local_nominal_declarations.get(name)
+                    && matches!(expected_ty, IncanType::Named(type_name) if type_name == name)
+                    && args.iter().all(|arg| matches!(arg, ast::PatternArg::Named(_, _)))
+                {
+                    let fields = args
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            ast::PatternArg::Named(field, pat) => {
+                                let mut field_place = place.clone();
+                                field_place.projection.push(bir::PlaceElem::Field(field.clone()));
+                                Some((
+                                    field.clone(),
+                                    self.lower_match_pattern(
+                                        pat,
+                                        &IncanType::Unknown,
+                                        &field_place,
+                                        arm_scope,
+                                        arm,
+                                        seen,
+                                        saved_bindings,
+                                    ),
+                                ))
+                            }
+                            ast::PatternArg::Positional(_) => None,
+                        })
+                        .collect();
+                    return bir::Pattern::Nominal {
+                        target: bir::NominalPatternTarget {
+                            direct_declaration_id: declaration.direct_declaration_id.clone(),
+                            name: declaration.name.clone(),
+                        },
+                        fields,
+                    };
+                }
+
+                if let Some((enum_name, variant_name)) = name.rsplit_once("::").or_else(|| name.rsplit_once('.'))
+                    && args.is_empty()
+                    && matches!(expected_ty, IncanType::Named(type_name) if type_name == enum_name)
+                    && let Some(declaration) = self.local_fieldless_enum_declarations.get(enum_name)
+                    && let Some(variant) = declaration.variants.iter().find(|variant| variant.name == variant_name)
+                {
+                    return bir::Pattern::FieldlessEnumVariant(bir::FieldlessEnumVariantTarget {
+                        enum_declaration_id: declaration.direct_declaration_id.clone(),
+                        variant_declaration_id: variant.direct_declaration_id.clone(),
+                        enum_name: declaration.name.clone(),
+                        variant_name: variant.name.clone(),
+                    });
+                }
+
+                if let Some(variant) = result_variant_kind(name)
+                    && let Some((ok_type, error_type)) = result_type_parts(expected_ty)
+                    && args.len() == 1
+                    && let [ast::PatternArg::Positional(payload)] = args.as_slice()
+                {
+                    let payload_type = match variant {
+                        bir::ResultVariantKind::Ok => ok_type,
+                        bir::ResultVariantKind::Err => error_type,
+                    };
+                    let lowered_payload =
+                        self.lower_match_pattern(payload, payload_type, place, arm_scope, arm, seen, saved_bindings);
+                    return bir::Pattern::Result {
+                        variant,
+                        fields: vec![lowered_payload],
+                    };
+                }
+
                 // Mirrors the existing Rust-emission backend's own `lower_pattern` (non-union-aware) mapping
                 // exactly: a mix of named and positional arguments (unusual, likely non-representative source)
                 // still lowers every sub-pattern's own bindings for side effects, but only the named fields survive
@@ -4260,6 +4850,17 @@ fn count_reads_in_comprehension_clauses(name: &str, clauses: &[ast::Comprehensio
 // ============================================================================
 // Free helper functions
 // ============================================================================
+
+/// One resolved direct-call declaration narrowed to the executor-relevant facts.
+///
+/// `direct_call_id` is present only for a declaration physically represented by this module. Keeping the target
+/// separate from its parameter slots prevents a future consumer from treating a successfully planned argument list
+/// as proof that an imported callable is executable here.
+struct DirectCallDeclaration {
+    slots: Option<Vec<DeclaredSlot>>,
+    direct_call_id: Option<CompilerNodeId>,
+    builtin: Option<bir::NamedCallableBuiltin>,
+}
 
 /// One declared callable parameter or nominal field, reduced to the facts call-site binding actually needs.
 ///
@@ -6858,6 +7459,37 @@ mod tests {
             snapshot.contains("= try?("),
             "`?` should lower to an explicit try-propagate statement: {snapshot}"
         );
+        assert!(
+            snapshot.contains("same_error_type=E")
+                && snapshot.contains("result_ok(")
+                && snapshot.contains("result_err("),
+            "Result constructors and exact error routing must stay explicit in Body IR: {snapshot}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_local_callable_named_ok_shadows_the_intrinsic_result_constructor() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "enum Failure:\n  Shadowed\n\ndef main(Ok: (int) -> Result[int, Failure]) -> Result[int, Failure]:\n  return Ok(42)\n";
+        let module = build(source, &["m", "result_constructor_shadow"])?;
+        let main = module
+            .bodies
+            .iter()
+            .find(|body| body.name == "main")
+            .ok_or("the main body must be retained")?;
+        let call = single_call(main)?;
+        let bir::StatementKind::Call {
+            callee: bir::Callee::Function(bir::CallableTarget::Local(target)),
+            ..
+        } = call
+        else {
+            return Err("a callable parameter named Ok must remain a local Body-IR call".into());
+        };
+        let parameter = main
+            .param_locals
+            .first()
+            .ok_or("the callable parameter must retain a local id")?;
+        assert_eq!(target.operand.place, bir::Place::from_local(*parameter));
         Ok(())
     }
 
@@ -7802,13 +8434,23 @@ mod tests {
             "a non-Copy element read through a projection borrows rather than moving: {snapshot}"
         );
 
-        // Neither binding is ever moved out -- `tail` is never read at all and `head` is only read as a call
-        // argument -- so both owe an explicit scope-exit drop on every iteration.
-        assert_eq!(
-            snapshot.matches("drop _").count(),
-            2,
-            "each non-Copy loop binding owes exactly one scope-exit drop: {snapshot}"
-        );
+        // `head` is its call argument's recorded last use and therefore moves; unread `tail` remains live and owes
+        // one loop-scope drop. Count exact ids so the enclosing parameter's root-scope drop is not conflated with
+        // either binding.
+        let body = module.bodies.first().ok_or("expected the widths Body IR")?;
+        let head = body
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("head"))
+            .ok_or("missing loop binding `head`")?;
+        let tail = body
+            .locals
+            .iter()
+            .find(|local| local.name.as_deref() == Some("tail"))
+            .ok_or("missing loop binding `tail`")?;
+        assert!(snapshot.contains(&format!("move(_{}", head.id.0)));
+        assert_eq!(snapshot.matches(&format!("drop _{}", head.id.0)).count(), 0);
+        assert_eq!(snapshot.matches(&format!("drop _{}", tail.id.0)).count(), 1);
         Ok(())
     }
 
@@ -8088,6 +8730,108 @@ mod tests {
         Ok(())
     }
 
+    /// Retain the exact local model layout a direct executor needs instead of treating a constructor spelling as an
+    /// identity.
+    #[test]
+    fn source_local_model_construction_retains_its_declaration_identity_and_canonical_field_layout()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "model Pair:\n  left: int\n  right: int\n\ndef main() -> int:\n  pair = Pair(right=2, left=40)\n  return pair.left + pair.right\n";
+        let module = build(source, &["m", "nominal_identity"])?;
+        let declaration = match module.nominal_declarations.as_slice() {
+            [declaration] => declaration,
+            declarations => {
+                return Err(format!("expected one retained local model declaration, found {declarations:?}").into());
+            }
+        };
+        assert_eq!(declaration.name, "Pair");
+        assert_eq!(declaration.fields, vec!["left", "right"]);
+        assert_eq!(declaration.type_parameter_count, 0);
+
+        let body = body_named(&module, "main")?;
+        let target = body
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                bir::StatementKind::Assign {
+                    rvalue: bir::Rvalue::Aggregate(bir::AggregateKind::Constructor(target), _),
+                    ..
+                } => Some(target),
+                _ => None,
+            })
+            .ok_or("the local model construction must lower as a constructor aggregate")?;
+        assert_eq!(target.name, "Pair");
+        assert_eq!(
+            target.direct_declaration_id.as_ref(),
+            Some(&declaration.direct_declaration_id)
+        );
+        let bir::ArgumentBinding::Resolved {
+            arguments,
+            defaulted_slots,
+        } = &target.binding
+        else {
+            return Err("local model construction must retain its resolved field binding".into());
+        };
+        assert!(defaulted_slots.is_empty());
+        assert_eq!(
+            arguments
+                .iter()
+                .map(|argument| (argument.slot, argument.written_position))
+                .collect::<Vec<_>>(),
+            vec![(0, 1), (1, 0)],
+            "constructor operands retain declaration slots while written positions retain source evaluation order"
+        );
+        Ok(())
+    }
+
+    /// Retain the exact local value-enum member selected by source lowering rather than recovering it from a
+    /// qualified spelling in a direct runtime.
+    #[test]
+    fn source_local_value_enum_member_retains_exact_enum_and_variant_identities()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "enum HttpStatus(int):\n  Ok = 200\n  NotFound = 404\n\ndef main() -> int:\n  return HttpStatus.NotFound.value()\n";
+        let module = build(source, &["m", "value_enum_identity"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("value_enum HttpStatus id=decl:m::value_enum_identity#decl."),
+            "the module must retain the source-local enum declaration identity: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("variant NotFound id=decl:m::value_enum_identity#decl."),
+            "the module must retain the source-local member declaration identity: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("value_enum_variant(HttpStatus::NotFound"),
+            "the member expression must lower to an identity-bearing rvalue instead of an external field place: {snapshot}"
+        );
+        Ok(())
+    }
+
+    /// Retain the exact local fieldless normal-enum member selected by source lowering rather than treating a
+    /// qualified spelling as a value any backend may recover.
+    #[test]
+    fn source_local_fieldless_enum_member_retains_exact_enum_and_variant_identities()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "enum Signal:\n  Ready\n  Stop\n\ndef main() -> bool:\n  return Signal.Ready == Signal.Stop\n";
+        let module = build(source, &["m", "fieldless_enum_identity"])?;
+        let snapshot = module.render_snapshot();
+
+        assert!(
+            snapshot.contains("fieldless_enum Signal id=decl:m::fieldless_enum_identity#decl."),
+            "the module must retain the source-local enum declaration identity: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("variant Ready id=decl:m::fieldless_enum_identity#decl."),
+            "the module must retain the source-local member declaration identity: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("fieldless_enum_variant(Signal::Ready"),
+            "the member expression must lower to an identity-bearing rvalue instead of an external field place: {snapshot}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn mixed_positional_and_named_call_arguments_bind_to_declared_parameters() -> Result<(), Box<dyn std::error::Error>>
     {
@@ -8322,6 +9066,38 @@ mod tests {
         assert!(
             rendered.contains("call fn:pick(const(10), const(1))"),
             "operands must follow the selected overload's declaration order: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn an_overloaded_call_retains_the_typechecker_selected_same_module_declaration_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = "def pick(a: int, b: int) -> int:\n  return a - b\n\ndef pick(b: str, a: str) -> str:\n  return a\n\ndef use() -> int:\n  return pick(a=10, b=1)\n";
+        let module = build(source, &["m", "overload_identity"])?;
+        let use_body = body_named(&module, "use")?;
+        let bir::StatementKind::Call {
+            callee: bir::Callee::Function(bir::CallableTarget::Named(target)),
+            ..
+        } = single_call(use_body)?
+        else {
+            return Err("expected an identity-selected named function call".into());
+        };
+        let target_id = target
+            .direct_call_id
+            .as_ref()
+            .ok_or("same-module overloaded call must retain a direct declaration identity")?;
+        let selected = module
+            .bodies
+            .iter()
+            .find(|body| body.direct_call_id == *target_id)
+            .ok_or("direct call identity must select a Body-IR declaration")?;
+
+        assert_eq!(selected.name, "pick");
+        assert!(
+            selected.render_snapshot().contains("local 0 a : int [param]"),
+            "the direct identity must select the integer overload: {}",
+            selected.render_snapshot()
         );
         Ok(())
     }
@@ -8773,8 +9549,21 @@ mod tests {
         // registered today. Dispatching on the payload alone would silently lower a future prefix keyword as a
         // suspension point, so lowering matches the surface *key*. This pins that.
         let type_info = TypeCheckInfo::default();
-        let default_sources = FunctionDefaultSources::new();
-        let mut builder = BodyBuilder::new(&type_info, &default_sources);
+        let function_default_sources = FunctionDefaultSources::new();
+        let local_function_declarations = LocalFunctionDeclarations::new();
+        let local_nominal_declarations = LocalNominalDeclarations::new();
+        let local_fieldless_enum_declarations = LocalFieldlessEnumDeclarations::new();
+        let local_value_enum_declarations = LocalValueEnumDeclarations::new();
+        let lowering_facts = BodyIrLoweringFacts {
+            type_info: &type_info,
+            function_default_sources: &function_default_sources,
+            local_function_declarations: &local_function_declarations,
+            local_nominal_declarations: &local_nominal_declarations,
+            local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
+            local_value_enum_declarations: &local_value_enum_declarations,
+            module_identity: "m",
+        };
+        let mut builder = BodyBuilder::new(&lowering_facts, IncanType::Unknown);
         let scope = builder.new_scope(None, HirSourceSpan::new(0, 1));
         let mut out = Vec::new();
         let surface = ast::SurfaceExpr {

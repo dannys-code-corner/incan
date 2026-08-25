@@ -47,11 +47,34 @@ use crate::{AbiV0RuntimeRequirement, CompilerNodeId, HirSourceSpan, IncanType};
 // Module / body containers
 // ============================================================================
 
-/// One module's worth of lowered function/method bodies.
+/// One module's lowered function/method bodies and direct-execution declaration facts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BodyIrModule {
     /// Identity of the owning module, matching [`crate::HirModule::id`].
     pub module_id: CompilerNodeId,
+    /// Source-local plain-model declarations whose construction layout is available to a direct runtime.
+    ///
+    /// This is not a general nominal symbol table. It contains only the source-local model declarations lowering
+    /// has explicitly retained for direct execution, and each record carries its declaration-span identity and
+    /// canonical field order. A consumer must resolve a [`ConstructorTarget::direct_declaration_id`] against this
+    /// list rather than recovering a constructor identity from a source spelling, import, alias, or typechecker
+    /// lookup. Models outside this deliberately narrow value profile are absent and must refuse.
+    pub nominal_declarations: Vec<NominalDeclaration>,
+    /// Source-local fieldless normal-enum declarations whose canonical unit variants are available to direct
+    /// execution.
+    ///
+    /// This is not a general algebraic-data-type registry. The direct profile may materialize only an exact retained
+    /// unit variant, compare two carriers of the same retained enum identity, and dispatch a pattern carrying the
+    /// same exact enum/member identities; payload variants, aliases, imports, traits, and methods remain absent and
+    /// must refuse.
+    pub fieldless_enum_declarations: Vec<FieldlessEnumDeclaration>,
+    /// Source-local RFC 032 value-enum declarations whose canonical scalar members are available to direct execution.
+    ///
+    /// This is deliberately separate from [`Self::nominal_declarations`]: a value enum has no model field layout,
+    /// and the direct runtime may extract only a retained member's scalar backing through the compiler-provided
+    /// zero-argument `.value()` surface. Ordinary enums, payload variants, aliases, imports, behavior-bearing
+    /// enums, and generic enums are absent and must refuse rather than being rediscovered by spelling.
+    pub value_enum_declarations: Vec<ValueEnumDeclaration>,
     /// One [`Body`] per lowered function/method declaration in the module.
     pub bodies: Vec<Body>,
 }
@@ -61,10 +84,156 @@ impl BodyIrModule {
     pub fn render_snapshot(&self) -> String {
         let mut out = String::new();
         let _ = writeln!(&mut out, "body_ir_module {}", self.module_id);
+        for declaration in &self.nominal_declarations {
+            let _ = writeln!(
+                &mut out,
+                "nominal {} id={} fields=[{}] type_params={}",
+                declaration.name,
+                declaration.direct_declaration_id,
+                declaration.fields.join(", "),
+                declaration.type_parameter_count
+            );
+        }
+        for declaration in &self.fieldless_enum_declarations {
+            let _ = writeln!(
+                &mut out,
+                "fieldless_enum {} id={} variants=[{}]",
+                declaration.name,
+                declaration.direct_declaration_id,
+                declaration
+                    .variants
+                    .iter()
+                    .map(FieldlessEnumVariantDeclaration::render_snapshot)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for declaration in &self.value_enum_declarations {
+            let _ = writeln!(
+                &mut out,
+                "value_enum {} id={} backing={} variants=[{}]",
+                declaration.name,
+                declaration.direct_declaration_id,
+                declaration.backing.as_str(),
+                declaration
+                    .variants
+                    .iter()
+                    .map(ValueEnumVariantDeclaration::render_snapshot)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
         for body in &self.bodies {
             out.push_str(&body.render_snapshot());
         }
         out
+    }
+}
+
+/// The exact local declaration and canonical field layout for one direct-executable plain model.
+///
+/// The record is module-scoped and deliberately excludes classes, enums, imported nominals, generic models, and
+/// behavior-bearing models. Its field order is the checked constructor-slot order; a direct runtime must pair it
+/// with [`ConstructorTarget::binding`] rather than treating constructor argument spelling as layout evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NominalDeclaration {
+    /// Exact source-local declaration identity, derived from the declaration source span.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical source declaration name, checked again by consumers as a defence against malformed Body IR.
+    pub name: String,
+    /// Canonical declared field names in declaration order.
+    pub fields: Vec<String>,
+    /// Number of declared type parameters; this profile admits only zero.
+    pub type_parameter_count: usize,
+}
+
+/// One source-local fieldless normal enum retained for direct identity comparison.
+///
+/// The record exists only for undecorated, non-generic declarations with no traits, methods, aliases, value backing,
+/// or payload variants. A runtime validates these records before materializing a carrier and never treats the enum
+/// spelling itself as an execution authority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldlessEnumDeclaration {
+    /// Exact source-local enum declaration identity, derived from the declaration source span.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical source declaration name.
+    pub name: String,
+    /// Canonical zero-payload variants in source declaration order.
+    pub variants: Vec<FieldlessEnumVariantDeclaration>,
+}
+
+/// One canonical zero-payload member of a retained fieldless normal enum.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldlessEnumVariantDeclaration {
+    /// Exact source-local variant declaration identity, derived from the declaration source span.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical member name; aliases are intentionally not retained.
+    pub name: String,
+}
+
+impl FieldlessEnumVariantDeclaration {
+    /// Render the member identity for a deterministic module snapshot.
+    fn render_snapshot(&self) -> String {
+        format!("variant {} id={}", self.name, self.direct_declaration_id)
+    }
+}
+
+/// The scalar backing category a retained RFC 032 value enum exposes through `.value()`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueEnumBacking {
+    /// An integer-backed value enum.
+    Int,
+    /// A string-backed value enum.
+    Str,
+}
+
+impl ValueEnumBacking {
+    /// Render the canonical source-level scalar type name for snapshots and diagnostics.
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Str => "str",
+        }
+    }
+}
+
+/// One source-local RFC 032 value enum retained for direct scalar extraction.
+///
+/// The record exists only for undecorated, non-generic declarations with no traits, methods, aliases, or payload
+/// variants. Each member has its own source-span identity, so a direct executor verifies the actual selected member
+/// without treating a qualified `Enum.Member` spelling as an identity.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueEnumDeclaration {
+    /// Exact source-local enum declaration identity, derived from its declaration span.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical source declaration name.
+    pub name: String,
+    /// The only scalar carrier exposed by the admitted generated `.value()` operation.
+    pub backing: ValueEnumBacking,
+    /// Canonical value-enum members in source declaration order.
+    pub variants: Vec<ValueEnumVariantDeclaration>,
+}
+
+/// One canonical scalar member of a retained source-local value enum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ValueEnumVariantDeclaration {
+    /// Exact source-local variant declaration identity, derived from its declaration span.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical member name; aliases are intentionally not retained.
+    pub name: String,
+    /// The checked source literal exposed only through identity-validated `.value()` extraction.
+    pub raw_value: Constant,
+}
+
+impl ValueEnumVariantDeclaration {
+    /// Render the member's identity and raw scalar fact for a deterministic module snapshot.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "variant {} id={} raw={}",
+            self.name,
+            self.direct_declaration_id,
+            self.raw_value.render_snapshot()
+        )
     }
 }
 
@@ -73,6 +242,14 @@ impl BodyIrModule {
 pub struct Body {
     /// Identity of the owning declaration, matching the [`crate::HirDeclaration::id`] this body was lowered from.
     pub decl_id: CompilerNodeId,
+    /// Exact source-local identity used to dispatch a direct named Body-IR call.
+    ///
+    /// [`Self::decl_id`] intentionally stays correlated with declaration-level HIR, whose named identity is useful
+    /// to existing consumers but is not collision-safe for same-name overloads. This span-based declaration identity
+    /// is retained separately so a direct executor can select precisely the declaration the typechecker chose,
+    /// without reconstructing name resolution or consulting generated Rust. It is always scoped to this
+    /// [`BodyIrModule`] and must never stand in for an imported callable identity.
+    pub direct_call_id: CompilerNodeId,
     /// Source-level function/method name.
     pub name: String,
     /// Full source span of the declaration this body was lowered from.
@@ -527,6 +704,25 @@ pub enum Rvalue {
     BinaryOp(BinOp, Operand, Operand),
     /// Build a tuple, list, or nominal-constructor value from its element/field operands.
     Aggregate(AggregateKind, Vec<Operand>),
+    /// Materialize one exact source-local RFC 032 value-enum member.
+    ///
+    /// This stores declaration identities rather than a raw scalar so a direct runtime can revalidate enum/member
+    /// membership against [`BodyIrModule::value_enum_declarations`] before the compiler-provided `.value()` method
+    /// exposes the literal. It never represents an ordinary enum, payload variant, alias, import, or Result value.
+    ValueEnumVariant(ValueEnumVariantTarget),
+    /// Materialize one exact source-local fieldless normal-enum member.
+    ///
+    /// This stores declaration identities rather than a source spelling so a direct runtime can revalidate the
+    /// unit-variant membership against [`BodyIrModule::fieldless_enum_declarations`]. It never represents payload
+    /// construction, aliases, imports, or Result values; matching is represented separately by
+    /// [`Pattern::FieldlessEnumVariant`].
+    FieldlessEnumVariant(FieldlessEnumVariantTarget),
+    /// Construct one compiler-owned `Result` variant from one already-lowered payload.
+    ///
+    /// The variant kind and checked payload/error types are explicit Body-IR facts. A direct runtime may therefore
+    /// construct only `Ok` or `Err` without treating an arbitrary same-spelled callable as a Result constructor;
+    /// imported conversions, unresolved types, and cross-error-type propagation remain visible refusals.
+    ResultVariant(ResultVariant),
     /// An f-string interpolation, built from a sequence of literal text chunks and already-lowered embedded
     /// expressions. Mirrors the existing Rust-emission backend's dedicated `IrExprKind::Format { parts }` node
     /// (`src/backend/ir/expr.rs`) rather than a helper-call desugar: an f-string is a compiler-owned structured
@@ -636,6 +832,9 @@ impl Rvalue {
                 let items: Vec<String> = operands.iter().map(Operand::render_snapshot).collect();
                 format!("{}[{}]", kind.as_str(), items.join(", "))
             }
+            Self::ValueEnumVariant(target) => target.render_snapshot(),
+            Self::FieldlessEnumVariant(target) => target.render_snapshot(),
+            Self::ResultVariant(variant) => variant.render_snapshot(),
             Self::Format(parts) => {
                 let items: Vec<String> = parts.iter().map(FormatPart::render_snapshot).collect();
                 format!("fstring({})", items.join(", "))
@@ -671,6 +870,97 @@ impl Rvalue {
                 let arms_str: Vec<String> = arms.iter().map(MatchArm::render_snapshot).collect();
                 format!("match {} {{ {} }}", scrutinee.render_snapshot(), arms_str.join(", "))
             }
+        }
+    }
+}
+
+/// Exact source-local enum/member identity selected for one value-enum member expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ValueEnumVariantTarget {
+    /// Exact source-local owner enum declaration identity.
+    pub enum_declaration_id: CompilerNodeId,
+    /// Exact source-local member declaration identity.
+    pub variant_declaration_id: CompilerNodeId,
+    /// Canonical owner name, retained for malformed-Body-IR cross-checks and diagnostics.
+    pub enum_name: String,
+    /// Canonical member name, retained for malformed-Body-IR cross-checks and diagnostics.
+    pub variant_name: String,
+}
+
+impl ValueEnumVariantTarget {
+    /// Render both retained identities so snapshots cannot mistake a member spelling for its direct target fact.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "value_enum_variant({}::{} enum_id={} variant_id={})",
+            self.enum_name, self.variant_name, self.enum_declaration_id, self.variant_declaration_id
+        )
+    }
+}
+
+/// Exact source-local enum/member identity selected for one fieldless normal-enum member expression.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FieldlessEnumVariantTarget {
+    /// Exact source-local owner enum declaration identity.
+    pub enum_declaration_id: CompilerNodeId,
+    /// Exact source-local member declaration identity.
+    pub variant_declaration_id: CompilerNodeId,
+    /// Canonical owner name, retained for malformed-Body-IR cross-checks and diagnostics.
+    pub enum_name: String,
+    /// Canonical member name, retained for malformed-Body-IR cross-checks and diagnostics.
+    pub variant_name: String,
+}
+
+impl FieldlessEnumVariantTarget {
+    /// Render both retained identities so snapshots cannot mistake a unit-variant spelling for a direct target fact.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "fieldless_enum_variant({}::{} enum_id={} variant_id={})",
+            self.enum_name, self.variant_name, self.enum_declaration_id, self.variant_declaration_id
+        )
+    }
+}
+
+/// One direct compiler-owned `Result` construction with its checked payload and error facts retained.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResultVariant {
+    /// Which intrinsic Result constructor source checking selected.
+    pub kind: ResultVariantKind,
+    /// The one source-order payload operand.
+    pub payload: Operand,
+    /// Checked `Result` success type.
+    pub ok_type: IncanType,
+    /// Checked `Result` error type.
+    pub error_type: IncanType,
+}
+
+impl ResultVariant {
+    /// Render the construction and checked type facts without consulting any target-language Result spelling.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "result_{}({}, ok_type={}, error_type={})",
+            self.kind.as_str(),
+            self.payload.render_snapshot(),
+            self.ok_type,
+            self.error_type
+        )
+    }
+}
+
+/// Intrinsic source-level Result constructor selected by typechecking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultVariantKind {
+    /// `Ok(payload)`.
+    Ok,
+    /// `Err(payload)`.
+    Err,
+}
+
+impl ResultVariantKind {
+    /// Stable lowercase spelling for snapshots and receipts.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Err => "err",
         }
     }
 }
@@ -984,6 +1274,19 @@ pub enum Pattern {
         name: String,
         fields: Vec<(String, Pattern)>,
     },
+    /// A source-local plain-model pattern whose exact declaration identity is retained alongside canonical named
+    /// fields. This is distinct from [`Self::Struct`], whose name-only fallback remains a visible refusal.
+    Nominal {
+        target: NominalPatternTarget,
+        fields: Vec<(String, Pattern)>,
+    },
+    /// A source-local fieldless normal-enum unit pattern with exact enum/member identities.
+    FieldlessEnumVariant(FieldlessEnumVariantTarget),
+    /// One intrinsic `Result` constructor pattern with its recursively lowered payload patterns.
+    Result {
+        variant: ResultVariantKind,
+        fields: Vec<Pattern>,
+    },
     /// A positional constructor pattern (`Some(x)`, `Ok(value)`, `Shape::Circle(r)`): matches an enum-variant (or
     /// `Option`/`Result`) scrutinee and recursively matches/binds each positional field. `name` is the enum type
     /// name when known, or empty when v0 lowering could not resolve it (matching the existing backend's own
@@ -1020,6 +1323,20 @@ impl Pattern {
                     .collect();
                 format!("{name} {{ {} }}", fields.join(", "))
             }
+            Self::Nominal { target, fields } => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|(field_name, pat)| format!("{field_name}: {}", pat.render_snapshot()))
+                    .collect();
+                format!("nominal {} {{ {} }}", target.render_snapshot(), fields.join(", "))
+            }
+            Self::FieldlessEnumVariant(target) => {
+                format!("fieldless {}", target.render_snapshot())
+            }
+            Self::Result { variant, fields } => {
+                let fields: Vec<String> = fields.iter().map(Pattern::render_snapshot).collect();
+                format!("Result::{}({})", variant.as_str(), fields.join(", "))
+            }
             Self::Enum { name, variant, fields } => {
                 let label = if name.is_empty() {
                     variant.clone()
@@ -1038,6 +1355,22 @@ impl Pattern {
                 items.join(" | ")
             }
         }
+    }
+}
+
+/// Exact source-local plain-model declaration selected by one structural pattern.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NominalPatternTarget {
+    /// Exact source-local model declaration identity.
+    pub direct_declaration_id: CompilerNodeId,
+    /// Canonical model name retained only for malformed-Body-IR cross-checks and diagnostics.
+    pub name: String,
+}
+
+impl NominalPatternTarget {
+    /// Render the nominal identity explicitly so a snapshot cannot mistake the name for an authority.
+    fn render_snapshot(&self) -> String {
+        format!("{} id={}", self.name, self.direct_declaration_id)
     }
 }
 
@@ -1446,6 +1779,17 @@ pub struct LocalCallableTarget {
     pub binding: ArgumentBinding,
 }
 
+/// One compiler-recognized named callable with an explicit direct-runtime rule.
+///
+/// This is intentionally distinct from an absent same-module declaration identity. An absent identity means the
+/// source target is unresolved, imported, or otherwise unavailable to this Body-IR module and must refuse; only a
+/// checked builtin fact may select a compiler-owned direct-runtime behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NamedCallableBuiltin {
+    /// The compiler-owned `range` iterator constructor.
+    Range,
+}
+
 /// A direct call to a named function, with its resolved call-site identity.
 ///
 /// Explicit call-site type arguments are part of that identity rather than decoration: `decode_rows[Order](path)`
@@ -1456,6 +1800,16 @@ pub struct LocalCallableTarget {
 pub struct NamedCallableTarget {
     /// Source-level function name.
     pub name: String,
+    /// Exact same-module declaration selected for this call, when Body IR can retain one.
+    ///
+    /// `None` is never permission for an executor to guess an imported, unresolved, or otherwise non-local target
+    /// from [`Self::name`]. A compiler-owned callable uses [`Self::builtin`] instead.
+    pub direct_call_id: Option<CompilerNodeId>,
+    /// Compiler-recognized builtin target, if the typechecker proved this call did not resolve to a source binding.
+    ///
+    /// This is `None` for every same-module, imported, unresolved, or otherwise external target. Consumers must
+    /// reject an absent `direct_call_id` and absent `builtin` rather than using [`Self::name`] as a dispatch key.
+    pub builtin: Option<NamedCallableBuiltin>,
     /// Resolved explicit call-site type arguments, in declared type-parameter order. Empty when the call site wrote
     /// none.
     pub type_args: Vec<IncanType>,
@@ -1531,6 +1885,11 @@ impl std::fmt::Display for MethodTarget {
 pub struct ConstructorTarget {
     /// Source-level nominal type name.
     pub name: String,
+    /// Exact source-local nominal declaration selected for this construction, when the module retained one.
+    ///
+    /// An absent identity is not permission to look up [`Self::name`] in another compiler structure: imports,
+    /// aliases, classes, generic models, and any unretained nominal target must refuse at the constructor span.
+    pub direct_declaration_id: Option<CompilerNodeId>,
     /// Resolved binding of the surrounding aggregate's operands to the type's declared fields.
     pub binding: ArgumentBinding,
 }
@@ -1724,12 +2083,17 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
         StatementKind::Expr { value } => {
             let _ = writeln!(out, "{indent}expr {}", value.render_snapshot());
         }
-        StatementKind::TryPropagate { destination, operand } => {
+        StatementKind::TryPropagate {
+            destination,
+            operand,
+            error_routing,
+        } => {
             let _ = writeln!(
                 out,
-                "{indent}{} = try?({})",
+                "{indent}{} = try?({}, {})",
                 destination.render_snapshot(),
-                operand.render_snapshot()
+                operand.render_snapshot(),
+                error_routing.render_snapshot()
             );
         }
         StatementKind::IterNext {
@@ -1909,7 +2273,13 @@ pub enum StatementKind {
     /// call-target resolution for a manual decomposition is out of scope for v0 (see the module docs). Unlike
     /// [`Callee::Helper`] this needs no runtime-helper requirement: the conversion is Rust's own `From`/`Into`
     /// machinery, not a compiler-provided function call.
-    TryPropagate { destination: Place, operand: Operand },
+    TryPropagate {
+        destination: Place,
+        operand: Operand,
+        /// Checked routing fact for the failure payload. A direct runtime supports only the exact same error type;
+        /// a conversion remains represented so it can refuse without guessing an `Into`/`From` implementation.
+        error_routing: TryErrorRouting,
+    },
     /// Poll one iteration of a general (non-range) `for` loop or comprehension `for` clause, standing in for
     /// `iterator.next_method()` (or a builtin collection's implicit advance) plus the branch on its result -- the
     /// same #653-criterion-3 "compiler-owned semantic gets its own explicit node" treatment as
@@ -1936,6 +2306,35 @@ pub enum StatementKind {
     /// A source construct v0 lowering does not yet model. Keeps the model total over real programs instead of
     /// panicking or silently dropping the construct.
     Unsupported { description: String },
+}
+
+/// Typechecker-proven error routing selected for one `?` operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TryErrorRouting {
+    /// The operand and enclosing Result have the same exact error type, so direct propagation needs no conversion.
+    SameType { error_type: IncanType },
+    /// Source semantics selected a conversion between distinct error types. The direct runtime intentionally does
+    /// not reconstruct that conversion until Body IR retains the conversion authority itself.
+    ConversionRequired {
+        source_error_type: IncanType,
+        destination_error_type: IncanType,
+    },
+    /// Lowering did not retain enough checked Result type information to describe error routing honestly.
+    Unresolved,
+}
+
+impl TryErrorRouting {
+    /// Stable maintainer-facing rendering paired with the `try?` snapshot line.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::SameType { error_type } => format!("same_error_type={error_type}"),
+            Self::ConversionRequired {
+                source_error_type,
+                destination_error_type,
+            } => format!("error_conversion={source_error_type}->{destination_error_type}"),
+            Self::Unresolved => "error_routing=unresolved".to_string(),
+        }
+    }
 }
 
 // ============================================================================
@@ -1984,11 +2383,13 @@ mod tests {
 
     fn sample_body() -> Body {
         let decl_id = CompilerNodeId::declaration("m", "add");
+        let direct_call_id = CompilerNodeId::declaration_span("m", 0, 30);
         let local_x = LocalId(0);
         let local_y = LocalId(1);
         let local_tmp = LocalId(2);
         Body {
             decl_id: decl_id.clone(),
+            direct_call_id,
             name: "add".to_string(),
             span: HirSourceSpan::new(0, 30),
             locals: vec![
@@ -2332,12 +2733,15 @@ mod tests {
                 kind: StatementKind::TryPropagate {
                     destination: Place::from_local(LocalId(2)),
                     operand: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Move, true),
+                    error_routing: TryErrorRouting::SameType {
+                        error_type: IncanType::Named("E".to_string()),
+                    },
                 },
                 span: HirSourceSpan::new(0, 1),
             },
         );
         let snapshot = body.render_snapshot();
-        assert!(snapshot.contains("_2 = try?(move(_0, last_use))"));
+        assert!(snapshot.contains("_2 = try?(move(_0, last_use), same_error_type=E)"));
     }
 
     #[test]
@@ -2627,6 +3031,9 @@ mod tests {
     fn body_ir_module_snapshot_wraps_bodies() {
         let module = BodyIrModule {
             module_id: CompilerNodeId::new(CompilerNodeKind::Module, "m"),
+            nominal_declarations: Vec::new(),
+            fieldless_enum_declarations: Vec::new(),
+            value_enum_declarations: Vec::new(),
             bodies: vec![sample_body()],
         };
         let snapshot = module.render_snapshot();

@@ -3,15 +3,18 @@
 //! This module consumes [`BodyIrModule`] directly. It never reads generated Rust, never
 //! delegates a requested replacement execution to [`crate::backend::ir`], and rejects every operation outside the
 //! first free-function profile with the original Body-IR source span. The profile is intentionally limited to
-//! scalar local values, scalar tuple collections, arithmetic, compiler-owned string concatenation, branches,
-//! normalized loops, returns, and assertions. It admits only the one-level `.0`/`.1` tuple projections Body IR
-//! emits for `for a, b in pairs`, where `pairs` is `list[tuple[scalar, scalar]]`. It also consumes the retained
-//! callable vocabulary directly: captured local closures, partial presets, source-evaluable defaults, resolved
-//! local or same-module named calls, generator expressions and generator functions, and their bounded lazy
-//! `map`/`filter` adapters. Packages, Rust interop, unsupported callable/default forms, general destructuring, and
-//! other projections remain visible refusals. Its enclosing declaration snapshot retains a deferred generator's
-//! shape, but the frame executes and adds execution-frame evidence only when collection polls it; no path falls
-//! back to generated Rust.
+//! scalar arithmetic, compiler-owned string concatenation, branches, normalized loops, assertions, source-local
+//! recursive tuple/list values, fully supplied source-local plain-model values, and exact source-local RFC 032
+//! value-enum members followed by their generated scalar `.value()` extraction. It admits one numeric tuple or
+//! canonical plain-model field projection and one integer list projection or assignment;
+//! builtin iteration remains limited to `list[tuple[scalar, scalar]]`. The selected entrypoint must produce a scalar
+//! observable, although an admitted sibling may return a structural intermediate to its direct caller. The executor
+//! also consumes the retained callable vocabulary directly: captured local closures, partial presets,
+//! source-evaluable defaults, identity-selected local or same-module named calls, generator expressions and
+//! generator functions, and their bounded lazy `map`/`filter` adapters. Packages, Rust interop, unsupported
+//! callable/default forms, general destructuring, and other projections remain visible refusals. Its enclosing
+//! declaration snapshot retains a deferred generator's shape, but the frame executes and adds execution-frame
+//! evidence only when collection polls it; no path falls back to generated Rust.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -22,11 +25,16 @@ use incan_core::{
 };
 use incan_semantics_core::body_ir::{
     AggregateKind, ArgumentBinding, BinOp, Body, BodyIrModule, CallableParam, CallableParamDefault, CallableTarget,
-    Callee, ClosureBody, Constant, DefaultComputation, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget,
-    LocalId, LocalOrigin, NamedCallableTarget, Operand, OwnershipFact, Place, PlaceElem, Rvalue, Statement,
-    StatementKind, UnOp,
+    Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation, FieldlessEnumDeclaration,
+    FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp, IterProtocol,
+    LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget, NominalDeclaration,
+    NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem, ResultVariant,
+    ResultVariantKind, Rvalue, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration,
+    ValueEnumVariantDeclaration, ValueEnumVariantTarget,
 };
-use incan_semantics_core::{AbiV0RuntimeRequirement, HirSourceSpan, IncanPrimitiveType, IncanType};
+use incan_semantics_core::{
+    AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
+};
 
 use crate::backend::selection::digest_output;
 
@@ -52,13 +60,60 @@ pub enum ReplacementValue {
     Unit,
     /// A normalized runtime range iterator for the selected `range` source-spelling control-flow case.
     Range { next: i64, end: i64, step: i64 },
-    /// A `list[tuple[scalar, scalar]]` value with the cursor owned by its materialized builtin iterator local.
+    /// A source-local structural list value with the cursor owned by its materialized builtin iterator local.
     List {
         elements: Vec<ReplacementValue>,
         next: usize,
     },
-    /// A two-element scalar tuple, retained only as one element of an admitted replacement list value.
+    /// A source-local structural tuple whose elements remain direct replacement values.
     Tuple(Vec<ReplacementValue>),
+    /// A source-local plain-model instance whose declaration identity and canonical field layout were verified.
+    ///
+    /// This is neither a generic object nor a name-based map. Construction resolves `direct_declaration_id` against
+    /// `BodyIrModule::nominal_declarations`, and field reads repeat that verification before returning a stored
+    /// canonical field. Nested nominal values, methods, field writes, aliases, and nominal entrypoint results stay
+    /// outside this phase's profile.
+    Nominal {
+        /// Exact declaration identity retained from the source-local Body-IR nominal registry.
+        direct_declaration_id: incan_semantics_core::CompilerNodeId,
+        /// Canonical declared field names and values in declaration order.
+        fields: Vec<(String, ReplacementValue)>,
+    },
+    /// An exact source-local fieldless normal-enum member verified against the Body-IR declaration registry.
+    ///
+    /// This carrier has no payload and exposes no methods, matching, collection behavior, or selected-entrypoint
+    /// output. The direct runtime permits only equality or inequality after both operands revalidate their exact
+    /// enum/member identities against the same source-local registry.
+    FieldlessEnum {
+        /// Exact retained source-local owner enum identity.
+        enum_declaration_id: CompilerNodeId,
+        /// Exact retained source-local unit-member identity.
+        variant_declaration_id: CompilerNodeId,
+    },
+    /// An exact source-local RFC 032 value-enum member verified against the Body-IR declaration registry.
+    ///
+    /// The carrier deliberately stores no raw scalar and supports no general enum operations. The scalar literal is
+    /// resolved again only by the admitted compiler-provided `.value()` call, after rechecking both identities and
+    /// their membership in the same module registry.
+    ValueEnum {
+        /// Exact retained source-local owner enum identity.
+        enum_declaration_id: incan_semantics_core::CompilerNodeId,
+        /// Exact retained source-local member identity.
+        variant_declaration_id: incan_semantics_core::CompilerNodeId,
+    },
+    /// One intrinsic `Result` carrier constructed directly from its retained Body-IR variant and payload.
+    ///
+    /// The source checker has already selected `Ok` or `Err`; direct execution retains that selection rather than
+    /// reconstructing constructors from spelling. The payload is boxed solely because a Result may carry an admitted
+    /// nominal or structural direct value.
+    Result {
+        kind: ResultVariantKind,
+        payload: Box<ReplacementValue>,
+        /// Checked `Result` success type retained by the constructing Body-IR rvalue.
+        ok_type: IncanType,
+        /// Checked `Result` error type retained by the constructing Body-IR rvalue.
+        error_type: IncanType,
+    },
     /// A closure or partial application whose lexical captures were evaluated when the value was constructed.
     Callable(Box<ReplacementCallable>),
     /// A generator expression or generator function whose frame remains deferred until an admitted consumer polls
@@ -173,6 +228,59 @@ impl GeneratorCursor {
     }
 }
 
+/// Convert one registry-owned value-enum literal to its admitted scalar only after backing-category validation.
+///
+/// This deliberately accepts neither arbitrary `Constant` shapes nor a raw scalar carried by an execution target:
+/// the declaration registry remains the single source of truth for a direct value enum's value representation.
+fn value_enum_scalar_value(
+    declaration: &ValueEnumDeclaration,
+    variant: &ValueEnumVariantDeclaration,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    match (&declaration.backing, &variant.raw_value) {
+        (ValueEnumBacking::Int, Constant::Int(value)) => Ok(ReplacementValue::Int(*value)),
+        (ValueEnumBacking::Str, Constant::Str(value)) => Ok(ReplacementValue::Str(value.clone())),
+        _ => Err(unsupported(
+            format!(
+                "value enum `{}` member `{}` has a raw literal incompatible with its retained scalar backing",
+                declaration.name, variant.name
+            ),
+            span,
+        )),
+    }
+}
+
+/// Return whether `id` is one canonical span-derived declaration identity owned by `module`.
+///
+/// The registry is supplied alongside executable Body IR, so membership alone cannot establish source locality: a
+/// malformed module could otherwise carry a coherent-looking foreign record and target. Direct value-enum execution
+/// accepts only the exact `CompilerNodeId::declaration_span` shape emitted for this module by lowering.
+fn is_module_span_declaration_id(module: &BodyIrModule, id: &CompilerNodeId) -> bool {
+    if module.module_id.kind() != CompilerNodeKind::Module || id.kind() != CompilerNodeKind::Declaration {
+        return false;
+    }
+    let prefix = format!("{}#decl.", module.module_id.path());
+    let Some(span) = id.path().strip_prefix(&prefix) else {
+        return false;
+    };
+    let Some((start, end)) = span.split_once("..") else {
+        return false;
+    };
+    matches!(
+        (start.parse::<usize>(), end.parse::<usize>()),
+        (Ok(start), Ok(end)) if start <= end
+    )
+}
+
+/// Return whether a body retains precisely the source-span identity lowering derives for its own declaration.
+///
+/// A caller's direct identity is not enough to establish a dispatch target: malformed Body IR could copy a valid
+/// same-module identity onto an unrelated body. Direct execution therefore requires both a unique target match and
+/// this body-local canonicality check before it enters the child frame.
+fn has_canonical_direct_call_id(module: &BodyIrModule, body: &Body) -> bool {
+    body.direct_call_id == CompilerNodeId::declaration_span(module.module_id.path(), body.span.start, body.span.end)
+}
+
 impl ReplacementValue {
     /// Render a deterministic source-observable result spelling for replacement receipts and CLI output.
     pub fn observable_text(&self) -> String {
@@ -199,6 +307,26 @@ impl ReplacementValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Nominal {
+                direct_declaration_id,
+                fields,
+            } => format!(
+                "nominal({direct_declaration_id}){{{}}}",
+                fields
+                    .iter()
+                    .map(|(field, value)| format!("{field}={}", value.observable_text()))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            Self::FieldlessEnum {
+                enum_declaration_id,
+                variant_declaration_id,
+            } => format!("fieldless_enum({enum_declaration_id}::{variant_declaration_id})"),
+            Self::ValueEnum {
+                enum_declaration_id,
+                variant_declaration_id,
+            } => format!("value_enum({enum_declaration_id}::{variant_declaration_id})"),
+            Self::Result { kind, payload, .. } => format!("{}({})", kind.as_str(), payload.observable_text()),
             Self::Callable(_) => "<callable>".to_string(),
             Self::Generator(_) => "<generator>".to_string(),
             Self::Adapter(_) => "<generator-adapter>".to_string(),
@@ -383,29 +511,12 @@ pub fn prepare_free_function_execution<'module, 'args>(
         });
     }
     validate_scalar_arguments(args, body.span)?;
-    validate_unambiguous_range_builtin(module)?;
     validate_direct_body_profile(body)?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
         args,
     })
-}
-
-/// Reject a same-module `range` declaration until Body IR carries a canonical builtin-target identity.
-///
-/// The bounded iterator profile may execute the unresolved source spelling `range(...)` as the builtin. A user
-/// declaration with that name would make the same spelling ambiguous, so accepting it could silently choose the
-/// builtin instead of the declared callable. Refusal preserves source authority rather than reconstructing name
-/// resolution in the runtime.
-fn validate_unambiguous_range_builtin(module: &BodyIrModule) -> Result<(), ReplacementExecutionError> {
-    if let Some(body) = module.bodies.iter().find(|body| body.name == "range") {
-        return Err(unsupported(
-            "same-module `range` declaration; Body IR has no canonical builtin target identity",
-            body.span,
-        ));
-    }
-    Ok(())
 }
 
 /// Validate every direct-execution invariant of one body before it is executed or stored as a lazy frame.
@@ -423,7 +534,8 @@ fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionE
     }
     validate_binding_identity(body)?;
     let range_iterator_locals = range_iterator_locals(&body.block);
-    validate_collection_local_types(body, &body.block, &range_iterator_locals)?;
+    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals)?;
+    validate_nested_structural_aggregate_types(body)?;
     let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
     let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
     validate_callable_params_profile(&body.params)?;
@@ -581,48 +693,31 @@ fn validate_closure_profile(
     validate_operand_profile(&body.result, span, tuple_iteration_locals)
 }
 
-/// Validate every list, tuple, and builtin-iteration local against the typed Body IR profile.
+/// Validate structural aggregate destinations and retain the narrower builtin-iteration type boundary.
 ///
-/// Runtime operands alone cannot classify an empty list. This pass uses each authoritative local declaration, so an
-/// empty `list[int]` refuses before it can be mistaken for the vacuously valid empty form of the selected profile.
+/// Runtime operands alone cannot classify an empty aggregate. This pass therefore consumes the compiler-owned local
+/// declaration type before execution: tuple and list aggregates may be recursively structural values, while the
+/// existing builtin collection iteration profile remains restricted to scalar tuple pairs.
 fn validate_collection_local_types(
     body: &Body,
-    block: &incan_semantics_core::body_ir::Block,
+    statements: &[Statement],
     range_iterator_locals: &BTreeSet<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
-    for statement in &block.stmts {
+    for statement in statements {
         match &statement.kind {
             StatementKind::Assign {
                 place,
                 rvalue: Rvalue::Aggregate(AggregateKind::Tuple, _),
-            } => validate_scalar_pair_tuple_local_type(
+            }
+            | StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Aggregate(AggregateKind::List, _),
+            } => validate_structural_aggregate_local_type(
                 body,
                 bare_local(place, statement.span)?,
                 statement.span,
-                "tuple aggregate destination",
+                "structural aggregate destination",
             )?,
-            StatementKind::Assign {
-                place,
-                rvalue: Rvalue::Aggregate(AggregateKind::List, operands),
-            } => {
-                validate_scalar_pair_list_local_type(
-                    body,
-                    bare_local(place, statement.span)?,
-                    statement.span,
-                    "list aggregate destination",
-                )?;
-                for operand in operands {
-                    let Operand::Place(place_operand) = operand else {
-                        continue;
-                    };
-                    validate_scalar_pair_tuple_local_type(
-                        body,
-                        bare_local(&place_operand.place, statement.span)?,
-                        statement.span,
-                        "list aggregate element",
-                    )?;
-                }
-            }
             StatementKind::IterNext {
                 destination,
                 iterator: Operand::Place(iterator),
@@ -649,13 +744,22 @@ fn validate_collection_local_types(
             StatementKind::If {
                 then_block, else_block, ..
             } => {
-                validate_collection_local_types(body, then_block, range_iterator_locals)?;
+                validate_collection_local_types(body, &then_block.stmts, range_iterator_locals)?;
                 if let Some(else_block) = else_block {
-                    validate_collection_local_types(body, else_block, range_iterator_locals)?;
+                    validate_collection_local_types(body, &else_block.stmts, range_iterator_locals)?;
                 }
             }
             StatementKind::Loop { body: loop_body } => {
-                validate_collection_local_types(body, loop_body, range_iterator_locals)?;
+                validate_collection_local_types(body, &loop_body.stmts, range_iterator_locals)?;
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    validate_collection_local_types(body, &arm.guard_stmts, range_iterator_locals)?;
+                    validate_collection_local_types(body, &arm.body_stmts, range_iterator_locals)?;
+                }
             }
             _ => {}
         }
@@ -663,33 +767,166 @@ fn validate_collection_local_types(
     Ok(())
 }
 
-/// Collect builtin iterator locals admitted by the current `range` source-spelling rule.
+/// Apply the compiler-owned aggregate type gate inside deferred callable and generator frames too.
 ///
-/// Body IR v0 records [`Callee::Function`] by source spelling, not resolved builtin identity. The direct profile
-/// therefore rejects a same-module declaration named `range` before reaching this executor. Within that boundary,
-/// `range(...)` enters normalized general iteration as a `Call`, then passes through plain temporary aliases before
-/// `IterNext` polls it. The executor materializes that admitted spelling as [`ReplacementValue::Range`] without
-/// treating an arbitrary `list[int]` as a collection the new profile admits. Canonical call-target identity is
-/// deferred to #1042.
+/// Defaults, closures, and generators reuse their owning [`Body`] local-id space. Checking only the selected
+/// body's ordinary block would let an empty `list[float]` pass the runtime's vacuous structural-value test before a
+/// deferred frame executes it. This walk retains the declared local type as the authority without adding a second
+/// runtime type model or looking back at source structures.
+fn validate_nested_structural_aggregate_types(body: &Body) -> Result<(), ReplacementExecutionError> {
+    validate_callable_param_aggregate_types(body, &body.params)?;
+    validate_nested_aggregate_types_in_statements(body, &body.block.stmts)
+}
+
+/// Check source defaults on one callable surface and recurse into their deferred statements.
+fn validate_callable_param_aggregate_types(
+    body: &Body,
+    params: &[CallableParam],
+) -> Result<(), ReplacementExecutionError> {
+    for parameter in params {
+        let CallableParamDefault::Source(computation) = &parameter.default else {
+            continue;
+        };
+        validate_structural_aggregate_types_in_statements(body, &computation.stmts)?;
+        validate_nested_aggregate_types_in_statements(body, &computation.stmts)?;
+    }
+    Ok(())
+}
+
+/// Find deferred closure and generator frames nested below ordinary normalized statements.
+fn validate_nested_aggregate_types_in_statements(
+    body: &Body,
+    statements: &[Statement],
+) -> Result<(), ReplacementExecutionError> {
+    for statement in statements {
+        match &statement.kind {
+            StatementKind::Assign { rvalue, .. } => validate_nested_aggregate_types_in_rvalue(body, rvalue)?,
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                validate_nested_aggregate_types_in_statements(body, &then_block.stmts)?;
+                if let Some(else_block) = else_block {
+                    validate_nested_aggregate_types_in_statements(body, &else_block.stmts)?;
+                }
+            }
+            StatementKind::Loop { body: loop_body } => {
+                validate_nested_aggregate_types_in_statements(body, &loop_body.stmts)?;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Check each deferred rvalue that can contain normalized assignments under the owning body type environment.
+fn validate_nested_aggregate_types_in_rvalue(body: &Body, rvalue: &Rvalue) -> Result<(), ReplacementExecutionError> {
+    match rvalue {
+        Rvalue::Closure {
+            params, body: closure, ..
+        } => {
+            validate_callable_param_aggregate_types(body, params)?;
+            validate_structural_aggregate_types_in_statements(body, &closure.stmts)?;
+            validate_nested_aggregate_types_in_statements(body, &closure.stmts)
+        }
+        Rvalue::Generator { body: generator, .. } => {
+            validate_structural_aggregate_types_in_statements(body, &generator.stmts)?;
+            validate_nested_aggregate_types_in_statements(body, &generator.stmts)
+        }
+        Rvalue::Match { arms, .. } => {
+            for arm in arms {
+                validate_structural_aggregate_types_in_statements(body, &arm.guard_stmts)?;
+                validate_nested_aggregate_types_in_statements(body, &arm.guard_stmts)?;
+                validate_structural_aggregate_types_in_statements(body, &arm.body_stmts)?;
+                validate_nested_aggregate_types_in_statements(body, &arm.body_stmts)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Validate only aggregate destinations in a deferred frame, preserving its own iteration profile.
+///
+/// Generator frames use a deliberately different `IterNext` type contract from ordinary bodies. Deferred aggregate
+/// checks therefore share the same compiler-owned local type rule without accidentally applying the enclosing
+/// body's scalar-pair collection-iteration restriction to generator-local iterator values.
+fn validate_structural_aggregate_types_in_statements(
+    body: &Body,
+    statements: &[Statement],
+) -> Result<(), ReplacementExecutionError> {
+    for statement in statements {
+        match &statement.kind {
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Aggregate(AggregateKind::Tuple | AggregateKind::List, _),
+            } => validate_structural_aggregate_local_type(
+                body,
+                bare_local(place, statement.span)?,
+                statement.span,
+                "structural aggregate destination",
+            )?,
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                validate_structural_aggregate_types_in_statements(body, &then_block.stmts)?;
+                if let Some(else_block) = else_block {
+                    validate_structural_aggregate_types_in_statements(body, &else_block.stmts)?;
+                }
+            }
+            StatementKind::Loop { body: loop_body } => {
+                validate_structural_aggregate_types_in_statements(body, &loop_body.stmts)?;
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    validate_structural_aggregate_types_in_statements(body, &arm.guard_stmts)?;
+                    validate_structural_aggregate_types_in_statements(body, &arm.body_stmts)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Validate one aggregate destination against the recursive tuple/list value vocabulary.
+fn validate_structural_aggregate_local_type(
+    body: &Body,
+    local: LocalId,
+    span: HirSourceSpan,
+    role: &str,
+) -> Result<(), ReplacementExecutionError> {
+    let ty = declared_local_type(body, local, span)?;
+    if is_direct_structural_type(ty) {
+        Ok(())
+    } else {
+        Err(unsupported(format!("{role} has unsupported Body-IR type `{ty}`"), span))
+    }
+}
+
+/// Collect builtin `range` iterator locals from explicit Body-IR builtin targets.
+///
+/// A same-module declaration named `range` now carries a [`NamedCallableTarget::direct_call_id`] and dispatches to
+/// that declaration, while the compiler-recognized builtin carries [`NamedCallableBuiltin::Range`]. This keeps the
+/// existing bounded builtin rule without guessing from a source spelling or treating an imported callable as range.
 fn range_iterator_locals(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
     let mut locals = BTreeSet::new();
-    while collect_range_iterator_locals(block, &mut locals) {}
+    while collect_range_iterator_locals(&block.stmts, &mut locals) {}
     locals
 }
 
 /// Extend the admitted `range` source-spelling aliases until the enclosing body reaches a fixed point.
-fn collect_range_iterator_locals(
-    block: &incan_semantics_core::body_ir::Block,
-    range_locals: &mut BTreeSet<LocalId>,
-) -> bool {
+fn collect_range_iterator_locals(statements: &[Statement], range_locals: &mut BTreeSet<LocalId>) -> bool {
     let mut changed = false;
-    for statement in &block.stmts {
+    for statement in statements {
         match &statement.kind {
             StatementKind::Call {
                 destination: Some(destination),
-                callee: Callee::Function(name),
+                callee: Callee::Function(CallableTarget::Named(target)),
                 ..
-            } if name == "range" && destination.projection.is_empty() => {
+            } if is_explicit_range_builtin(target) && destination.projection.is_empty() => {
                 changed |= range_locals.insert(destination.local);
             }
             StatementKind::Assign {
@@ -704,13 +941,22 @@ fn collect_range_iterator_locals(
             StatementKind::If {
                 then_block, else_block, ..
             } => {
-                changed |= collect_range_iterator_locals(then_block, range_locals);
+                changed |= collect_range_iterator_locals(&then_block.stmts, range_locals);
                 if let Some(else_block) = else_block {
-                    changed |= collect_range_iterator_locals(else_block, range_locals);
+                    changed |= collect_range_iterator_locals(&else_block.stmts, range_locals);
                 }
             }
             StatementKind::Loop { body } => {
-                changed |= collect_range_iterator_locals(body, range_locals);
+                changed |= collect_range_iterator_locals(&body.stmts, range_locals);
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    changed |= collect_range_iterator_locals(&arm.guard_stmts, range_locals);
+                    changed |= collect_range_iterator_locals(&arm.body_stmts, range_locals);
+                }
             }
             _ => {}
         }
@@ -841,32 +1087,65 @@ fn is_collection_scalar_type(ty: &IncanType) -> bool {
     )
 }
 
+/// Return whether `ty` has the source-local recursively structural tuple/list shape this runtime materializes.
+fn is_direct_structural_type(ty: &IncanType) -> bool {
+    if is_collection_scalar_type(ty) {
+        return true;
+    }
+    match ty {
+        IncanType::Tuple(elements) => elements.iter().all(is_direct_structural_type),
+        IncanType::Generic { base, args }
+            if matches!(
+                collections::from_str(base),
+                Some(CollectionTypeId::Tuple | CollectionTypeId::List)
+            ) =>
+        {
+            args.iter().all(is_direct_structural_type)
+        }
+        _ => false,
+    }
+}
+
+/// Return whether Body IR explicitly identified this target as the compiler-owned `range` builtin.
+///
+/// A source spelling or absent same-module declaration identity is not enough: imported and unresolved callables
+/// retain the latter too, and must refuse rather than borrowing the builtin's execution rule.
+fn is_explicit_range_builtin(target: &NamedCallableTarget) -> bool {
+    target.direct_call_id.is_none() && target.builtin == Some(NamedCallableBuiltin::Range)
+}
+
 /// Collect the local identities written by builtin collection polling across one normalized body.
 ///
 /// Only these compiler-created item locals may later be projected as a selected scalar tuple element. This keeps a
 /// standalone tuple field access outside the profile even though it uses the same `PlaceElem::Field` representation.
 fn builtin_iteration_destinations(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
     let mut destinations = BTreeSet::new();
-    collect_builtin_iteration_destinations(block, &mut destinations);
+    collect_builtin_iteration_destinations(&block.stmts, &mut destinations);
     destinations
 }
 
 /// Recurse through normalized control flow to collect every builtin iteration destination local.
-fn collect_builtin_iteration_destinations(
-    block: &incan_semantics_core::body_ir::Block,
-    destinations: &mut BTreeSet<LocalId>,
-) {
-    for statement in &block.stmts {
+fn collect_builtin_iteration_destinations(statements: &[Statement], destinations: &mut BTreeSet<LocalId>) {
+    for statement in statements {
         match &statement.kind {
             StatementKind::If {
                 then_block, else_block, ..
             } => {
-                collect_builtin_iteration_destinations(then_block, destinations);
+                collect_builtin_iteration_destinations(&then_block.stmts, destinations);
                 if let Some(else_block) = else_block {
-                    collect_builtin_iteration_destinations(else_block, destinations);
+                    collect_builtin_iteration_destinations(&else_block.stmts, destinations);
                 }
             }
-            StatementKind::Loop { body } => collect_builtin_iteration_destinations(body, destinations),
+            StatementKind::Loop { body } => collect_builtin_iteration_destinations(&body.stmts, destinations),
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    collect_builtin_iteration_destinations(&arm.guard_stmts, destinations);
+                    collect_builtin_iteration_destinations(&arm.body_stmts, destinations);
+                }
+            }
             StatementKind::IterNext {
                 destination,
                 protocol: IterProtocol::Builtin,
@@ -888,17 +1167,17 @@ fn collect_builtin_iteration_destinations(
 fn scalar_tuple_collection_elements(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
     let mut tuple_destinations = BTreeSet::new();
     let mut list_operands = BTreeSet::new();
-    collect_scalar_tuple_collection_locals(block, &mut tuple_destinations, &mut list_operands);
+    collect_scalar_tuple_collection_locals(&block.stmts, &mut tuple_destinations, &mut list_operands);
     tuple_destinations.intersection(&list_operands).copied().collect()
 }
 
 /// Recurse through control flow to collect tuple assignments and direct list-aggregate operands.
 fn collect_scalar_tuple_collection_locals(
-    block: &incan_semantics_core::body_ir::Block,
+    statements: &[Statement],
     tuple_destinations: &mut BTreeSet<LocalId>,
     list_operands: &mut BTreeSet<LocalId>,
 ) {
-    for statement in &block.stmts {
+    for statement in statements {
         match &statement.kind {
             StatementKind::Assign {
                 place,
@@ -921,13 +1200,22 @@ fn collect_scalar_tuple_collection_locals(
             StatementKind::If {
                 then_block, else_block, ..
             } => {
-                collect_scalar_tuple_collection_locals(then_block, tuple_destinations, list_operands);
+                collect_scalar_tuple_collection_locals(&then_block.stmts, tuple_destinations, list_operands);
                 if let Some(else_block) = else_block {
-                    collect_scalar_tuple_collection_locals(else_block, tuple_destinations, list_operands);
+                    collect_scalar_tuple_collection_locals(&else_block.stmts, tuple_destinations, list_operands);
                 }
             }
             StatementKind::Loop { body } => {
-                collect_scalar_tuple_collection_locals(body, tuple_destinations, list_operands);
+                collect_scalar_tuple_collection_locals(&body.stmts, tuple_destinations, list_operands);
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    collect_scalar_tuple_collection_locals(&arm.guard_stmts, tuple_destinations, list_operands);
+                    collect_scalar_tuple_collection_locals(&arm.body_stmts, tuple_destinations, list_operands);
+                }
             }
             _ => {}
         }
@@ -954,13 +1242,13 @@ fn validate_statement_profile(
 ) -> Result<(), ReplacementExecutionError> {
     match &statement.kind {
         StatementKind::Assign { place, rvalue } => {
-            validate_bare_local(place, statement.span)?;
+            validate_write_place(place, statement.span, tuple_iteration_locals)?;
             validate_rvalue_profile(
                 rvalue,
                 statement.span,
                 tuple_iteration_locals,
                 scalar_tuple_collection_locals,
-                Some(place.local),
+                place.projection.is_empty().then_some(place.local),
             )
         }
         StatementKind::Call {
@@ -1021,7 +1309,28 @@ fn validate_statement_profile(
         // rather than leaving the executor unable to compile against the representation.
         StatementKind::Await { .. } => Err(unsupported("async await suspension", statement.span)),
         StatementKind::Race { .. } => Err(unsupported("async race selection", statement.span)),
-        StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
+        StatementKind::TryPropagate {
+            destination,
+            operand,
+            error_routing,
+        } => {
+            validate_bare_local(destination, statement.span)?;
+            validate_operand_profile(operand, statement.span, tuple_iteration_locals)?;
+            match error_routing {
+                TryErrorRouting::SameType { error_type } if is_direct_result_payload_type(error_type) => Ok(()),
+                TryErrorRouting::SameType { .. } => Err(unsupported(
+                    "try propagation with an unsupported Result error payload",
+                    statement.span,
+                )),
+                TryErrorRouting::ConversionRequired { .. } => {
+                    Err(unsupported("cross-error-type try propagation", statement.span))
+                }
+                TryErrorRouting::Unresolved => Err(unsupported(
+                    "try propagation without a resolved Result error route",
+                    statement.span,
+                )),
+            }
+        }
         StatementKind::IterNext { .. } => Err(unsupported("non-range iteration", statement.span)),
         StatementKind::Unsupported { description } => Err(unsupported(description, statement.span)),
     }
@@ -1038,13 +1347,20 @@ fn validate_call_profile(
         Callee::Helper(HelperOp::StrConcat) => true,
         // Named calls remain direct module dispatches. Their target/binding facts are Body-IR values, not a source
         // lookup reconstructed by this executor.
-        Callee::Function(CallableTarget::Named(target)) if target.name == "range" => true,
-        Callee::Function(CallableTarget::Named(target)) => validate_argument_binding_profile(&target.binding),
+        Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => true,
+        Callee::Function(CallableTarget::Named(target)) => {
+            target.direct_call_id.is_some()
+                && target.builtin.is_none()
+                && validate_argument_binding_profile(&target.binding)
+        }
         Callee::Function(CallableTarget::Local(target)) => {
             validate_operand_profile(&Operand::Place(target.operand.clone()), span, tuple_iteration_locals)?;
             validate_argument_binding_profile(&target.binding)
         }
         Callee::Method(target) if target.name == "collect" => args.len() == 1,
+        // The generated RFC 032 `.value()` surface is admitted only when its receiver becomes an identity-validated
+        // value-enum runtime carrier. Explicit type arguments and ordinary arguments have no retained source fact.
+        Callee::Method(target) if target.name == "value" => target.type_args.is_empty() && args.len() == 1,
         // The compiler currently records the iterator-adapter receiver and callback in source order but leaves
         // their stdlib method signature as `UnresolvedPositional`. That is sufficient for this deliberately
         // positional two-argument profile: neither adapter has named arguments or callable defaults to bind.
@@ -1103,6 +1419,9 @@ fn validate_rvalue_profile(
             scalar_tuple_collection_locals,
             destination,
         ),
+        Rvalue::FieldlessEnumVariant(target) => validate_fieldless_enum_variant_target(target, span),
+        Rvalue::ValueEnumVariant(target) => validate_value_enum_variant_target(target, span),
+        Rvalue::ResultVariant(variant) => validate_result_variant_profile(variant, span, tuple_iteration_locals),
         Rvalue::Format(_) => Err(unsupported("f-string", span)),
         Rvalue::Closure {
             params,
@@ -1127,8 +1446,152 @@ fn validate_rvalue_profile(
             }
             validate_generator_body_profile(body, tuple_iteration_locals, scalar_tuple_collection_locals)
         }
-        Rvalue::Match { .. } => Err(unsupported("match expression", span)),
+        Rvalue::Match { scrutinee, arms } => {
+            validate_operand_profile(scrutinee, span, tuple_iteration_locals)?;
+            validate_match_arms_profile(arms, span, tuple_iteration_locals, scalar_tuple_collection_locals)
+        }
     }
+}
+
+/// Validate the intrinsic Result constructor facts retained by Body IR.
+fn validate_result_variant_profile(
+    variant: &ResultVariant,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    if !is_direct_result_payload_type(&variant.ok_type) || !is_direct_result_payload_type(&variant.error_type) {
+        return Err(unsupported(
+            "Result construction with an unsupported payload type",
+            span,
+        ));
+    }
+    validate_operand_profile(&variant.payload, span, tuple_iteration_locals)
+}
+
+/// Accept only data-only Result payload types that this executor can carry without recovering source behavior.
+fn is_direct_result_payload_type(ty: &IncanType) -> bool {
+    match ty {
+        IncanType::Primitive(
+            IncanPrimitiveType::Int | IncanPrimitiveType::Bool | IncanPrimitiveType::Str | IncanPrimitiveType::Unit,
+        )
+        | IncanType::Named(_) => true,
+        IncanType::Tuple(elements) => elements.iter().all(is_direct_result_payload_type),
+        IncanType::Generic { base, args } => match collections::from_str(base) {
+            Some(CollectionTypeId::Tuple) => args.iter().all(is_direct_result_payload_type),
+            Some(CollectionTypeId::List) => args.len() == 1 && is_direct_result_payload_type(&args[0]),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Validate all selected arm facts before a direct match executes any source statement.
+fn validate_match_arms_profile(
+    arms: &[MatchArm],
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    if arms.is_empty() {
+        return Err(unsupported("match expression without arms", span));
+    }
+    for arm in arms {
+        validate_pattern_profile(&arm.pattern, span)?;
+        for statement in &arm.guard_stmts {
+            validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+        }
+        if let Some(guard) = &arm.guard {
+            validate_operand_profile(guard, span, tuple_iteration_locals)?;
+        }
+        for statement in &arm.body_stmts {
+            validate_statement_profile(statement, tuple_iteration_locals, scalar_tuple_collection_locals)?;
+        }
+        validate_operand_profile(&arm.result, span, tuple_iteration_locals)?;
+    }
+    Ok(())
+}
+
+/// Validate only the exact retained pattern vocabulary this direct runtime implements.
+fn validate_pattern_profile(pattern: &Pattern, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    match pattern {
+        Pattern::Wildcard | Pattern::Literal(_) => Ok(()),
+        Pattern::Var(binding) => (!matches!(binding.fact, OwnershipFact::Move | OwnershipFact::Unknown))
+            .then_some(())
+            .ok_or_else(|| unsupported("match binding with unsupported move or unknown ownership", span)),
+        Pattern::Tuple(items) | Pattern::Or(items) => {
+            for item in items {
+                validate_pattern_profile(item, span)?;
+            }
+            Ok(())
+        }
+        Pattern::Nominal { target, fields } => {
+            validate_nominal_pattern_target(target, span)?;
+            for (_, field_pattern) in fields {
+                validate_pattern_profile(field_pattern, span)?;
+            }
+            Ok(())
+        }
+        Pattern::FieldlessEnumVariant(target) => validate_fieldless_enum_variant_target(target, span),
+        Pattern::Result { fields, .. } => {
+            if fields.len() != 1 {
+                return Err(unsupported("Result pattern without one payload", span));
+            }
+            validate_pattern_profile(&fields[0], span)
+        }
+        Pattern::Struct { .. } | Pattern::Enum { .. } => Err(unsupported(
+            "match pattern without an exact direct target identity",
+            span,
+        )),
+    }
+}
+
+/// Reject a nominal pattern whose canonical identity was absent before runtime registry validation.
+fn validate_nominal_pattern_target(
+    target: &NominalPatternTarget,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if target.name.is_empty() {
+        return Err(unsupported(
+            "nominal match pattern without a canonical source-local name",
+            span,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a malformed fieldless-enum rvalue before execution can attempt declaration-name recovery.
+///
+/// Runtime resolution remains responsible for module-local identity and membership checks because only the retained
+/// Body-IR registry owns those facts. This preflight rejects an incomplete target at the original source span.
+fn validate_fieldless_enum_variant_target(
+    target: &FieldlessEnumVariantTarget,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if target.enum_name.is_empty() || target.variant_name.is_empty() {
+        return Err(unsupported(
+            "fieldless-enum member without a canonical source-local name",
+            span,
+        ));
+    }
+    Ok(())
+}
+
+/// Reject a malformed value-enum rvalue before execution can attempt declaration-name recovery.
+///
+/// Runtime resolution remains responsible for membership and raw-scalar checks because only the Body-IR module
+/// registry contains those source-local facts. This preflight ensures that malformed targets cannot be mistaken for
+/// ordinary unresolved field projections.
+fn validate_value_enum_variant_target(
+    target: &ValueEnumVariantTarget,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if target.enum_name.is_empty() || target.variant_name.is_empty() {
+        return Err(unsupported(
+            "value-enum member without a canonical source-local name",
+            span,
+        ));
+    }
+    Ok(())
 }
 
 /// Validate the deferred body carried by an admitted generator-expression rvalue.
@@ -1187,51 +1650,72 @@ fn validate_generator_statements_profile(
     Ok(())
 }
 
-/// Validate the narrow aggregate vocabulary needed to materialize scalar tuple collections.
+/// Validate source-local tuple/list aggregates plus the constrained plain-model constructor vocabulary.
+///
+/// Dict and set semantics remain unavailable. Constructor admission is limited further by retained declaration
+/// identity, complete checked bindings, and structural field values before the executor materializes a model value.
 fn validate_aggregate_profile(
     kind: &AggregateKind,
     operands: &[Operand],
     span: HirSourceSpan,
     tuple_iteration_locals: &BTreeSet<LocalId>,
-    scalar_tuple_collection_locals: &BTreeSet<LocalId>,
-    destination: Option<LocalId>,
+    _scalar_tuple_collection_locals: &BTreeSet<LocalId>,
+    _destination: Option<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
     match kind {
-        AggregateKind::Tuple
-            if operands.len() == 2
-                && destination.is_some_and(|local| scalar_tuple_collection_locals.contains(&local)) =>
-        {
+        AggregateKind::Tuple | AggregateKind::List => {
             for operand in operands {
                 validate_operand_profile(operand, span, tuple_iteration_locals)?;
             }
             Ok(())
         }
-        AggregateKind::Tuple => Err(unsupported(
-            "tuple aggregate outside the two-scalar collection-element profile",
-            span,
-        )),
-        AggregateKind::List => {
-            for operand in operands {
-                let Operand::Place(place_operand) = operand else {
-                    return Err(unsupported(
-                        "list aggregate outside the list[tuple[scalar, scalar]] profile",
-                        span,
-                    ));
-                };
-                if !place_operand.place.projection.is_empty()
-                    || !scalar_tuple_collection_locals.contains(&place_operand.place.local)
-                {
-                    return Err(unsupported(
-                        "list aggregate outside the list[tuple[scalar, scalar]] profile",
-                        span,
-                    ));
-                }
-                validate_operand_profile(operand, span, tuple_iteration_locals)?;
-            }
-            Ok(())
-        }
+        AggregateKind::Constructor(target) => validate_nominal_constructor_target(target, operands.len(), span),
         _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
     }
+}
+
+/// Check that a constructor shape carries the minimal checked facts required before direct materialization.
+///
+/// The module registry and canonical field layout are verified at execution time, where the executor has the exact
+/// `BodyIrModule`; this preflight rejects missing identity/default/binding claims before any constructor operand can
+/// produce a successful replacement receipt.
+fn validate_nominal_constructor_target(
+    target: &ConstructorTarget,
+    operand_count: usize,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if target.direct_declaration_id.is_none() {
+        return Err(unsupported(
+            format!(
+                "constructor `{}` without a source-local declaration identity",
+                target.name
+            ),
+            span,
+        ));
+    }
+    let ArgumentBinding::Resolved {
+        arguments,
+        defaulted_slots,
+    } = &target.binding
+    else {
+        return Err(unsupported(
+            format!("constructor `{}` with unresolved field binding", target.name),
+            span,
+        ));
+    };
+    if !defaulted_slots.is_empty() {
+        return Err(unsupported(
+            format!("constructor `{}` with an omitted field default", target.name),
+            span,
+        ));
+    }
+    if arguments.len() != operand_count || !validate_argument_binding_profile(&target.binding) {
+        return Err(unsupported(
+            format!("constructor `{}` with invalid field binding", target.name),
+            span,
+        ));
+    }
+    Ok(())
 }
 
 /// Validate a single operand's place shape and compiler-owned ownership decision.
@@ -1250,12 +1734,12 @@ fn validate_operand_profile(
     Ok(())
 }
 
-/// Reject projections at the profile boundary while preserving the statement's original source authority.
+/// Reject non-local assignments at the profile boundary while preserving the statement's source authority.
 fn validate_bare_local(place: &Place, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
     bare_local(place, span).map(|_| ())
 }
 
-/// Admit only the one-level numeric tuple fields lowering uses for `for a, b in pairs`.
+/// Admit one-level tuple/model fields and one-level indexes over source-local structural values.
 fn validate_read_place(
     place: &Place,
     span: HirSourceSpan,
@@ -1263,30 +1747,25 @@ fn validate_read_place(
 ) -> Result<(), ReplacementExecutionError> {
     match place.projection.as_slice() {
         [] => Ok(()),
-        [PlaceElem::Field(field)]
-            if matches!(field.as_str(), "0" | "1") && tuple_iteration_locals.contains(&place.local) =>
-        {
-            Ok(())
-        }
-        [PlaceElem::Field(field)] if matches!(field.as_str(), "0" | "1") => Err(unsupported(
-            "tuple field projection outside a scalar tuple collection iteration",
-            span,
-        )),
-        [PlaceElem::Field(_)] => Err(unsupported(
-            "non-numeric tuple field projection outside the scalar tuple collection profile",
-            span,
-        )),
-        // The only admitted index target is a list created by the generator-expression `.collect()` consumer. The
-        // runtime check keeps ordinary list indexing outside the original scalar-pair collection profile.
+        [PlaceElem::Field(_)] => Ok(()),
         [PlaceElem::Index(index)] => validate_operand_profile(index, span, tuple_iteration_locals),
-        [PlaceElem::Slice { .. }] => Err(unsupported(
-            "slice projection outside the scalar tuple collection profile",
-            span,
-        )),
-        _ => Err(unsupported(
-            "nested place projection outside the scalar tuple collection profile",
-            span,
-        )),
+        [PlaceElem::Slice { .. }] => Err(unsupported("slice projection", span)),
+        _ => Err(unsupported("nested place projection", span)),
+    }
+}
+
+/// Admit a bare assignment or a one-level mutable list-index assignment.
+fn validate_write_place(
+    place: &Place,
+    span: HirSourceSpan,
+    tuple_iteration_locals: &BTreeSet<LocalId>,
+) -> Result<(), ReplacementExecutionError> {
+    match place.projection.as_slice() {
+        [] => Ok(()),
+        [PlaceElem::Index(index)] => validate_operand_profile(index, span, tuple_iteration_locals),
+        [PlaceElem::Field(_)] => Err(unsupported("field assignment", span)),
+        [PlaceElem::Slice { .. }] => Err(unsupported("slice assignment", span)),
+        _ => Err(unsupported("nested place assignment", span)),
     }
 }
 
@@ -1298,6 +1777,10 @@ struct BodyExecutor {
     runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     body_snapshots: Vec<String>,
     steps: usize,
+    /// A structured match expression may execute an arm whose body returns, breaks, or continues before the
+    /// enclosing assignment has a value to store. Keep that flow explicit rather than assigning a placeholder and
+    /// accidentally continuing execution after source-level control flow.
+    pending_flow: Option<Flow>,
 }
 
 impl BodyExecutor {
@@ -1310,6 +1793,7 @@ impl BodyExecutor {
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
             steps: 0,
+            pending_flow: None,
         };
         executor.record_body(body);
         executor.locals = executor.bind_direct_arguments(body, args)?;
@@ -1325,6 +1809,7 @@ impl BodyExecutor {
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
             steps,
+            pending_flow: None,
         }
     }
 
@@ -1530,9 +2015,11 @@ impl BodyExecutor {
     fn execute_statement(&mut self, statement: &Statement) -> Result<Flow, ReplacementExecutionError> {
         match &statement.kind {
             StatementKind::Assign { place, rvalue } => {
-                let local = bare_local(place, statement.span)?;
                 let value = self.evaluate_rvalue(rvalue, statement.span)?;
-                self.assign_local(local, value);
+                if let Some(flow) = self.pending_flow.take() {
+                    return Ok(flow);
+                }
+                self.assign_place(place, value, statement.span)?;
                 Ok(Flow::Next)
             }
             StatementKind::Call {
@@ -1599,7 +2086,11 @@ impl BodyExecutor {
                 "generator yield outside a generator expression",
                 statement.span,
             )),
-            StatementKind::TryPropagate { .. } => Err(unsupported("try propagation", statement.span)),
+            StatementKind::TryPropagate {
+                destination,
+                operand,
+                error_routing,
+            } => self.execute_try_propagate(destination, operand, error_routing, statement.span),
             // See the matching arms in `validate_statement_profile`: representation is #1164's, execution is #1155's.
             StatementKind::Await { .. } => Err(unsupported("async await suspension", statement.span)),
             StatementKind::Race { .. } => Err(unsupported("async race selection", statement.span)),
@@ -1630,7 +2121,7 @@ impl BodyExecutor {
                 let right = self.evaluate_operand(right, span)?.into_string(span)?;
                 ReplacementValue::Str(format!("{left}{right}"))
             }
-            Callee::Function(CallableTarget::Named(target)) if target.name == "range" => {
+            Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => {
                 self.evaluate_range(args, span)?
             }
             Callee::Function(CallableTarget::Named(target)) => self.execute_named_callable(target, args, span)?,
@@ -1642,6 +2133,7 @@ impl BodyExecutor {
                 let iterator = self.take_generator_receiver(receiver, span)?;
                 self.collect_generator(iterator, span)?
             }
+            Callee::Method(target) if target.name == "value" => self.extract_value_enum_scalar(target, args, span)?,
             Callee::Method(target) if matches!(target.name.as_str(), "map" | "filter") => {
                 self.construct_generator_adapter(target.name.as_str(), args, span)?
             }
@@ -1700,35 +2192,67 @@ impl BodyExecutor {
         Ok(result)
     }
 
-    /// Invoke an in-module named function, creating a lazy frame instead when the target body yields.
+    /// Invoke one identity-selected in-module named function, creating a lazy frame when it yields.
     fn execute_named_callable(
         &mut self,
         target: &NamedCallableTarget,
         args: &[Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let body = self
-            .module
-            .bodies
-            .iter()
-            .find(|body| body.name == target.name)
-            .cloned()
-            .ok_or_else(|| {
-                unsupported(
-                    format!("named callable `{}` outside this Body-IR module", target.name),
-                    span,
-                )
-            })?;
-        if self
-            .module
-            .bodies
-            .iter()
-            .filter(|candidate| candidate.name == target.name)
-            .nth(1)
-            .is_some()
-        {
+        let direct_call_id = target.direct_call_id.as_ref().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "named callable `{}` without a same-module declaration identity",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        if !is_module_span_declaration_id(&self.module, direct_call_id) {
             return Err(unsupported(
-                format!("ambiguous named callable `{}` in Body IR", target.name),
+                "named callable declaration identity is not scoped to this Body-IR module",
+                span,
+            ));
+        }
+        let mut matching_bodies = self
+            .module
+            .bodies
+            .iter()
+            .filter(|body| body.direct_call_id == *direct_call_id);
+        let body = matching_bodies.next().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "named callable `{}` targets a declaration outside this Body-IR module",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        if matching_bodies.next().is_some() {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` declaration identity selects multiple Body-IR bodies",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        if !has_canonical_direct_call_id(&self.module, body) {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` body does not retain its canonical declaration identity",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        let body = body.clone();
+        if body.name != target.name {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` disagrees with its same-module declaration identity",
+                    target.name
+                ),
                 span,
             ));
         }
@@ -1889,6 +2413,9 @@ impl BodyExecutor {
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
+            Rvalue::FieldlessEnumVariant(target) => self.evaluate_fieldless_enum_variant(target, span),
+            Rvalue::ValueEnumVariant(target) => self.evaluate_value_enum_variant(target, span),
+            Rvalue::ResultVariant(variant) => self.evaluate_result_variant(variant, span),
             Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure {
                 params,
@@ -1900,7 +2427,7 @@ impl BodyExecutor {
                 captured_operands,
                 body,
             } => self.construct_generator(source, captured_operands, body, span),
-            Rvalue::Match { .. } => Err(unsupported("match expression", span)),
+            Rvalue::Match { scrutinee, arms } => self.evaluate_match(scrutinee, arms, span),
         }
     }
 
@@ -2259,36 +2786,858 @@ impl BodyExecutor {
         Ok(())
     }
 
-    /// Materialize only scalar two-tuples and lists composed of those tuples for the selected loop profile.
+    /// Materialize source-local tuples/lists or a retained plain-model constructor without inventing dict or set
+    /// behavior.
     fn evaluate_aggregate(
         &mut self,
         kind: &AggregateKind,
         operands: &[Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if let AggregateKind::Constructor(target) = kind {
+            return self.evaluate_nominal_constructor(target, operands, span);
+        }
         let values = operands
             .iter()
             .map(|operand| self.evaluate_operand(operand, span))
             .collect::<Result<Vec<_>, _>>()?;
         match kind {
-            AggregateKind::Tuple if values.len() == 2 && values.iter().all(ReplacementValue::is_collection_scalar) => {
+            AggregateKind::Tuple if values.iter().all(ReplacementValue::is_direct_structural) => {
                 Ok(ReplacementValue::Tuple(values))
             }
-            AggregateKind::Tuple => Err(unsupported(
-                "tuple aggregate outside the two-scalar collection-element profile",
-                span,
-            )),
-            AggregateKind::List if values.iter().all(ReplacementValue::is_scalar_pair_tuple) => {
+            AggregateKind::Tuple => Err(unsupported("tuple aggregate with a non-structural element", span)),
+            AggregateKind::List if values.iter().all(ReplacementValue::is_direct_structural) => {
                 Ok(ReplacementValue::List {
                     elements: values,
                     next: 0,
                 })
             }
-            AggregateKind::List => Err(unsupported(
-                "list aggregate outside the list[tuple[scalar, scalar]] profile",
+            AggregateKind::List => Err(unsupported("list aggregate with a non-structural element", span)),
+            _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+        }
+    }
+
+    /// Construct the checked intrinsic Result carrier without falling back to constructor-name interpretation.
+    fn evaluate_result_variant(
+        &mut self,
+        variant: &ResultVariant,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if !is_direct_result_payload_type(&variant.ok_type) || !is_direct_result_payload_type(&variant.error_type) {
+            return Err(unsupported(
+                "Result construction with an unsupported payload type",
+                span,
+            ));
+        }
+        let payload = self.evaluate_operand(&variant.payload, span)?;
+        let payload_type = match variant.kind {
+            ResultVariantKind::Ok => &variant.ok_type,
+            ResultVariantKind::Err => &variant.error_type,
+        };
+        if !payload.is_direct_result_payload() || !self.value_matches_direct_result_type(&payload, payload_type) {
+            return Err(unsupported(
+                format!(
+                    "Result construction with {} payload incompatible with retained type `{payload_type}`",
+                    value_kind(&payload)
+                ),
+                span,
+            ));
+        }
+        self.record_frame_evidence(format!(
+            "executed Result::{} construction span={}..{}",
+            variant.kind.as_str(),
+            span.start,
+            span.end
+        ));
+        Ok(ReplacementValue::Result {
+            kind: variant.kind,
+            payload: Box::new(payload),
+            ok_type: variant.ok_type.clone(),
+            error_type: variant.error_type.clone(),
+        })
+    }
+
+    /// Execute the first selected structured match arm while restoring the complete local environment after every
+    /// failed guard or completed arm. Pattern locals are arm-scoped source facts; leaking them would let an arm
+    /// shadow an enclosing local in later code.
+    fn evaluate_match(
+        &mut self,
+        scrutinee: &Operand,
+        arms: &[MatchArm],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let value = self.evaluate_operand(scrutinee, span)?;
+        for arm in arms {
+            let saved_locals = self.locals.clone();
+            let Some(bindings) = self.match_pattern(&arm.pattern, &value, span)? else {
+                self.locals = saved_locals;
+                continue;
+            };
+            self.bind_pattern_values(bindings, span)?;
+
+            for statement in &arm.guard_stmts {
+                self.record_step(statement.span)?;
+                match self.execute_statement(statement)? {
+                    Flow::Next => {}
+                    flow => {
+                        self.locals = saved_locals;
+                        self.record_frame_evidence(format!(
+                            "executed direct match arm span={}..{}",
+                            span.start, span.end
+                        ));
+                        self.pending_flow = Some(flow);
+                        return Ok(ReplacementValue::Unit);
+                    }
+                }
+            }
+            if let Some(guard) = &arm.guard
+                && !self.evaluate_operand(guard, span)?.into_bool(span)?
+            {
+                self.locals = saved_locals;
+                continue;
+            }
+
+            for statement in &arm.body_stmts {
+                self.record_step(statement.span)?;
+                match self.execute_statement(statement)? {
+                    Flow::Next => {}
+                    flow => {
+                        self.locals = saved_locals;
+                        self.record_frame_evidence(format!(
+                            "executed direct match arm span={}..{}",
+                            span.start, span.end
+                        ));
+                        self.pending_flow = Some(flow);
+                        return Ok(ReplacementValue::Unit);
+                    }
+                }
+            }
+            let result = self.evaluate_operand(&arm.result, span)?;
+            self.locals = saved_locals;
+            self.record_frame_evidence(format!("executed direct match arm span={}..{}", span.start, span.end));
+            return Ok(result);
+        }
+        Err(runtime_failure(
+            "exhaustive Body-IR match had no matching arm".to_string(),
+            span,
+        ))
+    }
+
+    /// Materialize arm-local bindings using their lowered ownership facts.
+    fn bind_pattern_values(
+        &mut self,
+        bindings: Vec<(PatternBinding, ReplacementValue)>,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        for (binding, value) in bindings {
+            if matches!(binding.fact, OwnershipFact::Move | OwnershipFact::Unknown) {
+                return Err(unsupported(
+                    "match binding with an unsupported move or unknown ownership fact",
+                    span,
+                ));
+            }
+            if matches!(binding.fact, OwnershipFact::Copy) && !value.is_copy_shaped() {
+                return Err(unsupported("copy match binding of a non-copy value", span));
+            }
+            self.ownership_reads.push(OwnershipRead {
+                span,
+                fact: binding.fact,
+                last_use: binding.last_use,
+            });
+            self.locals.insert(binding.local, value);
+        }
+        Ok(())
+    }
+
+    /// Check a Result payload against the checked type retained by its construction rvalue.
+    ///
+    /// Named values are accepted only after their runtime identity re-resolves to a declaration of the same source
+    /// name in this module. This prevents malformed Body IR from placing an arbitrary enum/model carrier in a
+    /// Result solely because both happen to be `Named` types.
+    fn value_matches_direct_result_type(&self, value: &ReplacementValue, ty: &IncanType) -> bool {
+        match (value, ty) {
+            (ReplacementValue::Int(_), IncanType::Primitive(IncanPrimitiveType::Int))
+            | (ReplacementValue::Bool(_), IncanType::Primitive(IncanPrimitiveType::Bool))
+            | (ReplacementValue::Str(_), IncanType::Primitive(IncanPrimitiveType::Str))
+            | (ReplacementValue::Unit, IncanType::Primitive(IncanPrimitiveType::Unit)) => true,
+            (ReplacementValue::Tuple(values), IncanType::Tuple(types)) => {
+                if values.len() != types.len() {
+                    return false;
+                }
+                values
+                    .iter()
+                    .zip(types)
+                    .all(|(value, ty)| self.value_matches_direct_result_type(value, ty))
+            }
+            (ReplacementValue::Tuple(values), IncanType::Generic { base, args })
+                if collections::from_str(base) == Some(CollectionTypeId::Tuple) =>
+            {
+                if values.len() != args.len() {
+                    return false;
+                }
+                values
+                    .iter()
+                    .zip(args)
+                    .all(|(value, ty)| self.value_matches_direct_result_type(value, ty))
+            }
+            (ReplacementValue::List { elements, .. }, IncanType::Generic { base, args })
+                if collections::from_str(base) == Some(CollectionTypeId::List) =>
+            {
+                let [element_type] = args.as_slice() else {
+                    return false;
+                };
+                elements
+                    .iter()
+                    .all(|element| self.value_matches_direct_result_type(element, element_type))
+            }
+            (
+                ReplacementValue::Nominal {
+                    direct_declaration_id, ..
+                },
+                IncanType::Named(expected),
+            ) => self.module.nominal_declarations.iter().any(|declaration| {
+                declaration.direct_declaration_id == *direct_declaration_id && declaration.name == *expected
+            }),
+            (
+                ReplacementValue::FieldlessEnum {
+                    enum_declaration_id, ..
+                },
+                IncanType::Named(expected),
+            ) => self.module.fieldless_enum_declarations.iter().any(|declaration| {
+                declaration.direct_declaration_id == *enum_declaration_id && declaration.name == *expected
+            }),
+            (
+                ReplacementValue::ValueEnum {
+                    enum_declaration_id, ..
+                },
+                IncanType::Named(expected),
+            ) => self.module.value_enum_declarations.iter().any(|declaration| {
+                declaration.direct_declaration_id == *enum_declaration_id && declaration.name == *expected
+            }),
+            _ => false,
+        }
+    }
+
+    /// Match only the identity-retaining direct pattern vocabulary, returning selected arm bindings without mutating
+    /// the executor until an arm is known to match.
+    fn match_pattern(
+        &self,
+        pattern: &Pattern,
+        value: &ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<Option<Vec<(PatternBinding, ReplacementValue)>>, ReplacementExecutionError> {
+        match pattern {
+            Pattern::Wildcard => Ok(Some(Vec::new())),
+            Pattern::Var(binding) => Ok(Some(vec![(binding.clone(), value.clone())])),
+            Pattern::Literal(constant) => {
+                let constant = direct_pattern_constant(constant, span)?;
+                Ok((constant == *value).then_some(Vec::new()))
+            }
+            Pattern::Tuple(patterns) => {
+                let ReplacementValue::Tuple(values) = value else {
+                    return Ok(None);
+                };
+                if patterns.len() != values.len() {
+                    return Ok(None);
+                }
+                let mut bindings = Vec::new();
+                for (pattern, value) in patterns.iter().zip(values) {
+                    let Some(mut nested) = self.match_pattern(pattern, value, span)? else {
+                        return Ok(None);
+                    };
+                    bindings.append(&mut nested);
+                }
+                Ok(Some(bindings))
+            }
+            Pattern::Nominal { target, fields } => self.match_nominal_pattern(target, fields, value, span),
+            Pattern::FieldlessEnumVariant(target) => {
+                let (declaration, variant) = self.local_fieldless_enum_variant_by_ids(
+                    &target.enum_declaration_id,
+                    &target.variant_declaration_id,
+                    span,
+                )?;
+                if declaration.name != target.enum_name || variant.name != target.variant_name {
+                    return Err(unsupported(
+                        "fieldless-enum pattern disagrees with its source-local declaration identity",
+                        span,
+                    ));
+                }
+                let ReplacementValue::FieldlessEnum {
+                    enum_declaration_id,
+                    variant_declaration_id,
+                } = value
+                else {
+                    return Ok(None);
+                };
+                Ok((enum_declaration_id == &declaration.direct_declaration_id
+                    && variant_declaration_id == &variant.direct_declaration_id)
+                    .then_some(Vec::new()))
+            }
+            Pattern::Result { variant, fields } => {
+                let [payload_pattern] = fields.as_slice() else {
+                    return Err(unsupported("Result pattern without one payload", span));
+                };
+                let ReplacementValue::Result { kind, payload, .. } = value else {
+                    return Ok(None);
+                };
+                if kind != variant {
+                    return Ok(None);
+                }
+                self.match_pattern(payload_pattern, payload, span)
+            }
+            Pattern::Or(alternatives) => {
+                for alternative in alternatives {
+                    if let Some(bindings) = self.match_pattern(alternative, value, span)? {
+                        return Ok(Some(bindings));
+                    }
+                }
+                Ok(None)
+            }
+            Pattern::Struct { .. } | Pattern::Enum { .. } => Err(unsupported(
+                "match pattern without an exact direct target identity",
                 span,
             )),
-            _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
+        }
+    }
+
+    /// Match an identity-selected source-local plain model and its canonical named fields.
+    fn match_nominal_pattern(
+        &self,
+        target: &NominalPatternTarget,
+        patterns: &[(String, Pattern)],
+        value: &ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<Option<Vec<(PatternBinding, ReplacementValue)>>, ReplacementExecutionError> {
+        let declaration = self.local_nominal_pattern_declaration(target, span)?;
+        let ReplacementValue::Nominal {
+            direct_declaration_id,
+            fields,
+        } = value
+        else {
+            return Ok(None);
+        };
+        if *direct_declaration_id != declaration.direct_declaration_id {
+            return Ok(None);
+        }
+        if fields.len() != declaration.fields.len()
+            || declaration
+                .fields
+                .iter()
+                .zip(fields)
+                .any(|(declared, (stored, _))| declared != stored)
+        {
+            return Err(unsupported(
+                "nominal match with a mismatched canonical field layout",
+                span,
+            ));
+        }
+        let mut pattern_fields = BTreeSet::new();
+        let mut bindings = Vec::new();
+        for (field, pattern) in patterns {
+            if !pattern_fields.insert(field) {
+                return Err(unsupported("nominal match pattern with duplicate field", span));
+            }
+            let Some((_, stored)) = fields.iter().find(|(stored, _)| stored == field) else {
+                return Err(unsupported(
+                    format!("nominal match pattern for unknown field `{field}`"),
+                    span,
+                ));
+            };
+            let Some(mut nested) = self.match_pattern(pattern, stored, span)? else {
+                return Ok(None);
+            };
+            bindings.append(&mut nested);
+        }
+        Ok(Some(bindings))
+    }
+
+    /// Materialize a fully supplied source-local plain model from checked constructor binding facts.
+    ///
+    /// `ArgumentBinding` orders operand storage by declaration slot but records source written positions separately.
+    /// Evaluating through that written order is essential: evaluating the surrounding operand vector directly would
+    /// reverse source effects for an out-of-order named constructor call.
+    fn evaluate_nominal_constructor(
+        &mut self,
+        target: &ConstructorTarget,
+        operands: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let declaration = self.local_nominal_declaration(target, span)?;
+        let ArgumentBinding::Resolved {
+            arguments,
+            defaulted_slots,
+        } = &target.binding
+        else {
+            return Err(unsupported(
+                format!("constructor `{}` with unresolved field binding", target.name),
+                span,
+            ));
+        };
+        if !defaulted_slots.is_empty() {
+            return Err(unsupported(
+                format!("constructor `{}` with an omitted field default", target.name),
+                span,
+            ));
+        }
+        if operands.len() != declaration.fields.len() || arguments.len() != operands.len() {
+            return Err(unsupported(
+                format!("constructor `{}` with incomplete field binding", target.name),
+                span,
+            ));
+        }
+
+        let mut field_values = vec![None; declaration.fields.len()];
+        let mut argument_indices = (0..arguments.len()).collect::<Vec<_>>();
+        argument_indices.sort_by_key(|index| arguments[*index].written_position);
+        for index in argument_indices {
+            let argument = arguments[index];
+            if argument.slot >= field_values.len()
+                || field_values[argument.slot].is_some()
+                || arguments
+                    .iter()
+                    .filter(|other| other.written_position == argument.written_position)
+                    .count()
+                    != 1
+            {
+                return Err(unsupported(
+                    format!("constructor `{}` with invalid field binding", target.name),
+                    span,
+                ));
+            }
+            let value = self.evaluate_operand(&operands[index], span)?;
+            if !value.is_direct_structural() {
+                return Err(unsupported(
+                    format!("constructor `{}` with a non-structural field value", target.name),
+                    span,
+                ));
+            }
+            field_values[argument.slot] = Some(value);
+        }
+        let fields = declaration
+            .fields
+            .iter()
+            .cloned()
+            .zip(field_values)
+            .map(|(field, value)| match value {
+                Some(value) => Ok((field, value)),
+                None => Err(unsupported(
+                    format!("constructor `{}` omitted field `{field}`", target.name),
+                    span,
+                )),
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.record_frame_evidence(format!(
+            "executed nominal constructor name={} id={} fields=[{}] call_span={}..{}",
+            declaration.name,
+            declaration.direct_declaration_id,
+            declaration.fields.join(", "),
+            span.start,
+            span.end
+        ));
+        Ok(ReplacementValue::Nominal {
+            direct_declaration_id: declaration.direct_declaration_id,
+            fields,
+        })
+    }
+
+    /// Materialize one exact source-local fieldless normal-enum member without reducing it to a source spelling.
+    ///
+    /// The resulting carrier stores only validated declaration identities. It has no payload and can reach a scalar
+    /// result solely through same-enum equality or inequality, preserving a narrow direct-execution boundary.
+    fn evaluate_fieldless_enum_variant(
+        &mut self,
+        target: &FieldlessEnumVariantTarget,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let (declaration, variant) = self.local_fieldless_enum_variant_by_ids(
+            &target.enum_declaration_id,
+            &target.variant_declaration_id,
+            span,
+        )?;
+        if declaration.name != target.enum_name || variant.name != target.variant_name {
+            return Err(unsupported(
+                format!(
+                    "fieldless-enum member `{}::{}` disagrees with its source-local declaration identity",
+                    target.enum_name, target.variant_name
+                ),
+                span,
+            ));
+        }
+        self.record_frame_evidence(format!(
+            "executed fieldless-enum variant name={}::{} enum_id={} variant_id={}",
+            declaration.name, variant.name, declaration.direct_declaration_id, variant.direct_declaration_id
+        ));
+        Ok(ReplacementValue::FieldlessEnum {
+            enum_declaration_id: declaration.direct_declaration_id,
+            variant_declaration_id: variant.direct_declaration_id,
+        })
+    }
+
+    /// Resolve one normal-enum/member pair solely through this module's retained fieldless-enum registry.
+    fn local_fieldless_enum_variant_by_ids(
+        &self,
+        enum_declaration_id: &CompilerNodeId,
+        variant_declaration_id: &CompilerNodeId,
+        span: HirSourceSpan,
+    ) -> Result<(FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration), ReplacementExecutionError> {
+        if !is_module_span_declaration_id(&self.module, enum_declaration_id)
+            || !is_module_span_declaration_id(&self.module, variant_declaration_id)
+        {
+            return Err(unsupported(
+                "fieldless-enum member declaration identity is not scoped to this Body-IR module",
+                span,
+            ));
+        }
+        let declarations = self
+            .module
+            .fieldless_enum_declarations
+            .iter()
+            .filter(|declaration| declaration.direct_declaration_id == *enum_declaration_id)
+            .collect::<Vec<_>>();
+        let [declaration] = declarations.as_slice() else {
+            return Err(unsupported(
+                "fieldless-enum member targets a declaration outside this Body-IR module",
+                span,
+            ));
+        };
+        let canonical_names = declaration
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<BTreeSet<_>>();
+        if canonical_names.len() != declaration.variants.len() {
+            return Err(unsupported(
+                format!(
+                    "fieldless enum `{}` has a duplicate canonical member layout",
+                    declaration.name
+                ),
+                span,
+            ));
+        }
+        let variants = declaration
+            .variants
+            .iter()
+            .filter(|variant| variant.direct_declaration_id == *variant_declaration_id)
+            .collect::<Vec<_>>();
+        let [variant] = variants.as_slice() else {
+            return Err(unsupported(
+                format!(
+                    "fieldless enum `{}` has no retained selected member identity",
+                    declaration.name
+                ),
+                span,
+            ));
+        };
+        Ok(((*declaration).clone(), (*variant).clone()))
+    }
+
+    /// Compare two identity-validated fieldless normal-enum carriers without admitting a general enum operation.
+    fn fieldless_enum_values_equal(
+        &self,
+        left_enum_declaration_id: &CompilerNodeId,
+        left_variant_declaration_id: &CompilerNodeId,
+        right_enum_declaration_id: &CompilerNodeId,
+        right_variant_declaration_id: &CompilerNodeId,
+        span: HirSourceSpan,
+    ) -> Result<bool, ReplacementExecutionError> {
+        let (left_declaration, left_variant) =
+            self.local_fieldless_enum_variant_by_ids(left_enum_declaration_id, left_variant_declaration_id, span)?;
+        let (right_declaration, right_variant) =
+            self.local_fieldless_enum_variant_by_ids(right_enum_declaration_id, right_variant_declaration_id, span)?;
+        if left_declaration.direct_declaration_id != right_declaration.direct_declaration_id {
+            return Err(unsupported(
+                "fieldless-enum comparison across distinct source-local enum declarations",
+                span,
+            ));
+        }
+        Ok(left_variant.direct_declaration_id == right_variant.direct_declaration_id)
+    }
+
+    /// Materialize one exact source-local RFC 032 value-enum member without reducing it to a name or raw scalar.
+    ///
+    /// The scalar stays in the verified declaration registry until the separately admitted generated `.value()`
+    /// call asks for it. Keeping the carrier identity-bearing prevents ordinary enum/member spellings, imported
+    /// lookalikes, and malformed Body IR from acquiring direct execution semantics.
+    fn evaluate_value_enum_variant(
+        &mut self,
+        target: &ValueEnumVariantTarget,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let (declaration, variant) =
+            self.local_value_enum_variant_by_ids(&target.enum_declaration_id, &target.variant_declaration_id, span)?;
+        if declaration.name != target.enum_name || variant.name != target.variant_name {
+            return Err(unsupported(
+                format!(
+                    "value-enum member `{}::{}` disagrees with its source-local declaration identity",
+                    target.enum_name, target.variant_name
+                ),
+                span,
+            ));
+        }
+        let raw_value = value_enum_scalar_value(&declaration, &variant, span)?;
+        self.record_frame_evidence(format!(
+            "executed value-enum variant name={}::{} enum_id={} variant_id={} raw={}",
+            declaration.name,
+            variant.name,
+            declaration.direct_declaration_id,
+            variant.direct_declaration_id,
+            raw_value.observable_text()
+        ));
+        Ok(ReplacementValue::ValueEnum {
+            enum_declaration_id: declaration.direct_declaration_id,
+            variant_declaration_id: variant.direct_declaration_id,
+        })
+    }
+
+    /// Extract the backing scalar through the only admitted compiler-provided value-enum method.
+    ///
+    /// No ordinary method dispatch occurs here: the call is valid only for a runtime carrier already materialized
+    /// by [`Self::evaluate_value_enum_variant`], and the raw literal is resolved solely from the same Body-IR
+    /// declaration registry after membership verification.
+    fn extract_value_enum_scalar(
+        &mut self,
+        target: &incan_semantics_core::body_ir::MethodTarget,
+        args: &[Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if !target.type_args.is_empty() {
+            return Err(unsupported("value-enum `.value()` with explicit type arguments", span));
+        }
+        let [receiver] = args else {
+            return Err(unsupported("value-enum `.value()` call arity", span));
+        };
+        let value = self.evaluate_operand(receiver, span)?;
+        let ReplacementValue::ValueEnum {
+            enum_declaration_id,
+            variant_declaration_id,
+        } = value
+        else {
+            return Err(unsupported("`.value()` on a non-value-enum receiver", span));
+        };
+        let (declaration, variant) =
+            self.local_value_enum_variant_by_ids(&enum_declaration_id, &variant_declaration_id, span)?;
+        let raw_value = value_enum_scalar_value(&declaration, &variant, span)?;
+        self.record_frame_evidence(format!(
+            "extracted value-enum scalar name={}::{} enum_id={} variant_id={}",
+            declaration.name, variant.name, declaration.direct_declaration_id, variant.direct_declaration_id
+        ));
+        Ok(raw_value)
+    }
+
+    /// Resolve one enum/member pair through this module's retained source-local value-enum registry.
+    fn local_value_enum_variant_by_ids(
+        &self,
+        enum_declaration_id: &CompilerNodeId,
+        variant_declaration_id: &CompilerNodeId,
+        span: HirSourceSpan,
+    ) -> Result<(ValueEnumDeclaration, ValueEnumVariantDeclaration), ReplacementExecutionError> {
+        if !is_module_span_declaration_id(&self.module, enum_declaration_id)
+            || !is_module_span_declaration_id(&self.module, variant_declaration_id)
+        {
+            return Err(unsupported(
+                "value-enum member declaration identity is not scoped to this Body-IR module",
+                span,
+            ));
+        }
+        let declarations = self
+            .module
+            .value_enum_declarations
+            .iter()
+            .filter(|declaration| declaration.direct_declaration_id == *enum_declaration_id)
+            .collect::<Vec<_>>();
+        let [declaration] = declarations.as_slice() else {
+            return Err(unsupported(
+                "value-enum member targets a declaration outside this Body-IR module",
+                span,
+            ));
+        };
+        let canonical_names = declaration
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<BTreeSet<_>>();
+        if canonical_names.len() != declaration.variants.len() {
+            return Err(unsupported(
+                format!(
+                    "value enum `{}` has a duplicate canonical member layout",
+                    declaration.name
+                ),
+                span,
+            ));
+        }
+        let variants = declaration
+            .variants
+            .iter()
+            .filter(|variant| variant.direct_declaration_id == *variant_declaration_id)
+            .collect::<Vec<_>>();
+        let [variant] = variants.as_slice() else {
+            return Err(unsupported(
+                format!(
+                    "value enum `{}` has no retained selected member identity",
+                    declaration.name
+                ),
+                span,
+            ));
+        };
+        Ok(((*declaration).clone(), (*variant).clone()))
+    }
+
+    /// Resolve one constructor identity solely through this module's retained plain-model declaration registry.
+    fn local_nominal_declaration(
+        &self,
+        target: &ConstructorTarget,
+        span: HirSourceSpan,
+    ) -> Result<NominalDeclaration, ReplacementExecutionError> {
+        let direct_declaration_id = target.direct_declaration_id.as_ref().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "constructor `{}` without a source-local declaration identity",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        let declaration = self
+            .module
+            .nominal_declarations
+            .iter()
+            .find(|declaration| declaration.direct_declaration_id == *direct_declaration_id)
+            .cloned()
+            .ok_or_else(|| {
+                unsupported(
+                    format!(
+                        "constructor `{}` targets a declaration outside this Body-IR module",
+                        target.name
+                    ),
+                    span,
+                )
+            })?;
+        if declaration.name != target.name {
+            return Err(unsupported(
+                format!(
+                    "constructor `{}` disagrees with its source-local declaration identity",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        if declaration.type_parameter_count != 0 {
+            return Err(unsupported(
+                format!("generic model constructor `{}`", target.name),
+                span,
+            ));
+        }
+        let fields = declaration.fields.iter().collect::<BTreeSet<_>>();
+        if fields.len() != declaration.fields.len() {
+            return Err(unsupported(
+                format!("constructor `{}` has a duplicate canonical field layout", target.name),
+                span,
+            ));
+        }
+        Ok(declaration)
+    }
+
+    /// Resolve a nominal pattern exclusively through its retained source-local declaration identity.
+    fn local_nominal_pattern_declaration(
+        &self,
+        target: &NominalPatternTarget,
+        span: HirSourceSpan,
+    ) -> Result<NominalDeclaration, ReplacementExecutionError> {
+        if !is_module_span_declaration_id(&self.module, &target.direct_declaration_id) {
+            return Err(unsupported(
+                "nominal match pattern declaration identity is not scoped to this Body-IR module",
+                span,
+            ));
+        }
+        let declarations = self
+            .module
+            .nominal_declarations
+            .iter()
+            .filter(|declaration| declaration.direct_declaration_id == target.direct_declaration_id)
+            .collect::<Vec<_>>();
+        let [declaration] = declarations.as_slice() else {
+            return Err(unsupported(
+                "nominal match pattern targets a declaration outside this Body-IR module",
+                span,
+            ));
+        };
+        if declaration.name != target.name || declaration.type_parameter_count != 0 {
+            return Err(unsupported(
+                "nominal match pattern disagrees with its source-local declaration identity",
+                span,
+            ));
+        }
+        if declaration.fields.iter().collect::<BTreeSet<_>>().len() != declaration.fields.len() {
+            return Err(unsupported(
+                "nominal match pattern has a duplicate canonical field layout",
+                span,
+            ));
+        }
+        Ok((*declaration).clone())
+    }
+
+    /// Execute the explicit Result propagation primitive only when lowering retained an exact same-error route.
+    fn execute_try_propagate(
+        &mut self,
+        destination: &Place,
+        operand: &Operand,
+        error_routing: &TryErrorRouting,
+        span: HirSourceSpan,
+    ) -> Result<Flow, ReplacementExecutionError> {
+        let TryErrorRouting::SameType { error_type } = error_routing else {
+            return Err(unsupported(
+                match error_routing {
+                    TryErrorRouting::ConversionRequired { .. } => "cross-error-type try propagation",
+                    TryErrorRouting::Unresolved => "try propagation without a resolved Result error route",
+                    TryErrorRouting::SameType { .. } => unreachable!(),
+                },
+                span,
+            ));
+        };
+        if !is_direct_result_payload_type(error_type) {
+            return Err(unsupported(
+                "try propagation with an unsupported Result error payload",
+                span,
+            ));
+        }
+        let destination = bare_local(destination, span)?;
+        let value = self.evaluate_operand(operand, span)?;
+        let ReplacementValue::Result {
+            kind,
+            payload,
+            ok_type,
+            error_type: carrier_error_type,
+        } = value
+        else {
+            return Err(unsupported("try propagation using a non-Result carrier", span));
+        };
+        if carrier_error_type != *error_type {
+            return Err(unsupported(
+                "try propagation whose Result carrier disagrees with the retained same-error route",
+                span,
+            ));
+        }
+        match kind {
+            ResultVariantKind::Ok => {
+                self.assign_local(destination, *payload);
+                self.record_frame_evidence(format!(
+                    "executed Result try route=ok span={}..{}",
+                    span.start, span.end
+                ));
+                Ok(Flow::Next)
+            }
+            ResultVariantKind::Err => {
+                self.record_frame_evidence(format!(
+                    "executed Result try route=err span={}..{}",
+                    span.start, span.end
+                ));
+                Ok(Flow::Return(Some(ReplacementValue::Result {
+                    kind: ResultVariantKind::Err,
+                    payload,
+                    ok_type,
+                    error_type: carrier_error_type,
+                })))
+            }
         }
     }
 
@@ -2342,6 +3691,40 @@ impl BodyExecutor {
             (BinOp::Mod, ReplacementValue::Int(left), ReplacementValue::Int(right)) => {
                 Ok(ReplacementValue::Int(python_mod_i64(left, right)))
             }
+            (
+                BinOp::Eq,
+                ReplacementValue::FieldlessEnum {
+                    enum_declaration_id: left_enum_declaration_id,
+                    variant_declaration_id: left_variant_declaration_id,
+                },
+                ReplacementValue::FieldlessEnum {
+                    enum_declaration_id: right_enum_declaration_id,
+                    variant_declaration_id: right_variant_declaration_id,
+                },
+            ) => Ok(ReplacementValue::Bool(self.fieldless_enum_values_equal(
+                &left_enum_declaration_id,
+                &left_variant_declaration_id,
+                &right_enum_declaration_id,
+                &right_variant_declaration_id,
+                span,
+            )?)),
+            (
+                BinOp::Ne,
+                ReplacementValue::FieldlessEnum {
+                    enum_declaration_id: left_enum_declaration_id,
+                    variant_declaration_id: left_variant_declaration_id,
+                },
+                ReplacementValue::FieldlessEnum {
+                    enum_declaration_id: right_enum_declaration_id,
+                    variant_declaration_id: right_variant_declaration_id,
+                },
+            ) => Ok(ReplacementValue::Bool(!self.fieldless_enum_values_equal(
+                &left_enum_declaration_id,
+                &left_variant_declaration_id,
+                &right_enum_declaration_id,
+                &right_variant_declaration_id,
+                span,
+            )?)),
             (BinOp::Eq, left, right) if left.is_collection_scalar() && right.is_collection_scalar() => {
                 Ok(ReplacementValue::Bool(left == right))
             }
@@ -2416,7 +3799,7 @@ impl BodyExecutor {
         }
     }
 
-    /// Move a complete local while refusing the partial moves Body IR v0 does not model for collection tuples.
+    /// Move a complete local while refusing unrepresented partial moves through a projected place.
     fn read_moved_place(
         &mut self,
         place: &Place,
@@ -2424,7 +3807,7 @@ impl BodyExecutor {
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         if !place.projection.is_empty() {
             return Err(unsupported(
-                "move through a tuple field projection outside the scalar tuple collection profile",
+                "move through a place projection outside the direct replacement profile",
                 span,
             ));
         }
@@ -2433,7 +3816,7 @@ impl BodyExecutor {
             .ok_or_else(|| runtime_failure("read of a moved or dropped local".to_string(), span))
     }
 
-    /// Apply the one scalar-tuple field projection or collected-generator list index admitted by this profile.
+    /// Apply one source-local tuple/model field or list index projection while retaining the original source span.
     fn project_place(
         &mut self,
         value: ReplacementValue,
@@ -2441,30 +3824,130 @@ impl BodyExecutor {
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         match place.projection.as_slice() {
-            [] | [PlaceElem::Field(_)] => project_tuple_field(value, place, span),
+            [] => Ok(value),
+            [PlaceElem::Field(field)] if field.parse::<usize>().is_ok() => project_tuple_field(value, place, span),
+            [PlaceElem::Field(field)] => self.project_nominal_field(value, field, span),
             [PlaceElem::Index(index)] => {
                 let index = self.evaluate_operand(index, span)?;
                 let ReplacementValue::Int(index) = index else {
-                    return Err(unsupported("collected generator index using a non-int value", span));
+                    return Err(unsupported("list index using a non-int value", span));
                 };
-                let index = usize::try_from(index)
-                    .map_err(|_| runtime_failure("collected generator index is negative".to_string(), span))?;
+                let index =
+                    usize::try_from(index).map_err(|_| runtime_failure("list index is negative".to_string(), span))?;
                 match value {
-                    ReplacementValue::CollectedGenerator { elements, .. } => elements
-                        .get(index)
-                        .cloned()
-                        .ok_or_else(|| runtime_failure("collected generator index is out of range".to_string(), span)),
+                    ReplacementValue::List { elements, .. } | ReplacementValue::CollectedGenerator { elements, .. } => {
+                        elements
+                            .get(index)
+                            .cloned()
+                            .ok_or_else(|| runtime_failure("list index is out of range".to_string(), span))
+                    }
                     value => Err(unsupported(
-                        format!(
-                            "indexing {} outside the generator-expression collect profile",
-                            value_kind(&value)
-                        ),
+                        format!("indexing {} outside the source-local list profile", value_kind(&value)),
                         span,
                     )),
                 }
             }
             _ => Err(unsupported(
-                "place projection outside the scalar tuple collection profile",
+                "place projection outside the source-local structural profile",
+                span,
+            )),
+        }
+    }
+
+    /// Read a canonical field from a nominal value after revalidating its retained declaration layout.
+    fn project_nominal_field(
+        &self,
+        value: ReplacementValue,
+        field: &str,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let ReplacementValue::Nominal {
+            direct_declaration_id,
+            fields,
+        } = value
+        else {
+            return Err(unsupported(
+                format!("named field projection `.{field}` using a non-nominal value"),
+                span,
+            ));
+        };
+        let declaration = self
+            .module
+            .nominal_declarations
+            .iter()
+            .find(|declaration| declaration.direct_declaration_id == direct_declaration_id)
+            .ok_or_else(|| {
+                unsupported(
+                    "nominal field projection with an unavailable declaration identity",
+                    span,
+                )
+            })?;
+        if declaration.fields.len() != fields.len()
+            || declaration
+                .fields
+                .iter()
+                .zip(&fields)
+                .any(|(declared, (stored, _))| declared != stored)
+        {
+            return Err(unsupported(
+                "nominal field projection with a mismatched canonical field layout",
+                span,
+            ));
+        }
+        fields
+            .into_iter()
+            .find_map(|(stored, value)| (stored == field).then_some(value))
+            .ok_or_else(|| {
+                unsupported(
+                    format!("named field projection `.{field}` outside the source-local nominal layout"),
+                    span,
+                )
+            })
+    }
+
+    /// Assign a complete local or one source-local list element without permitting nested writes.
+    fn assign_place(
+        &mut self,
+        place: &Place,
+        value: ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        match place.projection.as_slice() {
+            [] => {
+                self.assign_local(place.local, value);
+                Ok(())
+            }
+            [PlaceElem::Index(index)] => {
+                if !value.is_direct_structural() {
+                    return Err(unsupported("list assignment with a non-structural value", span));
+                }
+                let index = self.evaluate_operand(index, span)?;
+                let ReplacementValue::Int(index) = index else {
+                    return Err(unsupported("list assignment using a non-int index", span));
+                };
+                let index = usize::try_from(index)
+                    .map_err(|_| runtime_failure("list assignment index is negative".to_string(), span))?;
+                let target = self
+                    .locals
+                    .get_mut(&place.local)
+                    .ok_or_else(|| runtime_failure("assignment to an unavailable local".to_string(), span))?;
+                let ReplacementValue::List { elements, .. } = target else {
+                    return Err(unsupported(
+                        "index assignment outside the source-local list profile",
+                        span,
+                    ));
+                };
+                let Some(element) = elements.get_mut(index) else {
+                    return Err(runtime_failure(
+                        "list assignment index is out of range".to_string(),
+                        span,
+                    ));
+                };
+                *element = value;
+                Ok(())
+            }
+            _ => Err(unsupported(
+                "place assignment outside the source-local list profile",
                 span,
             )),
         }
@@ -2486,17 +3969,31 @@ impl BodyExecutor {
 impl ReplacementValue {
     /// Return whether a value can honor a Body-IR `Copy` read without duplicating owned state.
     const fn is_copy_shaped(&self) -> bool {
-        matches!(self, Self::Int(_) | Self::Bool(_) | Self::Unit)
+        matches!(
+            self,
+            Self::Int(_) | Self::Bool(_) | Self::Unit | Self::FieldlessEnum { .. }
+        )
     }
 
-    /// Return whether this value is one of the selected, source-observable scalar tuple element shapes.
+    /// Return whether this value is one scalar leaf of the source-local structural vocabulary.
     const fn is_collection_scalar(&self) -> bool {
         matches!(self, Self::Int(_) | Self::Bool(_) | Self::Str(_) | Self::Unit)
     }
 
-    /// Return whether this value is an admitted two-scalar tuple stored in a replacement collection.
-    fn is_scalar_pair_tuple(&self) -> bool {
-        matches!(self, Self::Tuple(elements) if elements.len() == 2 && elements.iter().all(Self::is_collection_scalar))
+    /// Return whether this value is recursively materializable by the tuple/list profile.
+    fn is_direct_structural(&self) -> bool {
+        self.is_collection_scalar()
+            || matches!(self, Self::Tuple(elements) | Self::List { elements, .. }
+                if elements.iter().all(Self::is_direct_structural))
+    }
+
+    /// Return whether this value can be carried in the intentionally data-only direct Result profile.
+    fn is_direct_result_payload(&self) -> bool {
+        self.is_direct_structural()
+            || matches!(
+                self,
+                Self::Nominal { .. } | Self::FieldlessEnum { .. } | Self::ValueEnum { .. }
+            )
     }
 
     /// Return this value as a boolean, refusing a type-shape mismatch at the original source location.
@@ -2543,7 +4040,7 @@ fn bare_local(place: &Place, span: HirSourceSpan) -> Result<LocalId, Replacement
     }
 }
 
-/// Project one admitted scalar tuple field while retaining the statement's original source authority on refusal.
+/// Project one numeric source-local tuple field while retaining the statement's original source authority on refusal.
 fn project_tuple_field(
     value: ReplacementValue,
     place: &Place,
@@ -2554,35 +4051,22 @@ fn project_tuple_field(
             Ok(value)
         } else {
             Err(unsupported(
-                "place projection outside the scalar tuple collection profile",
+                "place projection outside the source-local structural profile",
                 span,
             ))
         };
     };
-    let index = match field.as_str() {
-        "0" => 0,
-        "1" => 1,
-        _ => {
-            return Err(unsupported(
-                "non-numeric tuple field projection outside the scalar tuple collection profile",
-                span,
-            ));
-        }
-    };
+    let index = field
+        .parse::<usize>()
+        .map_err(|_| unsupported("non-numeric tuple field projection", span))?;
     match value {
-        ReplacementValue::Tuple(elements)
-            if elements.len() == 2 && elements.iter().all(ReplacementValue::is_collection_scalar) =>
-        {
-            elements.into_iter().nth(index).ok_or_else(|| {
-                unsupported(
-                    "tuple field projection outside the scalar tuple collection profile",
-                    span,
-                )
-            })
-        }
+        ReplacementValue::Tuple(elements) => elements
+            .into_iter()
+            .nth(index)
+            .ok_or_else(|| runtime_failure("tuple field index is out of range".to_string(), span)),
         value => Err(unsupported(
             format!(
-                "tuple field projection `.{}` using {} outside the scalar tuple collection profile",
+                "tuple field projection `.{}` using {} outside the source-local structural profile",
                 field,
                 value_kind(&value)
             ),
@@ -2708,8 +4192,9 @@ const fn ownership_label(fact: OwnershipFact) -> &'static str {
 /// Render a narrow unsupported-call label for diagnostics.
 fn callee_label(callee: &Callee) -> String {
     match callee {
-        Callee::Function(name) => format!("function `{name}`"),
-        Callee::Method(name) => format!("method `{name}`"),
+        Callee::Function(CallableTarget::Named(target)) => format!("function `{}`", target.name),
+        Callee::Function(CallableTarget::Local(_)) => "stored callable".to_string(),
+        Callee::Method(target) => format!("method `{}`", target.name),
         Callee::Helper(helper) => format!("runtime helper `{}`", helper_label(*helper)),
     }
 }
@@ -2837,6 +4322,10 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Range { .. } => "range",
         ReplacementValue::List { .. } => "list",
         ReplacementValue::Tuple(_) => "tuple",
+        ReplacementValue::Nominal { .. } => "nominal",
+        ReplacementValue::FieldlessEnum { .. } => "fieldless enum",
+        ReplacementValue::ValueEnum { .. } => "value enum",
+        ReplacementValue::Result { .. } => "Result",
         ReplacementValue::Callable(_) => "callable",
         ReplacementValue::Generator(_) => "generator",
         ReplacementValue::Adapter(_) => "generator adapter",
@@ -2852,6 +4341,19 @@ fn constant_value(constant: &Constant) -> ReplacementValue {
         Constant::Str(value) => ReplacementValue::Str(value.clone()),
         Constant::Unit | Constant::None => ReplacementValue::Unit,
         Constant::Float(value) => ReplacementValue::Float(value.clone()),
+    }
+}
+
+/// Convert only scalar/unit Body-IR constants to a direct pattern comparison value.
+fn direct_pattern_constant(
+    constant: &Constant,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    match constant {
+        Constant::Int(_) | Constant::Bool(_) | Constant::Str(_) | Constant::Unit | Constant::None => {
+            Ok(constant_value(constant))
+        }
+        Constant::Float(_) => Err(unsupported("floating-point match literal", span)),
     }
 }
 
@@ -2872,6 +4374,9 @@ mod tests {
         let span = HirSourceSpan::new(0, 1);
         let module = BodyIrModule {
             module_id: CompilerNodeId::module("replacement.generator_budget_test"),
+            nominal_declarations: Vec::new(),
+            fieldless_enum_declarations: Vec::new(),
+            value_enum_declarations: Vec::new(),
             bodies: Vec::new(),
         };
         let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS);
