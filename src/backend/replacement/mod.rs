@@ -1400,7 +1400,7 @@ impl BodyExecutor {
     fn bind_call_arguments(
         &mut self,
         params: &[CallableParam],
-        args: &[Operand],
+        args: &[&Operand],
         binding: &ArgumentBinding,
         captures: &BTreeMap<LocalId, ReplacementValue>,
         span: HirSourceSpan,
@@ -1687,7 +1687,7 @@ impl BodyExecutor {
     fn execute_local_callable(
         &mut self,
         target: &LocalCallableTarget,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let callable = self.take_callable_receiver(&target.operand, span)?;
@@ -1736,7 +1736,7 @@ impl BodyExecutor {
     fn execute_named_callable(
         &mut self,
         target: &NamedCallableTarget,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let body = self
@@ -1797,7 +1797,7 @@ impl BodyExecutor {
     fn construct_generator_adapter(
         &mut self,
         name: &str,
-        args: &[Operand],
+        args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         let [receiver, callback] = args else {
