@@ -1255,8 +1255,20 @@ fn source_compiler_vocab_support_root() -> Result<PathBuf, OvenLegacyCargoError>
 /// may seal its checked helper closure at the explicit publisher boundary, from a packaged compiler that must rely
 /// on a shipped release-cohort Loaf.
 pub(crate) fn source_compiler_vocab_support_is_available() -> bool {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    root.join("Cargo.lock").is_file() && root.join("crates/incan_vocab/Cargo.toml").is_file()
+    let Ok(root) = fs::canonicalize(Path::new(env!("CARGO_MANIFEST_DIR"))) else {
+        return false;
+    };
+    let Ok(executable) = std::env::current_exe().and_then(fs::canonicalize) else {
+        return false;
+    };
+    source_compiler_vocab_support_paths_are_available(&root, &executable)
+}
+
+/// Return whether `executable` is a source-build binary beneath the checked compiler workspace at `root`.
+fn source_compiler_vocab_support_paths_are_available(root: &Path, executable: &Path) -> bool {
+    root.join("Cargo.lock").is_file()
+        && root.join("crates/incan_vocab/Cargo.toml").is_file()
+        && executable.starts_with(root.join("target"))
 }
 
 /// Prepare and publish exactly one receipt-bound direct-rustc closure through the hidden `legacy_cargo` boundary.
@@ -8989,8 +9001,9 @@ mod tests {
         publisher_registry_source_catalog, reclaim_unmaterialized_compiler_suite_target_files,
         release_cohort_generated_project_lock, resolve_direct_dependency_packages, run_legacy_cargo_invocation,
         select_compiler_test_suite_identity, select_existing_project_extension_identity,
-        stage_compiler_suite_shard_files, stage_registry_source_directory, stage_self_contained_sdk_provider_tree,
-        validate_compiler_suite_unit_graph, validate_generated_registry_lock, validate_release_cohort_registry_lock,
+        source_compiler_vocab_support_paths_are_available, stage_compiler_suite_shard_files,
+        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
+        validate_generated_registry_lock, validate_release_cohort_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
@@ -9014,6 +9027,33 @@ mod tests {
         path::{Path, PathBuf},
         process::Command,
     };
+
+    #[test]
+    fn source_compiler_vocab_support_requires_a_binary_beneath_the_source_target()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = tempfile::tempdir()?;
+        let source_root = source.path();
+        fs::create_dir_all(source_root.join("crates/incan_vocab"))?;
+        fs::create_dir_all(source_root.join("target/release"))?;
+        fs::write(source_root.join("Cargo.lock"), "# fixture\n")?;
+        fs::write(
+            source_root.join("crates/incan_vocab/Cargo.toml"),
+            "[package]\nname = \"incan_vocab\"\n",
+        )?;
+
+        let source_binary = source_root.join("target/release/incan");
+        assert!(source_compiler_vocab_support_paths_are_available(
+            source_root,
+            &source_binary
+        ));
+
+        let installed_binary = tempfile::tempdir()?.path().join("toolchains/0.5.1-rc2/bin/incan");
+        assert!(!source_compiler_vocab_support_paths_are_available(
+            source_root,
+            &installed_binary
+        ));
+        Ok(())
+    }
 
     #[cfg(unix)]
     #[test]
