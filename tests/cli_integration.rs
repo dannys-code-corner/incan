@@ -7445,6 +7445,45 @@ edition = "2021"
 }
 
 #[test]
+fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let _main_path = write_minimal_project(tmp.path(), "cli_unbaked_script_target", "")?;
+    let scripts_dir = tmp.path().join("scripts");
+    fs::create_dir_all(&scripts_dir)?;
+    let metadata_path = scripts_dir.join("metadata.incn");
+    fs::write(&metadata_path, "def main() -> None:\n    pass\n")?;
+
+    let bake_output = run_explicit_oven_bake(tmp.path())?;
+    assert_success(
+        &bake_output,
+        "explicit Oven bake for the conventional executable target",
+    );
+
+    let run_output = run_incan(
+        tmp.path(),
+        &[
+            "run",
+            metadata_path.to_str().ok_or("metadata path was not valid UTF-8")?,
+        ],
+    )?;
+    assert_failure(&run_output, "incan run for an undeclared unbaked script");
+    let stderr = String::from_utf8_lossy(&run_output.stderr);
+    assert!(
+        stderr.contains("Oven Alpha has no baked executable target for `scripts/metadata.incn`"),
+        "unbaked-script diagnostic did not name the missing target:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("[project.scripts]") && stderr.contains("incan oven bake --project ."),
+        "unbaked-script diagnostic did not describe the declaration and bake recovery:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("Needs: none"),
+        "unbaked-script diagnostic must not fall through to a generic dependency miss:\n{stderr}"
+    );
+    Ok(())
+}
+
+#[test]
 fn rust_generic_interop_scenarios_share_one_project() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let main_path = write_minimal_project(

@@ -5328,18 +5328,26 @@ fn prepare_oven_project(
             &rustc,
         )?
     };
-    let plan_preparation = plan_preparation.ok_or_else(|| {
-        CliError::failure(format!(
-            "{}. `incan build` and `incan run` {}. {} (Needs: {}. Build record {}; generated project: {}; receipt: {}.)",
-            OVEN_DEPENDENCY_MISS_SUMMARY,
-            OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
-            OVEN_LOAF_MISS_GUIDANCE,
-            required_registry_dependencies,
-            receipt.identity,
-            generator.output_dir().display(),
-            crate::oven::default_receipt_path(&project_root).display(),
-        ))
-    })?;
+    let plan_preparation = match plan_preparation {
+        Some(plan_preparation) => plan_preparation,
+        None => {
+            if oven_plan_mode == OvenProjectPlanMode::ConsumeOnly
+                && let Some(error) = unbaked_executable_target_error(manifest.as_ref(), path)?
+            {
+                return Err(error);
+            }
+            return Err(CliError::failure(format!(
+                "{}. `incan build` and `incan run` {}. {} (Needs: {}. Build record {}; generated project: {}; receipt: {}.)",
+                OVEN_DEPENDENCY_MISS_SUMMARY,
+                OVEN_NO_IMPLICIT_DEPENDENCY_BUILD,
+                OVEN_LOAF_MISS_GUIDANCE,
+                required_registry_dependencies,
+                receipt.identity,
+                generator.output_dir().display(),
+                crate::oven::default_receipt_path(&project_root).display(),
+            )));
+        }
+    };
     let plan_selection = plan_preparation.plan_selection;
     let registry_authority = registry_leaf_authority_for_plan_selection(&plan_selection)?;
     let full_artifact_plan = plan_selection.artifact_plan();
@@ -12595,6 +12603,30 @@ fn discover_oven_executable_entrypoints(manifest: &ProjectManifest) -> CliResult
     Ok(executable_paths)
 }
 
+/// Describe an unbaked explicit script only after normal plan selection has failed.
+///
+/// An arbitrary manifest-owned path remains a supported normal command when a receipt-compatible plan is available;
+/// compiler-suite fixtures rely on that. When no plan exists, however, `incan oven bake --project .` can prepare only
+/// the conventional main executable and manifest-declared scripts. Name that missing target rather than incorrectly
+/// suggesting an empty dependency set is the problem.
+fn unbaked_executable_target_error(
+    manifest: Option<&ProjectManifest>,
+    entrypoint: &Path,
+) -> CliResult<Option<CliError>> {
+    let Some(manifest) = manifest else {
+        return Ok(None);
+    };
+    let Some(relative_entrypoint) = project_relative_entrypoint(manifest.project_root(), entrypoint) else {
+        return Ok(None);
+    };
+    if discover_oven_executable_entrypoints(manifest)?.contains_key(&relative_entrypoint) {
+        return Ok(None);
+    }
+    Ok(Some(CliError::failure(format!(
+        "Oven Alpha has no baked executable target for `{relative_entrypoint}`. `incan oven bake --project .` bakes `src/main.incn` and entries declared under `[project.scripts]`; declare `{relative_entrypoint}` in `[project.scripts]`, then rerun `incan oven bake --project .` before using that target with a normal Oven command."
+    ))))
+}
+
 /// Resolve every manifest-backed target that an explicit project bake must prepare.
 ///
 /// Declared scripts are first-class executable targets rather than aliases for `src/main.incn`. The conventional main
@@ -16309,6 +16341,30 @@ impl ChildId {
         let extra_output = oven_bake_executable_output_dir(project.path(), &extra)?
             .ok_or("custom script did not receive an isolated output root")?;
         assert!(extra_output.starts_with(project.path().join("target/incan/oven-targets")));
+        Ok(())
+    }
+
+    #[test]
+    fn oven_reports_an_undeclared_script_as_an_unbaked_executable_target() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("src"))?;
+        fs::create_dir_all(project.path().join("scripts"))?;
+        fs::write(project.path().join("incan.toml"), "[project]\nname = \"scripts\"\n")?;
+        let main = project.path().join("src/main.incn");
+        let metadata = project.path().join("scripts/metadata.incn");
+        fs::write(&main, "def main() -> None:\n    pass\n")?;
+        fs::write(&metadata, "def main() -> None:\n    pass\n")?;
+        let manifest = ProjectManifest::load(&project.path().join("incan.toml"))?;
+
+        assert!(unbaked_executable_target_error(Some(&manifest), &main)?.is_none());
+        let error = unbaked_executable_target_error(Some(&manifest), &metadata)?
+            .ok_or("an undeclared executable must not fall through to a dependency miss")?;
+        let message = error.to_string();
+        assert!(message.contains("scripts/metadata.incn"));
+        assert!(message.contains("[project.scripts]"));
+        assert!(message.contains("incan oven bake --project ."));
+        assert!(message.contains("normal Oven command"));
+        assert!(!message.contains("before `incan run"));
         Ok(())
     }
 
