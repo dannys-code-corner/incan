@@ -7882,7 +7882,7 @@ async def main() -> None:
   "schema_version": 2,
   "sdk_id": "incan",
   "sdk_version": "0.5.0",
-  "compiler_requirement": ">=0.5.0-dev.6,<0.6.0",
+  "compiler_requirement": ">=0.5.1-dev.0,<0.6.0",
   "provider_codegen_revision": 4,
   "components": {},
   "profiles": {"default": []}
