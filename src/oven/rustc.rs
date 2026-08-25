@@ -24,7 +24,9 @@ use super::legacy_cargo::{
 use super::process::{isolate_process_group, terminate_process_group};
 use super::{OVEN_COMPILER_TEST_PROFILE, OvenBuildIntent, OvenReceipt, digest_bytes, digest_source_tree};
 use crate::manifest::{DependencySource, DependencySpec};
-use crate::oven::store::{OvenArtifactKind, OvenStore, OvenStoreError, OvenStoreExecutionPayload, OvenStoreLease};
+use crate::oven::store::{
+    OvenArtifactKind, OvenArtifactManifest, OvenStore, OvenStoreError, OvenStoreExecutionPayload, OvenStoreLease,
+};
 
 /// Wire-format version for an Oven-owned direct-rustc artifact manifest.
 /// Version 9 separates the complete sealed Rust-inspection source closure from linkable registry leaves. This keeps
@@ -4277,9 +4279,7 @@ pub(crate) fn load_project_inspection_authority(
         selected_index += 1;
         if selected.manifest.identity != *identity
             || selected.manifest.kind != *artifact_kind
-            || selected.manifest.receipt_identity != receipt.identity
-            || selected.manifest.build_unit_identity != receipt.build_unit_identity
-            || selected.manifest.intent != receipt.intent
+            || !project_inspection_constituent_matches_receipt(&selected.manifest, *artifact_kind, receipt)
         {
             return Err(OvenRustcError::InvalidStoredPlan {
                 identity: identity.clone(),
@@ -4343,6 +4343,21 @@ pub(crate) fn load_project_inspection_authority(
         _authority_lease: authority_lease,
         lineage_leases: Vec::new(),
     })
+}
+
+/// Return whether one stored inspection constituent is authorized by its receiving project receipt.
+///
+/// Direct-Rustc plans are shared immutable closures, so their original publisher receipt may differ from the
+/// receiving project receipt while the reusable build unit and build intent remain exact. Project extensions remain
+/// receipt-specific because they contain caller-owned project material.
+pub(crate) fn project_inspection_constituent_matches_receipt(
+    manifest: &OvenArtifactManifest,
+    artifact_kind: OvenArtifactKind,
+    receipt: &OvenReceipt,
+) -> bool {
+    manifest.build_unit_identity == receipt.build_unit_identity
+        && manifest.intent == receipt.intent
+        && (artifact_kind == OvenArtifactKind::DirectRustcPlan || manifest.receipt_identity == receipt.identity)
 }
 
 /// Check a generated inspection batch against the exact normal/dev roots sealed by one project authority.
@@ -6280,8 +6295,8 @@ mod tests {
     use super::{
         OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION, OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
         OvenCallerOwnedRustcLibrary, OvenDirectRustcTestRequest, OvenProjectInspectionAuthorityPayload,
-        OvenProjectInspectionConstituent, OvenProjectInspectionRootDependency, OvenProjectInspectionSource,
-        OvenProjectInspectionSourceOwner, OvenProjectInspectionTestDependencyEnvelope,
+        OvenProjectInspectionAuthorityRef, OvenProjectInspectionConstituent, OvenProjectInspectionRootDependency,
+        OvenProjectInspectionSource, OvenProjectInspectionSourceOwner, OvenProjectInspectionTestDependencyEnvelope,
         OvenProjectInspectionTestDependencyRoot, OvenRegistryLeafAuthority, OvenRustcArtifactExtern,
         OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcAuxiliaryTarget, OvenRustcError,
         OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact,
@@ -6290,9 +6305,9 @@ mod tests {
         apply_oven_profile, attach_caller_owned_rustc_libraries, bake_direct_rustc_test, bake_stored_direct_rustc_run,
         bake_stored_direct_rustc_test, bake_trusted_direct_rustc_dylib, bake_trusted_direct_rustc_library,
         bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run, bake_trusted_direct_rustc_test,
-        combined_process_output, is_host_native_unix_target, materialize_declared_rust_libraries,
-        materialize_declared_rust_libraries_with_selected_path_authority,
-        project_inspection_authority_supports_dependencies,
+        combined_process_output, is_host_native_unix_target, load_project_inspection_authority,
+        materialize_declared_rust_libraries, materialize_declared_rust_libraries_with_selected_path_authority,
+        project_inspection_authority_supports_dependencies, project_inspection_constituent_matches_receipt,
         project_inspection_test_dependency_envelope_supports_dependencies, resolve_sealed_registry_leaf,
         run_trusted_rustdoc_test, rustc_dynamic_library_environment, rustc_host_target,
         select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
@@ -8378,6 +8393,116 @@ mod tests {
             select_direct_rustc_plan_identity(&store, &second_receipt)?,
             stored.identity
         );
+        Ok(())
+    }
+
+    #[test]
+    fn project_inspection_authority_reuses_a_compatible_direct_plan_across_receipts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let first = tempfile::tempdir()?;
+        let second = tempfile::tempdir()?;
+        for (root, source) in [
+            (first.path(), "fn main() { println!(\"first\"); }\n"),
+            (second.path(), "fn main() { println!(\"second\"); }\n"),
+        ] {
+            fs::create_dir_all(root.join("src"))?;
+            fs::write(root.join("src/main.rs"), source)?;
+        }
+        let receipt_for = |root: &Path| {
+            receipt_generated_project(
+                &OvenGeneratedProjectRequest::new(
+                    root,
+                    "shared-oven-fixture",
+                    "0.1.0",
+                    "aarch64-apple-darwin",
+                    "rustc 1.96.0",
+                    "debug",
+                    Vec::new(),
+                )
+                .with_generated_source("generated-root", root.join("src/main.rs"))
+                .with_generated_source_tree("generated-tree", root.join("src"))
+                .with_build_unit_input("runtime-lock", "sha256:shared"),
+            )
+        };
+        let first_receipt = receipt_for(first.path())?;
+        let second_receipt = receipt_for(second.path())?;
+        assert_ne!(first_receipt.identity, second_receipt.identity);
+        assert_eq!(first_receipt.build_unit_identity, second_receipt.build_unit_identity);
+
+        let store_root = tempfile::tempdir()?;
+        let store = OvenStore::new(
+            store_root.path(),
+            OvenStoreLimits::new(128 * 1024, 128 * 1024, 64 * 1024),
+        );
+        let direct_plan = store.publish(&OvenArtifactPublishRequest {
+            receipt: first_receipt,
+            domain: "shared-alpha".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: serde_json::to_vec(&empty_manifest(&second_receipt))?,
+            materialized_files: Vec::new(),
+        })?;
+        let project_identity = "sha256:project";
+        let source_authority_digest = "sha256:source";
+        let compiler_version = "0.5.1-test";
+        let authority_payload = OvenProjectInspectionAuthorityPayload {
+            schema_version: OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
+            project_identity: project_identity.to_string(),
+            source_authority_digest: source_authority_digest.to_string(),
+            compiler_version: compiler_version.to_string(),
+            registry_lock_digest: digest_bytes(b"registry lock"),
+            registry_source_dependencies: Vec::new(),
+            dev_registry_source_dependencies: Vec::new(),
+            test_dependency_envelope: None,
+            constituents: vec![OvenProjectInspectionConstituent::Stored {
+                identity: direct_plan.identity.clone(),
+                artifact_kind: OvenArtifactKind::DirectRustcPlan,
+                receipt: second_receipt.clone(),
+                base_loaf_identity: None,
+            }],
+            registry_sources: Vec::new(),
+        };
+        let authority = store.publish(&OvenArtifactPublishRequest {
+            receipt: second_receipt.clone(),
+            domain: "shared-alpha".to_string(),
+            kind: OvenArtifactKind::ProjectInspectionAuthority,
+            payload: serde_json::to_vec(&authority_payload)?,
+            materialized_files: Vec::new(),
+        })?;
+
+        let (selected_manifest, _, _, _) = store.select_payload_for_execution(&direct_plan.identity)?;
+        assert!(project_inspection_constituent_matches_receipt(
+            &selected_manifest,
+            OvenArtifactKind::DirectRustcPlan,
+            &second_receipt,
+        ));
+        assert!(!project_inspection_constituent_matches_receipt(
+            &selected_manifest,
+            OvenArtifactKind::ProjectPayload,
+            &second_receipt,
+        ));
+        let mut selected = store.select_payloads_for_execution(std::slice::from_ref(&direct_plan.identity))?;
+        let selected = selected
+            .pop()
+            .ok_or("direct plan disappeared after authority selection")?;
+        let selection =
+            crate::cli::commands::build::project_test_dependency_plan_from_constituent(selected, &second_receipt)?;
+        assert!(matches!(
+            selection,
+            crate::cli::commands::build::OvenDirectRustcPlanSelection::Stored(_)
+        ));
+
+        let loaded = load_project_inspection_authority(
+            &store,
+            &OvenProjectInspectionAuthorityRef {
+                identity: authority.identity,
+                receipt_identity: second_receipt.identity.clone(),
+                build_unit_identity: second_receipt.build_unit_identity.clone(),
+            },
+            project_identity,
+            source_authority_digest,
+            compiler_version,
+        )?;
+        assert_eq!(loaded.payload, authority_payload);
         Ok(())
     }
 

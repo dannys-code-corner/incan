@@ -84,10 +84,10 @@ use crate::oven::rustc::{
     OvenTrustedDirectRustcTargetRequest, OvenTrustedRustcArtifactRoot, attach_caller_owned_rustc_libraries,
     bake_trusted_direct_rustc_library, bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run,
     clear_inherited_cargo_environment, load_project_inspection_authority,
-    materialize_declared_rust_libraries_with_selected_path_authority, resolve_active_rustc, rustc_host_target,
-    rustc_identity, select_direct_rustc_plan_for_execution, trusted_artifact_plan_for_source_evidence,
-    validate_project_extension_payload_against_base, validate_project_inspection_authority_payload,
-    validate_selected_sealed_registry_leaf,
+    materialize_declared_rust_libraries_with_selected_path_authority, project_inspection_constituent_matches_receipt,
+    resolve_active_rustc, rustc_host_target, rustc_identity, select_direct_rustc_plan_for_execution,
+    trusted_artifact_plan_for_source_evidence, validate_project_extension_payload_against_base,
+    validate_project_inspection_authority_payload, validate_selected_sealed_registry_leaf,
 };
 use crate::oven::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
@@ -1314,10 +1314,7 @@ pub(crate) fn project_test_dependency_plan_from_constituent(
     selected: crate::oven::store::OvenStoreExecutionPayload,
     receipt: &crate::oven::OvenReceipt,
 ) -> CliResult<OvenDirectRustcPlanSelection> {
-    if selected.manifest.receipt_identity != receipt.identity
-        || selected.manifest.build_unit_identity != receipt.build_unit_identity
-        || selected.manifest.intent != receipt.intent
-    {
+    if !project_inspection_constituent_matches_receipt(&selected.manifest, selected.manifest.kind, receipt) {
         return Err(CliError::failure(
             "project inspection test dependency constituent changed kind, receipt, build unit, or intent",
         ));
