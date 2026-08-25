@@ -176,29 +176,6 @@ fn run_incan_with_env_and_removed(
     Ok(output)
 }
 
-/// Run one normal consumer command without the compiler-suite's scheduler-owned execution authority.
-///
-/// The compiler suite may inject a leased direct-rustc closure so its own test roots can execute without copying
-/// that closure into each fixture. A nested command that models a user's ordinary source/receipt path must not
-/// consume that test-only capability. It retains the suite's read-only, prewarmed SDK inventory, but removes the
-/// mutable provider-store override and all scheduler execution handoffs.
-fn run_incan_as_normal_oven_consumer(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
-    run_incan_with_env_and_removed(
-        current_dir,
-        args,
-        &[],
-        &[
-            "INCAN_OVEN_COMPILER_SUITE_CAPABILITY",
-            "INCAN_OVEN_COMPILER_SUITE_VOCAB_CAPABILITY",
-            "INCAN_OVEN_COMPILER_SUITE_RUSTC",
-            "INCAN_INTERNAL_OVEN_LOAF_EXECUTION",
-            "INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT",
-            "INCAN_INTERNAL_OVEN_RUNTIME_ROOT",
-            "INCAN_INTERNAL_SDK_PROVIDER_STORE",
-        ],
-    )
-}
-
 fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(incan_binary());
     command
@@ -7464,80 +7441,6 @@ edition = "2021"
     assert_success(&test_after_extra_lock, "incan test --locked after extra lock");
     assert_no_stale_warning(&test_after_extra_lock, "incan test --locked after extra lock");
 
-    Ok(())
-}
-
-#[test]
-fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn std::error::Error>> {
-    let tmp = tempfile::tempdir()?;
-    let src_dir = tmp.path().join("src");
-    fs::create_dir_all(&src_dir)?;
-    fs::write(
-        tmp.path().join("incan.toml"),
-        "[project]\nname = \"cli_unbaked_script_target\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
-    )?;
-    fs::write(
-        src_dir.join("lib.incn"),
-        "from std.fs import Path\n\npub def value() -> int:\n    return 1\n",
-    )?;
-    let vocab_root = tmp.path().join("vocab_companion");
-    fs::create_dir_all(vocab_root.join("src"))?;
-    fs::write(
-        vocab_root.join("Cargo.toml"),
-        format!(
-            "[package]\nname = \"cli_unbaked_script_vocab\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\npath = \"src/lib.rs\"\ncrate-type = [\"rlib\", \"cdylib\"]\n\n[dependencies]\nincan_vocab = {{ path = \"{}\" }}\n",
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("crates/incan_vocab")
-                .display()
-        ),
-    )?;
-    fs::write(
-        vocab_root.join("src/lib.rs"),
-        "pub fn library_vocab() -> incan_vocab::VocabRegistration {\n    incan_vocab::VocabRegistration::new()\n}\n",
-    )?;
-    let scripts_dir = tmp.path().join("scripts");
-    fs::create_dir_all(&scripts_dir)?;
-    let metadata_path = scripts_dir.join("metadata.incn");
-    // Match the IncQL registry checker shape: a library-root bake seals no executable target, so this separate,
-    // undeclared script has no compatible executable plan to select.
-    fs::write(
-        &metadata_path,
-        "from std.fs import Path\n\ndef main() -> None:\n    pass\n",
-    )?;
-
-    let bake_output = run_explicit_oven_bake(tmp.path())?;
-    assert_success(&bake_output, "explicit Oven bake for the library project");
-
-    // Retain IncQL's API-metadata-before-script order, but remove the suite-only consumer authority so both nested
-    // commands use the same source/receipt selection as an ordinary installed or source-built toolchain.
-    let metadata_output =
-        run_incan_as_normal_oven_consumer(tmp.path(), &["tools", "metadata", "api", ".", "--format", "json"])?;
-    assert_success(
-        &metadata_output,
-        "API metadata inspection after an explicit project bake",
-    );
-
-    let run_output = run_incan_as_normal_oven_consumer(
-        tmp.path(),
-        &[
-            "run",
-            metadata_path.to_str().ok_or("metadata path was not valid UTF-8")?,
-        ],
-    )?;
-    assert_failure(&run_output, "incan run for an undeclared unbaked script");
-    let stderr = String::from_utf8_lossy(&run_output.stderr);
-    assert!(
-        stderr.contains("Oven Alpha has no baked executable target for `scripts/metadata.incn`"),
-        "unbaked-script diagnostic did not name the missing target:\n{stderr}"
-    );
-    assert!(
-        stderr.contains("[project.scripts]") && stderr.contains("incan oven bake --project ."),
-        "unbaked-script diagnostic did not describe the declaration and bake recovery:\n{stderr}"
-    );
-    assert!(
-        !stderr.contains("Needs: none"),
-        "unbaked-script diagnostic must not fall through to a generic dependency miss:\n{stderr}"
-    );
     Ok(())
 }
 

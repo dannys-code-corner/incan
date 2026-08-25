@@ -284,7 +284,7 @@ jobs:
           INCAN_TEST_PREWARM_TOOLCHAIN=stable
           INCAN_TEST_LOAF_TOOLCHAIN=stable
           INCAN_TEST_SUITE_TOOLCHAIN=stable
-          make -s test-prewarm-oven-loafs
+          make -s test-prewarm-oven-loafs test-prewarm-oven-release-loafs
       - name: Derive immutable prepared-suite cache key
         id: oven-suite-cache-key
         run: echo "key=incan-oven-suite-v1-Linux-X64-${{ github.sha }}" >> "$GITHUB_OUTPUT"
@@ -295,6 +295,7 @@ jobs:
           path: |
             .incan/oven/compiler-libtests-receipt.json
             target/share/incan/oven/loafs
+            target/oven-alpha-release-toolchain
             target/oven-compiler-suite-store
             target/incan_test_sdk_provider_store
             target/incan_test_sdk_provider_path
@@ -384,6 +385,7 @@ jobs:
           path: |
             .incan/oven/compiler-libtests-receipt.json
             target/share/incan/oven/loafs
+            target/oven-alpha-release-toolchain
             target/oven-compiler-suite-store
             target/incan_test_sdk_provider_store
             target/incan_test_sdk_provider_path
@@ -392,6 +394,8 @@ jobs:
         run: |
           test -s .incan/oven/compiler-libtests-receipt.json
           test -d target/share/incan/oven/loafs
+          test -x target/oven-alpha-release-toolchain/bin/incan
+          test -d target/oven-alpha-release-toolchain/share/incan/oven/loafs
           test -d target/oven-compiler-suite-store
           test -s target/incan_test_sdk_provider_path
       - name: Run receipt-bound Oven partition

@@ -300,7 +300,9 @@ test-oven: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
 	@$(MAKE) --no-print-directory test-oven-replay
 
 .PHONY: test-oven-partition  ## test - Replay one deterministic prewarmed Oven compiler-suite partition
-test-oven-partition: test-prewarm-oven-loafs test-prewarm-oven-release-loafs
+# CI restores the complete compiler and release envelopes before invoking this target. Keep it replay-only: a
+# partition must never silently publish or prewarm an authority that its receipt is supposed to consume.
+test-oven-partition:
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_INDEX)" || { echo "INCAN_TEST_OVEN_PARTITION_INDEX is required" >&2; exit 2; }
 	@test -n "$(INCAN_TEST_OVEN_PARTITION_COUNT)" || { echo "INCAN_TEST_OVEN_PARTITION_COUNT is required" >&2; exit 2; }
 	@partition_display=$$(( $(INCAN_TEST_OVEN_PARTITION_INDEX) + 1 )); \
