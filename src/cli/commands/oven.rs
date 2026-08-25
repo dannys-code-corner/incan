@@ -7098,7 +7098,7 @@ mod tests {
             ),
         )?;
         assert_eq!(limits.max_physical_bytes, DEFAULT_OVEN_MAX_PHYSICAL_BYTES);
-        assert_eq!(limits.max_physical_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_physical_bytes, 9 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_physical_bytes, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES);
         assert_eq!(limits.max_domain_physical_bytes, 6 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_logical_bytes, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES);

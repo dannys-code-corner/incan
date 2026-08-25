@@ -85,9 +85,11 @@ pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
 /// Default aggregate physical allocation retained by an everyday Alpha Oven store.
 ///
-/// A project bake retains independent debug and release plans. Eight GiB keeps both real project closures bounded
-/// without allowing the publisher's private target to grow without limit.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// A project bake retains independent debug and release plans. A measured IncQL/DataFusion provider retains about
+/// 4.23 GiB while its consumer's compatibility publisher transiently needs about 3.80 GiB. Nine GiB admits that
+/// ordinary provider-to-consumer hand-off with practical headroom while keeping the publisher's private target
+/// bounded.
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 9 * 1024 * 1024 * 1024;
 /// Default physical allocation cap for one compatibility domain.
 ///
 /// A checked IncQL/DataFusion debug plan retains 1.21 GiB while its following release publisher needs a bounded
