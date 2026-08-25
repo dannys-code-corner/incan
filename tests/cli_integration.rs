@@ -176,6 +176,29 @@ fn run_incan_with_env_and_removed(
     Ok(output)
 }
 
+/// Run one normal consumer command without the compiler-suite's scheduler-owned execution authority.
+///
+/// The compiler suite may inject a leased direct-rustc closure so its own test roots can execute without copying
+/// that closure into each fixture. A nested command that models a user's ordinary source/receipt path must not
+/// consume that test-only capability; it keeps the fixture's Oven home and source overrides while removing only
+/// the scheduler handoffs.
+fn run_incan_as_normal_oven_consumer(current_dir: &Path, args: &[&str]) -> Result<Output, Box<dyn std::error::Error>> {
+    run_incan_with_env_and_removed(
+        current_dir,
+        args,
+        &[],
+        &[
+            "INCAN_OVEN_COMPILER_SUITE_CAPABILITY",
+            "INCAN_OVEN_COMPILER_SUITE_VOCAB_CAPABILITY",
+            "INCAN_OVEN_COMPILER_SUITE_RUSTC",
+            "INCAN_INTERNAL_OVEN_LOAF_EXECUTION",
+            "INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT",
+            "INCAN_INTERNAL_OVEN_RUNTIME_ROOT",
+            "INCAN_SDK_INVENTORY",
+        ],
+    )
+}
+
 fn configured_incan_command(current_dir: &Path, args: &[&str]) -> Command {
     let mut command = Command::new(incan_binary());
     command
@@ -7485,14 +7508,16 @@ fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn st
     let bake_output = run_explicit_oven_bake(tmp.path())?;
     assert_success(&bake_output, "explicit Oven bake for the library project");
 
-    // IncQL inspects checked API metadata before executing its registry-checker script, so retain that command order.
-    let metadata_output = run_incan(tmp.path(), &["tools", "metadata", "api", ".", "--format", "json"])?;
+    // Retain IncQL's API-metadata-before-script order, but remove the suite-only consumer authority so both nested
+    // commands use the same source/receipt selection as an ordinary installed or source-built toolchain.
+    let metadata_output =
+        run_incan_as_normal_oven_consumer(tmp.path(), &["tools", "metadata", "api", ".", "--format", "json"])?;
     assert_success(
         &metadata_output,
         "API metadata inspection after an explicit project bake",
     );
 
-    let run_output = run_incan(
+    let run_output = run_incan_as_normal_oven_consumer(
         tmp.path(),
         &[
             "run",
