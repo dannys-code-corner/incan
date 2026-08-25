@@ -1671,7 +1671,13 @@ fn source_type_path_display(
     out.push(crate_name.to_string());
     out.extend(owner);
     out.extend(segments);
-    out.join("::")
+    let source_owned_path = out.join("::");
+    // A `super::` path becomes crate-qualified only after its owner module is restored. Re-check public reexports
+    // at that point so method signatures can identify the same nominal type as a consumer's public import.
+    source_public_reexports
+        .get(source_owned_path.as_str())
+        .cloned()
+        .unwrap_or(source_owned_path)
 }
 
 /// Normalize dependency source type syntax without loading rust-analyzer.

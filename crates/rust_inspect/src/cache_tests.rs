@@ -92,6 +92,37 @@ fn source_and_generated_type_displays_preserve_never_type() {
     );
 }
 
+/// Source method signatures can reach a public reexport through a `super::` path.
+///
+/// The reexport key is only available after the relative path has been qualified with its owning crate and module.
+#[test]
+fn source_type_display_resolves_public_reexport_after_qualifying_super_path() {
+    let external_crates = HashSet::new();
+    let aliases = HashMap::new();
+    let preferred_external_paths = HashMap::new();
+    let source_public_reexports = HashMap::from([(
+        "datafusion::execution::options::ParquetReadOptions".to_string(),
+        "datafusion::datasource::file_format::options::ParquetReadOptions".to_string(),
+    )]);
+
+    assert_eq!(
+        source_type_display(
+            "super::super::options::ParquetReadOptions",
+            "datafusion",
+            &[
+                "execution".to_string(),
+                "context".to_string(),
+                "parquet".to_string(),
+            ],
+            &external_crates,
+            &aliases,
+            &preferred_external_paths,
+            &source_public_reexports,
+        ),
+        "datafusion::datasource::file_format::options::ParquetReadOptions"
+    );
+}
+
 /// Syntax-only metadata preserves owner type parameters while excluding unsupported lifetime and const parameters.
 #[test]
 fn generated_type_metadata_preserves_owner_type_parameters() -> Result<(), Box<dyn std::error::Error>> {

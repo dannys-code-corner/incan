@@ -5123,6 +5123,48 @@ fn test_types_compatible_keeps_rust_paths_permissive_without_definition_metadata
     );
 }
 
+#[test]
+fn test_types_compatible_elides_lifetime_only_rust_generic_args() {
+    let checker = TypeChecker::new();
+    let actual = ResolvedType::RustPath("datafusion::execution::options::ArrowReadOptions<i64>".to_string());
+    let expected = checker.resolved_type_from_rust_display(
+        "datafusion::execution::options::ArrowReadOptions<datafusion::execution::context::'_, i64>",
+    );
+    let mismatched = checker.resolved_type_from_rust_display(
+        "datafusion::execution::options::ArrowReadOptions<datafusion::execution::context::'_, String>",
+    );
+
+    assert!(
+        checker.types_compatible(&actual, &expected),
+        "lifetime-only Rust generic arguments must not become Incan type arguments"
+    );
+    assert!(
+        !checker.types_compatible(&actual, &mismatched),
+        "eliding a lifetime must not hide a remaining concrete generic-argument mismatch"
+    );
+}
+
+#[test]
+fn test_rust_method_parameter_paths_resolve_from_receiver_not_synthetic_callable() {
+    let checker = TypeChecker::new();
+    let owner =
+        TypeChecker::rust_method_owner_path("rust::datafusion::execution::context::SessionContext.register_parquet");
+    let parameter = checker.rust_display_for_owner_path(
+        "datafusion::execution::context::super::options::ParquetReadOptions<datafusion::execution::context::parquet::'_>",
+        owner,
+    );
+
+    assert_eq!(owner, "datafusion::execution::context::SessionContext");
+    assert_eq!(
+        parameter,
+        "datafusion::execution::options::ParquetReadOptions<datafusion::execution::context::parquet::'_>"
+    );
+    assert!(checker.rust_arg_matches_boundary(
+        &ResolvedType::RustPath("datafusion::execution::options::ParquetReadOptions".to_string()),
+        parameter.as_str(),
+    ));
+}
+
 #[cfg(feature = "rust_inspect")]
 #[test]
 fn test_rust_inspect_resolves_type_associated_function_field_access() -> Result<(), Box<dyn std::error::Error>> {

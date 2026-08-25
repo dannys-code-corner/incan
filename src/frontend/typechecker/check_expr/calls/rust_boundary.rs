@@ -898,6 +898,7 @@ impl TypeChecker {
             self.errors
                 .push(errors::async_call_without_await(callable_display, span));
         }
+        let owner_path = Self::rust_method_owner_path(callable_display);
         let params = if Self::rust_signature_has_receiver(sig) {
             &sig.params[1..]
         } else {
@@ -906,12 +907,12 @@ impl TypeChecker {
         let has_keyword_args = args
             .iter()
             .any(|arg| matches!(arg, CallArg::Named(_, _) | CallArg::KeywordUnpack(_)));
-        self.record_rust_call_site_params(span, params, callable_display, has_keyword_args);
+        self.record_rust_call_site_params(span, params, owner_path, has_keyword_args);
 
         let binding_errors_before = self.errors.len();
         let bindings = self.bind_rust_call_args(callable_display, params, args, arg_types, span);
         if self.errors.len() != binding_errors_before {
-            return self.resolved_rust_call_type_from_sig(sig, callable_display, span);
+            return self.resolved_rust_call_type_from_sig(sig, owner_path, span);
         }
 
         for binding in bindings {
@@ -919,7 +920,7 @@ impl TypeChecker {
             let param = binding.param;
             let target_ty = self.resolved_rust_boundary_target_from_param_display_for_owner_path(
                 param.type_display.as_str(),
-                callable_display,
+                owner_path,
             );
             let contextual_arg_ty = if (matches!(arg_expr.node, Expr::Closure(_, _))
                 && matches!(&target_ty, ResolvedType::Function(_, _)))
@@ -933,10 +934,10 @@ impl TypeChecker {
             if preserves_lookup_arg_shape && self.rust_lookup_probe_boundary_match(arg_ty, &target_ty) {
                 continue;
             }
-            self.validate_rust_boundary_value(callable_display, param.type_display.as_str(), arg_expr, arg_ty, false);
+            self.validate_rust_boundary_value(owner_path, param.type_display.as_str(), arg_expr, arg_ty, false);
         }
 
-        let ret = self.resolved_rust_call_type_from_sig(sig, callable_display, span);
+        let ret = self.resolved_rust_call_type_from_sig(sig, owner_path, span);
         self.record_rust_return_coercion_from_display(sig.return_type.as_str(), &ret, span);
         ret
     }

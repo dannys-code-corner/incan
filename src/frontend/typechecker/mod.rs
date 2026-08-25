@@ -906,6 +906,15 @@ impl TypeChecker {
         path.strip_prefix("rust::").unwrap_or(path)
     }
 
+    /// Return the inspected Rust owner path for a synthetic `rust::Type.method` call display.
+    ///
+    /// Method diagnostics retain the callable spelling, but metadata signatures resolve `crate::`, `self::`, and
+    /// `super::` relative to the receiver type's module, never relative to the synthetic method segment.
+    pub(crate) fn rust_method_owner_path(callable_display: &str) -> &str {
+        let path = Self::normalize_rust_namespace_path(callable_display);
+        path.rsplit_once('.').map_or(path, |(owner, _method)| owner)
+    }
+
     fn rust_path_base_and_args(&self, path: &str) -> (String, Vec<ResolvedType>) {
         let trimmed = path.trim();
         if let Some(start) = trimmed.find('<')
@@ -915,11 +924,24 @@ impl TypeChecker {
             let inner = &trimmed[start + 1..trimmed.len() - 1];
             let args = Self::split_top_level_generic_args(inner)
                 .into_iter()
+                .filter(|arg| !Self::rust_generic_arg_is_lifetime(arg))
                 .map(|arg| self.resolved_type_from_rust_display(arg))
                 .collect();
             return (base, args);
         }
         (Self::normalize_rust_namespace_path(trimmed).to_string(), Vec::new())
+    }
+
+    /// Return whether a Rust generic argument is a lifetime, which Incan deliberately does not model as a type.
+    ///
+    /// Rust metadata may qualify an inferred lifetime through the owner module (for example, `crate::'_`). Preserve
+    /// real type arguments while eliding both plain and qualified lifetime placeholders before nominal comparison.
+    fn rust_generic_arg_is_lifetime(arg: &str) -> bool {
+        let candidate = arg.trim().rsplit("::").next().unwrap_or(arg.trim());
+        let Some(name) = candidate.strip_prefix('\'') else {
+            return false;
+        };
+        !name.is_empty() && name.chars().all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     }
 
     /// Rewrite Rust's crate-relative type displays against the inspected callable or type path that produced them.
@@ -974,18 +996,27 @@ impl TypeChecker {
         }
         self_expanded.push_str(remaining);
 
+        let owner_module_prefix = (!owner_module.is_empty()).then(|| format!("{}::", owner_module.join("::")));
         let mut super_expanded = String::with_capacity(self_expanded.len() + owner_definition.len());
         let mut remaining = self_expanded.as_str();
         while let Some(idx) = remaining.find("super::") {
             let (before, after) = remaining.split_at(idx);
             super_expanded.push_str(before);
-            let prev = super_expanded.chars().next_back();
             let mut rest = after;
             let mut parent_count = 0usize;
             while let Some(next) = rest.strip_prefix("super::") {
                 parent_count += 1;
                 rest = next;
             }
+            // rust-analyzer can qualify a relative path with the method owner's module, for example
+            // `datafusion::execution::context::super::options::...`. The prefix is context for the relative
+            // segment, not part of the resulting type path, so remove it before replacing `super` with its parent.
+            if let Some(prefix) = owner_module_prefix.as_deref()
+                && super_expanded.ends_with(prefix)
+            {
+                super_expanded.truncate(super_expanded.len() - prefix.len());
+            }
+            let prev = super_expanded.chars().next_back();
             if prev.is_some_and(|ch| ch == '_' || ch.is_ascii_alphanumeric()) || parent_count >= owner_module.len() {
                 super_expanded.push_str(&after[..after.len() - rest.len()]);
             } else {
@@ -1437,7 +1468,6 @@ impl TypeChecker {
     fn rust_display_without_lifetimes(rust_ty: &str) -> String {
         Self::strip_borrow_lifetimes(rust_ty)
             .replace("'static ", "")
-            .replace("'_", "")
             .trim_start_matches("::")
             .to_string()
     }
