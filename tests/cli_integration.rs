@@ -7446,11 +7446,6 @@ edition = "2021"
 
 #[test]
 fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn std::error::Error>> {
-    if support::oven_compiler_suite_is_active() {
-        // Compiler-suite children execute their own sealed test artifact and do not exercise normal source/receipt
-        // selection. The native invocation below is the regression lane for this normal-command diagnostic.
-        return Ok(());
-    }
     let tmp = tempfile::tempdir()?;
     let src_dir = tmp.path().join("src");
     fs::create_dir_all(&src_dir)?;
@@ -7480,8 +7475,8 @@ fn oven_run_names_an_unbaked_undeclared_script_target() -> Result<(), Box<dyn st
     let scripts_dir = tmp.path().join("scripts");
     fs::create_dir_all(&scripts_dir)?;
     let metadata_path = scripts_dir.join("metadata.incn");
-    // Match the IncQL registry checker shape: a library-root bake seals no conventional executable, while this
-    // separate script requires an additional stdlib component and therefore has no compatible executable plan to reuse.
+    // Match the IncQL registry checker shape: a library-root bake seals no executable target, so this separate,
+    // undeclared script has no compatible executable plan to select.
     fs::write(
         &metadata_path,
         "from std.fs import Path\n\ndef main() -> None:\n    pass\n",
