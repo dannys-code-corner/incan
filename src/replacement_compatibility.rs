@@ -1762,6 +1762,8 @@ fn registered_parity_corpus_case_id(case_id: &str) -> bool {
             | "replacement-body-v0-005"
             | "replacement-body-v0-006"
             | "replacement-body-v0-007"
+            | "replacement-body-v0-018"
+            | "replacement-body-v0-019"
     )
 }
 
@@ -2322,12 +2324,6 @@ struct BaselineManifest {
 fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
     vec![
         planned_feature(
-            "async.tasks",
-            "Async functions, await, and race preserve scheduling, cancellation, and diagnostic semantics.",
-            1155,
-            "Depends on #1101 for complete Body IR representation; #1155 owns direct task runtime state.",
-        ),
-        planned_feature(
             "call.named-and-variadic",
             "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
             1152,
@@ -2490,12 +2486,6 @@ struct FeatureAnchorProfile {
 /// executor selectors identify existing seams where an owner must materialize coverage; they do not assert support.
 fn feature_anchor_profile(feature_id: &str) -> FeatureAnchorProfile {
     match feature_id {
-        "async.tasks" => FeatureAnchorProfile {
-            typechecker_path: "src/frontend/typechecker/check_expr/control_flow.rs",
-            typechecker_selector: "fn check_await",
-            body_ir_selector: "fn lower_yield",
-            replacement_executor_selector: "ReplacementGenerator",
-        },
         "call.named-and-variadic" | "call.partial-binding" | "call.stored-callables" => FeatureAnchorProfile {
             typechecker_path: "src/frontend/typechecker/check_expr/calls.rs",
             typechecker_selector: "fn check_call",
@@ -2890,6 +2880,7 @@ fn preserved_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
             "replacement-body-v0-003",
             "replacement-body-v0-005",
         ],
+        "async.tasks" => vec!["replacement-body-v0-018", "replacement-body-v0-019"],
         _ => Vec::new(),
     }
 }
@@ -2897,13 +2888,6 @@ fn preserved_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
 /// Construct temporary private requirements that have not reached their owning local implementation boundary yet.
 fn migration_bootstrap_implementation_requirements() -> Vec<ImplementationRequirement> {
     vec![
-        requirement(
-            "async.runtime",
-            "Async tasks have explicit scheduler, wake, cancellation, and receipt semantics.",
-            "frontend Body IR plus replacement runtime",
-            "async typechecker and Body-IR tests",
-            "Schedulers and wake queues are mechanisms, not public capabilities.",
-        ),
         requirement(
             "call.frames",
             "Every local or nested callable has isolated locals, return flow, and source-owned spans.",
@@ -3147,8 +3131,6 @@ fn link(capability_id: &'static str, feature_id: &'static str) -> PublicCapabili
 /// Construct temporary feature-to-requirement links whose owning mechanism has not reached local registration yet.
 fn migration_bootstrap_feature_requirement_links() -> Vec<FeatureRequirementLink> {
     vec![
-        req_link("async.tasks", "async.runtime"),
-        req_link("async.tasks", "receipts.comparison"),
         req_link("call.named-and-variadic", "call.argument-binder"),
         req_link("call.named-and-variadic", "call.frames"),
         req_link("call.named-and-variadic", "types.resolved-dispatch"),

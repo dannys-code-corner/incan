@@ -647,6 +647,32 @@ def direct_result_routing() -> int:
     return 0
 "#;
 
+const REPLACEMENT_BODY_V0_018_SRC: &str = r#"
+import std.async
+
+async def answer() -> int:
+    return 42
+
+async def direct_async_await() -> int:
+    return await answer()
+"#;
+
+const REPLACEMENT_BODY_V0_019_SRC: &str = r#"
+import std.async
+
+async def first() -> int:
+    return 1
+
+async def second() -> int:
+    return 2
+
+async def source_order_race() -> int:
+    winner = race for value:
+        await first() => value
+        await second() => value
+    return winner
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -781,6 +807,22 @@ fn replacement_body_v0_017_arguments() -> Vec<ReplacementValue> {
 
 fn replacement_body_v0_017_expected() -> ReplacementValue {
     ReplacementValue::Int(2)
+}
+
+fn replacement_body_v0_018_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_018_expected() -> ReplacementValue {
+    ReplacementValue::Int(42)
+}
+
+fn replacement_body_v0_019_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+fn replacement_body_v0_019_expected() -> ReplacementValue {
+    ReplacementValue::Int(1)
 }
 
 // ============================================================================
@@ -1258,6 +1300,38 @@ fn seed_corpus() -> Vec<ParityCase> {
                 shadow_comparison: false,
             }),
         },
+        ParityCase {
+            id: "replacement-body-v0-018",
+            title: "Source-local async await executes through direct Body-IR task frames",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1155; tests/replacement_backend_execution_tests.rs::replacement_executes_a_source_local_async_task_and_binds_its_lifecycle_evidence; comparison remains non-green until #1155 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_018_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "direct_async_await",
+                arguments: replacement_body_v0_018_arguments,
+                expected: replacement_body_v0_018_expected,
+                shadow_comparison: false,
+            }),
+        },
+        ParityCase {
+            id: "replacement-body-v0-019",
+            title: "Source-order ready ties execute through direct Body-IR race task frames",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1155; tests/replacement_backend_execution_tests.rs::replacement_executes_source_order_async_race_ties_with_loser_cancellation; comparison remains non-green until #1155 produces paired source-observable evidence through #1146's completed route",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_019_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "source_order_race",
+                arguments: replacement_body_v0_019_arguments,
+                expected: replacement_body_v0_019_expected,
+                shadow_comparison: false,
+            }),
+        },
     ]
 }
 
@@ -1571,8 +1645,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        17,
-        "the six #988 cases, #1123's lazy-generator case, #1152's four callable/runtime cases, and #1154's structural, nominal, enum, pattern, and Result cases must stay stable in #987"
+        19,
+        "the six #988 cases, #1123's lazy-generator case, #1152's four callable/runtime cases, #1154's structural/value cases, and #1155's direct async cases must stay stable in #987"
     );
     let nominal_row = replacement_rows
         .iter()
@@ -1655,6 +1729,7 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
                 body_snapshot,
                 ownership_reads,
                 runtime_requirements,
+                task_lifecycle,
                 comparison_reason,
             } => {
                 assert!(selection_identity.starts_with("sha256:"));
@@ -1675,6 +1750,14 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
                     "{} emitted an invalid runtime-requirement projection: {runtime_requirements:?}",
                     row.id
                 );
+                if matches!(row.id, "replacement-body-v0-018" | "replacement-body-v0-019") {
+                    assert!(
+                        task_lifecycle.iter().any(|event| event.event == "constructed")
+                            && task_lifecycle.iter().any(|event| event.event == "completed"),
+                        "{} needs receipt-bound task construction/completion evidence: {task_lifecycle:?}",
+                        row.id
+                    );
+                }
                 // Rows that never declared a comparison say so; the declaring row, when its comparison could
                 // not run, names the boundary that stopped it instead. Neither may imply generated Rust proved
                 // anything.
