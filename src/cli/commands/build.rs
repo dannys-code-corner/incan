@@ -4656,16 +4656,29 @@ fn caller_owned_provider_registry_leaf_authority(
 
 /// Read and identity-verify one caller-owned provider's own Oven receipt for `profile`, if one exists.
 ///
-/// Mirrors the exact receipt paths the explicit library bake writes for each profile (see the `receipt_path`
-/// selection in the library-mode bake loop), so a provider baked through the ordinary `incan build --lib` /
-/// `incan oven bake --project` path is always found here.
+/// An explicit project bake writes the library receipt under its target-qualified path.
+///
+/// The generic receipt is a legacy `incan build --lib` handoff; an explicit bake with a declared script overwrites it
+/// with the last target prepared. Prefer the library-specific receipt so a consumer never borrows a script's unrelated
+/// native closure. Retain the generic path only for a legacy standalone library build.
 fn read_verified_caller_owned_provider_receipt(project_root: &Path, profile: &str) -> Option<crate::oven::OvenReceipt> {
-    let path = if profile == "release" {
-        crate::oven::default_receipt_path(project_root)
-    } else {
-        crate::oven::default_receipt_path(project_root).with_file_name(format!("library-{profile}-receipt.json"))
+    let library_entrypoint = project_root.join(OvenBakeProjectTarget::Library.source_relative_path());
+    let library_receipt = project_bake_receipt_path(
+        project_root,
+        OvenBakeProjectTarget::Library,
+        &library_entrypoint,
+        profile,
+    )
+    .ok();
+    let path = match library_receipt {
+        Some(path) => match fs::symlink_metadata(&path) {
+            Ok(_) => path,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => crate::oven::default_receipt_path(project_root),
+            Err(_) => return None,
+        },
+        None => crate::oven::default_receipt_path(project_root),
     };
-    let receipt = fs::read(&path)
+    let receipt = fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<crate::oven::OvenReceipt>(&bytes).ok())?;
     receipt.verify_identity().ok()?;
@@ -13515,6 +13528,59 @@ mod tests {
                 .all(|alias| !packaged_provider_aliases.contains(&alias)),
             "the Cargo-published test delta and sealed package-provider externs must be disjoint"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn caller_owned_provider_authority_prefers_the_explicit_library_receipt() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let project = tempfile::tempdir()?;
+        let library_source = project.path().join("generated/library.rs");
+        let script_source = project.path().join("generated/checker.rs");
+        fs::create_dir_all(library_source.parent().ok_or("library source has no parent")?)?;
+        fs::write(&library_source, "pub fn library() {}\n")?;
+        fs::write(&script_source, "fn main() {}\n")?;
+
+        let library_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "provider",
+                "0.1.0",
+                "aarch64-apple-darwin",
+                "rustc fixture",
+                "release",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &library_source),
+        )?;
+        let script_receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "provider",
+                "0.1.0",
+                "aarch64-apple-darwin",
+                "rustc fixture",
+                "release",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &script_source),
+        )?;
+        assert_ne!(library_receipt.identity, script_receipt.identity);
+
+        write_receipt(
+            &library_receipt,
+            project_bake_receipt_path(
+                project.path(),
+                OvenBakeProjectTarget::Library,
+                &project.path().join("src/lib.incn"),
+                "release",
+            )?,
+        )?;
+        write_receipt(&script_receipt, crate::oven::default_receipt_path(project.path()))?;
+
+        let selected = read_verified_caller_owned_provider_receipt(project.path(), "release")
+            .ok_or("library receipt should be selected")?;
+        assert_eq!(selected.identity, library_receipt.identity);
         Ok(())
     }
 
