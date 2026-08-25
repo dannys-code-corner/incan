@@ -60,7 +60,9 @@ use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 use crate::frontend::ast;
 use crate::frontend::symbols::{CallableParam, ResolvedType};
-use crate::frontend::typechecker::{FixedUnpackPlan, IdentKind, TypeCheckInfo, semantic_type_from_resolved};
+use crate::frontend::typechecker::{
+    FixedUnpackPlan, IdentKind, ResolvedOperatorKind, TypeCheckInfo, semantic_type_from_resolved,
+};
 
 /// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
 /// typechecked module.
@@ -2926,6 +2928,16 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let rhs_ty = self.resolve_ty(rhs.span);
         let result_ty = self.resolve_ty(span);
 
+        // A user-defined operator is a method call, not a primitive operation. The typechecker already resolved
+        // which dunder this spelling dispatches to, so lowering follows that decision rather than falling through
+        // to the primitive operator set -- which would represent `a + b` on two `Vec2` values as machine addition.
+        if let Some(dispatch) = self.type_info.resolved_operator_call(span)
+            && dispatch.kind == ResolvedOperatorKind::Binary
+        {
+            let method = dispatch.method.clone();
+            return self.lower_operator_dispatch(&method, lhs, rhs, result_ty, scope, hir_span_value, out);
+        }
+
         if !Self::binary_op_is_supported(op, &lhs_ty, &rhs_ty) {
             return self.unsupported_operand(format!("binary operator {op:?}"), scope, hir_span_value, out);
         }
@@ -2948,6 +2960,44 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// path or a direct [`bir::BinOp`] mapping). Checked *before* evaluating operand sub-expressions in both
     /// [`Self::lower_binary`] and [`Self::lower_compound_assignment`], so an operator v0 does not model never
     /// causes its operands' side effects (calls, reads) to be lowered on the way to an unsupported placeholder.
+    /// Lower a user-defined operator to the dunder method call the typechecker resolved for it.
+    ///
+    /// RFC 028 lets a type define `__add__`, `__and__`, `__contains__` and friends, and the typechecker records
+    /// which method one operator spelling dispatches to. Body IR must follow that decision: representing `a + b` on
+    /// two `Vec2` values as [`bir::BinOp::Add`] would claim a primitive machine operation where the source calls a
+    /// method, which is a wrong representation rather than an honest refusal — no `Unsupported` marker, nothing for
+    /// a consumer to notice.
+    ///
+    /// The left operand becomes the receiver and the right becomes the single argument, matching how
+    /// [`Self::lower_method_call`] arranges an ordinary method call: `args[0]` is the receiver, borrowed. The
+    /// binding is [`bir::ArgumentBinding::UnresolvedPositional`] because an operator spelling names no parameter
+    /// and this stage resolves no declared slot for it.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_operator_dispatch(
+        &mut self,
+        method: &str,
+        lhs: &ast::Spanned<ast::Expr>,
+        rhs: &ast::Spanned<ast::Expr>,
+        result_ty: IncanType,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        // Source evaluation observes the receiver before the argument, exactly as for a written method call.
+        let receiver_place = self.lower_expr_to_place(lhs, scope, out);
+        let receiver = bir::Operand::place(receiver_place, bir::OwnershipFact::Borrow, false);
+        let argument = self.lower_expr_to_operand(rhs, scope, out);
+        self.push_call_temp(
+            bir::Callee::Method(bir::MethodTarget::synthesized(method)),
+            vec![bir::ArgumentElement::One(receiver), bir::ArgumentElement::One(argument)],
+            result_ty,
+            scope,
+            span,
+            false,
+            out,
+        )
+    }
+
     fn binary_op_is_supported(op: ast::BinaryOp, lhs_ty: &IncanType, rhs_ty: &IncanType) -> bool {
         (is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some())
             || lower_binary_op(op).is_some()
@@ -10009,6 +10059,54 @@ mod tests {
                 "the rejection must name spread rather than being any parse failure: {errors:?}"
             );
         }
+        Ok(())
+    }
+
+    // ========================================================================
+    // RFC 028 -- user-defined operator dispatch
+    // ========================================================================
+
+    const VEC2_SRC: &str = "@derive(Debug)\nmodel Vec2:\n  x: int\n  y: int\n\n  def __add__(self, other: Vec2) -> Vec2:\n    return Vec2(x=self.x + other.x, y=self.y + other.y)\n\n";
+
+    #[test]
+    fn a_user_defined_operator_lowers_to_the_method_the_typechecker_resolved() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Representing this as `BinOp::Add` would claim a primitive machine operation where the source calls a
+        // method -- a wrong representation rather than an honest refusal, with no marker for a consumer to notice.
+        let source = format!("{VEC2_SRC}def f(a: Vec2, b: Vec2) -> Vec2:\n  return a + b\n");
+        let module = build(&source, &["m", "user_op"])?;
+        let rendered = body_named(&module, "f")?.render_snapshot();
+
+        assert!(
+            rendered.contains("call method:__add__ unbound(borrow(_0),"),
+            "a user-defined operator must dispatch to its resolved method, with the left operand borrowed as the \
+             receiver: {rendered}"
+        );
+        assert!(
+            !rendered.contains("copy(_0) + copy(_1)") && !rendered.contains("move(_0, last_use) + "),
+            "it must not also lower as a primitive operation: {rendered}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn primitive_operators_are_unaffected_by_operator_dispatch() -> Result<(), Box<dyn std::error::Error>> {
+        // The typechecker records no dispatch for primitives, so these must keep their existing representations.
+        let ints = build("def f(a: int, b: int) -> int:\n  return a + b\n", &["m", "prim_int"])?;
+        assert!(
+            body_named(&ints, "f")?
+                .render_snapshot()
+                .contains("copy(_0) + copy(_1)"),
+            "integer addition must stay a primitive binary operation"
+        );
+
+        let strings = build("def f(a: str, b: str) -> str:\n  return a + b\n", &["m", "prim_str"])?;
+        assert!(
+            body_named(&strings, "f")?
+                .render_snapshot()
+                .contains("call helper:str_concat("),
+            "string concatenation must stay a compiler-owned helper call"
+        );
         Ok(())
     }
 }
