@@ -389,6 +389,15 @@ pub struct TypeChecker {
     /// of naming the facade. Stored as the written import path plus the original name, resolved with the facade's own
     /// module path as the resolution base.
     pub(crate) dependency_member_reexports: HashMap<String, HashMap<String, (ImportPath, String)>>,
+    /// True module path segments for a registered dependency, keyed by its flattened cache name.
+    ///
+    /// The cache name is the underscore-joined spelling that also names the emitted Rust module, so it is not
+    /// injective: the path `pkg.helpers` and a module literally named `pkg_helpers` flatten to one string. An origin
+    /// built from whichever candidate matched would therefore reflect the spelling that asked rather than the module
+    /// that answered, and two spellings of one module would yield two identities. Registering the real segments
+    /// alongside the flat name — the same thing `IrCodegen::add_module_with_path_segments` does for emission — lets an
+    /// identity name the module that actually answered.
+    pub(crate) dependency_module_path_segments: HashMap<String, Vec<String>>,
     /// Module-owned direct partial projection metadata captured while that module is being imported.
     pub(crate) dependency_direct_member_partial_projections: HashMap<String, HashMap<String, PartialProjectionInfo>>,
     /// RFC 024 derivable-module metadata from imported source modules, keyed by module path.
@@ -572,6 +581,7 @@ impl TypeChecker {
             dependency_direct_member_symbols: HashMap::new(),
             dependency_direct_member_spans: HashMap::new(),
             dependency_member_reexports: HashMap::new(),
+            dependency_module_path_segments: HashMap::new(),
             dependency_direct_member_partial_projections: HashMap::new(),
             dependency_derivable_modules: HashMap::new(),
             dependency_module_traits: HashMap::new(),
@@ -5245,6 +5255,42 @@ impl TypeChecker {
     /// identity, which is the same fail-closed answer as any other unproven owner.
     const MAX_REEXPORT_DEPTH: usize = 16;
 
+    /// Register a dependency's real module path segments alongside the flattened name it is cached under.
+    ///
+    /// Caller-supplied metadata, not a derived cache: it deliberately survives `check_with_imports`, which clears the
+    /// dependency caches it rebuilds. Registering before checking is therefore the expected order, and re-registering
+    /// one name overwrites it.
+    ///
+    /// Optional: an unregistered dependency still resolves, and its identity falls back to the matching candidate's
+    /// path. Registering is what makes the origin name the module that answered rather than the spelling that asked,
+    /// which matters wherever the flattened name is ambiguous. Mirrors
+    /// `IrCodegen::add_module_with_path_segments`, which carries the same pair for emission.
+    pub fn register_dependency_module_path_segments(&mut self, module_name: &str, path_segments: Vec<String>) {
+        if path_segments.is_empty() {
+            return;
+        }
+        self.dependency_module_path_segments
+            .insert(module_name.to_string(), path_segments);
+    }
+
+    /// Return the module path segments that canonically identify a cached dependency, if they are known.
+    ///
+    /// A declaration identity must never be built from a *projection* spelling. The cache key is the flattened,
+    /// underscore-joined name that also names the emitted Rust module, and it is not injective: the path
+    /// `pkg.helpers` and a module literally named `pkg_helpers` are one key. Reading segments back out of it would
+    /// invent an origin for a module that may not exist, and would give one module two identities depending on which
+    /// spelling reached it.
+    ///
+    /// The segments therefore come from an explicit registration, and otherwise only from the one case the flattened
+    /// name determines by itself: a name containing no `_` can only be a single segment. Anything else is genuinely
+    /// ambiguous and yields no identity rather than a guess.
+    fn canonical_owner_segments(&self, cache_key: &str) -> Option<Vec<String>> {
+        if let Some(segments) = self.dependency_module_path_segments.get(cache_key) {
+            return Some(segments.clone());
+        }
+        (!cache_key.is_empty() && !cache_key.contains('_')).then(|| vec![cache_key.to_string()])
+    }
+
     /// Return the canonical identity of an imported member, following re-exports to the module that declares it.
     ///
     /// Import resolution is not literal: `logical_source_path_candidates` tries the sibling-relative path before the
@@ -5310,6 +5356,7 @@ impl TypeChecker {
                     .get(&key)
                     .and_then(|spans| spans.get(item_name))?;
                 let target_kind = Self::source_target_kind_for_symbol(kind)?;
+                let owner = self.canonical_owner_segments(&key)?;
                 return Some(CanonicalSymbolId::module_declaration(
                     owner,
                     item_name,

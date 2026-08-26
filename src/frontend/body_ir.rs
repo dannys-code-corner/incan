@@ -6229,26 +6229,39 @@ mod tests {
     use crate::frontend::typechecker::TypeChecker;
     use crate::frontend::{lexer, parser};
 
-    /// Lower a module that imports from other modules, so cross-module call facts can be asserted.
+    /// Lower a module that imports from other modules, declaring each dependency's flattened cache name *and* its
+    /// real path segments.
+    ///
+    /// Both are required because the flattened name is not injective: `("pkg_helpers", &["pkg", "helpers"], ..)` and
+    /// `("pkg_helpers", &["pkg_helpers"], ..)` are different modules sharing one cache key, and only the segments say
+    /// which one a fixture means.
     fn build_with_imports(
         source: &str,
         module_path: &[&str],
-        imports: &[(&str, &str)],
+        imports: &[(&str, &[&str], &str)],
     ) -> Result<bir::BodyIrModule, Box<dyn std::error::Error>> {
         let mut import_programs = Vec::new();
-        for (name, import_source) in imports {
+        for (name, segments, import_source) in imports {
             let tokens = lexer::lex(import_source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
             let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
-            import_programs.push((*name, program));
+            import_programs.push((*name, *segments, program));
         }
-        let import_refs: Vec<(&str, &ast::Program)> =
-            import_programs.iter().map(|(name, program)| (*name, program)).collect();
+        let import_refs: Vec<(&str, &ast::Program)> = import_programs
+            .iter()
+            .map(|(name, _, program)| (*name, program))
+            .collect();
 
         let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
         let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
         let module_path: Vec<String> = module_path.iter().map(|s| s.to_string()).collect();
         let mut checker = TypeChecker::new();
         checker.set_current_module_path(Some(module_path.clone()));
+        for (name, segments, _) in &import_programs {
+            checker.register_dependency_module_path_segments(
+                name,
+                segments.iter().map(|segment| segment.to_string()).collect(),
+            );
+        }
         checker
             .check_with_imports(&program, &import_refs)
             .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
@@ -10238,7 +10251,10 @@ def use_reexport() -> int:
         let app = build_with_imports(
             app_source,
             &["app"],
-            &[("helpers", helpers_source), ("facade", facade_source)],
+            &[
+                ("helpers", &["helpers"], helpers_source),
+                ("facade", &["facade"], facade_source),
+            ],
         )?;
 
         let mut facts = Vec::new();
@@ -10316,7 +10332,7 @@ def render(value: int) -> int:
 def run() -> int:
   return render(7)
 "#;
-        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", &["helpers"], helpers_source)])?;
 
         let targets = named_targets(&app, "run");
         let [target] = targets.as_slice() else {
@@ -10427,9 +10443,9 @@ def run() -> int:
             app_source,
             &["app"],
             &[
-                ("helpers", helpers_source),
-                ("inner", inner_source),
-                ("facade", facade_source),
+                ("helpers", &["helpers"], helpers_source),
+                ("inner", &["inner"], inner_source),
+                ("facade", &["facade"], facade_source),
             ],
         )?;
 
@@ -10452,6 +10468,57 @@ def run() -> int:
             "the origin is the declaring module, not either facade"
         );
         assert_eq!(target.name, "relayed", "the call site keeps its own spelling");
+        Ok(())
+    }
+
+    /// The dependency cache key is the flattened, underscore-joined module name, which also names the emitted Rust
+    /// module and is therefore not injective: the path `pkg.helpers` and a module literally named `pkg_helpers` are
+    /// one key. Registering the real segments makes the identity name the module that answered rather than the
+    /// spelling that asked — and note a leading-underscore segment like `pkg._helpers` is exactly what defeats an
+    /// escaping scheme, which is why the real segments are carried instead of being encoded into one string.
+    #[test]
+    fn a_registered_module_path_wins_over_the_matching_candidate_spelling() -> Result<(), Box<dyn std::error::Error>> {
+        let helpers_source = r#"
+pub def render() -> int:
+  return 1
+"#;
+        let app_source = r#"
+from helpers import render
+
+def run() -> int:
+  return render()
+"#;
+        let helpers_tokens = lexer::lex(helpers_source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let helpers_program =
+            parser::parse(&helpers_tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let tokens = lexer::lex(app_source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+
+        let module_path = vec!["pkg".to_string(), "app".to_string()];
+        let mut checker = TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        // One real module, a single segment literally named `pkg_helpers`, reached from `pkg.app` as sibling
+        // `helpers`. Without the registration the matching candidate would spell a `pkg::helpers` that does not exist.
+        checker.register_dependency_module_path_segments("pkg_helpers", vec!["pkg_helpers".to_string()]);
+        checker
+            .check_with_imports(&program, &[("pkg_helpers", &helpers_program)])
+            .map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let app = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from(
+                "the import resolves to a declaration and must carry an identity".to_string(),
+            ));
+        };
+        assert_eq!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["pkg_helpers".to_string()]),
+            "the origin must be the module that answered, not the candidate spelling that matched its flattened name"
+        );
         Ok(())
     }
 
@@ -10479,7 +10546,11 @@ def run() -> int:
         let app = build_with_imports(
             app_source,
             &["pkg", "app"],
-            &[("helpers", root_helpers), ("pkg_helpers", sibling_helpers)],
+            &[
+                ("helpers", &["helpers"], root_helpers), /* The sibling is genuinely the nested module
+                                                          * `pkg.helpers`, not a module named `pkg_helpers`. */
+                ("pkg_helpers", &["pkg", "helpers"], sibling_helpers),
+            ],
         )?;
 
         let targets = named_targets(&app, "run");
@@ -10533,7 +10604,7 @@ def use_imported() -> int:
 def use_alias() -> int:
   return draw(3)
 "#;
-        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", &["helpers"], helpers_source)])?;
 
         for body in ["use_imported", "use_alias"] {
             let targets = named_targets(&app, body);
@@ -10571,7 +10642,7 @@ def run() -> int:
   return draw()
 "#;
         let helpers = build(helpers_source, &["helpers"])?;
-        let app = build_with_imports(app_source, &["app"], &[("helpers", helpers_source)])?;
+        let app = build_with_imports(app_source, &["app"], &[("helpers", &["helpers"], helpers_source)])?;
 
         let targets = named_targets(&app, "run");
         let [target] = targets.as_slice() else {
