@@ -518,6 +518,12 @@ pub struct IrEmitter<'a> {
     type_aliases: HashMap<String, IrType>,
     /// Incan `rusttype` aliases that should use compiler-owned call conversion rules at the surface boundary.
     rusttype_alias_names: HashSet<String>,
+    /// Source newtypes keyed by the exact Rust nominal type that backs their single carrier field.
+    ///
+    /// A newtype may invoke an associated Rust function on its carrier while implementing its source API. The carrier
+    /// retains its qualified Rust identity, but the call needs the source newtype's ownership signature. This mapping
+    /// permits that explicit relationship without treating arbitrary same-named Rust and Incan types as equivalent.
+    newtype_backing_type_names: HashMap<String, HashSet<String>>,
     /// Method signature lookup for Incan-owned nominal receivers, including imported modules.
     method_signatures: HashMap<(String, String), FunctionSignature>,
     /// Impl-level generic parameter order for method signatures.
@@ -671,6 +677,7 @@ impl<'a> IrEmitter<'a> {
             public_dependency_type_paths: HashMap::new(),
             type_aliases: HashMap::new(),
             rusttype_alias_names: HashSet::new(),
+            newtype_backing_type_names: HashMap::new(),
             method_signatures: HashMap::new(),
             method_signature_type_params: HashMap::new(),
             in_return_context: RefCell::new(false),
@@ -2167,6 +2174,14 @@ impl<'a> IrEmitter<'a> {
         // Newtypes carry method bodies just like models and classes. Consumers do not lower the provider source, so
         // their artifact metadata must participate in the same Incan ownership planning as every other nominal type.
         for newtype in newtypes {
+            if let IrType::Struct(backing_type) | IrType::NamedGeneric(backing_type, _) =
+                Self::manifest_type_ref_to_ir_type(&newtype.underlying)
+            {
+                self.newtype_backing_type_names
+                    .entry(backing_type)
+                    .or_default()
+                    .insert(newtype.name.clone());
+            }
             self.register_manifest_method_metadata(&newtype.name, &newtype.methods, &newtype.type_params);
         }
     }
@@ -2250,6 +2265,19 @@ impl<'a> IrEmitter<'a> {
                             (module_path.clone(), s.name.clone()),
                             StructConstructorMetadata::from_source_dependency(module_path, s),
                         );
+                    }
+                    // Constructor metadata is keyed by the short source type name and must therefore ignore ambiguous
+                    // dependency declarations. A newtype carrier relationship is different: it is keyed by the exact
+                    // raw Rust type, and `method_signature_for_receiver` refuses a non-unique result. Preserve those
+                    // ownership facts even when the source wrapper name itself is ambiguous.
+                    if s.kind == IrStructKind::Newtype
+                        && let Some(IrType::Struct(backing_type) | IrType::NamedGeneric(backing_type, _)) =
+                            s.fields.first().map(|field| &field.ty)
+                    {
+                        self.newtype_backing_type_names
+                            .entry(backing_type.clone())
+                            .or_default()
+                            .insert(s.name.clone());
                     }
                     if skip_ambiguous && self.ambiguous_type_names.contains(&s.name) {
                         continue;
@@ -2702,29 +2730,49 @@ impl<'a> IrEmitter<'a> {
 
     /// Return an Incan-owned method signature for a receiver type when typechecker call-site metadata is unavailable.
     ///
-    /// A qualified nominal name is already an identity, so it must match the registry exactly. Falling back to its
-    /// final segment lets unrelated Rust and Incan types collide: for example, an external `bevy::prelude::App`
-    /// would otherwise acquire defaults from the Incan `App` type. Only unqualified source names may use the
-    /// historical short-name lookup.
+    /// A qualified nominal name is already an identity, so it must match the registry exactly. The one deliberate
+    /// bridge is an exact Rust backing type recorded for a source newtype, whose source API supplies ownership facts
+    /// while implementing that newtype. Falling back to a final segment would instead let unrelated Rust and Incan
+    /// types collide: for example, an external `bevy::prelude::App` would acquire defaults from Incan `App`.
     pub(super) fn method_signature_for_receiver(
         &self,
         receiver_ty: &IrType,
         method_name: &str,
     ) -> Option<&FunctionSignature> {
         match receiver_ty {
-            IrType::Struct(name) | IrType::NamedGeneric(name, _) => self
-                .method_signatures
-                .get(&(name.clone(), method_name.to_string()))
-                .or_else(|| {
-                    (!name.contains("::"))
-                        .then(|| {
-                            name.rsplit("::").next().and_then(|short_name| {
-                                self.method_signatures
-                                    .get(&(short_name.to_string(), method_name.to_string()))
-                            })
-                        })
-                        .flatten()
-                }),
+            IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
+                if let Some(signature) = self.method_signatures.get(&(name.clone(), method_name.to_string())) {
+                    return Some(signature);
+                }
+                if name.contains("::") {
+                    // A source newtype records its carrier using the local Rust-import alias, while method lowering
+                    // retains that import's canonical Rust path. Relate only those two representations of the same
+                    // import; this is not a final-segment fallback for arbitrary external Rust types.
+                    let canonical_name = name.trim_start_matches("::");
+                    let mut backing_type_names = vec![name.clone()];
+                    backing_type_names.extend(
+                        self.rust_import_paths
+                            .borrow()
+                            .iter()
+                            .filter_map(|(alias, path)| (path.join("::") == canonical_name).then(|| alias.clone())),
+                    );
+                    let backing_newtypes = backing_type_names
+                        .iter()
+                        .filter_map(|backing_type| self.newtype_backing_type_names.get(backing_type))
+                        .flat_map(|newtypes| newtypes.iter())
+                        .collect::<HashSet<_>>();
+                    let mut signatures = backing_newtypes.iter().filter_map(|newtype_name| {
+                        self.method_signatures
+                            .get(&((*newtype_name).clone(), method_name.to_string()))
+                    });
+                    let signature = signatures.next()?;
+                    return signatures.next().is_none().then_some(signature);
+                }
+                name.rsplit("::").next().and_then(|short_name| {
+                    self.method_signatures
+                        .get(&(short_name.to_string(), method_name.to_string()))
+                })
+            }
             IrType::Ref(inner) | IrType::RefMut(inner) => self.method_signature_for_receiver(inner, method_name),
             _ => None,
         }
@@ -3042,6 +3090,29 @@ mod tests {
                 return_type: IrType::Unit,
             },
         );
+        emitter
+            .newtype_backing_type_names
+            .entry("RustJsonValue".to_string())
+            .or_default()
+            .insert("JsonValue".to_string());
+        emitter.rust_import_paths.borrow_mut().insert(
+            "RustJsonValue".to_string(),
+            vec!["incan_stdlib".to_string(), "json".to_string(), "JsonValue".to_string()],
+        );
+        emitter.method_signatures.insert(
+            ("JsonValue".to_string(), "string".to_string()),
+            FunctionSignature {
+                params: vec![crate::backend::ir::decl::FunctionParam {
+                    name: "value".to_string(),
+                    ty: IrType::String,
+                    mutability: crate::backend::ir::Mutability::Immutable,
+                    is_self: false,
+                    kind: crate::frontend::ast::ParamKind::Normal,
+                    default: None,
+                }],
+                return_type: IrType::Struct("JsonValue".to_string()),
+            },
+        );
 
         assert!(
             emitter
@@ -3054,6 +3125,12 @@ mod tests {
                 .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
                 .is_some(),
             "unqualified Incan receiver names retain their source method metadata"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("incan_stdlib::json::JsonValue".to_string()), "string",)
+                .is_some(),
+            "a source newtype may supply call ownership facts through its exact Rust import identity"
         );
     }
 
