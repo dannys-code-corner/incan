@@ -8173,9 +8173,10 @@ fn compiler_suite_cargo_build_output(path: &Path) -> bool {
 ///
 /// Cargo 1.99 writes normal dependency libraries as
 /// `oven-test/build/<package>/<identity>/out/lib<target>-<identity>.<linker-extension>`. A build script may also
-/// write files below `out`, but it cannot pass this structural identity test unless Cargo has presented it as that
-/// target's compiler artifact. Directory scans keep rejecting all `build` output; this predicate is used only for
-/// the JSON-recorded file list from the named publisher.
+/// write files below `out`, but it cannot pass this target-and-identity-shaped filename test unless Cargo has
+/// presented it as that target's compiler artifact. The package directory need not match the library target (for
+/// example, package `coreaudio-rs` emits target `coreaudio`). Directory scans keep rejecting all `build` output;
+/// this predicate is used only for the JSON-recorded file list from the named publisher.
 fn cargo_reported_direct_artifact(profile: &str, target_name: &str, path: &Path) -> bool {
     if !cargo_reported_build_output(profile, path) {
         return true;
@@ -8197,12 +8198,10 @@ fn cargo_reported_direct_artifact(profile: &str, target_name: &str, path: &Path)
         return false;
     }
     let identity = parent_components[out_index - 1].as_os_str().to_str();
-    let package = parent_components[out_index - 2].as_os_str().to_str();
-    let Some((identity, package)) = identity.zip(package) else {
+    let Some(identity) = identity else {
         return false;
     };
-    let normalize = |value: &str| value.chars().filter(char::is_ascii_alphanumeric).collect::<String>();
-    if identity.is_empty() || normalize(package) != normalize(target_name) {
+    if identity.is_empty() {
         return false;
     }
     [".rlib", ".dylib", ".so", ".dll", ".a", ".lib"]
@@ -9518,6 +9517,45 @@ mod tests {
             "the root --extern must use the direct 0.63 package, not its 0.62 transitive namesake: {}",
             externs[0].relative_path
         );
+        Ok(())
+    }
+
+    #[test]
+    fn reported_artifact_closure_retains_a_renamed_library_target_from_cargo_build_output()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let staging = tempfile::tempdir()?;
+        let target_triple = "aarch64-apple-darwin";
+        let output_directory = staging
+            .path()
+            .join(format!("target/{target_triple}/debug/build/coreaudio-rs/abc123/out"));
+        fs::create_dir_all(&output_directory)?;
+        let library = output_directory.join("libcoreaudio-abc123.rlib");
+        fs::write(&library, "coreaudio-rs library target")?;
+        let compiler_artifact = serde_json::json!({
+            "reason": "compiler-artifact",
+            "package_id": "coreaudio-rs 0.2.16 (registry+https://example.invalid)",
+            "target": { "name": "coreaudio" },
+            "filenames": [library],
+        });
+        let output = CargoInvocationOutput {
+            stdout: format!("{compiler_artifact}\n").into_bytes(),
+        };
+
+        let (search_paths, _, supporting) = artifact_closure_from_reported_paths(
+            staging.path(),
+            target_triple,
+            "debug",
+            &BTreeMap::new(),
+            false,
+            &[output],
+        )?;
+
+        assert_eq!(
+            search_paths,
+            vec!["target/aarch64-apple-darwin/debug/build/coreaudio-rs/abc123/out".to_string()]
+        );
+        assert_eq!(supporting.len(), 1);
+        assert!(supporting[0].relative_path.ends_with("libcoreaudio-abc123.rlib"));
         Ok(())
     }
 
