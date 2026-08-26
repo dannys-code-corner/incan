@@ -8995,15 +8995,15 @@ mod tests {
         compiler_suite_workspace_libraries_for_roots, conservative_directory_reservation, create_publisher_staging,
         digest_local_cargo_workspace_authority, direct_rustc_compile_environment,
         direct_rustc_reusable_project_plan_environment, explicit_project_bake_inspection_sources,
-        generated_project_direct_dependencies, inspection_package_closure_ids, locked_generated_project,
-        materialize_sealed_registry_lock, materialized_files_from_directory, prepare_compiler_test_suite,
-        prepare_direct_rustc_plan, project_registry_source_dependencies, publisher_direct_dependencies,
-        publisher_registry_source_catalog, reclaim_unmaterialized_compiler_suite_target_files,
-        release_cohort_generated_project_lock, resolve_direct_dependency_packages, run_legacy_cargo_invocation,
-        select_compiler_test_suite_identity, select_existing_project_extension_identity,
-        source_compiler_vocab_support_paths_are_available, stage_compiler_suite_shard_files,
-        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
-        validate_generated_registry_lock, validate_release_cohort_registry_lock,
+        generated_project_direct_dependencies, inspection_package_closure_ids, legacy_cargo_inspection_sources,
+        locked_generated_project, materialize_sealed_registry_lock, materialized_files_from_directory,
+        prepare_compiler_test_suite, prepare_direct_rustc_plan, project_registry_source_dependencies,
+        publisher_direct_dependencies, publisher_registry_source_catalog,
+        reclaim_unmaterialized_compiler_suite_target_files, release_cohort_generated_project_lock,
+        resolve_direct_dependency_packages, run_legacy_cargo_invocation, select_compiler_test_suite_identity,
+        select_existing_project_extension_identity, source_compiler_vocab_support_paths_are_available,
+        stage_compiler_suite_shard_files, stage_registry_source_directory, stage_self_contained_sdk_provider_tree,
+        validate_compiler_suite_unit_graph, validate_generated_registry_lock, validate_release_cohort_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
@@ -11966,6 +11966,46 @@ version = "1.0.0"
         let locked_arguments = fs::read_to_string(&observed_arguments)?;
         assert!(locked_arguments.lines().any(|argument| argument == "--offline"));
         assert!(locked_arguments.lines().any(|argument| argument == "--locked"));
+        Ok(())
+    }
+
+    #[test]
+    fn explicit_project_bake_creates_and_reuses_a_local_cargo_lock_issue1196() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = tempfile::tempdir()?;
+        let project = fixture.path().join("generated-project");
+        let helper = project.join("helper");
+        fs::create_dir_all(project.join("src"))?;
+        fs::create_dir_all(helper.join("src"))?;
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[dependencies]\nhelper = { path = \"helper\" }\n",
+        )?;
+        fs::write(project.join("src/main.rs"), "fn main() { helper::marker(); }\n")?;
+        fs::write(
+            helper.join("Cargo.toml"),
+            "[package]\nname = \"helper\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(helper.join("src/lib.rs"), "pub fn marker() {}\n")?;
+
+        let cargo = crate::backend::project::runner::resolved_cargo_executable()?;
+        let manifest = project.join("Cargo.toml");
+        let staging = fixture.path().join("staging");
+        let initial_sources = explicit_project_bake_inspection_sources(&cargo, &manifest, &[], &[], &staging, None)?;
+        assert!(
+            initial_sources.is_empty(),
+            "the local-only fixture has no registry sources to stage"
+        );
+        assert!(
+            project.join("Cargo.lock").is_file(),
+            "the one explicit bake boundary must establish the missing Cargo.lock"
+        );
+
+        let replayed_sources = legacy_cargo_inspection_sources(&cargo, &manifest, &[], &[], &staging)?;
+        assert!(
+            replayed_sources.is_empty(),
+            "the newly created lock must support the locked publisher replay"
+        );
         Ok(())
     }
 

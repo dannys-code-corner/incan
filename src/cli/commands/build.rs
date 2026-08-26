@@ -4164,23 +4164,6 @@ fn merge_oven_dependency_surface(
     Ok(())
 }
 
-/// Exclude provider manifest dependencies already supplied by the selected direct-Rustc plan.
-///
-/// A matching registry crate is compiler-owned whenever it is selected by the plan. A path dependency with the same
-/// name remains caller-owned unless it resolves below an active compiler-owned root. Those roots are either the
-/// scheduler's sealed runtime/provider trees or an exact crate root from the active compiler layout. That containment
-/// check preserves user package authority while recognizing generated references such as `incan_core`.
-fn caller_owned_library_dependencies_missing_from_selected_plan(
-    dependencies: &[DependencySpec],
-    artifact_plan: &OvenRustcArtifactPlan,
-) -> Vec<DependencySpec> {
-    caller_owned_library_dependencies_missing_from_selected_plan_with_owned_roots(
-        dependencies,
-        artifact_plan,
-        &compiler_owned_roots(artifact_plan),
-    )
-}
-
 /// Variant with explicit scheduler-owned roots so the authority rule is independently testable.
 fn caller_owned_library_dependencies_missing_from_selected_plan_with_owned_roots(
     dependencies: &[DependencySpec],
@@ -4247,9 +4230,10 @@ fn compiler_owned_roots(artifact_plan: &OvenRustcArtifactPlan) -> Vec<PathBuf> {
 ///
 /// A normal command may receive an SDK component's generated Cargo projection as a path dependency. That source
 /// root is not necessarily one of the compiler crate directories (for example, `incan_stdlib_core` is a sealed SDK
-/// component, not `crates/incan_stdlib_core`), but it remains compiler-owned precisely when the checked provider
-/// plan says so *and* the selected direct-Rustc plan exposes its exact crate name. Project `pub::` artifacts never
-/// meet this condition and remain caller-owned.
+/// component, not `crates/incan_stdlib_core`). A compiled provider can also retain a historical physical SDK path;
+/// that path remains compiler-owned only when the checked provider plan has already rebound it to an equivalent active
+/// SDK artifact *and* the selected direct-Rustc plan exposes its exact crate name. Project `pub::` artifacts never
+/// meet either condition and remain caller-owned.
 fn compiler_owned_roots_with_provider_plan(
     artifact_plan: &OvenRustcArtifactPlan,
     provider_plan: Option<&ProviderPlan>,
@@ -4278,6 +4262,19 @@ fn compiler_owned_roots_with_provider_plan(
             if names.iter().any(|name| selected_externs.contains(name))
                 && let Ok(root) = fs::canonicalize(&artifact.crate_root)
             {
+                roots.push(root);
+            }
+        }
+        for rebinding in provider_plan.sdk_dependency_rebindings() {
+            let names = [
+                rebinding.provider_name.replace('-', "_"),
+                rebinding.dependency_key.replace('-', "_"),
+            ];
+            if names.iter().any(|name| selected_externs.contains(name))
+                && let Ok(root) = fs::canonicalize(&rebinding.source_crate_root)
+            {
+                // The provider plan has checked the frozen private edge against the active SDK's semantic identity.
+                // This root is only a legacy coordinate: direct Rustc still consumes the selected sealed extern.
                 roots.push(root);
             }
         }
@@ -4331,6 +4328,7 @@ fn rematerialize_caller_owned_provider_graph(
     consumer_output_root: &Path,
     registry_authority: Option<&OvenRegistryLeafAuthority>,
     extra_dependency_search_paths: &[PathBuf],
+    compiler_owned_roots: &[PathBuf],
     selected_path_authority: Option<&OvenSelectedPathRustcAuthority>,
     visiting: &mut BTreeSet<PathBuf>,
     authority_context: &mut Option<&mut OvenProjectBakeAuthorityContext>,
@@ -4377,6 +4375,7 @@ fn rematerialize_caller_owned_provider_graph(
                 consumer_output_root,
                 registry_authority,
                 extra_dependency_search_paths,
+                compiler_owned_roots,
                 selected_path_authority,
                 visiting,
                 authority_context,
@@ -4393,8 +4392,11 @@ fn rematerialize_caller_owned_provider_graph(
             caller_owned_library_dependencies_without_unused_incan_derive(artifact, provider_dependencies)?;
         let provider_dependencies =
             caller_owned_library_dependencies_without_public_provider_edges(provider_dependencies, manifest);
-        let provider_dependencies =
-            caller_owned_library_dependencies_missing_from_selected_plan(&provider_dependencies, artifact_plan);
+        let provider_dependencies = caller_owned_library_dependencies_missing_from_selected_plan_with_owned_roots(
+            &provider_dependencies,
+            artifact_plan,
+            compiler_owned_roots,
+        );
         let mut provider_rust_libraries = materialize_declared_rust_libraries_with_selected_path_authority(
             &consumer_output_root
                 .join("oven")
@@ -4701,7 +4703,9 @@ fn rematerialize_caller_owned_libraries_with_authority_context(
 ) -> CliResult<Vec<OvenCallerOwnedRustcLibrary>> {
     let mut libraries = Vec::new();
     let mut visiting = BTreeSet::new();
-    let selected_path_authority = compiler_selected_path_authority(artifact_plan, Some(provider_plan));
+    let compiler_owned_roots = compiler_owned_roots_with_provider_plan(artifact_plan, Some(provider_plan));
+    let selected_path_authority = (!compiler_owned_roots.is_empty())
+        .then(|| OvenSelectedPathRustcAuthority::new(&compiler_owned_roots, artifact_plan));
     for provider in provider_plan.active_records().filter(|provider| {
         matches!(
             provider.authority,
@@ -4737,6 +4741,7 @@ fn rematerialize_caller_owned_libraries_with_authority_context(
             consumer_output_root,
             registry_authority,
             extra_dependency_search_paths,
+            &compiler_owned_roots,
             selected_path_authority.as_ref(),
             &mut visiting,
             &mut authority_context,
@@ -15796,6 +15801,133 @@ headers = ["interop/include/bridge.h"]
             &owned_roots,
         );
         assert_eq!(remaining, vec![caller]);
+        Ok(())
+    }
+
+    #[test]
+    fn checked_historical_sdk_rebinding_reuses_the_selected_sealed_extern() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::provider::{NamespaceAuthority, ProviderIdentity, ProviderProvenance, ProviderRecord};
+
+        let workspace = tempfile::tempdir()?;
+        let library_root = workspace.path().join("library/target/lib");
+        let historical_sdk_root = library_root.join("private/stdlib-core");
+        let active_sdk_root = workspace.path().join("active-sdk/stdlib-core");
+        let caller_lookalike = workspace.path().join("caller/incan_stdlib_core");
+        for root in [&library_root, &historical_sdk_root, &active_sdk_root, &caller_lookalike] {
+            fs::create_dir_all(root.join("src"))?;
+            fs::write(
+                root.join("Cargo.toml"),
+                "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+            )?;
+            fs::write(root.join("src/lib.rs"), "pub fn marker() {}\n")?;
+        }
+
+        let active_digest = digest_provider_artifact(&active_sdk_root)?;
+        let mut library_manifest = LibraryManifest::new("library", "0.1.0");
+        library_manifest
+            .contract_metadata
+            .provider
+            .provider_dependencies
+            .push(ProviderDependencyMetadata {
+                kind: ProviderDependencyKind::PrivateImplementation,
+                dependency_key: "incan_stdlib_core".to_string(),
+                provider_name: "incan_stdlib_core".to_string(),
+                provider_version: "0.5.0".to_string(),
+                artifact_digest: active_digest.clone(),
+                relative_artifact_path: "private/stdlib-core".to_string(),
+                requested_features: BTreeSet::new(),
+                default_features: false,
+                optional: false,
+            });
+        let library_manifest_path = library_root.join("library.incnlib");
+        library_manifest.write_to_path(&library_manifest_path)?;
+        let library_artifact = LibraryArtifactMetadata::from_crate_root("library", "library", &library_root);
+        let active_sdk_artifact =
+            LibraryArtifactMetadata::from_crate_root("incan_stdlib_core", "incan_stdlib_core", &active_sdk_root);
+        let provider_plan = ProviderPlan::new(
+            LibraryManifestIndex::default(),
+            vec![
+                ProviderRecord {
+                    identity: ProviderIdentity {
+                        name: "library".to_string(),
+                        version: "0.1.0".to_string(),
+                        digest: digest_provider_artifact(&library_root)?,
+                        feature_projection: BTreeSet::new(),
+                    },
+                    provenance: ProviderProvenance::ProjectDependency {
+                        dependency_key: "library".to_string(),
+                        manifest_path: library_manifest_path,
+                    },
+                    authority: NamespaceAuthority::ProjectDependency {
+                        dependency_key: "library".to_string(),
+                    },
+                    namespace_claims: BTreeSet::new(),
+                    available: true,
+                    enabled: true,
+                    manifest: Some(Arc::new(library_manifest)),
+                    artifact: Some(library_artifact),
+                    implementation_facets: Vec::new(),
+                },
+                ProviderRecord {
+                    identity: ProviderIdentity {
+                        name: "incan_stdlib_core".to_string(),
+                        version: "0.5.0".to_string(),
+                        digest: active_digest,
+                        feature_projection: BTreeSet::new(),
+                    },
+                    provenance: ProviderProvenance::Sdk {
+                        sdk_identity: "incan@0.5.1-rc2".to_string(),
+                        component_id: "stdlib-core".to_string(),
+                        inventory_path: None,
+                    },
+                    authority: NamespaceAuthority::SdkReserved,
+                    namespace_claims: BTreeSet::new(),
+                    available: true,
+                    enabled: true,
+                    manifest: Some(Arc::new(LibraryManifest::new("incan_stdlib_core", "0.5.0"))),
+                    artifact: Some(active_sdk_artifact),
+                    implementation_facets: Vec::new(),
+                },
+            ],
+            [],
+        )?;
+        let artifact_plan = OvenRustcArtifactPlan {
+            dependency_search_paths: Vec::new(),
+            native_search_paths: Vec::new(),
+            externs: vec![(
+                "incan_stdlib_core".to_string(),
+                workspace.path().join("sealed/incan_stdlib_core.rlib"),
+            )],
+            compile_environment: BTreeMap::new(),
+            caller_owned_library_digests: BTreeMap::new(),
+        };
+
+        let owned_roots = compiler_owned_roots_with_provider_plan(&artifact_plan, Some(&provider_plan));
+        assert!(
+            owned_roots.contains(&fs::canonicalize(&historical_sdk_root)?),
+            "the provider plan verified this stale coordinate against the active SDK artifact"
+        );
+        let historical_dependency = DependencySpec {
+            crate_name: "incan_stdlib_core".to_string(),
+            version: None,
+            features: Vec::new(),
+            default_features: false,
+            source: DependencySource::Path {
+                path: historical_sdk_root,
+            },
+            optional: false,
+            package: None,
+        };
+        let lookalike_dependency = DependencySpec {
+            source: DependencySource::Path { path: caller_lookalike },
+            ..historical_dependency.clone()
+        };
+        let remaining = caller_owned_library_dependencies_missing_from_selected_plan_with_owned_roots(
+            &[historical_dependency, lookalike_dependency.clone()],
+            &artifact_plan,
+            &owned_roots,
+        );
+        assert_eq!(remaining, vec![lookalike_dependency]);
         Ok(())
     }
 

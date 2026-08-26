@@ -12237,6 +12237,60 @@ def main() -> None:
         run_timed_incan_command("incan oven bake --project", command)
     }
 
+    #[test]
+    fn oven_bake_replays_after_format_one_lock_migrates_issue1194() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let main_path = write_project_files(
+            project.path(),
+            "[project]\nname = \"format_one_rebake\"\nversion = \"0.1.0\"\n",
+            "def main() -> None:\n  pass\n",
+        )?;
+        let lock_output = run_lock(&main_path)?;
+        assert!(
+            lock_output.status.success(),
+            "expected the fixture lock to resolve before exercising format migration.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&lock_output.stdout),
+            String::from_utf8_lossy(&lock_output.stderr)
+        );
+        let lock_path = project.path().join("incan.lock");
+        let mut lock = incan::lockfile::IncanLock::load(&lock_path)?;
+        lock.format = 1;
+        lock.write(&lock_path)?;
+
+        let bake = || -> Result<std::process::Output, Box<dyn std::error::Error>> {
+            let mut command = super::incan_command();
+            command
+                .args(["oven", "bake", "--project", "."])
+                .current_dir(project.path())
+                .env("CARGO_NET_OFFLINE", "true")
+                .env("INCAN_HOME", project.path().join("oven-home"));
+            support::configure_explicit_oven_bake_command(&mut command)?;
+            run_timed_incan_command("incan oven bake --project", command)
+        };
+
+        let first_bake = bake()?;
+        assert!(
+            first_bake.status.success(),
+            "expected a format-1 lock to migrate during its explicit bake.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&first_bake.stdout),
+            String::from_utf8_lossy(&first_bake.stderr)
+        );
+        assert_eq!(
+            incan::lockfile::IncanLock::load(&lock_path)?.format,
+            2,
+            "the first bake must publish the current lock format"
+        );
+
+        let replay_bake = bake()?;
+        assert!(
+            replay_bake.status.success(),
+            "the bake that migrated the lock must replay without changing source authority.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&replay_bake.stdout),
+            String::from_utf8_lossy(&replay_bake.stderr)
+        );
+        Ok(())
+    }
+
     /// Publish a public-library provider before a separate consumer imports its package Loaf.
     fn bake_library_provider(project_root: &Path) -> Result<std::process::Output, Box<dyn std::error::Error>> {
         bake_project(project_root)
@@ -12272,6 +12326,49 @@ def main() -> None:
             "expected source-backed {dependency_key} vocabulary fixture provider to bake.\nstdout:\n{}\nstderr:\n{}",
             String::from_utf8_lossy(&provider_bake.stdout),
             String::from_utf8_lossy(&provider_bake.stderr)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn source_built_compiler_bakes_vocab_provider_without_scheduler_authority_issue1193()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = tempfile::tempdir()?;
+        let provider_root = fixture.path().join("source-vocab-provider");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("incan.toml"),
+            "[project]\nname = \"source_vocab_provider\"\nversion = \"0.1.0\"\n\n[vocab]\ncrate = \"vocab_companion\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.incn"),
+            "pub def filter(value: int) -> int:\n  return value\n",
+        )?;
+        write_vocab_companion_crate_with_source(
+            &provider_root,
+            "vocab_companion",
+            "source_vocab_provider_companion",
+            filterkit_vocab_companion_source(),
+        )?;
+
+        let mut command = super::incan_command();
+        command
+            .args(["oven", "bake", "--project", "."])
+            .current_dir(&provider_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", fixture.path().join("oven-home"))
+            .env_remove("INCAN_INTERNAL_OVEN_LOAF_EXECUTION")
+            .env_remove("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT");
+        let output = run_timed_incan_command("source incan oven bake --project", command)?;
+        assert!(
+            output.status.success(),
+            "expected the source-built compiler to bake a [vocab] provider without scheduler-only authority.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            provider_root.join("target/lib/source_vocab_provider.incnlib").is_file(),
+            "the ordinary source bake must publish the vocabulary provider artifact"
         );
         Ok(())
     }

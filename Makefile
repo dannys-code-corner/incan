@@ -42,12 +42,7 @@ TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_STDLIB="$(CURDIR)/crates/incan_stdlib/stdlib" \
 	INCAN_STDLIB_DIR="$(CURDIR)/crates/incan_stdlib/stdlib" \
 	INCAN_TOOLCHAIN_CRATES_DIR="$(CURDIR)/crates"
-# The smoke runner deliberately reuses the compiler-suite's sealed SDK-provider store across
-# commands. Its providers can retain an earlier immutable store generation, so mark this as the
-# scheduler-owned execution that may link an exact selected runtime extern from that store.
 TEST_RUNTIME_ENV = $(TEST_ENV) \
-	INCAN_INTERNAL_OVEN_LOAF_EXECUTION=1 \
-	INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT="$(CURDIR)/target" \
 	INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)" \
 	INCAN_SDK_INVENTORY="$$(cat "$(INCAN_TEST_SDK_PROVIDER_PATH_FILE)")/sdk-inventory.json"
 ifneq ($(strip $(INCAN_OVEN_NATIVE_TEST_CASE_TIMINGS)),)
