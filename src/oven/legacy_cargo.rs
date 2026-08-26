@@ -8998,7 +8998,7 @@ mod tests {
         generated_project_direct_dependencies, inspection_package_closure_ids, legacy_cargo_inspection_sources,
         locked_generated_project, materialize_sealed_registry_lock, materialized_files_from_directory,
         prepare_compiler_test_suite, prepare_direct_rustc_plan, project_registry_source_dependencies,
-        publisher_direct_dependencies, publisher_registry_source_catalog,
+        publisher_direct_dependencies, publisher_registry_source_catalog, read_legacy_cargo_metadata_with_lock_policy,
         reclaim_unmaterialized_compiler_suite_target_files, release_cohort_generated_project_lock,
         resolve_direct_dependency_packages, run_legacy_cargo_invocation, select_compiler_test_suite_identity,
         select_existing_project_extension_identity, source_compiler_vocab_support_paths_are_available,
@@ -12005,6 +12005,49 @@ version = "1.0.0"
         assert!(
             replayed_sources.is_empty(),
             "the newly created lock must support the locked publisher replay"
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_explicit_project_metadata_uses_online_then_locked_policy_issue1196()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir()?;
+        let project = fixture.path().join("generated-project");
+        let cargo = fixture.path().join("cargo");
+        let observed_arguments = fixture.path().join("cargo-metadata-arguments");
+        fs::create_dir_all(&project)?;
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n",
+        )?;
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"{}\"\nif [ ! -f Cargo.lock ]; then printf 'version = 4\\n' > Cargo.lock; fi\nprintf '%s\\n' '{{\"packages\":[],\"resolve\":null}}'\n",
+                observed_arguments.display(),
+            ),
+        )?;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+        let manifest = project.join("Cargo.toml");
+
+        let _ = read_legacy_cargo_metadata_with_lock_policy(&cargo, &manifest, &[], false)?;
+        let initial_arguments = fs::read_to_string(&observed_arguments)?;
+        assert!(
+            !initial_arguments.contains("--offline") && !initial_arguments.contains("--locked"),
+            "the first explicit project metadata resolve must be allowed to establish Cargo.lock: {initial_arguments}"
+        );
+        assert!(project.join("Cargo.lock").is_file());
+
+        let _ = read_legacy_cargo_metadata_with_lock_policy(&cargo, &manifest, &[], true)?;
+        let invocations = fs::read_to_string(&observed_arguments)?;
+        let replay_arguments = invocations.lines().last().ok_or("missing replay metadata invocation")?;
+        assert!(
+            replay_arguments.contains("--offline") && replay_arguments.contains("--locked"),
+            "every later publisher metadata read must be locked and offline: {replay_arguments}"
         );
         Ok(())
     }
