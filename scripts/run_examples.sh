@@ -159,10 +159,16 @@ prebuild_example_libraries() {
       continue
     fi
 
-    # A project declaring real `[rust-dependencies]` (external registry crates, not just `rust::std::*`)
-    # needs full Cargo-backed inspection authority before `run`/`--check` can use it; that authority is
-    # only registered by an explicit `oven bake --project`, not implicitly by a plain `incan run`.
-    if grep -q '^\[rust-dependencies\]' "$manifest"; then
+    # Projects with Rust inspection, an imported `pub::` library, or a sibling consumer need an explicit bake before
+    # normal build or run. The bake establishes inspection authority and imports or publishes the package Loaf.
+    local needs_explicit_bake=false
+    if grep -q -e '^\[rust-dependencies\]' -e '^\[dependencies\]' "$manifest"; then
+      needs_explicit_bake=true
+    fi
+    if [[ "$(basename "$project_dir")" == "producer" && -d "$(dirname "$project_dir")/consumer" ]]; then
+      needs_explicit_bake=true
+    fi
+    if [[ "$needs_explicit_bake" == true ]]; then
       echo "==> oven-bake: $project_dir"
       local reg_bake_log_file
       reg_bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
@@ -192,22 +198,6 @@ prebuild_example_libraries() {
       failed=$((failed + 1))
     fi
 
-    # A `producer` directory paired with a sibling `consumer` publishes a `pub::` package another
-    # project imports. `build --lib` alone only materializes its library artifact; the consumer also
-    # needs an explicit package Loaf, which only `oven bake --project` registers.
-    if [[ "$(basename "$project_dir")" == "producer" && -d "$(dirname "$project_dir")/consumer" ]]; then
-      echo "==> oven-bake: $project_dir"
-      local bake_log_file
-      bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
-      if (cd "$project_dir" && INCAN_NO_BANNER=1 "$INCAN_BIN" oven bake --project . >"$bake_log_file" 2>&1); then
-        :
-      else
-        echo "FAILED: oven bake --project $project_dir"
-        print_log "$bake_log_file"
-        failed_items+=("oven bake --project $project_dir")
-        failed=$((failed + 1))
-      fi
-    fi
   done < <(
     find examples \
       \( -type d -name target -o -type d -name __pycache__ \) -prune -o \
