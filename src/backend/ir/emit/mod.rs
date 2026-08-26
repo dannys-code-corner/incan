@@ -2787,6 +2787,36 @@ impl<'a> IrEmitter<'a> {
         }
     }
 
+    /// Return the call-site signature applicable to a method receiver.
+    ///
+    /// Semantic call-site metadata can retain source defaults before backend lowering has established that a short
+    /// nominal name is a direct Rust import. Rust methods cannot have source-language defaults, so retain their type
+    /// shapes but clear defaults for those receivers. A source newtype carrier is the deliberate exception: its
+    /// imported Rust alias implements a source-owned API and therefore still owns its declared defaults.
+    pub(super) fn method_call_signature_for_receiver(
+        &self,
+        receiver_ty: &IrType,
+        call_signature: Option<&FunctionSignature>,
+    ) -> Option<FunctionSignature> {
+        let mut call_signature = call_signature?.clone();
+        let direct_rust_alias_without_newtype = match receiver_ty {
+            IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
+                self.rust_import_paths.borrow().contains_key(name)
+                    && !self.newtype_backing_type_names.contains_key(name)
+            }
+            IrType::Ref(inner) | IrType::RefMut(inner) => {
+                return self.method_call_signature_for_receiver(inner, Some(&call_signature));
+            }
+            _ => false,
+        };
+        if direct_rust_alias_without_newtype {
+            for param in &mut call_signature.params {
+                param.default = None;
+            }
+        }
+        Some(call_signature)
+    }
+
     /// Return a method signature specialized through a concrete generic receiver target.
     ///
     /// Associated constructors such as `OrderedDict.from_items(...)` can be checked from the assignment target
@@ -3156,6 +3186,42 @@ mod tests {
                 .method_signature_for_receiver(&IrType::Struct("RustJsonValue".to_string()), "string")
                 .is_some(),
             "a source newtype may supply call ownership facts through its local Rust import alias"
+        );
+
+        let signature_with_source_default = FunctionSignature {
+            params: vec![crate::backend::ir::decl::FunctionParam {
+                name: "port".to_string(),
+                ty: IrType::Int,
+                mutability: crate::backend::ir::Mutability::Immutable,
+                is_self: false,
+                kind: crate::frontend::ast::ParamKind::Normal,
+                default: Some(TypedExpr::new(IrExprKind::Int(8080), IrType::Int)),
+            }],
+            return_type: IrType::Unit,
+        };
+        assert!(
+            emitter
+                .method_call_signature_for_receiver(
+                    &IrType::Struct("App".to_string()),
+                    Some(&signature_with_source_default),
+                )
+                .expect("call signature")
+                .params[0]
+                .default
+                .is_none(),
+            "a direct Rust import alias must not retain source-language defaults"
+        );
+        assert!(
+            emitter
+                .method_call_signature_for_receiver(
+                    &IrType::Struct("RustJsonValue".to_string()),
+                    Some(&signature_with_source_default),
+                )
+                .expect("call signature")
+                .params[0]
+                .default
+                .is_some(),
+            "a source newtype carrier retains its source-owned defaults"
         );
     }
 
