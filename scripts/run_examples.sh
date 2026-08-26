@@ -149,7 +149,47 @@ should_skip_run() {
   return 1
 }
 
+bake_example_project() {
+  local project_dir="$1"
+  echo "==> oven-bake: $project_dir"
+  local bake_log_file
+  bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
+  if (cd "$project_dir" && INCAN_NO_BANNER=1 "$INCAN_BIN" oven bake --project . >"$bake_log_file" 2>&1); then
+    :
+  else
+    echo "FAILED: oven bake --project $project_dir"
+    print_log "$bake_log_file"
+    failed_items+=("oven bake --project $project_dir")
+    failed=$((failed + 1))
+  fi
+}
+
+prebake_example_providers() {
+  local manifest
+  while IFS= read -r manifest; do
+    [[ -z "$manifest" ]] && continue
+    local project_dir
+    project_dir="$(dirname "$manifest")"
+    local consumer_dir
+    consumer_dir="$(dirname "$project_dir")/consumer"
+    if [[ "$(basename "$project_dir")" != "producer" || ! -d "$consumer_dir" ]]; then
+      continue
+    fi
+    if selection_requires_project "$project_dir" || selection_requires_project "$consumer_dir"; then
+      bake_example_project "$project_dir"
+    fi
+  done < <(
+    find examples \
+      \( -type d -name target -o -type d -name __pycache__ \) -prune -o \
+      -type f -name 'incan.toml' -print | sort
+  )
+}
+
 prebuild_example_libraries() {
+  # Consumers can import a package Loaf only after the sibling provider has published it. This must be a separate
+  # pass because the stable manifest order visits `consumer` before `producer`.
+  prebake_example_providers
+
   local manifest
   while IFS= read -r manifest; do
     [[ -z "$manifest" ]] && continue
@@ -159,27 +199,14 @@ prebuild_example_libraries() {
       continue
     fi
 
-    # Projects with Rust inspection, an imported `pub::` library, or a sibling consumer need an explicit bake before
-    # normal build or run. The bake establishes inspection authority and imports or publishes the package Loaf.
+    # Projects with Rust inspection or an imported `pub::` library need an explicit bake before normal build or run.
+    # Provider Loafs were published in the preceding pass, so a consumer bake now imports a complete closure.
     local needs_explicit_bake=false
     if grep -q -e '^\[rust-dependencies\]' -e '^\[dependencies\]' "$manifest"; then
       needs_explicit_bake=true
     fi
-    if [[ "$(basename "$project_dir")" == "producer" && -d "$(dirname "$project_dir")/consumer" ]]; then
-      needs_explicit_bake=true
-    fi
     if [[ "$needs_explicit_bake" == true ]]; then
-      echo "==> oven-bake: $project_dir"
-      local reg_bake_log_file
-      reg_bake_log_file="$(log_file_for "oven-bake" "$project_dir")"
-      if (cd "$project_dir" && INCAN_NO_BANNER=1 "$INCAN_BIN" oven bake --project . >"$reg_bake_log_file" 2>&1); then
-        :
-      else
-        echo "FAILED: oven bake --project $project_dir"
-        print_log "$reg_bake_log_file"
-        failed_items+=("oven bake --project $project_dir")
-        failed=$((failed + 1))
-      fi
+      bake_example_project "$project_dir"
     fi
 
     if [[ ! -f "$project_dir/src/lib.incn" && ! -f "$project_dir/src/lib.incan" ]]; then
