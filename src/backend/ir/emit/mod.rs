@@ -2801,8 +2801,16 @@ impl<'a> IrEmitter<'a> {
         let mut call_signature = call_signature?.clone();
         let direct_rust_alias_without_newtype = match receiver_ty {
             IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
-                self.rust_import_paths.borrow().contains_key(name)
-                    && !self.newtype_backing_type_names.contains_key(name)
+                let short_name = name.rsplit("::").next().unwrap_or(name);
+                let rust_import_paths = self.rust_import_paths.borrow();
+                let matching_import_aliases = rust_import_paths
+                    .keys()
+                    .filter(|alias| *alias == name || *alias == short_name)
+                    .collect::<Vec<_>>();
+                !matching_import_aliases.is_empty()
+                    && !matching_import_aliases
+                        .iter()
+                        .any(|alias| self.newtype_backing_type_names.contains_key(*alias))
             }
             IrType::Ref(inner) | IrType::RefMut(inner) => {
                 return self.method_call_signature_for_receiver(inner, Some(&call_signature));
@@ -3210,6 +3218,18 @@ mod tests {
                 .default
                 .is_none(),
             "a direct Rust import alias must not retain source-language defaults"
+        );
+        assert!(
+            emitter
+                .method_call_signature_for_receiver(
+                    &IrType::Struct("std::web::App".to_string()),
+                    Some(&signature_with_source_default),
+                )
+                .expect("call signature")
+                .params[0]
+                .default
+                .is_none(),
+            "a call-chain receiver retaining a source-qualified spelling must still respect its Rust import alias"
         );
         assert!(
             emitter
