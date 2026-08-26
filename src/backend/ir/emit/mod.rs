@@ -2754,7 +2754,8 @@ impl<'a> IrEmitter<'a> {
                         self.rust_import_paths
                             .borrow()
                             .iter()
-                            .filter_map(|(alias, path)| (path.join("::") == canonical_name).then(|| alias.clone())),
+                            .filter(|(_, path)| path.join("::") == canonical_name)
+                            .map(|(alias, _)| alias.clone()),
                     );
                     let backing_newtypes = backing_type_names
                         .iter()
