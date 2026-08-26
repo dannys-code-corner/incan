@@ -11250,10 +11250,24 @@ fn baked_project_lock_dependencies_fingerprint(project_root: &Path) -> CliResult
 /// that representation, so recording the format here would make the publisher reject the state it just wrote.
 fn digest_baked_project_lock_authority(lock_path: &Path) -> CliResult<String> {
     let lock = IncanLock::load(lock_path).map_err(|error| CliError::failure(error.to_string()))?;
+    let mut semantic = lock.semantic;
+    // A bake refreshes compiler-owned SDK identity records to the active release cohort. Those records are already
+    // bound by the compiler/runtime receipt inputs, so treating them as authored project authority would make the
+    // publisher reject its own lock refresh. Package, feature, custom-provider, Oven, workspace, and Cargo-lock
+    // selections remain part of this lock authority.
+    semantic.sdk = None;
+    semantic
+        .providers
+        .retain(|provider| !provider.identity.starts_with("incan_stdlib_"));
+    for member in &mut semantic.workspace_members {
+        member.sdk = None;
+        member
+            .providers
+            .retain(|provider| !provider.identity.starts_with("incan_stdlib_"));
+    }
     let projection = serde_json::json!({
-        "incan_version": lock.incan_version,
         "cargo_features": lock.cargo_features,
-        "semantic": lock.semantic,
+        "semantic": semantic,
         "cargo_lock_payload": lock.cargo_lock_payload,
     });
     serde_json::to_vec(&projection)
@@ -13359,7 +13373,8 @@ mod tests {
     use crate::frontend::parser;
     use crate::frontend::symbols::ResolvedType;
     use crate::lockfile::{
-        CargoFeatureSelection, IncanLock, LockedOvenState, SemanticLockState, compute_deps_fingerprint,
+        CargoFeatureSelection, IncanLock, LockedOvenState, LockedProvider, LockedSdkComponent, LockedSdkState,
+        SemanticLockState, compute_deps_fingerprint,
     };
     use crate::manifest::ProjectManifest;
     use crate::oven::interop::{
@@ -14136,11 +14151,84 @@ headers = ["interop/include/bridge.h"]
         let format_one = digest_baked_project_source_authority(project.path())?;
 
         lock.format = 2;
+        lock.incan_version = "0.5.1-rc2".to_string();
         lock.write(&lock_path)?;
         assert_eq!(
             format_one,
             digest_baked_project_source_authority(project.path())?,
-            "a structural lock migration must not invalidate unchanged authored project input"
+            "a structural or compiler-cohort lock refresh must not invalidate unchanged authored project input"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn baked_project_source_authority_ignores_sdk_cohort_refresh_issue1194() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        fs::create_dir_all(project.path().join("src"))?;
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"sdk_cohort_fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        fs::write(project.path().join("src/main.incn"), "def main() -> None:\n    pass\n")?;
+        let lock_path = project.path().join("incan.lock");
+        let mut lock = IncanLock::new_with_semantic(
+            "sha256:sdk-cohort".to_string(),
+            CargoFeatureSelection::default(),
+            SemanticLockState {
+                sdk: Some(LockedSdkState {
+                    identity: "incan@0.5.0".to_string(),
+                    inventory_digest: "sha256:old-sdk".to_string(),
+                    profile: "default".to_string(),
+                    components: vec![LockedSdkComponent {
+                        id: "stdlib-core".to_string(),
+                        version: "0.5.0".to_string(),
+                        reason: "mandatory".to_string(),
+                    }],
+                }),
+                providers: vec![
+                    LockedProvider {
+                        identity: "incan_stdlib_core@0.5.0#sha256:old[]".to_string(),
+                        participation: "used".to_string(),
+                        namespace_claims: BTreeSet::new(),
+                        used_modules: BTreeSet::new(),
+                        implementation_facets: Vec::new(),
+                        backend_requirements: BTreeSet::new(),
+                    },
+                    LockedProvider {
+                        identity: "example_provider@1.0.0#sha256:stable[]".to_string(),
+                        participation: "used".to_string(),
+                        namespace_claims: BTreeSet::new(),
+                        used_modules: BTreeSet::new(),
+                        implementation_facets: Vec::new(),
+                        backend_requirements: BTreeSet::new(),
+                    },
+                ],
+                ..SemanticLockState::default()
+            },
+            "version = 4\n".to_string(),
+        );
+        lock.write(&lock_path)?;
+        let initial = digest_baked_project_source_authority(project.path())?;
+
+        lock.incan_version = "0.5.1-rc2".to_string();
+        let sdk = lock.semantic.sdk.as_mut().ok_or("fixture lost SDK state")?;
+        sdk.identity = "incan@0.5.1-rc2".to_string();
+        sdk.inventory_digest = "sha256:new-sdk".to_string();
+        sdk.components[0].version = "0.5.1-rc2".to_string();
+        lock.semantic.providers[0].identity = "incan_stdlib_core@0.5.1-rc2#sha256:new[]".to_string();
+        lock.write(&lock_path)?;
+        assert_eq!(
+            initial,
+            digest_baked_project_source_authority(project.path())?,
+            "a compiler-owned SDK cohort refresh must not invalidate unchanged authored project input"
+        );
+
+        lock.semantic.providers[1].identity = "example_provider@1.0.0#sha256:changed[]".to_string();
+        lock.write(&lock_path)?;
+        assert_ne!(
+            initial,
+            digest_baked_project_source_authority(project.path())?,
+            "a non-SDK provider selection must remain part of project authority"
         );
         Ok(())
     }
