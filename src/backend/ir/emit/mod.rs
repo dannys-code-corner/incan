@@ -2701,6 +2701,11 @@ impl<'a> IrEmitter<'a> {
     }
 
     /// Return an Incan-owned method signature for a receiver type when typechecker call-site metadata is unavailable.
+    ///
+    /// A qualified nominal name is already an identity, so it must match the registry exactly. Falling back to its
+    /// final segment lets unrelated Rust and Incan types collide: for example, an external `bevy::prelude::App`
+    /// would otherwise acquire defaults from the Incan `App` type. Only unqualified source names may use the
+    /// historical short-name lookup.
     pub(super) fn method_signature_for_receiver(
         &self,
         receiver_ty: &IrType,
@@ -2711,10 +2716,14 @@ impl<'a> IrEmitter<'a> {
                 .method_signatures
                 .get(&(name.clone(), method_name.to_string()))
                 .or_else(|| {
-                    name.rsplit("::").next().and_then(|short_name| {
-                        self.method_signatures
-                            .get(&(short_name.to_string(), method_name.to_string()))
-                    })
+                    (!name.contains("::"))
+                        .then(|| {
+                            name.rsplit("::").next().and_then(|short_name| {
+                                self.method_signatures
+                                    .get(&(short_name.to_string(), method_name.to_string()))
+                            })
+                        })
+                        .flatten()
                 }),
             IrType::Ref(inner) | IrType::RefMut(inner) => self.method_signature_for_receiver(inner, method_name),
             _ => None,
@@ -2993,7 +3002,9 @@ impl<'a> IrEmitter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConstructorProviderIdentity, IrEmitter, StructConstructorMetadata, StructConstructorSurface};
+    use super::{
+        ConstructorProviderIdentity, FunctionSignature, IrEmitter, StructConstructorMetadata, StructConstructorSurface,
+    };
     use crate::backend::ir::decl::{
         IrDecl, IrDeclKind, IrImportItem, IrImportOrigin, IrImportQualifier, IrStruct, IrStructKind, StructField,
         Visibility,
@@ -3018,6 +3029,32 @@ mod tests {
             &IrType::RustDisplay("&mut egui::Ui".to_string()),
             &IrType::Struct("Frame".to_string()),
         ));
+    }
+
+    #[test]
+    fn qualified_rust_receiver_does_not_inherit_same_named_incan_method_signature() {
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.method_signatures.insert(
+            ("App".to_string(), "run".to_string()),
+            FunctionSignature {
+                params: Vec::new(),
+                return_type: IrType::Unit,
+            },
+        );
+
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("bevy::prelude::App".to_string()), "run")
+                .is_none(),
+            "qualified Rust receivers must not use an unrelated short-name Incan signature"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
+                .is_some(),
+            "unqualified Incan receiver names retain their source method metadata"
+        );
     }
 
     fn checked_source_class(
