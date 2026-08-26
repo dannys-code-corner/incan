@@ -10311,6 +10311,194 @@ def use_reexport() -> int:
         Ok(())
     }
 
+    /// Same-named declarations cross-imported along an acyclic chain: `a` <- `b` <- `c` <- `d`.
+    ///
+    /// Module `c` ends up with three `make` declarations in scope at once — its own, `a`'s, and `b`'s — reached under
+    /// three spellings. Each must resolve to its own declaration, and `d` must agree with `c` about which is which.
+    #[test]
+    fn same_named_declarations_cross_imported_along_a_chain_stay_distinct() -> Result<(), Box<dyn std::error::Error>> {
+        let a_source = r#"
+pub def make() -> int:
+  return 1
+"#;
+        let b_source = r#"
+from a import make as make_a
+
+pub def make() -> int:
+  return 2
+
+def use_all() -> int:
+  return make() + make_a()
+"#;
+        let c_source = r#"
+from a import make as make_a
+from b import make as make_b
+
+pub def make() -> int:
+  return 3
+
+def use_all() -> int:
+  return make() + make_a() + make_b()
+"#;
+        let d_source = r#"
+from a import make as make_a
+from b import make as make_b
+from c import make as make_c
+
+def use_all() -> int:
+  return make_a() + make_b() + make_c()
+"#;
+
+        fn origins(
+            module: &bir::BodyIrModule,
+            body: &str,
+        ) -> Result<Vec<incan_semantics_core::SymbolOrigin>, Box<dyn std::error::Error>> {
+            let mut found = Vec::new();
+            for target in named_targets(module, body) {
+                let Some(fact) = &target.canonical else {
+                    return Err(Box::from(format!("a call in `{body}` carried no identity")));
+                };
+                assert_eq!(fact.declaration_name, "make");
+                found.push(fact.origin.clone());
+            }
+            found.sort();
+            Ok(found)
+        }
+        let module_origin = |name: &str| incan_semantics_core::SymbolOrigin::Module(vec![name.to_string()]);
+
+        let b = build_with_imports(b_source, &["b"], &[("a", &["a"], a_source)])?;
+        assert_eq!(
+            origins(&b, "use_all")?,
+            vec![module_origin("a"), module_origin("b")],
+            "`b` sees its own `make` and `a`'s as different declarations"
+        );
+
+        let c = build_with_imports(c_source, &["c"], &[("a", &["a"], a_source), ("b", &["b"], b_source)])?;
+        assert_eq!(
+            origins(&c, "use_all")?,
+            vec![module_origin("a"), module_origin("b"), module_origin("c")],
+            "`c` holds three same-named declarations at once and must keep them apart"
+        );
+
+        let d = build_with_imports(
+            d_source,
+            &["d"],
+            &[
+                ("a", &["a"], a_source),
+                ("b", &["b"], b_source),
+                ("c", &["c"], c_source),
+            ],
+        )?;
+        assert_eq!(
+            origins(&d, "use_all")?,
+            vec![module_origin("a"), module_origin("b"), module_origin("c")],
+            "a consumer that only imports must agree with `c` about which declaration is which"
+        );
+        Ok(())
+    }
+
+    /// Three modules with byte-identical contents, consumed together.
+    ///
+    /// Because the sources are identical, `declaration_name`, `kind`, and `declaration_span` are identical across all
+    /// three `make` declarations, so `origin` is the only field that can separate them. If origin were dropped, wrong,
+    /// or recovered from a spelling, the three would collapse into one identity — and a consumer would dispatch a call
+    /// on `a` to the declaration in `c`.
+    ///
+    /// It also pins the converse: one declaration reached from two modules under two spellings stays one identity.
+    #[test]
+    fn identical_modules_consumed_together_keep_three_distinct_identities() -> Result<(), Box<dyn std::error::Error>> {
+        // One source text, used verbatim for `a`, `b`, and `c`.
+        let shared_source = r#"
+pub model Item:
+  value: int
+
+pub def make() -> int:
+  return 1
+
+def use_local() -> int:
+  return make()
+"#;
+        let consumer_source = r#"
+from a import make as make_a
+from b import make as make_b
+from c import make as make_c
+
+def use_a() -> int:
+  return make_a()
+
+def use_b() -> int:
+  return make_b()
+
+def use_c() -> int:
+  return make_c()
+"#;
+        let consumer = build_with_imports(
+            consumer_source,
+            &["d"],
+            &[
+                ("a", &["a"], shared_source),
+                ("b", &["b"], shared_source),
+                ("c", &["c"], shared_source),
+            ],
+        )?;
+
+        let mut facts = Vec::new();
+        for body in ["use_a", "use_b", "use_c"] {
+            let targets = named_targets(&consumer, body);
+            let [target] = targets.as_slice() else {
+                return Err(Box::from(format!(
+                    "expected one named call in `{body}`, got {}",
+                    targets.len()
+                )));
+            };
+            let Some(fact) = &target.canonical else {
+                return Err(Box::from(format!("`{body}` must carry an identity")));
+            };
+            facts.push(fact.clone());
+        }
+
+        // The premise: everything except origin is identical, so origin alone carries the distinction.
+        for fact in &facts {
+            assert_eq!(fact.declaration_name, "make");
+            assert_eq!(fact.kind, SemanticSourceTargetKind::Function);
+        }
+        assert_eq!(facts[0].declaration_span, facts[1].declaration_span);
+        assert_eq!(facts[1].declaration_span, facts[2].declaration_span);
+
+        for (fact, module) in facts.iter().zip(["a", "b", "c"]) {
+            assert_eq!(
+                fact.origin,
+                incan_semantics_core::SymbolOrigin::Module(vec![module.to_string()]),
+                "each call must name the module it imported from"
+            );
+        }
+        assert_ne!(facts[0], facts[1]);
+        assert_ne!(facts[1], facts[2]);
+        assert_ne!(facts[0], facts[2]);
+
+        // One declaration reached two ways — locally in `a`, and through `d`'s alias — stays one identity.
+        let a_module = build(shared_source, &["a"])?;
+        let local = named_targets(&a_module, "use_local");
+        let [local] = local.as_slice() else {
+            return Err(Box::from("expected one named call in `use_local`".to_string()));
+        };
+        let Some(local_fact) = &local.canonical else {
+            return Err(Box::from("the local call must carry an identity".to_string()));
+        };
+        assert_eq!(
+            *local_fact, facts[0],
+            "`a`'s own `make` and `d`'s `make_a` are one declaration"
+        );
+
+        // And the seam refuses an identity this module does not own, despite the identical spelling and span.
+        assert!(a_module.body_for_canonical_target(&facts[0]).is_some());
+        assert!(
+            a_module.body_for_canonical_target(&facts[1]).is_none(),
+            "`a` must not answer for `b`'s identically-spelled, identically-spanned declaration"
+        );
+        Ok(())
+    }
+
     /// A local declaration shadowed by a same-name import must be identified as the *local* declaration.
     ///
     /// `source_target_for_symbol` consults import bindings first and unconditionally, so the recorded source target
