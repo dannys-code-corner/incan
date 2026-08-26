@@ -2741,22 +2741,30 @@ impl<'a> IrEmitter<'a> {
     ) -> Option<&FunctionSignature> {
         match receiver_ty {
             IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
-                if let Some(signature) = self.method_signatures.get(&(name.clone(), method_name.to_string())) {
-                    return Some(signature);
-                }
-                if name.contains("::") {
-                    // A source newtype records its carrier using the local Rust-import alias, while method lowering
-                    // retains that import's canonical Rust path. Relate only those two representations of the same
-                    // import; this is not a final-segment fallback for arbitrary external Rust types.
+                let (is_rust_import_alias, canonical_import_aliases) = {
+                    let rust_import_paths = self.rust_import_paths.borrow();
                     let canonical_name = name.trim_start_matches("::");
-                    let mut backing_type_names = vec![name.clone()];
-                    backing_type_names.extend(
-                        self.rust_import_paths
-                            .borrow()
+                    (
+                        rust_import_paths.contains_key(name),
+                        rust_import_paths
                             .iter()
                             .filter(|(_, path)| path.join("::") == canonical_name)
-                            .map(|(alias, _)| alias.clone()),
-                    );
+                            .map(|(alias, _)| alias.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                if !is_rust_import_alias
+                    && let Some(signature) = self.method_signatures.get(&(name.clone(), method_name.to_string()))
+                {
+                    return Some(signature);
+                }
+                if name.contains("::") || is_rust_import_alias {
+                    // A source newtype records its carrier using the local Rust-import alias, while method lowering
+                    // can retain either that alias or its canonical Rust path. Relate only those two representations
+                    // of the same import; a normal `rust::` alias must never acquire a source method with the same
+                    // short name.
+                    let mut backing_type_names = vec![name.clone()];
+                    backing_type_names.extend(canonical_import_aliases);
                     let backing_newtypes = backing_type_names
                         .iter()
                         .filter_map(|backing_type| self.newtype_backing_type_names.get(backing_type))
@@ -3117,6 +3125,16 @@ mod tests {
 
         assert!(
             emitter
+                .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
+                .is_some(),
+            "an Incan nominal receiver uses its own method metadata"
+        );
+        emitter.rust_import_paths.borrow_mut().insert(
+            "App".to_string(),
+            vec!["bevy".to_string(), "prelude".to_string(), "App".to_string()],
+        );
+        assert!(
+            emitter
                 .method_signature_for_receiver(&IrType::Struct("bevy::prelude::App".to_string()), "run")
                 .is_none(),
             "qualified Rust receivers must not use an unrelated short-name Incan signature"
@@ -3124,14 +3142,20 @@ mod tests {
         assert!(
             emitter
                 .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
-                .is_some(),
-            "unqualified Incan receiver names retain their source method metadata"
+                .is_none(),
+            "a local Rust import alias must not use an unrelated source method signature"
         );
         assert!(
             emitter
                 .method_signature_for_receiver(&IrType::Struct("incan_stdlib::json::JsonValue".to_string()), "string",)
                 .is_some(),
             "a source newtype may supply call ownership facts through its exact Rust import identity"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("RustJsonValue".to_string()), "string")
+                .is_some(),
+            "a source newtype may supply call ownership facts through its local Rust import alias"
         );
     }
 
