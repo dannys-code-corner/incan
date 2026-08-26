@@ -68,8 +68,9 @@ use crate::oven::legacy_cargo::{
 };
 use crate::oven::loaf::{
     OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
-    OVEN_NO_IMPLICIT_DEPENDENCY_BUILD, OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf,
-    resolve_toolchain_loaf_by_identity, resolve_toolchain_loaf_for_registry_dependencies, runtime_build_unit_inputs,
+    OVEN_NO_IMPLICIT_DEPENDENCY_BUILD, OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT, OvenToolchainLoaf,
+    resolve_compiler_owned_loaf_by_identity, resolve_compiler_owned_loaf_for_registry_dependencies,
+    runtime_build_unit_inputs,
 };
 #[cfg(test)]
 use crate::oven::rustc::direct_rustc_source_extern_names;
@@ -96,7 +97,7 @@ use crate::oven::store::{
 use crate::oven::{
     OvenGeneratedProjectRequest, digest_bytes, digest_dependency_specs, digest_project_source_tree,
     generated_project_source_evidence, receipt_generated_project, receipt_generated_project_with_source_evidence,
-    receipt_without_build_unit_input, write_receipt,
+    write_receipt,
 };
 use crate::oven_interop::locked_oven_interop_targets;
 use crate::provider::{
@@ -166,8 +167,6 @@ const OVEN_PROJECT_OUTPUT_PROJECTION_SCHEMA_VERSION: u32 = 3;
 const OVEN_PROJECT_OUTPUT_REPORT_SCHEMA_VERSION: u32 = 2;
 const OVEN_PROJECT_OUTPUT_REPORT_PATH_TAG: &str = "$incan_portable_path";
 const OVEN_PROJECT_OUTPUT_REPORT_EXTERNAL_ROOT: &str = "$INCAN_EXTERNAL_AUTHORITY";
-/// Build-unit input that marks a source-built compiler's sealed vocabulary-helper closure.
-const SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT: &str = "source-compiler-vocab-support";
 /// Maximum time an explicit project bake waits for another explicit publisher's bounded staging transaction.
 const OVEN_PROJECT_OUTPUT_PUBLICATION_WAIT: Duration = Duration::from_secs(5 * 60);
 /// Short cooperative backoff while the named publisher retains the only safe staging reservation.
@@ -1217,7 +1216,8 @@ fn project_extension_execution_plan_from_selected(
     receipt: &crate::oven::OvenReceipt,
 ) -> CliResult<OvenProjectExtensionExecutionPlan> {
     let (manifest, artifact_root, _payload, lease) = selected.into_parts();
-    let base = resolve_compiler_owned_loaf_by_identity(receipt, &extension_payload.base_loaf_identity)?
+    let base = resolve_compiler_owned_loaf_by_identity(receipt, &extension_payload.base_loaf_identity)
+        .map_err(|error| CliError::failure(error.to_string()))?
         .ok_or_else(|| {
             CliError::failure(format!(
                 "selected Oven project extension Loaf requires base `{}`, but that exact installed standard-library Loaf is unavailable; rebake the project for this Incan release",
@@ -5527,82 +5527,6 @@ fn ensure_loaf_stdlib_features(stdlib_features: &mut Vec<String>, loaf: bool) {
     stdlib_features.dedup();
 }
 
-/// Return whether a project receipt requests the source-compiler vocabulary capability.
-///
-/// The marker distinguishes source-built project plans that had to publish their own helper when no compatible
-/// compiler Loaf was installed. It does not change provider, target, toolchain, or runtime authority, so it may be
-/// omitted only while selecting a compiler-owned Loaf that independently proves the same helper capability.
-fn receipt_requests_source_compiler_vocab_support(receipt: &crate::oven::OvenReceipt) -> bool {
-    receipt
-        .sources
-        .build_unit_inputs
-        .get(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
-        .is_some_and(|value| value == "v1")
-}
-
-/// Return whether a compiler-owned Loaf seals the vocabulary helper required by a source-built project.
-fn compiler_loaf_supplies_source_compiler_vocab_support(
-    loaf: &OvenToolchainLoaf,
-    intent: &crate::oven::OvenBuildIntent,
-) -> bool {
-    loaf.artifacts.vocab_auxiliary_targets.iter().any(|target| {
-        target.target == intent.target
-            && ["incan_vocab", "serde_json"]
-                .into_iter()
-                .all(|crate_name| target.externs.iter().any(|artifact| artifact.crate_name == crate_name))
-    })
-}
-
-/// Resolve a compiler-owned Loaf for a project receipt without treating its source-only helper marker as a runtime
-/// cohort change.
-///
-/// The normal exact/compatible selection remains first. The narrowly derived receipt is considered only for the
-/// source-built vocabulary marker and only when the candidate itself seals the helper. Project outputs retain their
-/// original receipt and can never use this path to acquire a generic dependency build.
-fn resolve_compiler_owned_loaf_for_registry_dependencies(
-    receipt: &crate::oven::OvenReceipt,
-    registry_dependencies: &[DependencySpec],
-) -> CliResult<Option<OvenToolchainLoaf>> {
-    let selected = resolve_toolchain_loaf_for_registry_dependencies(
-        receipt,
-        OvenLoafSelection::CompilerOwnedProviderSuperset,
-        registry_dependencies,
-    )
-    .map_err(|error| CliError::failure(error.to_string()))?;
-    if selected.is_some() || !receipt_requests_source_compiler_vocab_support(receipt) {
-        return Ok(selected);
-    }
-    let base_receipt = receipt_without_build_unit_input(receipt, SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    let selected = resolve_toolchain_loaf_for_registry_dependencies(
-        &base_receipt,
-        OvenLoafSelection::CompilerOwnedProviderSuperset,
-        registry_dependencies,
-    )
-    .map_err(|error| CliError::failure(error.to_string()))?;
-    Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)))
-}
-
-/// Resolve the exact compiler-owned base recorded by a project extension.
-///
-/// See [`resolve_compiler_owned_loaf_for_registry_dependencies`] for why the source-built vocabulary marker is
-/// excluded only for capability selection. The base identity is still fixed by the extension payload.
-fn resolve_compiler_owned_loaf_by_identity(
-    receipt: &crate::oven::OvenReceipt,
-    loaf_identity: &str,
-) -> CliResult<Option<OvenToolchainLoaf>> {
-    let selected = resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    if selected.is_some() || !receipt_requests_source_compiler_vocab_support(receipt) {
-        return Ok(selected);
-    }
-    let base_receipt = receipt_without_build_unit_input(receipt, SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    let selected = resolve_toolchain_loaf_by_identity(&base_receipt, loaf_identity)
-        .map_err(|error| CliError::failure(error.to_string()))?;
-    Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)))
-}
-
 /// Return the receipt-compatible direct-Rustc selection for one normal command.
 ///
 /// The compiler-suite scheduler marks nested commands explicitly and supplies a read-only compiler-data root whose
@@ -5641,7 +5565,8 @@ fn select_oven_direct_rustc_plan_with_materialization(
             .ok_or_else(|| {
                 CliError::failure("compiler-suite native execution requires a readable immutable toolchain-data root")
             })?;
-        let native = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)?;
+        let native = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)
+            .map_err(|error| CliError::failure(error.to_string()))?;
         if let Some(native) = native {
             if !native.artifact_root.starts_with(&toolchain_data_root) {
                 return Err(CliError::failure(
@@ -5670,7 +5595,9 @@ fn select_oven_direct_rustc_plan_with_materialization(
     if let Some(selected) = select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)? {
         return Ok(Some(selected));
     }
-    if let Some(native) = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)? {
+    if let Some(native) = resolve_compiler_owned_loaf_for_registry_dependencies(receipt, registry_dependencies)
+        .map_err(|error| CliError::failure(error.to_string()))?
+    {
         return Ok(Some(OvenDirectRustcPlanPreparation {
             plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(native)),
             materialization: OvenToolchainMaterialization::ToolchainLoaf,
@@ -5762,6 +5689,7 @@ fn remove_completed_generated_cargo_lock(generated_project: &Path) -> CliResult<
 /// compatible prebuilt Loaf or stored project plan and never invoke this helper as a fallback.
 fn project_extension_base_loaf(receipt: &crate::oven::OvenReceipt) -> CliResult<Option<OvenToolchainLoaf>> {
     resolve_compiler_owned_loaf_for_registry_dependencies(receipt, &[])
+        .map_err(|error| CliError::failure(error.to_string()))
 }
 
 /// The complete checked Rust dependency surface used to select one project Loaf.
@@ -6024,7 +5952,8 @@ fn prepare_oven_test_dependency_envelope(
     let plan_selection = if publisher_dependencies
         .iter()
         .all(|dependency| matches!(dependency.source, DependencySource::Registry))
-        && let Some(loaf) = resolve_compiler_owned_loaf_for_registry_dependencies(&receipt, &publisher_dependencies)?
+        && let Some(loaf) = resolve_compiler_owned_loaf_for_registry_dependencies(&receipt, &publisher_dependencies)
+            .map_err(|error| CliError::failure(error.to_string()))?
     {
         OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(loaf))
     } else {
@@ -6071,7 +6000,7 @@ fn select_or_bake_generated_project_plan(
     let source_compiler_vocab_support = receipt
         .sources
         .build_unit_inputs
-        .get(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .get(OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
         .is_some_and(|value| value == "v1");
     if mode == OvenProjectPlanMode::ExplicitBake {
         // The completed project-output Loaf owns generated project sources and the final native result. Do not bake
@@ -6087,7 +6016,8 @@ fn select_or_bake_generated_project_plan(
             .iter()
             .all(|dependency| matches!(dependency.source, DependencySource::Registry))
             && let Some(loaf) =
-                resolve_compiler_owned_loaf_for_registry_dependencies(receipt, dependency_surface.selection)?
+                resolve_compiler_owned_loaf_for_registry_dependencies(receipt, dependency_surface.selection)
+                    .map_err(|error| CliError::failure(error.to_string()))?
         {
             return Ok(Some(OvenDirectRustcPlanPreparation {
                 plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(loaf)),
@@ -9387,7 +9317,10 @@ fn prepare_library_project(
         // A source-built compiler seals this helper at the explicit publisher boundary. Keep that closure in a
         // distinct build unit so a v0.5.0 plan without it can neither shadow nor become ambiguous with the
         // upgraded receipt. Packaged compilers continue to select their release-cohort helper unchanged.
-        build_inputs.insert(SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT.to_string(), "v1".to_string());
+        build_inputs.insert(
+            OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT.to_string(),
+            "v1".to_string(),
+        );
     }
     let oven_rustc = normal_oven
         .then(resolve_active_rustc)
@@ -11629,7 +11562,7 @@ fn restore_reused_library_package(
             return Ok(false);
         }
         if candidate.entries.is_empty()
-            && resolve_toolchain_loaf(&candidate.receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
+            && resolve_compiler_owned_loaf_for_registry_dependencies(&candidate.receipt, &[])
                 .map_or(true, |selected| selected.is_none())
         {
             return Ok(false);
@@ -11639,7 +11572,7 @@ fn restore_reused_library_package(
                 return Ok(false);
             }
             if let Some(base_loaf_identity) = entry.base_loaf_identity.as_deref()
-                && resolve_toolchain_loaf_by_identity(&candidate.receipt, base_loaf_identity)
+                && resolve_compiler_owned_loaf_by_identity(&candidate.receipt, base_loaf_identity)
                     .map_or(true, |selected| selected.is_none())
             {
                 return Ok(false);

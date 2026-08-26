@@ -33,7 +33,7 @@ use super::rustc::{
     validate_sealed_registry_leaf,
 };
 use super::store::{OvenArtifactKind, OvenStore, OvenStoreError};
-use super::{OvenReceipt, digest_bytes};
+use super::{OvenReceipt, digest_bytes, receipt_without_build_unit_input};
 use crate::manifest::{DependencySource, DependencySpec, ProjectManifest};
 use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 
@@ -60,6 +60,11 @@ pub const OVEN_NESTED_DEPENDENCY_MISS_SUMMARY: &str = "This nested build's depen
 ///
 /// A miss message without it describes some other failure, so the probe must not treat it as the expected one.
 pub const OVEN_NO_IMPLICIT_DEPENDENCY_BUILD: &str = "will not compile them for you";
+/// Build-unit input that records a source compiler's sealed vocabulary-helper capability.
+///
+/// This is project-private publication evidence rather than a runtime-cohort input. A compiler-owned Loaf may omit
+/// it only after proving that it seals the vocabulary helper itself.
+pub const OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT: &str = "source-compiler-vocab-support";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
@@ -2639,6 +2644,28 @@ pub fn resolve_toolchain_loaf(
     select_toolchain_loaf(receipt, selection, &[], OvenLoafRegistryRequirement::LinkableLeaf)
 }
 
+/// Return whether a project receipt requests the source compiler's vocabulary helper.
+fn receipt_requests_source_compiler_vocab_support(receipt: &OvenReceipt) -> bool {
+    receipt
+        .sources
+        .build_unit_inputs
+        .get(OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .is_some_and(|value| value == "v1")
+}
+
+/// Return whether this compiler-owned Loaf seals the vocabulary helper required by a source-built project.
+fn compiler_loaf_supplies_source_compiler_vocab_support(
+    loaf: &OvenToolchainLoaf,
+    intent: &super::OvenBuildIntent,
+) -> bool {
+    loaf.artifacts.vocab_auxiliary_targets.iter().any(|target| {
+        target.target == intent.target
+            && ["incan_vocab", "serde_json"]
+                .into_iter()
+                .all(|crate_name| target.externs.iter().any(|artifact| artifact.crate_name == crate_name))
+    })
+}
+
 /// Resolve a compiler-owned full-stdlib Loaf whose linkable catalog satisfies every caller registry root.
 pub fn resolve_toolchain_loaf_for_registry_dependencies(
     receipt: &OvenReceipt,
@@ -2650,6 +2677,36 @@ pub fn resolve_toolchain_loaf_for_registry_dependencies(
         selection,
         dependencies,
         OvenLoafRegistryRequirement::LinkableLeaf,
+    )
+}
+
+/// Resolve a compiler-owned Loaf while treating the source-only vocabulary marker as a capability requirement,
+/// rather than a release-cohort change.
+///
+/// A source-built compiler marks a project only when it may need to publish its own vocabulary helper. That marker
+/// is removed before compiler-owned selection, then the selected Loaf must prove that it seals both helper crates
+/// for the receipt target. Keeping this rule beside Loaf selection prevents Rust-inspection and direct-Rustc
+/// preparation from disagreeing about the same immutable compiler closure.
+pub fn resolve_compiler_owned_loaf_for_registry_dependencies(
+    receipt: &OvenReceipt,
+    dependencies: &[DependencySpec],
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    if receipt_requests_source_compiler_vocab_support(receipt) {
+        let base_receipt = receipt_without_build_unit_input(receipt, OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+            .map_err(|error| OvenLoafError::Preparation {
+                message: format!("failed to derive source-vocabulary Loaf receipt: {error}"),
+            })?;
+        let selected = resolve_toolchain_loaf_for_registry_dependencies(
+            &base_receipt,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
+            dependencies,
+        )?;
+        return Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)));
+    }
+    resolve_toolchain_loaf_for_registry_dependencies(
+        receipt,
+        OvenLoafSelection::CompilerOwnedProviderSuperset,
+        dependencies,
     )
 }
 
@@ -2681,6 +2738,25 @@ pub fn resolve_toolchain_loaf_by_identity(
         .map(Some);
     }
     Ok(None)
+}
+
+/// Resolve the compiler-owned base recorded by a project extension under the source-vocabulary capability rule.
+///
+/// The extension still pins `loaf_identity`; removing the marker only compares the release-cohort inputs shared by
+/// the project and its compiler-owned base.
+pub fn resolve_compiler_owned_loaf_by_identity(
+    receipt: &OvenReceipt,
+    loaf_identity: &str,
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    if receipt_requests_source_compiler_vocab_support(receipt) {
+        let base_receipt = receipt_without_build_unit_input(receipt, OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+            .map_err(|error| OvenLoafError::Preparation {
+                message: format!("failed to derive source-vocabulary Loaf receipt: {error}"),
+            })?;
+        let selected = resolve_toolchain_loaf_by_identity(&base_receipt, loaf_identity)?;
+        return Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)));
+    }
+    resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
 }
 
 /// Resolve a scheduler-held source-authority Loaf whose immutable source catalog satisfies every registry root.

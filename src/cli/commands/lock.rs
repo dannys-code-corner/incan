@@ -47,7 +47,7 @@ use crate::oven::legacy_cargo::OvenLegacyCargoInspectionPackage;
 use crate::oven::legacy_cargo::{OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV, explicit_project_bake_inspection_sources};
 #[cfg(feature = "rust_inspect")]
 use crate::oven::loaf::{
-    OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf, resolve_toolchain_loaf_by_identity,
+    OvenToolchainLoaf, resolve_compiler_owned_loaf_by_identity, resolve_compiler_owned_loaf_for_registry_dependencies,
     resolve_toolchain_loaf_for_registry_sources,
 };
 #[cfg(feature = "rust_inspect")]
@@ -602,9 +602,8 @@ pub(crate) fn prepare_rust_inspect_workspace(
                     )?;
                     source_loaf = Some(selected);
                 } else {
-                    let release_loaf =
-                        resolve_toolchain_loaf(&receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
-                            .map_err(|error| CliError::failure(error.to_string()))?;
+                    let release_loaf = resolve_compiler_owned_loaf_for_registry_dependencies(&receipt, &[])
+                        .map_err(|error| CliError::failure(error.to_string()))?;
                     let release_registry_lock = release_loaf
                         .as_ref()
                         .map(|loaf| loaf.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH));
@@ -781,7 +780,7 @@ pub(crate) fn prepare_project_registry_source_authorities(
                 build_unit_identity,
                 receipt,
             } => {
-                let loaf = resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
+                let loaf = resolve_compiler_owned_loaf_by_identity(receipt, loaf_identity)
                     .map_err(|error| CliError::failure(error.to_string()))?
                     .ok_or_else(|| {
                         CliError::failure(format!(
