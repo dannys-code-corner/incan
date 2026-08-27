@@ -10311,6 +10311,75 @@ def use_reexport() -> int:
         Ok(())
     }
 
+    /// A nested facade resolves its own relative re-export against *its* module, not the consumer's.
+    ///
+    /// `pkg.facade` writing `from helpers import render` means `pkg.helpers`, because a sibling-relative candidate is
+    /// tried before the bare one from `pkg.facade`. Resolving that link from the consumer instead binds the root
+    /// `helpers`, and since the cache and the identity both resolved it, they would agree on the wrong declaration.
+    /// Distinguished by arity so the binding itself proves which module won.
+    #[test]
+    fn a_nested_facade_reexport_resolves_against_the_facade_not_the_consumer() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root_helpers = r#"
+pub def render(first: int, second: int) -> int:
+  return first + second
+"#;
+        let nested_helpers = r#"
+pub def render() -> int:
+  return 1
+"#;
+        let facade_source = r#"
+from helpers import render
+"#;
+        let app_source = r#"
+from pkg.facade import render
+
+def run() -> int:
+  return render()
+"#;
+        let app = build_with_imports(
+            app_source,
+            &["app"],
+            &[
+                ("helpers", &["helpers"], root_helpers),
+                ("pkg_helpers", &["pkg", "helpers"], nested_helpers),
+                ("pkg_facade", &["pkg", "facade"], facade_source),
+            ],
+        )?;
+
+        let targets = named_targets(&app, "run");
+        let [target] = targets.as_slice() else {
+            return Err(Box::from(format!("expected one named call, got {}", targets.len())));
+        };
+        let Some(fact) = &target.canonical else {
+            return Err(Box::from("the re-exported call must carry an identity".to_string()));
+        };
+
+        assert_eq!(
+            fact.origin,
+            incan_semantics_core::SymbolOrigin::Module(vec!["pkg".to_string(), "helpers".to_string()]),
+            "the facade's own module decides what its relative re-export means"
+        );
+
+        // The span must be the nested declaration's, not the root's identically-named one.
+        let nested = build(nested_helpers, &["pkg", "helpers"])?;
+        let nested_render = nested
+            .bodies
+            .iter()
+            .find(|body| body.name == "render")
+            .ok_or_else(|| Box::<dyn std::error::Error>::from("nested `render` body missing"))?;
+        assert_eq!(fact.declaration_span, nested_render.span);
+
+        let root = build(root_helpers, &["helpers"])?;
+        if let Some(root_render) = root.bodies.iter().find(|body| body.name == "render") {
+            assert_ne!(
+                fact.declaration_span, root_render.span,
+                "the root module's `render` is a different declaration"
+            );
+        }
+        Ok(())
+    }
+
     /// Same-named declarations cross-imported along an acyclic chain: `a` <- `b` <- `c` <- `d`.
     ///
     /// Module `c` ends up with three `make` declarations in scope at once — its own, `a`'s, and `b`'s — reached under

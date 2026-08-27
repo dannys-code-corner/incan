@@ -5003,12 +5003,19 @@ impl TypeChecker {
             member_projections.extend(direct_projections.clone());
         }
         let mut reexports = HashMap::new();
+        // A facade's own relative imports resolve against the facade's module, not the consumer's. Resolving them
+        // from the consumer would bind `pkg.facade`'s `from helpers import render` to the root `helpers`.
+        let facade_module_path = self
+            .canonical_owner_segments(module_name)
+            .unwrap_or_else(|| vec![module_name.to_string()]);
         for (exported_name, module, item_name) in Self::dependency_source_reexport_targets(module_ast) {
             reexports.insert(exported_name.clone(), (module.clone(), item_name.clone()));
-            if let Some(kind) = self.dependency_reexported_function_symbol(&module, &item_name) {
+            if let Some(kind) = self.dependency_reexported_function_symbol(&facade_module_path, &module, &item_name) {
                 member_symbols.insert(exported_name.clone(), kind);
             }
-            if let Some(mut projection) = self.dependency_member_partial_projection_for_path(&module, &item_name) {
+            if let Some(mut projection) =
+                self.dependency_member_partial_projection_for_path_from(&facade_module_path, &module, &item_name)
+            {
                 projection.name.clone_from(&exported_name);
                 member_projections.insert(exported_name, projection);
             }
@@ -5022,8 +5029,13 @@ impl TypeChecker {
     }
 
     /// Resolve a function re-export from either another source dependency or the compiler-owned stdlib metadata.
-    fn dependency_reexported_function_symbol(&mut self, module: &ImportPath, item_name: &str) -> Option<SymbolKind> {
-        if let Some(kind) = self.dependency_member_symbol_for_path(module, item_name) {
+    fn dependency_reexported_function_symbol(
+        &mut self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<SymbolKind> {
+        if let Some(kind) = self.dependency_member_symbol_for_path_from(base_module_path, module, item_name) {
             return Some(kind);
         }
         let module_path = canonicalize_source_module_segments(&module.segments);
@@ -5218,7 +5230,22 @@ impl TypeChecker {
         entries: &'a HashMap<String, T>,
     ) -> Option<&'a T> {
         let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
-        for candidate in logical_source_import_candidates(current_module_path, module) {
+        self.dependency_module_entry_for_path_from(current_module_path, module, entries)
+    }
+
+    /// Select one dependency cache entry, resolving the import path against an explicit base module.
+    ///
+    /// A module's relative imports resolve against *its own* path. That is the consumer's path for an ordinary
+    /// import, but a facade's own path when caching what that facade re-exports: `pkg.facade` writing
+    /// `from helpers import render` means `pkg.helpers`, and resolving it from the consumer would silently bind the
+    /// root `helpers` instead.
+    fn dependency_module_entry_for_path_from<'a, T>(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        entries: &'a HashMap<String, T>,
+    ) -> Option<&'a T> {
+        for candidate in logical_source_import_candidates(base_module_path, module) {
             if let Some(entry) = entries.get(&candidate.join("_")) {
                 return Some(entry);
             }
@@ -5245,6 +5272,18 @@ impl TypeChecker {
     /// Return the exact symbol kind for one dependency module member path.
     pub(crate) fn dependency_member_symbol_for_path(&self, module: &ImportPath, item_name: &str) -> Option<SymbolKind> {
         self.dependency_module_entry_for_path(module, &self.dependency_member_symbols)?
+            .get(item_name)
+            .cloned()
+    }
+
+    /// Return one dependency member's symbol kind, resolving the import path against an explicit base module.
+    pub(crate) fn dependency_member_symbol_for_path_from(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<SymbolKind> {
+        self.dependency_module_entry_for_path_from(base_module_path, module, &self.dependency_member_symbols)?
             .get(item_name)
             .cloned()
     }
@@ -5366,12 +5405,10 @@ impl TypeChecker {
             }
 
             // Otherwise the member arrived here as a re-export. Follow it to the declaration it names, resolving
-            // against the *same* base `dependency_reexported_function_symbol` used when it bound the facade's link —
-            // the consuming module's path, not the facade's. Resolving against the facade would be defensible in
-            // isolation, but it would make this identity name a different declaration than the one actually bound.
-            // Both must move together if that base is ever corrected.
+            // against the facade's own module — the same base `cache_dependency_member_symbols` used when it bound
+            // that link, so the identity names exactly the declaration the binding selected.
             let (target_module, target_name) = self.dependency_member_reexports.get(&key)?.get(item_name)?;
-            return self.dependency_member_identity_from(from_module_path, target_module, target_name, depth + 1);
+            return self.dependency_member_identity_from(&owner, target_module, target_name, depth + 1);
         }
         None
     }
@@ -5434,6 +5471,22 @@ impl TypeChecker {
         self.dependency_module_entry_for_path(module, &self.dependency_member_partial_projections)?
             .get(item_name)
             .cloned()
+    }
+
+    /// Return one dependency member's partial projection, resolving against an explicit base module.
+    pub(crate) fn dependency_member_partial_projection_for_path_from(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<PartialProjectionInfo> {
+        self.dependency_module_entry_for_path_from(
+            base_module_path,
+            module,
+            &self.dependency_member_partial_projections,
+        )?
+        .get(item_name)
+        .cloned()
     }
 
     /// Register RFC 024 metadata exported by a dependency source module.
