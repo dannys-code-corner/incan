@@ -719,6 +719,7 @@ fn collect_api_metadata_package(path: &Path) -> CliResult<CheckedApiMetadataPack
             checker.set_declared_crate_names(names);
         }
         checker.set_library_manifest_index(library_manifest_index.clone());
+        super::common::register_module_path_segments(&mut checker, &modules);
 
         match checker.check_with_imports(&module.ast, &deps_for_module) {
             Ok(()) => {

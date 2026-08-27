@@ -4610,6 +4610,18 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
         .collect()
 }
 
+/// Register every collected module's real path segments with a checker before typechecking.
+///
+/// The dependency cache is keyed by the flattened, underscore-joined module name, which also names the emitted Rust
+/// module and is therefore not injective: `pkg.helpers` and a module literally named `pkg_helpers` flatten to one
+/// string. Supplying the true segments lets a canonical identity name the module that answered rather than the
+/// spelling that asked. Mirrors the pair `IrCodegen::add_module_with_path_segments` already carries for emission.
+pub(crate) fn register_module_path_segments(checker: &mut typechecker::TypeChecker, modules: &[ParsedModule]) {
+    for module in modules {
+        checker.register_dependency_module_path_segments(&module.name, module.path_segments.clone());
+    }
+}
+
 /// Typecheck all collected modules in dependency-safe order using shared CLI diagnostics formatting.
 ///
 /// This helper centralizes the per-module checker setup used by `build` and `check` paths so warning/error rendering
@@ -4698,6 +4710,7 @@ fn typecheck_modules_with_import_graph_artifacts(
             checker.set_declared_crate_names(names);
         }
         checker.set_current_module_path(Some(module.path_segments.clone()));
+        register_module_path_segments(&mut checker, modules);
         checker.set_provider_plan(Arc::clone(provider_plan));
         #[cfg(feature = "rust_inspect")]
         if let Some(rust_inspect_manifest_dir) = rust_inspect_manifest_dir {

@@ -109,6 +109,7 @@ use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::lang::types::numerics::{self, NumericFamily, NumericTypeId};
 use incan_core::lang::types::stringlike::StringLikeId;
+use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
 
 /// Type checker state.
 ///
@@ -375,6 +376,28 @@ pub struct TypeChecker {
     /// contain unrelated same-name declarations from sibling modules. Direct members must therefore come from this
     /// per-module snapshot rather than a later global `lookup_symbol(...)`.
     pub(crate) dependency_direct_member_symbols: HashMap<String, HashMap<String, SymbolKind>>,
+    /// Declaration span of each directly-declared dependency member, keyed by module cache key then member name.
+    ///
+    /// RFC 120 anchors a canonical identity to its one declaration site, and a dependency's members are exactly the
+    /// declarations a consumer cannot otherwise see a span for. The cache key is the `_`-joined module spelling and is
+    /// ambiguous by itself, so the owning module path is supplied at lookup time from the resolution candidate rather
+    /// than recovered by splitting this key.
+    pub(crate) dependency_direct_member_spans: HashMap<String, HashMap<String, Span>>,
+    /// Re-export links a dependency module publishes, keyed by module cache key then exported name.
+    ///
+    /// A facade does not own what it re-exports, so an identity must follow this link to the declaring module instead
+    /// of naming the facade. Stored as the written import path plus the original name, resolved with the facade's own
+    /// module path as the resolution base.
+    pub(crate) dependency_member_reexports: HashMap<String, HashMap<String, (ImportPath, String)>>,
+    /// True module path segments for a registered dependency, keyed by its flattened cache name.
+    ///
+    /// The cache name is the underscore-joined spelling that also names the emitted Rust module, so it is not
+    /// injective: the path `pkg.helpers` and a module literally named `pkg_helpers` flatten to one string. An origin
+    /// built from whichever candidate matched would therefore reflect the spelling that asked rather than the module
+    /// that answered, and two spellings of one module would yield two identities. Registering the real segments
+    /// alongside the flat name — the same thing `IrCodegen::add_module_with_path_segments` does for emission — lets an
+    /// identity name the module that actually answered.
+    pub(crate) dependency_module_path_segments: HashMap<String, Vec<String>>,
     /// Module-owned direct partial projection metadata captured while that module is being imported.
     pub(crate) dependency_direct_member_partial_projections: HashMap<String, HashMap<String, PartialProjectionInfo>>,
     /// RFC 024 derivable-module metadata from imported source modules, keyed by module path.
@@ -556,6 +579,9 @@ impl TypeChecker {
             dependency_registry_definitions: HashMap::new(),
             dependency_member_partial_projections: HashMap::new(),
             dependency_direct_member_symbols: HashMap::new(),
+            dependency_direct_member_spans: HashMap::new(),
+            dependency_member_reexports: HashMap::new(),
+            dependency_module_path_segments: HashMap::new(),
             dependency_direct_member_partial_projections: HashMap::new(),
             dependency_derivable_modules: HashMap::new(),
             dependency_module_traits: HashMap::new(),
@@ -4976,15 +5002,26 @@ impl TypeChecker {
         if let Some(direct_projections) = self.dependency_direct_member_partial_projections.get(module_name) {
             member_projections.extend(direct_projections.clone());
         }
+        let mut reexports = HashMap::new();
+        // A facade's own relative imports resolve against the facade's module, not the consumer's. Resolving them
+        // from the consumer would bind `pkg.facade`'s `from helpers import render` to the root `helpers`.
+        let facade_module_path = self
+            .canonical_owner_segments(module_name)
+            .unwrap_or_else(|| vec![module_name.to_string()]);
         for (exported_name, module, item_name) in Self::dependency_source_reexport_targets(module_ast) {
-            if let Some(kind) = self.dependency_reexported_function_symbol(&module, &item_name) {
+            reexports.insert(exported_name.clone(), (module.clone(), item_name.clone()));
+            if let Some(kind) = self.dependency_reexported_function_symbol(&facade_module_path, &module, &item_name) {
                 member_symbols.insert(exported_name.clone(), kind);
             }
-            if let Some(mut projection) = self.dependency_member_partial_projection_for_path(&module, &item_name) {
+            if let Some(mut projection) =
+                self.dependency_member_partial_projection_for_path_from(&facade_module_path, &module, &item_name)
+            {
                 projection.name.clone_from(&exported_name);
                 member_projections.insert(exported_name, projection);
             }
         }
+        self.dependency_member_reexports
+            .insert(module_name.to_string(), reexports);
         self.dependency_member_symbols
             .insert(module_name.to_string(), member_symbols);
         self.dependency_member_partial_projections
@@ -4992,8 +5029,13 @@ impl TypeChecker {
     }
 
     /// Resolve a function re-export from either another source dependency or the compiler-owned stdlib metadata.
-    fn dependency_reexported_function_symbol(&mut self, module: &ImportPath, item_name: &str) -> Option<SymbolKind> {
-        if let Some(kind) = self.dependency_member_symbol_for_path(module, item_name) {
+    fn dependency_reexported_function_symbol(
+        &mut self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<SymbolKind> {
+        if let Some(kind) = self.dependency_member_symbol_for_path_from(base_module_path, module, item_name) {
             return Some(kind);
         }
         let module_path = canonicalize_source_module_segments(&module.segments);
@@ -5006,15 +5048,20 @@ impl TypeChecker {
     /// Cache direct declarations owned by one dependency module.
     fn cache_dependency_direct_member_symbols(&mut self, module_name: &str, module_ast: &Program, public_only: bool) {
         let mut direct_symbols = HashMap::new();
+        let mut direct_spans = HashMap::new();
         let mut direct_projections = HashMap::new();
         for name in Self::dependency_direct_member_names(module_ast, public_only) {
             if let Some(symbol) = self.lookup_symbol(name.as_str()) {
                 direct_symbols.insert(name.clone(), symbol.kind.clone());
+                // The symbol's own span is the declaration site an identity must anchor to.
+                direct_spans.insert(name.clone(), symbol.span);
             }
             if let Some(projection) = self.type_info.partial_projection(&name) {
                 direct_projections.insert(name, projection.clone());
             }
         }
+        self.dependency_direct_member_spans
+            .insert(module_name.to_string(), direct_spans);
         self.dependency_direct_member_symbols
             .insert(module_name.to_string(), direct_symbols);
         self.dependency_direct_member_partial_projections
@@ -5183,7 +5230,22 @@ impl TypeChecker {
         entries: &'a HashMap<String, T>,
     ) -> Option<&'a T> {
         let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
-        for candidate in logical_source_import_candidates(current_module_path, module) {
+        self.dependency_module_entry_for_path_from(current_module_path, module, entries)
+    }
+
+    /// Select one dependency cache entry, resolving the import path against an explicit base module.
+    ///
+    /// A module's relative imports resolve against *its own* path. That is the consumer's path for an ordinary
+    /// import, but a facade's own path when caching what that facade re-exports: `pkg.facade` writing
+    /// `from helpers import render` means `pkg.helpers`, and resolving it from the consumer would silently bind the
+    /// root `helpers` instead.
+    fn dependency_module_entry_for_path_from<'a, T>(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        entries: &'a HashMap<String, T>,
+    ) -> Option<&'a T> {
+        for candidate in logical_source_import_candidates(base_module_path, module) {
             if let Some(entry) = entries.get(&candidate.join("_")) {
                 return Some(entry);
             }
@@ -5212,6 +5274,143 @@ impl TypeChecker {
         self.dependency_module_entry_for_path(module, &self.dependency_member_symbols)?
             .get(item_name)
             .cloned()
+    }
+
+    /// Return one dependency member's symbol kind, resolving the import path against an explicit base module.
+    pub(crate) fn dependency_member_symbol_for_path_from(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<SymbolKind> {
+        self.dependency_module_entry_for_path_from(base_module_path, module, &self.dependency_member_symbols)?
+            .get(item_name)
+            .cloned()
+    }
+
+    /// Maximum re-export hops followed while resolving one imported member to its declaring module.
+    ///
+    /// A malformed or cyclic facade chain must terminate rather than recurse forever; exceeding this yields no
+    /// identity, which is the same fail-closed answer as any other unproven owner.
+    const MAX_REEXPORT_DEPTH: usize = 16;
+
+    /// Register a dependency's real module path segments alongside the flattened name it is cached under.
+    ///
+    /// Caller-supplied metadata, not a derived cache: it deliberately survives `check_with_imports`, which clears the
+    /// dependency caches it rebuilds. Registering before checking is therefore the expected order, and re-registering
+    /// one name overwrites it.
+    ///
+    /// Optional: an unregistered dependency still resolves, and its identity falls back to the matching candidate's
+    /// path. Registering is what makes the origin name the module that answered rather than the spelling that asked,
+    /// which matters wherever the flattened name is ambiguous. Mirrors
+    /// `IrCodegen::add_module_with_path_segments`, which carries the same pair for emission.
+    pub fn register_dependency_module_path_segments(&mut self, module_name: &str, path_segments: Vec<String>) {
+        if path_segments.is_empty() {
+            return;
+        }
+        self.dependency_module_path_segments
+            .insert(module_name.to_string(), path_segments);
+    }
+
+    /// Return the module path segments that canonically identify a cached dependency, if they are known.
+    ///
+    /// A declaration identity must never be built from a *projection* spelling. The cache key is the flattened,
+    /// underscore-joined name that also names the emitted Rust module, and it is not injective: the path
+    /// `pkg.helpers` and a module literally named `pkg_helpers` are one key. Reading segments back out of it would
+    /// invent an origin for a module that may not exist, and would give one module two identities depending on which
+    /// spelling reached it.
+    ///
+    /// The segments therefore come from an explicit registration, and otherwise only from the one case the flattened
+    /// name determines by itself: a name containing no `_` can only be a single segment. Anything else is genuinely
+    /// ambiguous and yields no identity rather than a guess.
+    fn canonical_owner_segments(&self, cache_key: &str) -> Option<Vec<String>> {
+        if let Some(segments) = self.dependency_module_path_segments.get(cache_key) {
+            return Some(segments.clone());
+        }
+        (!cache_key.is_empty() && !cache_key.contains('_')).then(|| vec![cache_key.to_string()])
+    }
+
+    /// Return the canonical identity of an imported member, following re-exports to the module that declares it.
+    ///
+    /// Import resolution is not literal: `logical_source_path_candidates` tries the sibling-relative path before the
+    /// bare one, so the path written at an import is not necessarily the module it bound. An identity built from the
+    /// written path can therefore name a different declaration that merely shares a leaf name. This follows the same
+    /// candidate order resolution used, and where the winning candidate only re-exports the member it follows that
+    /// link instead of naming the facade — a re-export is a binding to an existing declaration, not a second one.
+    ///
+    /// Returns `None` when the member is reachable only through the ambiguous ends-with fallback, when a re-export
+    /// chain does not terminate in a declaration, when the binding is an overload set (which retains only one
+    /// candidate's span), or when the declaration kind has no canonical spelling yet. An unproven identity must stay
+    /// absent rather than resolve to a facade or to a guess.
+    ///
+    /// Two known holes, both inherited rather than introduced here. A dependency module cache key is the `_`-joined
+    /// module spelling, so a module literally named `pkg_helpers` and the path `pkg.helpers` are one key and cannot be
+    /// told apart; an origin built from the matching candidate then reflects the spelling that asked, not the module
+    /// that answered. And the entrypoint-as-logical-`main` layout resolves through an ends-with fallback that this
+    /// deliberately does not mirror, so such calls carry no identity at all. Both are recorded on #1042.
+    pub(crate) fn dependency_member_identity(&self, module: &ImportPath, item_name: &str) -> Option<CanonicalSymbolId> {
+        let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
+        self.dependency_member_identity_from(current_module_path, module, item_name, 0)
+    }
+
+    /// Resolve one imported member to its declaring identity, using `from_module_path` as the resolution base.
+    ///
+    /// The base is the *consumer's* module for a direct import and the *facade's* module when following a re-export,
+    /// because a facade's own relative import paths resolve against where the facade lives, not where the consumer
+    /// does.
+    fn dependency_member_identity_from(
+        &self,
+        from_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+        depth: usize,
+    ) -> Option<CanonicalSymbolId> {
+        if depth >= Self::MAX_REEXPORT_DEPTH {
+            return None;
+        }
+        for owner in logical_source_import_candidates(from_module_path, module) {
+            let key = owner.join("_");
+            let resolves_here = self
+                .dependency_member_symbols
+                .get(&key)
+                .is_some_and(|members| members.contains_key(item_name));
+            if !resolves_here {
+                continue;
+            }
+
+            // Resolution stops at this candidate. It owns the declaration only if it declares the member directly.
+            if let Some(kind) = self
+                .dependency_direct_member_symbols
+                .get(&key)
+                .and_then(|direct| direct.get(item_name))
+            {
+                // An overloaded symbol keeps only one candidate's span, so an identity minted from it would name an
+                // arbitrary overload. Refuse at the producer rather than in a consumer: this accessor is public and
+                // documents that an absent identity means unproven.
+                if matches!(kind, SymbolKind::FunctionOverloads(_)) {
+                    return None;
+                }
+                let span = self
+                    .dependency_direct_member_spans
+                    .get(&key)
+                    .and_then(|spans| spans.get(item_name))?;
+                let target_kind = Self::source_target_kind_for_symbol(kind)?;
+                let owner = self.canonical_owner_segments(&key)?;
+                return Some(CanonicalSymbolId::module_declaration(
+                    owner,
+                    item_name,
+                    SemanticSourceTargetKind::from_kind_str(target_kind),
+                    HirSourceSpan::new(span.start, span.end),
+                ));
+            }
+
+            // Otherwise the member arrived here as a re-export. Follow it to the declaration it names, resolving
+            // against the facade's own module — the same base `cache_dependency_member_symbols` used when it bound
+            // that link, so the identity names exactly the declaration the binding selected.
+            let (target_module, target_name) = self.dependency_member_reexports.get(&key)?.get(item_name)?;
+            return self.dependency_member_identity_from(&owner, target_module, target_name, depth + 1);
+        }
+        None
     }
 
     /// Return one imported registry's checked defining contract and canonical owner path.
@@ -5272,6 +5471,22 @@ impl TypeChecker {
         self.dependency_module_entry_for_path(module, &self.dependency_member_partial_projections)?
             .get(item_name)
             .cloned()
+    }
+
+    /// Return one dependency member's partial projection, resolving against an explicit base module.
+    pub(crate) fn dependency_member_partial_projection_for_path_from(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+        item_name: &str,
+    ) -> Option<PartialProjectionInfo> {
+        self.dependency_module_entry_for_path_from(
+            base_module_path,
+            module,
+            &self.dependency_member_partial_projections,
+        )?
+        .get(item_name)
+        .cloned()
     }
 
     /// Register RFC 024 metadata exported by a dependency source module.
@@ -5540,6 +5755,8 @@ impl TypeChecker {
         self.dependency_registry_definitions.clear();
         self.dependency_member_partial_projections.clear();
         self.dependency_direct_member_symbols.clear();
+        self.dependency_direct_member_spans.clear();
+        self.dependency_member_reexports.clear();
         self.dependency_direct_member_partial_projections.clear();
         self.dependency_derivable_modules.clear();
         self.dependency_module_traits.clear();
@@ -5586,6 +5803,8 @@ impl TypeChecker {
         self.dependency_registry_definitions.clear();
         self.dependency_member_partial_projections.clear();
         self.dependency_direct_member_symbols.clear();
+        self.dependency_direct_member_spans.clear();
+        self.dependency_member_reexports.clear();
         self.dependency_direct_member_partial_projections.clear();
         self.dependency_derivable_modules.clear();
         self.dependency_module_traits.clear();

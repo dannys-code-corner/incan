@@ -898,6 +898,10 @@ pub(crate) fn local_implementation_contribution(
 }
 
 /// Build an explicitly temporary migration contribution for records without a landed local boundary yet.
+///
+/// Each parameter is a distinct named field of the record being built, so grouping them into a struct would
+/// only move the same list behind another type.
+#[allow(clippy::too_many_arguments)]
 fn migration_bootstrap_contribution(
     id: &'static str,
     repository_path: &'static str,
@@ -922,6 +926,10 @@ fn migration_bootstrap_contribution(
 }
 
 /// Construct the common contributor metadata and derive its visible record membership.
+///
+/// Each parameter is a distinct named field of the record being built, so grouping them into a struct would
+/// only move the same list behind another type.
+#[allow(clippy::too_many_arguments)]
 fn contribution(
     id: &'static str,
     lifecycle: CompatibilityRegistrationLifecycle,
@@ -1810,7 +1818,7 @@ pub fn render_developer_projection(
             retirement_condition,
         ));
     }
-    output.push_str("\n");
+    output.push('\n');
     output.push_str("## Compatibility features\n\n");
     output.push_str("| Feature | Source contract | Legacy run | Body IR | Direct replacement | #987 | Feature comparison | Scoped case comparisons | Disposition | Owner |\n");
     output.push_str("|---|---|---|---|---|---|---|---|---|---|\n");
@@ -2632,6 +2640,10 @@ fn planned_feature(
 /// The bootstrap map uses [`planned_feature`] only until an implementation has a coherent local registration. New
 /// implementation work must call this constructor from that boundary with its own audited selectors rather than
 /// extending the migration profile switch above.
+///
+/// Each parameter is a distinct audited anchor for the feature being registered, so grouping them into a struct would
+/// only move the same list behind another type.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn planned_feature_at_boundary(
     id: &'static str,
     contract: &'static str,

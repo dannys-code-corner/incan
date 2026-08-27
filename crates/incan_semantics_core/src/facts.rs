@@ -350,15 +350,60 @@ impl fmt::Display for SemanticSourceTarget {
     }
 }
 
-/// Semantic target declaration category.
+/// Declaration category a canonical identity or semantic target names.
+///
+/// This is RFC 120's `kind` field. It deliberately covers every binding form the identity model reaches, not only the
+/// declaration kinds today's codegraph targets happen to record, so a member and a local never have to be told apart
+/// by a string. [`Self::Other`] remains for a frontend spelling this vocabulary has not adopted yet; it is a gap
+/// marker, never a category.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SemanticSourceTargetKind {
+    /// A `def` declaration, free or associated.
     Function,
+    /// A `model` declaration.
     Model,
+    /// A `class` declaration.
     Class,
+    /// A `newtype` declaration.
     Newtype,
+    /// A `rusttype` declaration binding a Rust type.
     Rusttype,
+    /// An `enum` declaration.
     Enum,
+    /// A `type X = ...` alias.
+    TypeAlias,
+    /// A `partial` projection declaration.
+    Partial,
+    /// One variant of an enum.
+    Variant,
+    /// A `trait` declaration.
+    Trait,
+    /// A field on a nominal type.
+    Field,
+    /// A method on a nominal type or trait.
+    Method,
+    /// A computed property on a nominal type.
+    Property,
+    /// A `const` declaration.
+    Const,
+    /// A `static` storage cell.
+    Static,
+    /// A binding introduced inside a body by `let`, `mut`, assignment, `for`, `with ... as`, or `except ... as`.
+    Local,
+    /// A declared callable parameter.
+    Parameter,
+    /// A receiver binding (`self` or `cls`).
+    Receiver,
+    /// A generic type parameter, scoped to the declaration that introduces it.
+    GenericBinder,
+    /// A module.
+    Module,
+    /// An item reached through `rust::`.
+    RustItem,
+    /// A compiler-owned builtin beneath the ordinary lexical scope chain.
+    Builtin,
+    /// A frontend declaration spelling this vocabulary has not adopted. A gap marker, not a category: a consumer that
+    /// branches on it is branching on a string.
     Other(String),
 }
 
@@ -372,6 +417,22 @@ impl SemanticSourceTargetKind {
             "newtype" => Self::Newtype,
             "rusttype" => Self::Rusttype,
             "enum" => Self::Enum,
+            "type_alias" => Self::TypeAlias,
+            "partial" => Self::Partial,
+            "variant" => Self::Variant,
+            "trait" => Self::Trait,
+            "field" => Self::Field,
+            "method" => Self::Method,
+            "property" => Self::Property,
+            "const" => Self::Const,
+            "static" => Self::Static,
+            "local" => Self::Local,
+            "parameter" => Self::Parameter,
+            "receiver" => Self::Receiver,
+            "generic_binder" => Self::GenericBinder,
+            "module" => Self::Module,
+            "rust_item" => Self::RustItem,
+            "builtin" => Self::Builtin,
             other => Self::Other(other.to_string()),
         }
     }
@@ -385,7 +446,138 @@ impl SemanticSourceTargetKind {
             Self::Newtype => "newtype",
             Self::Rusttype => "rusttype",
             Self::Enum => "enum",
+            Self::TypeAlias => "type_alias",
+            Self::Partial => "partial",
+            Self::Variant => "variant",
+            Self::Trait => "trait",
+            Self::Field => "field",
+            Self::Method => "method",
+            Self::Property => "property",
+            Self::Const => "const",
+            Self::Static => "static",
+            Self::Local => "local",
+            Self::Parameter => "parameter",
+            Self::Receiver => "receiver",
+            Self::GenericBinder => "generic_binder",
+            Self::Module => "module",
+            Self::RustItem => "rust_item",
+            Self::Builtin => "builtin",
             Self::Other(kind) => kind,
+        }
+    }
+}
+
+/// Render a module path into the identity string used by HIR, Body IR, and declaration identities.
+///
+/// One spelling, in one place: an empty path is a real case (a module checked without a path), and the frontend and
+/// the data model silently disagreeing about whether that is `"<module>"` or `""` would produce two identities for
+/// one declaration.
+pub fn module_identity_for_path(module_path: &[String]) -> String {
+    if module_path.is_empty() {
+        "<module>".to_string()
+    } else {
+        module_path.join("::")
+    }
+}
+
+/// Which of RFC 120's three namespaces a binding lives in.
+///
+/// Namespaces are distinguished by *how* a name is looked up, not by what kind of thing it names: a model name and a
+/// function name share one namespace, exactly as ordinary Python-like lexical lookup expects. Carrying this in an
+/// identity is what keeps a field named `items` and a local named `items` from ever comparing equal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SymbolNamespace {
+    /// Module-level declarations, imports, aliases and re-exports, bare enum variant names, generic binders,
+    /// parameters and receivers, and locals. Looked up innermost scope outward, then the builtin fallback tier.
+    OrdinaryLexical,
+    /// Fields, methods, computed properties, method aliases, and qualified enum variants. Reached `.`-directed from a
+    /// resolved owner type, never through the scope chain.
+    Member,
+    /// Project module paths, the `std` root, `rust::` crate roots, and `pub::` library roots. Path-directed from a
+    /// namespace root.
+    ModulePath,
+}
+
+/// What owns a declaration, independent of who references it.
+///
+/// An import, alias, or re-export carries its *target's* origin, never the referencing module's. That is the property
+/// that makes three different spellings of one declaration compare equal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SymbolOrigin {
+    /// A project source module, by canonical module path.
+    Module(Vec<String>),
+    /// A `pub::` library, and the module path owning the declaration inside it.
+    Package {
+        /// Library root name.
+        library: String,
+        /// Module path within the library.
+        module_path: Vec<String>,
+    },
+    /// A `rust::` crate root and item path.
+    RustCrate(Vec<String>),
+    /// The compiler-owned builtin registry beneath the ordinary lexical scope chain.
+    Builtin,
+}
+
+/// Distinguishes bindings that are not unique within their origin.
+///
+/// Module-level declarations are already unique within their origin and carry no discriminant. Locals, parameters,
+/// receivers, and generic binders are not: two `x` bindings in sibling blocks of one module must not collapse to one
+/// identity, so those carry the scope that introduced them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct ScopeDiscriminant(pub usize);
+
+/// RFC 120 canonical symbol identity: what a resolved reference *means*.
+///
+/// Assigned once at a declaration site and unchanged by how the declaration is later referenced. A local declaration,
+/// an import, an alias, and a re-export of one declaration all carry this same value; none of them creates a second
+/// identity for the thing they name.
+///
+/// Two properties are load-bearing. Equality is decidable structurally, without comparing source spellings or emitted
+/// names — no phase may recover what a reference means by parsing generated Rust. And identity is stable across the
+/// stages of *one* compilation, not across edits: [`Self::declaration_span`] moves when the file does, so a consumer
+/// needing cross-edit continuity must re-resolve rather than cache.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct CanonicalSymbolId {
+    /// Which namespace the binding lives in.
+    pub namespace: SymbolNamespace,
+    /// The module, package, crate, or registry owning the declaration.
+    pub origin: SymbolOrigin,
+    /// The spelling at the *declaration* site, never at a reference site.
+    pub declaration_name: String,
+    /// Declaration category.
+    pub kind: SemanticSourceTargetKind,
+    /// Present only for bindings that are not unique within their origin.
+    pub scope_discriminant: Option<ScopeDiscriminant>,
+    /// Provenance anchor: the one declaration site.
+    pub declaration_span: crate::HirSourceSpan,
+}
+
+impl CanonicalSymbolId {
+    /// Build the identity of a module-level declaration in a project source module.
+    ///
+    /// Module-level declarations are unique within their origin, so this deliberately takes no scope discriminant.
+    pub fn module_declaration(
+        module_path: Vec<String>,
+        declaration_name: impl Into<String>,
+        kind: SemanticSourceTargetKind,
+        declaration_span: crate::HirSourceSpan,
+    ) -> Self {
+        Self {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Module(module_path),
+            declaration_name: declaration_name.into(),
+            kind,
+            scope_discriminant: None,
+            declaration_span,
+        }
+    }
+
+    /// Return the owning module path when this identity is owned by a project source module.
+    pub fn module_path(&self) -> Option<&[String]> {
+        match &self.origin {
+            SymbolOrigin::Module(path) => Some(path),
+            _ => None,
         }
     }
 }
@@ -504,6 +696,44 @@ impl SemanticFactStore {
 
 #[cfg(test)]
 mod tests {
+    /// Every declaration category round-trips through its own spelling.
+    ///
+    /// The two arms are hand-written and 22 variants long; a typo in either would silently reclassify a declaration
+    /// as `Other`, which compares unequal to the variant it came from and would split one declaration's identity.
+    #[test]
+    fn every_source_target_kind_round_trips_through_its_spelling() {
+        use super::SemanticSourceTargetKind as K;
+        let all = [
+            K::Function,
+            K::Model,
+            K::Class,
+            K::Newtype,
+            K::Rusttype,
+            K::Enum,
+            K::TypeAlias,
+            K::Partial,
+            K::Variant,
+            K::Trait,
+            K::Field,
+            K::Method,
+            K::Property,
+            K::Const,
+            K::Static,
+            K::Local,
+            K::Parameter,
+            K::Receiver,
+            K::GenericBinder,
+            K::Module,
+            K::RustItem,
+            K::Builtin,
+        ];
+        for kind in &all {
+            assert_eq!(K::from_kind_str(kind.as_str()), *kind, "round trip failed for {kind}");
+        }
+        let spellings: std::collections::HashSet<&str> = all.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(spellings.len(), all.len(), "two categories share one spelling");
+    }
+
     use super::*;
 
     #[test]

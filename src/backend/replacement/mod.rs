@@ -2292,7 +2292,7 @@ impl BodyExecutor {
             {
                 return Err(unsupported("invalid resolved callable argument binding", span));
             }
-            supplied[argument.slot] = Some(self.evaluate_operand(&args[index], span)?);
+            supplied[argument.slot] = Some(self.evaluate_operand(args[index], span)?);
         }
         let defaulted = defaulted_slots.iter().copied().collect::<BTreeSet<_>>();
         for (slot, value) in supplied.iter().enumerate() {
@@ -3729,7 +3729,7 @@ impl BodyExecutor {
                     span,
                 ));
             }
-            let value = self.evaluate_operand(&operands[index], span)?;
+            let value = self.evaluate_operand(operands[index], span)?;
             if !value.is_direct_structural() {
                 return Err(unsupported(
                     format!("constructor `{}` with a non-structural field value", target.name),
