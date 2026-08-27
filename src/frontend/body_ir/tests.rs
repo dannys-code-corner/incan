@@ -4853,3 +4853,120 @@ type Meters = newtype int:
     );
     Ok(())
 }
+
+/// A newtype method's receiver is the newtype itself, and `mut self` stays a mutable receiver.
+#[test]
+fn newtype_method_receivers_are_receiver_locals() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def value(self) -> int:
+        return self.0
+
+    def scale(mut self, factor: int) -> None:
+        self.0 = self.0 * factor
+"#;
+    let module = build(source, &["m", "newtype_receiver"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(snapshot.contains("local 0 self : Meters [receiver]"), "{snapshot}");
+    assert!(snapshot.contains("local 0 self : Meters [receiver_mut]"), "{snapshot}");
+    assert!(
+        !snapshot.contains("unsupported("),
+        "newtype receiver reads and mutation must lower without a placeholder: {snapshot}"
+    );
+    Ok(())
+}
+
+/// An enum method's receiver is the enum value it dispatches on.
+#[test]
+fn enum_method_receiver_is_a_receiver_local() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+    Active(int)
+
+    def code(self) -> int:
+        return 0
+"#;
+    let module = build(source, &["m", "enum_receiver"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(snapshot.contains("local 0 self : Signal [receiver]"), "{snapshot}");
+    Ok(())
+}
+
+/// A bodyless newtype or enum method never reaches lowering: the source checker rejects it first.
+///
+/// Only a trait declaration admits a bodyless method, so the "abstract method contributes nothing" boundary sits
+/// upstream for these two kinds rather than in the lowering walk. Lowering still has to stay total for the rejected
+/// program, which is what this pins — no body, and no `Unsupported` placeholder standing in for one.
+#[test]
+fn a_bodyless_newtype_or_enum_method_is_a_source_error_and_lowers_nothing() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+
+    def label(self) -> str: ...
+"#;
+    let (module, errors) = build_after_expected_typecheck_errors(source, &["m", "bodyless"])?;
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("must have a body outside trait declarations")),
+        "the source checker owns this refusal: {errors:?}"
+    );
+    assert!(
+        module.bodies.is_empty(),
+        "a rejected bodyless method must produce neither a body nor a placeholder: {:?}",
+        module.bodies.iter().map(|body| body.name.as_str()).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+/// Every declaration kind that carries a `methods` field lowers its bodies.
+///
+/// A skipped kind is the one coverage failure this module cannot make visible — it produces no `Body` at all rather
+/// than an `Unsupported` marker — so the exhaustive set is pinned here rather than left to the walk's `_ => ` arm.
+#[test]
+fn every_declaration_kind_that_carries_methods_lowers_its_bodies() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+trait Describable:
+    def describe(self) -> int:
+        return 0
+
+model Point:
+    x: int
+
+    def get_x(self) -> int:
+        return self.x
+
+class Counter:
+    total: int
+
+    def total_now(self) -> int:
+        return self.total
+
+type Meters = newtype int:
+    def raw(self) -> int:
+        return self.0
+
+enum Signal:
+    Idle
+
+    def code(self) -> int:
+        return 1
+"#;
+    let module = build(source, &["m", "all_owners"])?;
+    let names: Vec<&str> = module.bodies.iter().map(|body| body.name.as_str()).collect();
+
+    for method in ["describe", "get_x", "total_now", "raw", "code"] {
+        assert!(names.contains(&method), "`{method}` must lower, got {names:?}");
+    }
+    assert_eq!(
+        module.bodies.len(),
+        5,
+        "one body per methods-carrying declaration kind and nothing else: {names:?}"
+    );
+    Ok(())
+}
