@@ -4732,3 +4732,124 @@ def use_str() -> int:
     }
     Ok(())
 }
+
+/// Newtype and enum methods lower like any other owner's methods.
+///
+/// The body count is asserted explicitly so a future regression shows up as a mismatch rather than a silent
+/// absence, which is how this gap went unnoticed: nothing failed when these bodies were simply never produced.
+#[test]
+fn newtype_and_enum_methods_contribute_bodies() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def value(self) -> int:
+        return self.0
+
+    def scale(mut self, factor: int) -> None:
+        self.0 = self.0 * factor
+
+enum Signal:
+    Idle
+    Active(int)
+
+    def code(self) -> int:
+        return 0
+
+def run() -> int:
+    return 1
+"#;
+    let module = build(source, &["app"])?;
+
+    let names: Vec<&str> = module.bodies.iter().map(|body| body.name.as_str()).collect();
+    assert!(
+        names.contains(&"value"),
+        "newtype method `value` must lower, got {names:?}"
+    );
+    assert!(
+        names.contains(&"scale"),
+        "newtype `mut self` method must lower, got {names:?}"
+    );
+    assert!(names.contains(&"code"), "enum method `code` must lower, got {names:?}");
+    assert!(names.contains(&"run"));
+    assert_eq!(
+        module.bodies.len(),
+        4,
+        "one body per method plus the free function, and nothing else: {names:?}"
+    );
+
+    // Each method's identity is scoped under its owning declaration, so two owners may share a method name.
+    for (owner, method) in [("Meters", "value"), ("Meters", "scale"), ("Signal", "code")] {
+        let body = module
+            .bodies
+            .iter()
+            .find(|body| body.name == method)
+            .ok_or_else(|| Box::<dyn std::error::Error>::from(format!("`{method}` body missing")))?;
+        assert!(
+            body.decl_id.path().ends_with(&format!("{owner}::{method}")),
+            "`{method}` must be scoped under `{owner}`, got {}",
+            body.decl_id.path()
+        );
+    }
+    Ok(())
+}
+
+/// An enum method that dispatches on `self`, including a payload variant, lowers a real body rather than an
+/// empty or placeholder one.
+#[test]
+fn an_enum_method_dispatching_on_self_lowers_its_match() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+    Active(int)
+
+    def level(self) -> int:
+        match self:
+            case Signal.Idle:
+                return 0
+            case Signal.Active(amount):
+                return amount
+"#;
+    let module = build(source, &["app"])?;
+
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "level")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("enum method `level` must lower"))?;
+
+    assert!(!body.block.stmts.is_empty(), "the method must lower a real body");
+    // A refused construct also produces statements, so an empty check proves nothing on its own. The snapshot
+    // carrying no `unsupported(` node is what distinguishes a lowered match from a placeholder.
+    let rendered = module.render_snapshot();
+    assert!(
+        !rendered.contains("unsupported("),
+        "the match and its payload binding must lower, not refuse:\n{rendered}"
+    );
+    Ok(())
+}
+
+/// A newtype method reading its wrapped value lowers through the nominal receiver.
+#[test]
+fn a_newtype_method_reads_its_wrapped_value() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def doubled(self) -> int:
+        return self.0 * 2
+"#;
+    let module = build(source, &["app"])?;
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "doubled")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("newtype method `doubled` must lower"))?;
+    assert!(!body.block.stmts.is_empty());
+    assert!(
+        !module.render_snapshot().contains("unsupported("),
+        "reading the wrapped value must lower, not refuse"
+    );
+    assert!(
+        body.decl_id.path().ends_with("Meters::doubled"),
+        "identity is scoped under the newtype, got {}",
+        body.decl_id.path()
+    );
+    Ok(())
+}
