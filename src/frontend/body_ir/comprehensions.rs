@@ -1,5 +1,8 @@
 //! Lowering for list and dict comprehensions and generator expressions, and the clause/terminal machinery they share.
 
+use super::args::*;
+use super::free_vars::*;
+use super::reads::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
@@ -432,4 +435,56 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             }
         }
     }
+}
+
+/// The innermost action a list/dict-comprehension clause chain performs once every clause accepts one binding
+/// combination -- what [`BodyBuilder::lower_comprehension_terminal`] lowers. It distinguishes a list's
+/// single-element push from a dict's key/value insert while sharing the same clause-chain desugar.
+pub(super) enum ComprehensionTerminal<'a> {
+    /// Push `element`'s value into the list at `list_local`.
+    ListPush {
+        list_local: bir::LocalId,
+        element: &'a ast::Spanned<ast::Expr>,
+    },
+    /// Insert `key`/`value` into the dict at `dict_local`.
+    DictInsert {
+        dict_local: bir::LocalId,
+        key: &'a ast::Spanned<ast::Expr>,
+        value: &'a ast::Spanned<ast::Expr>,
+    },
+    /// Suspend the surrounding generator body with `element` for one accepted binding combination.
+    GeneratorYield { element: &'a ast::Spanned<ast::Expr> },
+}
+impl ComprehensionTerminal<'_> {
+    /// Count `name` occurrences in this terminal's own expression(s), for seeding a comprehension `for`-clause
+    /// binding's last-use countdown (see [`BodyBuilder::declare_new_local_with_reads`]'s doc for why comprehension
+    /// bindings cannot reuse the statement-suffix-based [`count_reads_in_stmts`]).
+    fn count_reads(&self, name: &str) -> usize {
+        match self {
+            Self::ListPush { element, .. } => count_reads_in_expr(name, &element.node),
+            Self::DictInsert { key, value, .. } => {
+                count_reads_in_expr(name, &key.node) + count_reads_in_expr(name, &value.node)
+            }
+            Self::GeneratorYield { element } => count_reads_in_expr(name, &element.node),
+        }
+    }
+}
+/// Build the single mirrored `(pattern, iter, filter)` clause list a list/dict comprehension carries, as an owned
+/// `Vec<ast::ComprehensionClause>` so [`BodyBuilder::lower_comprehension_clauses`] can share its
+/// `&[ast::ComprehensionClause]`-based recursion with generator expressions' real multi-clause `generator.clauses`
+/// without a second clause-walking implementation. See [`BodyBuilder::lower_list_comp`]'s docs for why only this
+/// single mirrored clause is used, not the comprehension's own (unread-elsewhere) `clauses` field.
+pub(super) fn single_comprehension_clauses(
+    pattern: &ast::Spanned<ast::Pattern>,
+    iter: &ast::Spanned<ast::Expr>,
+    filter: Option<&ast::Spanned<ast::Expr>>,
+) -> Vec<ast::ComprehensionClause> {
+    let mut clauses = vec![ast::ComprehensionClause::For {
+        pattern: pattern.clone(),
+        iter: iter.clone(),
+    }];
+    if let Some(filter) = filter {
+        clauses.push(ast::ComprehensionClause::If(filter.clone()));
+    }
+    clauses
 }

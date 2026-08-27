@@ -1,5 +1,7 @@
 //! Lowering for calls: argument planning and binding, callable identity, nominal construction, method calls.
 
+use super::args::*;
+use super::primitives::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {

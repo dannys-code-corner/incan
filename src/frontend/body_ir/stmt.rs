@@ -1,5 +1,6 @@
 //! Lowering for statements and every assignment form: field, index, compound, tuple, and chained.
 
+use super::refusals::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {

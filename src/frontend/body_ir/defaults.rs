@@ -95,3 +95,45 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
 
     // ---- Expressions ----
 }
+
+/// Return the first explicitly unsupported default statement, preserving the source span a direct consumer must
+/// show when it refuses an omitted argument.
+///
+/// [`BodyBuilder::unsupported_operand`] records every unsupported expression as a
+/// [`bir::StatementKind::Unsupported`] statement. Defaults can also nest executable statement sequences inside
+/// control-flow, race arms, closures, generators, and match arms, so the scan walks each such sequence before the
+/// deferred computation becomes callable metadata.
+pub(super) fn first_unsupported_default_statement(stmts: &[bir::Statement]) -> Option<(HirSourceSpan, String)> {
+    stmts.iter().find_map(first_unsupported_default_statement_inner)
+}
+/// Inspect one statement and each rvalue shape that owns a nested executable statement sequence.
+pub(super) fn first_unsupported_default_statement_inner(statement: &bir::Statement) -> Option<(HirSourceSpan, String)> {
+    match &statement.kind {
+        bir::StatementKind::Unsupported { description } => Some((statement.span, description.clone())),
+        bir::StatementKind::Assign { rvalue, .. } => first_unsupported_default_rvalue(rvalue),
+        bir::StatementKind::If {
+            then_block, else_block, ..
+        } => first_unsupported_default_statement(&then_block.stmts).or_else(|| {
+            else_block
+                .as_ref()
+                .and_then(|block| first_unsupported_default_statement(&block.stmts))
+        }),
+        bir::StatementKind::Loop { body } => first_unsupported_default_statement(&body.stmts),
+        bir::StatementKind::Race { arms, .. } => arms
+            .iter()
+            .find_map(|arm| first_unsupported_default_statement(&arm.body.stmts)),
+        _ => None,
+    }
+}
+/// Inspect an rvalue's deferred executable parts without treating its explicit operands as source syntax to rebuild.
+pub(super) fn first_unsupported_default_rvalue(rvalue: &bir::Rvalue) -> Option<(HirSourceSpan, String)> {
+    match rvalue {
+        bir::Rvalue::Closure { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Generator { body, .. } => first_unsupported_default_statement(&body.stmts),
+        bir::Rvalue::Match { arms, .. } => arms.iter().find_map(|arm| {
+            first_unsupported_default_statement(&arm.guard_stmts)
+                .or_else(|| first_unsupported_default_statement(&arm.body_stmts))
+        }),
+        _ => None,
+    }
+}

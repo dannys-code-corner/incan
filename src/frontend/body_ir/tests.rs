@@ -3,6 +3,7 @@
 //! Moved verbatim out of the parent module: `use super::*` keeps every item these tests reach, so the split is a
 //! pure relocation with no visibility change.
 
+use super::defaults::*;
 use super::*;
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::{lexer, parser};

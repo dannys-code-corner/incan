@@ -1,5 +1,8 @@
 //! Lowering for `match` expressions and their patterns.
 
+use super::primitives::*;
+use super::reads::*;
+use super::refusals::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {

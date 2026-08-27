@@ -1,5 +1,8 @@
 //! Lowering for closures and partial applications, including how each computes and represents its captures.
 
+use super::args::*;
+use super::free_vars::*;
+use super::reads::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {

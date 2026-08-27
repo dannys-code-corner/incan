@@ -1,5 +1,7 @@
 //! Lowering an expression into an operand or a place, and materializing one into the other.
 
+use super::primitives::*;
+use super::refusals::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {

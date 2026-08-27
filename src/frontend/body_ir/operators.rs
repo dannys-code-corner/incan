@@ -1,5 +1,7 @@
 //! Lowering for binary operators, including dispatch to a user-defined operator method.
 
+use super::args::*;
+use super::primitives::*;
 use super::*;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
