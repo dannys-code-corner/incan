@@ -1748,15 +1748,39 @@ fn validate_observed_anchor_location(
         return;
     };
     let path = root.join(&anchor.repository_path);
-    let Ok(contents) = fs::read_to_string(&path) else {
-        return;
-    };
-    if !contents.contains(&anchor.selector) {
+    if !anchor_selector_resolves(&path, &anchor.selector) {
         errors.push(format!(
             "{label} selector `{}` is dangling at `{}`",
             anchor.selector, anchor.repository_path
         ));
     }
+}
+
+/// Return whether a selector still resolves for one recorded module, including inside that module's own submodules.
+///
+/// A recorded path names a *module*, not a physical file that must never move. `foo.rs` and `foo/` are one module in
+/// Rust, so a selector that moved from `body_ir.rs` into `body_ir/match_.rs` has not gone dangling — it is still on
+/// the same surface the anchor is recording. Searching the module's own directory keeps the anchor pinned to that
+/// surface while letting a module be split without rewriting every registration. The search deliberately does not
+/// recurse beyond the module's own tree, so a selector that genuinely leaves the surface still reports as dangling.
+fn anchor_selector_resolves(module_path: &Path, selector: &str) -> bool {
+    if fs::read_to_string(module_path).is_ok_and(|contents| contents.contains(selector)) {
+        return true;
+    }
+    let Some(module_dir) = module_path
+        .file_stem()
+        .map(|stem| module_path.with_file_name(stem))
+        .filter(|dir| dir.is_dir())
+    else {
+        return false;
+    };
+    let Ok(entries) = fs::read_dir(&module_dir) else {
+        return false;
+    };
+    entries.filter_map(Result::ok).any(|entry| {
+        entry.path().extension().is_some_and(|ext| ext == "rs")
+            && fs::read_to_string(entry.path()).is_ok_and(|contents| contents.contains(selector))
+    })
 }
 
 /// Return whether an existing #987 case ID is part of the reviewed stable seed corpus.
