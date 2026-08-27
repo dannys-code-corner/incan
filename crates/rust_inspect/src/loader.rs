@@ -116,6 +116,41 @@ pub fn write_sealed_oven_inspection_source_authority(
     )
 }
 
+/// Return the exact source roots named by a prepared Oven inspection authority.
+///
+/// This lightweight helper validates only schema and source-root accessibility. Callers that need full identity and
+/// digest validation must use the direct-inspection workspace loader. The typechecker uses these roots solely to
+/// constrain later fast source-metadata lookup; it does not rediscover Cargo's ambient cache.
+pub fn oven_inspection_registry_source_roots(manifest_dir: &Path) -> Result<Vec<PathBuf>, RustMetadataError> {
+    let path = manifest_dir.join(OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let authority = serde_json::from_slice::<OvenInspectionSourceAuthority>(&fs::read(&path)?).map_err(|error| {
+        RustMetadataError::LoadWorkspace {
+            path: path.clone(),
+            message: format!("invalid Oven Rust source authority: {error}"),
+        }
+    })?;
+    if !(1..=OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION).contains(&authority.schema_version) {
+        return Err(RustMetadataError::LoadWorkspace {
+            path,
+            message: format!(
+                "unsupported Oven Rust source authority schema {}",
+                authority.schema_version
+            ),
+        });
+    }
+    let mut roots = authority
+        .sources
+        .into_iter()
+        .map(|source| source.source_root.canonicalize())
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.sort();
+    roots.dedup();
+    Ok(roots)
+}
+
 /// Serialize deterministic inspection authority using the caller's declared validation boundary.
 fn write_oven_inspection_source_authority_with_validation(
     manifest_dir: &Path,

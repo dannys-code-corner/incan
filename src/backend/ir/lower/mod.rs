@@ -49,6 +49,7 @@ use crate::frontend::symbols::ResolvedType;
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint};
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
 use crate::frontend::typechecker::{CBindingType, TypeCheckInfo};
+use crate::manifest::RustTypeArgumentProjection;
 use crate::provider::ProviderPlan;
 use decl::callable_docstring;
 use incan_core::lang::conventions;
@@ -187,6 +188,8 @@ pub struct AstLowering {
     pub(super) import_aliases: HashMap<String, Vec<String>>,
     /// Direct Rust import aliases mapped to Rust path segments.
     pub(super) rust_import_aliases: HashMap<String, Vec<String>>,
+    /// Explicit ownership projections for generic arguments of imported Rust types.
+    pub(super) rust_type_argument_projections: Vec<RustTypeArgumentProjection>,
     /// Function-typed parameters for the currently lowered callable body.
     pub(super) callable_param_scopes: Vec<HashSet<String>>,
     /// Declared return types for callable bodies currently being lowered.
@@ -446,6 +449,7 @@ impl AstLowering {
             closure_param_scopes: Vec::new(),
             import_aliases: HashMap::new(),
             rust_import_aliases: HashMap::new(),
+            rust_type_argument_projections: Vec::new(),
             callable_param_scopes: Vec::new(),
             callable_return_types: Vec::new(),
             symbol_aliases: HashMap::new(),
@@ -482,9 +486,36 @@ impl AstLowering {
         self.provider_plan = plan;
     }
 
+    /// Supply the project-declared ownership projections for imported Rust generic arguments.
+    pub(crate) fn set_rust_type_argument_projections(&mut self, projections: Vec<RustTypeArgumentProjection>) {
+        self.rust_type_argument_projections = projections;
+    }
+
     /// Select crate-local stdlib dispatch paths while compiling an SDK-provider artifact.
     pub fn set_sdk_provider_build(&mut self, enabled: bool) {
         self.sdk_provider_build = enabled;
+    }
+
+    /// Lower a callable-surface parameter while preserving an imported Rust generic's source structure.
+    ///
+    /// Decorator metadata can carry a Rust generic as a display string (for example `Vec<(i64, i64)>`). That spelling
+    /// is not a nominal identifier and cannot be emitted through the normal resolved-type path. The source annotation
+    /// retains its import alias and generic argument tree, so use it for a top-level direct Rust handle; all other
+    /// callable parameters continue to take their typechecker-resolved type.
+    fn lower_callable_surface_parameter_type(
+        &self,
+        callable_param: &CallableParam,
+        source_param: Option<&ast::Spanned<ast::Param>>,
+        source_surface_is_unchanged: bool,
+    ) -> IrType {
+        source_surface_is_unchanged
+            .then_some(())
+            .and(source_param)
+            .filter(|source| self.type_is_top_level_direct_rust_import(&source.node.ty.node))
+            .map_or_else(
+                || self.lower_resolved_type(&callable_param.ty),
+                |source| self.lower_type(&source.node.ty.node),
+            )
     }
 
     /// Lower one typechecker-resolved callable surface into IR parameters, attaching an already-planned default
@@ -493,16 +524,42 @@ impl AstLowering {
         &mut self,
         callable_params: &[CallableParam],
         defaults: &[Option<TypedExpr>],
+        source_params: Option<&[ast::Spanned<ast::Param>]>,
+        original_callable_params: Option<&[CallableParam]>,
     ) -> Vec<FunctionParam> {
         callable_params
             .iter()
             .enumerate()
             .map(|(idx, param)| {
-                let base_ty = self.lower_resolved_type(&param.ty);
+                let source_param = source_params.and_then(|source_params| {
+                    let source_idx = param
+                        .name
+                        .as_deref()
+                        .and_then(|name| source_params.iter().position(|source| source.node.name == name))
+                        .unwrap_or(idx);
+                    source_params.get(source_idx)
+                });
+                let source_surface_is_unchanged = original_callable_params
+                    .and_then(|original| original.get(idx))
+                    .is_some_and(|original| original == param);
+                let base_ty =
+                    self.lower_callable_surface_parameter_type(param, source_param, source_surface_is_unchanged);
+                let (base_ty, mutability) = if source_surface_is_unchanged && let Some(source_param) = source_param {
+                    (
+                        self.apply_mutable_rust_type_argument_projections(
+                            source_param.node.is_mut,
+                            &source_param.node.ty.node,
+                            base_ty,
+                        ),
+                        self.lower_parameter_mutability(source_param.node.is_mut, &source_param.node.ty.node),
+                    )
+                } else {
+                    (base_ty, Mutability::Immutable)
+                };
                 FunctionParam {
                     name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
                     ty: Self::lower_param_container_type(param.kind, base_ty),
-                    mutability: Mutability::Immutable,
+                    mutability,
                     is_self: false,
                     kind: param.kind,
                     default: defaults.get(idx).cloned().flatten(),
@@ -517,23 +574,16 @@ impl AstLowering {
         &mut self,
         callable_params: &[CallableParam],
         callable_ret: &crate::frontend::symbols::ResolvedType,
+        source_params: Option<&[ast::Spanned<ast::Param>]>,
+        original_callable_params: Option<&[CallableParam]>,
     ) -> FunctionSignature {
         FunctionSignature {
-            params: callable_params
-                .iter()
-                .enumerate()
-                .map(|(idx, param)| {
-                    let base_ty = self.lower_resolved_type(&param.ty);
-                    FunctionParam {
-                        name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                        ty: Self::lower_param_container_type(param.kind, base_ty),
-                        mutability: Mutability::Immutable,
-                        is_self: false,
-                        kind: param.kind,
-                        default: None,
-                    }
-                })
-                .collect(),
+            params: self.function_params_from_callable_surface(
+                callable_params,
+                &[],
+                source_params,
+                original_callable_params,
+            ),
             return_type: self.lower_resolved_type(callable_ret),
         }
     }
@@ -543,8 +593,15 @@ impl AstLowering {
         &mut self,
         callable_params: &[CallableParam],
         callable_ret: &crate::frontend::symbols::ResolvedType,
+        source_params: Option<&[ast::Spanned<ast::Param>]>,
+        original_callable_params: Option<&[CallableParam]>,
     ) -> IrType {
-        let signature = self.function_signature_from_callable_surface(callable_params, callable_ret);
+        let signature = self.function_signature_from_callable_surface(
+            callable_params,
+            callable_ret,
+            source_params,
+            original_callable_params,
+        );
         IrType::Function {
             params: signature.params.into_iter().map(|param| param.ty).collect(),
             ret: Box::new(signature.return_type),
@@ -552,6 +609,10 @@ impl AstLowering {
     }
 
     /// Build forwarding arguments for a wrapper whose IR parameters already encode rest-parameter containers.
+    ///
+    /// An owned mutable Rust handle represents the outer Rust value by value. A generated wrapper
+    /// forwards it once, so reading it through Incan's ordinary value convention would introduce
+    /// an invalid clone for non-cloneable payloads such as `Vec<(&mut T, &mut U)>`.
     fn forwarding_args_from_params(params: &[FunctionParam]) -> Vec<IrCallArg> {
         params
             .iter()
@@ -567,7 +628,11 @@ impl AstLowering {
                     expr: TypedExpr::new(
                         IrExprKind::Var {
                             name: param.name.clone(),
-                            access: VarAccess::Read,
+                            access: if param.mutability == Mutability::OwnedMutable {
+                                VarAccess::Move
+                            } else {
+                                VarAccess::Read
+                            },
                             ref_kind: VarRefKind::Value,
                         },
                         param.ty.clone(),
@@ -598,14 +663,23 @@ impl AstLowering {
                 } else {
                     None
                 };
+                let base_ty = self.lower_callable_surface_parameter_type(param, source_param, true);
+                let (base_ty, mutability) = if let Some(source_param) = source_param {
+                    (
+                        self.apply_mutable_rust_type_argument_projections(
+                            source_param.node.is_mut,
+                            &source_param.node.ty.node,
+                            base_ty,
+                        ),
+                        self.lower_parameter_mutability(source_param.node.is_mut, &source_param.node.ty.node),
+                    )
+                } else {
+                    (base_ty, Mutability::Immutable)
+                };
                 Ok(FunctionParam {
                     name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                    ty: Self::lower_param_container_type(param.kind, self.lower_resolved_type(&param.ty)),
-                    mutability: if source_param.is_some_and(|source| source.node.is_mut) {
-                        Mutability::Mutable
-                    } else {
-                        Mutability::Immutable
-                    },
+                    ty: Self::lower_param_container_type(param.kind, base_ty),
+                    mutability,
                     is_self: false,
                     kind: param.kind,
                     default,
@@ -1784,15 +1858,16 @@ impl AstLowering {
                             .map(|p| {
                                 let base_ty =
                                     self.lower_type_with_type_params(&p.node.ty.node, Some(&type_param_names));
+                                let base_ty = self.apply_mutable_rust_type_argument_projections(
+                                    p.node.is_mut,
+                                    &p.node.ty.node,
+                                    base_ty,
+                                );
                                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);
                                 Ok(FunctionParam {
                                     name: p.node.name.clone(),
                                     ty: param_ty,
-                                    mutability: if p.node.is_mut {
-                                        Mutability::Mutable
-                                    } else {
-                                        Mutability::Immutable
-                                    },
+                                    mutability: self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node),
                                     is_self: false,
                                     kind: p.node.kind,
                                     default: self.lower_param_default_expr(p.node.default.as_ref())?,
@@ -1824,7 +1899,12 @@ impl AstLowering {
                                 continue;
                             }
                         };
-                    let params = self.function_params_from_callable_surface(&callable_params, &defaults);
+                    let params = self.function_params_from_callable_surface(
+                        &callable_params,
+                        &defaults,
+                        Some(&f.params),
+                        Some(original_params),
+                    );
                     let return_type = self.lower_resolved_type(&callable_ret);
                     ir_program.function_registry.register(
                         emitted_function_name.clone(),
@@ -2462,7 +2542,12 @@ impl AstLowering {
 
         let original_name = Self::decorator_original_function_name(&emitted_name);
         let original = self.lower_function_named(f, original_name.clone(), super::decl::Visibility::Private)?;
-        let decorated_ty = self.function_type_from_callable_surface(&callable_params, &callable_ret);
+        let decorated_ty = self.function_type_from_callable_surface(
+            &callable_params,
+            &callable_ret,
+            Some(&f.params),
+            Some(&original_params),
+        );
 
         if !original.type_params.is_empty() {
             let wrapper = self.generic_decorated_function_wrapper(
@@ -2719,7 +2804,12 @@ impl AstLowering {
         decorated_ty: IrType,
     ) -> Result<super::decl::IrFunction, LoweringError> {
         let defaults = self.decorated_param_defaults_for_surface(callable_params, original_params, &f.params)?;
-        let params = self.function_params_from_callable_surface(callable_params, &defaults);
+        let params = self.function_params_from_callable_surface(
+            callable_params,
+            &defaults,
+            Some(&f.params),
+            Some(original_params),
+        );
         let return_type = self.lower_resolved_type(callable_ret);
         let type_args = type_params
             .iter()
@@ -2846,7 +2936,12 @@ impl AstLowering {
         callable_ret: &crate::frontend::symbols::ResolvedType,
     ) -> Result<super::decl::IrFunction, LoweringError> {
         let defaults = self.decorated_param_defaults_for_surface(callable_params, original_params, &f.params)?;
-        let params = self.function_params_from_callable_surface(callable_params, &defaults);
+        let params = self.function_params_from_callable_surface(
+            callable_params,
+            &defaults,
+            Some(&f.params),
+            Some(original_params),
+        );
         let return_type = self.lower_resolved_type(callable_ret);
         let static_func = TypedExpr::new(
             IrExprKind::StaticRead {

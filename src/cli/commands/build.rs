@@ -2908,6 +2908,7 @@ fn prepare_project_with_options(
     codegen.set_root_source_module_name(path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
     if let Some(m) = manifest.as_ref() {
         codegen.set_declared_crate_names(m.declared_rust_crate_names());
+        codegen.set_rust_type_argument_projections(m.rust_type_argument_projections().to_vec());
     }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     for module in dep_modules
@@ -5086,6 +5087,7 @@ fn prepare_oven_project(
     codegen.set_root_source_module_name(path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
     if let Some(manifest) = manifest.as_ref() {
         codegen.set_declared_crate_names(manifest.declared_rust_crate_names());
+        codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
     }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     for module in dep_modules
@@ -9628,6 +9630,7 @@ fn prepare_library_project(
     );
     codegen.set_stdlib_cache(stdlib_cache);
     codegen.set_declared_crate_names(declared);
+    codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     let main_type_info = checked_type_info_by_path
         .get(&lib_module.file_path)
@@ -11687,7 +11690,10 @@ fn try_reuse_baked_project(
 
     // Only an exact local receipt set with matching immutable store headers earns the recursive authored-source scan.
     // Headers are a reject-only optimization; exact payload selection below remains the execution authority.
-    let source_authority_digest = authority_context.project_source_authority(project_root)?;
+    // A cache candidate is only tentative until every receipt, payload, and inspection authority validates below.
+    // Do not preserve this pre-refresh lock projection as this command's publication authority: an explicit bake
+    // may refresh an old lock after the cache probe misses, and that compiler-owned refresh is not an authored edit.
+    let source_authority_digest = authority_context.cache_probe_source_authority(project_root)?;
     let mut selected_outputs = Vec::new();
     for (project_target, entrypoint, profile, receipt_path, receipt) in expected_outputs {
         let Some(output) = select_baked_project_output_with_source_authority(
@@ -12314,6 +12320,15 @@ impl OvenProjectBakeAuthorityContext {
                 .insert((*profile).to_string(), (target.to_string(), toolchain.to_string()));
         }
         Ok(Some(selected))
+    }
+
+    /// Scan a tentative cache candidate without committing its current lock projection as publication authority.
+    ///
+    /// A cache miss must leave this context unbound. In particular, an old completed-output receipt can require an
+    /// authority scan before the explicit baker refreshes a legacy lock; binding that old projection would make the
+    /// final publication check reject the baker's own lock refresh.
+    fn cache_probe_source_authority(&self, project_root: &Path) -> CliResult<String> {
+        digest_baked_project_source_authority(project_root)
     }
 
     /// Return the memoized root authority used while preparing this command's targets.
@@ -17527,6 +17542,7 @@ pub model Nested:
             .is_none()
         );
         assert_eq!(context.source_digester.project_scan_count(project.path()), 0);
+        assert!(context.initial_project_source_authority.is_none());
 
         for receipt in receipts {
             store.publish(&OvenArtifactPublishRequest {
@@ -17548,7 +17564,11 @@ pub model Nested:
             )?
             .is_none()
         );
-        assert_eq!(context.source_digester.project_scan_count(project.path()), 1);
+        assert_eq!(context.source_digester.project_scan_count(project.path()), 0);
+        assert!(
+            context.initial_project_source_authority.is_none(),
+            "a failed cache probe must not preserve pre-refresh authority for final publication"
+        );
         Ok(())
     }
 

@@ -95,6 +95,7 @@ pub fn emit_rust(file_path: &str, strict: bool) -> CliResult<ExitCode> {
     codegen.set_strict_generated_lints(strict);
     if let Some(m) = session.manifest.as_ref() {
         codegen.set_declared_crate_names(m.declared_rust_crate_names());
+        codegen.set_rust_type_argument_projections(m.rust_type_argument_projections().to_vec());
     }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
 

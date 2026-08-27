@@ -142,6 +142,21 @@ pub struct Factory<'a, T, const N: usize> {
 }
 
 #[test]
+/// Tuple-struct syntax records an empty field label so constructors emit positional Rust arguments.
+fn generated_tuple_struct_metadata_preserves_positional_constructor_shape() -> Result<(), Box<dyn std::error::Error>> {
+    let external_crates = HashSet::new();
+    let source = "pub struct ClearColor(pub Color);";
+    let info = generated_type_info_from_source(source, &["ClearColor"], "demo", &[], &external_crates)
+        .ok_or_else(|| std::io::Error::other("expected generated tuple-struct metadata"))?;
+
+    assert_eq!(info.fields.len(), 1);
+    assert_eq!(info.fields[0].name, "");
+    assert_eq!(info.fields[0].type_display, "demo::Color");
+    Ok(())
+}
+
+#[test]
+/// Both Cargo's nested registry layout and Oven's exact package root resolve the same locked crate.
 fn lockfile_registry_fallback_resolves_hyphenated_package_for_underscored_crate_name()
 -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
@@ -181,6 +196,71 @@ name = "foo_bar"
     let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", &[registry_src_root])
         .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to resolve foo-bar source dir"))?;
     assert_eq!(resolved, dep_dir);
+    let sealed_root = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", &[dep_dir.clone()])
+        .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to accept an exact sealed source root"))?;
+    assert_eq!(sealed_root, dep_dir);
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "foo_bar::consume", &[dep_dir.clone()])?
+        .ok_or_else(|| std::io::Error::other("expected fast metadata from the sealed source root"))?;
+    assert_eq!(hit.metadata.canonical_path, "foo_bar::consume");
+    assert!(matches!(hit.metadata.kind, RustItemKind::Function(_)));
+    Ok(())
+}
+
+/// A sealed Oven source root has no nested `Cargo.lock`; a public facade re-export must therefore resolve its
+/// external target through the generated root's locked selection, never through ambient Cargo sources.
+#[test]
+fn sealed_registry_sources_resolve_nested_public_reexports_from_generated_lock() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let facade = tmp.path().join("facade-0.1.0");
+    let inner = tmp.path().join("inner-0.1.0");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(facade.join("src"))?;
+    fs::create_dir_all(inner.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        r#"version = 3
+
+[[package]]
+name = "facade"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "inner"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    )?;
+    fs::write(
+        facade.join("Cargo.toml"),
+        "[package]\nname = \"facade\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\ninner = \"0.1.0\"\n",
+    )?;
+    fs::write(facade.join("src/lib.rs"), "pub use inner::*;\n")?;
+    fs::write(
+        inner.join("Cargo.toml"),
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(inner.join("src/lib.rs"), "pub struct Vec2;\n")?;
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast_with_registry_src_roots(
+            &root,
+            "facade::Vec2",
+            &[facade.clone(), inner.clone()],
+        )?
+        .ok_or_else(|| std::io::Error::other("expected sealed facade re-export metadata"))?;
+    assert_eq!(hit.metadata.canonical_path, "facade::Vec2");
+    assert_eq!(hit.metadata.definition_path.as_deref(), Some("inner::Vec2"));
     Ok(())
 }
 

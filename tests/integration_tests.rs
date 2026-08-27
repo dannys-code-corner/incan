@@ -186,6 +186,197 @@ main = "src/main.incn"
 }
 
 #[test]
+fn build_manifest_projection_reaches_codegen_through_normal_cli_path() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("manifest_projection");
+    let src_dir = tmp.path().join("src");
+    let out_dir = tmp.path().join("out");
+    let oven_home = tmp.path().join("oven-home");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!(
+            r#"[project]
+name = "{project_name}"
+version = "0.1.0"
+
+[tool.incan.interop]
+
+[[tool.incan.interop.type-argument-projections]]
+import = "std::vec::Vec"
+argument = 0
+projection = "mutable-reference"
+"#
+        ),
+    )?;
+    let main_path = src_dir.join("main.incn");
+    fs::write(
+        &main_path,
+        r#"from rust::std::vec import Vec as ProviderHandle
+
+def replace_items(mut items: ProviderHandle[tuple[int, int]]) -> None:
+  pass
+
+def main() -> None:
+  replace_items(ProviderHandle.new())
+  println("projection CLI path")
+"#,
+    )?;
+
+    let mut bake_command = incan_command();
+    bake_command
+        .args(["oven", "bake", "--project", "."])
+        .current_dir(tmp.path())
+        .env("INCAN_HOME", &oven_home);
+    support::configure_explicit_oven_bake_command(&mut bake_command)?;
+    let bake_output = bake_command.output()?;
+    assert!(
+        bake_output.status.success(),
+        "explicit bake for the manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        bake_output.status,
+        String::from_utf8_lossy(&bake_output.stdout),
+        String::from_utf8_lossy(&bake_output.stderr)
+    );
+
+    let output = incan_command()
+        .args([
+            "build",
+            "--locked",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .current_dir(tmp.path())
+        .env("INCAN_HOME", &oven_home)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "normal build with manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    assert!(
+        generated.contains("fn replace_items(_: ProviderHandle<(&mut i64, &mut i64)>)"),
+        "normal CLI codegen must apply the declared projection through an alias, got:\n{generated}"
+    );
+    assert!(
+        generated.contains("replace_items(ProviderHandle::new())"),
+        "the caller must compile against the projected callee ABI, got:\n{generated}"
+    );
+    Ok(())
+}
+
+#[test]
+fn decorated_method_manifest_projection_keeps_static_and_wrapper_abi() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("decorated_manifest_projection");
+    let src_dir = tmp.path().join("src");
+    let out_dir = tmp.path().join("out");
+    let oven_home = tmp.path().join("oven-home");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!(
+            r#"[project]
+name = "{project_name}"
+version = "0.1.0"
+
+[tool.incan.interop]
+
+[[tool.incan.interop.type-argument-projections]]
+import = "std::vec::Vec"
+argument = 0
+projection = "mutable-reference"
+"#
+        ),
+    )?;
+    let main_path = src_dir.join("main.incn");
+    fs::write(
+        &main_path,
+        r#"def preserve[F]() -> ((F) -> F):
+  return (function) => function
+
+from rust::std::vec import Vec as ProviderHandle
+
+def adapted(value: int) -> int:
+  return value
+
+def to_int(function: (ProviderHandle[tuple[&mut int, &mut int]]) -> int) -> ((int) -> int):
+  return adapted
+
+class Container:
+  @preserve()
+  def replace(self, mut items: ProviderHandle[tuple[int, int]]) -> None:
+    pass
+
+@to_int
+def transformed(mut items: ProviderHandle[tuple[&mut int, &mut int]]) -> int:
+  return 0
+
+def main() -> None:
+  Container().replace(ProviderHandle.new())
+  println(transformed(7))
+  println("decorated projection CLI path")
+"#,
+    )?;
+
+    let mut bake_command = incan_command();
+    bake_command
+        .args(["oven", "bake", "--project", "."])
+        .current_dir(tmp.path())
+        .env("INCAN_HOME", &oven_home);
+    support::configure_explicit_oven_bake_command(&mut bake_command)?;
+    let bake_output = bake_command.output()?;
+    assert!(
+        bake_output.status.success(),
+        "explicit bake for the decorated manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        bake_output.status,
+        String::from_utf8_lossy(&bake_output.stdout),
+        String::from_utf8_lossy(&bake_output.stderr)
+    );
+
+    let output = incan_command()
+        .args([
+            "build",
+            "--locked",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .current_dir(tmp.path())
+        .env("INCAN_HOME", &oven_home)
+        .output()?;
+    assert!(
+        output.status.success(),
+        "normal decorated-method build with manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let projected = "ProviderHandle<(&mut i64, &mut i64)>";
+    assert!(
+        generated.match_indices(projected).count() >= 3,
+        "the decorated method, its static binding, and wrapper must share the projected ABI, got:\n{generated}"
+    );
+    assert!(
+        !generated.contains("ProviderHandle<(i64, i64)>"),
+        "no decorated-method adapter may retain an unprojected Rust generic ABI, got:\n{generated}"
+    );
+    assert!(
+        generated.contains("fn transformed(__incan_arg_0: i64) -> i64"),
+        "a decorator-changed callable surface must remain checker-authoritative instead of inheriting the original Rust parameter, got:\n{generated}"
+    );
+    assert!(
+        generated.contains("fn __incan_original_transformed(_: ProviderHandle<(&mut i64, &mut i64)>)"),
+        "the original function must retain its independently projected Rust ABI, got:\n{generated}"
+    );
+    Ok(())
+}
+
+#[test]
 fn build_rejects_unbound_type_annotation_before_generated_rust_issue902() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let cases = [("simple", "Count", "Count"), ("qualified", "missing::Count", "missing")];
@@ -10107,6 +10298,10 @@ module tests:
     @fixture
     def answer(seed: int) -> int:
         return seed + 2
+
+    @fixture(autouse=true)
+    def isolate_env(mut env: TestEnv) -> None:
+        env.unset("INCAN_INLINE_ENV_FIXTURE")
 
     def test_inline_addition(seed: int) -> None:
         assert_eq(seed, 40)

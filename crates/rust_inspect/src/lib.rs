@@ -27,7 +27,8 @@ pub use error::RustMetadataError;
 pub use extractor::extract_rust_item;
 pub use loader::{
     OVEN_DIRECT_INSPECTION_AUTHORITY_FILE, OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustWorkspace,
-    write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
+    oven_inspection_registry_source_roots, write_oven_inspection_source_authority,
+    write_sealed_oven_inspection_source_authority,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -558,6 +558,12 @@ impl<'a> IrEmitter<'a> {
                     } else {
                         quote! { &self }
                     }
+                } else if matches!(p.mutability, super::super::super::types::Mutability::OwnedMutable) {
+                    if param_is_used {
+                        quote! { mut #pname: #pty }
+                    } else {
+                        quote! { _: #pty }
+                    }
                 } else if mutated_params.contains(&p.name)
                     || matches!(p.mutability, super::super::super::types::Mutability::Mutable)
                 {
@@ -856,28 +862,37 @@ impl<'a> IrEmitter<'a> {
                 if p.is_self {
                     match p.mutability {
                         super::super::super::types::Mutability::Mutable => quote! { &mut self },
-                        super::super::super::types::Mutability::Immutable => quote! { &self },
+                        super::super::super::types::Mutability::Immutable
+                        | super::super::super::types::Mutability::OwnedMutable => quote! { &self },
                     }
                 } else {
                     let param_is_used = used_names.contains(&p.name);
                     let pname = Self::emit_param_name(&p.name, &used_names);
                     let pty = self.emit_type(&p.ty);
-                    let needs_mut = mutated_params.contains(&p.name)
-                        || matches!(p.mutability, super::super::super::types::Mutability::Mutable);
-                    if needs_mut {
-                        if !param_is_used {
-                            match &p.ty {
-                                IrType::Int | IrType::Float | IrType::Bool => quote! { _: #pty },
-                                _ => quote! { _: &mut #pty },
-                            }
+                    if matches!(p.mutability, super::super::super::types::Mutability::OwnedMutable) {
+                        if param_is_used {
+                            quote! { mut #pname: #pty }
                         } else {
-                            match &p.ty {
-                                IrType::Int | IrType::Float | IrType::Bool => quote! { mut #pname: #pty },
-                                _ => quote! { #pname: &mut #pty },
-                            }
+                            quote! { _: #pty }
                         }
                     } else {
-                        quote! { #pname: #pty }
+                        let needs_mut = mutated_params.contains(&p.name)
+                            || matches!(p.mutability, super::super::super::types::Mutability::Mutable);
+                        if needs_mut {
+                            if !param_is_used {
+                                match &p.ty {
+                                    IrType::Int | IrType::Float | IrType::Bool => quote! { _: #pty },
+                                    _ => quote! { _: &mut #pty },
+                                }
+                            } else {
+                                match &p.ty {
+                                    IrType::Int | IrType::Float | IrType::Bool => quote! { mut #pname: #pty },
+                                    _ => quote! { #pname: &mut #pty },
+                                }
+                            }
+                        } else {
+                            quote! { #pname: #pty }
+                        }
                     }
                 }
             })
@@ -941,20 +956,25 @@ impl<'a> IrEmitter<'a> {
                 if p.is_self {
                     match p.mutability {
                         super::super::super::types::Mutability::Mutable => quote! { &mut self },
-                        super::super::super::types::Mutability::Immutable => quote! { &self },
+                        super::super::super::types::Mutability::Immutable
+                        | super::super::super::types::Mutability::OwnedMutable => quote! { &self },
                     }
                 } else {
                     let pname = Self::rust_ident(&p.name);
                     let pty = self.emit_type(&p.ty);
-                    let needs_mut = mutated_params.contains(&p.name)
-                        || matches!(p.mutability, super::super::super::types::Mutability::Mutable);
-                    if needs_mut {
-                        match &p.ty {
-                            IrType::Int | IrType::Float | IrType::Bool => quote! { mut #pname: #pty },
-                            _ => quote! { #pname: &mut #pty },
-                        }
+                    if matches!(p.mutability, super::super::super::types::Mutability::OwnedMutable) {
+                        quote! { mut #pname: #pty }
                     } else {
-                        quote! { #pname: #pty }
+                        let needs_mut = mutated_params.contains(&p.name)
+                            || matches!(p.mutability, super::super::super::types::Mutability::Mutable);
+                        if needs_mut {
+                            match &p.ty {
+                                IrType::Int | IrType::Float | IrType::Bool => quote! { mut #pname: #pty },
+                                _ => quote! { #pname: &mut #pty },
+                            }
+                        } else {
+                            quote! { #pname: #pty }
+                        }
                     }
                 }
             })
@@ -1128,7 +1148,8 @@ impl<'a> IrEmitter<'a> {
                 if p.is_self {
                     match p.mutability {
                         super::super::super::types::Mutability::Mutable => quote! { &mut self },
-                        super::super::super::types::Mutability::Immutable => quote! { &self },
+                        super::super::super::types::Mutability::Immutable
+                        | super::super::super::types::Mutability::OwnedMutable => quote! { &self },
                     }
                 } else {
                     let pname = if func.body.is_empty() {
@@ -1138,7 +1159,13 @@ impl<'a> IrEmitter<'a> {
                         Self::emit_param_name(&p.name, &used_names)
                     };
                     let pty = self.emit_type(&p.ty);
-                    quote! { #pname: #pty }
+                    if matches!(p.mutability, super::super::super::types::Mutability::OwnedMutable)
+                        && (func.body.is_empty() || used_names.contains(&p.name))
+                    {
+                        quote! { mut #pname: #pty }
+                    } else {
+                        quote! { #pname: #pty }
+                    }
                 }
             })
             .collect();
@@ -1691,8 +1718,10 @@ impl<'a> IrEmitter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::ir::FunctionRegistry;
-    use crate::backend::ir::decl::{IrTrait, IrTypeParam, Visibility};
+    use crate::backend::ir::decl::{FunctionParam, IrFunction, IrTrait, IrTypeParam, Visibility};
+    use crate::backend::ir::expr::{IrExprKind, VarAccess, VarRefKind};
+    use crate::backend::ir::stmt::{IrStmt, IrStmtKind};
+    use crate::backend::ir::{FunctionRegistry, Mutability, TypedExpr};
 
     #[test]
     fn canonical_source_callable_emits_native_function_blanket_impl() {
@@ -1739,5 +1768,64 @@ mod tests {
         };
 
         assert!(emitter.emit_source_callable_blanket_impl(&trait_decl).is_empty());
+    }
+
+    #[test]
+    fn trait_default_method_keeps_owned_mutable_rust_parameter_binding() -> Result<(), Box<dyn std::error::Error>> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let items_ty = IrType::NamedGeneric(
+            "ProviderHandle".to_string(),
+            vec![IrType::Tuple(vec![
+                IrType::RefMut(Box::new(IrType::Struct("Widget".to_string()))),
+                IrType::RefMut(Box::new(IrType::Struct("Gadget".to_string()))),
+            ])],
+        );
+        let func = IrFunction {
+            name: "replace".to_string(),
+            docstring: None,
+            params: vec![
+                FunctionParam {
+                    name: "self".to_string(),
+                    ty: IrType::SelfType,
+                    mutability: Mutability::Immutable,
+                    is_self: true,
+                    kind: crate::frontend::ast::ParamKind::Normal,
+                    default: None,
+                },
+                FunctionParam {
+                    name: "items".to_string(),
+                    ty: items_ty.clone(),
+                    mutability: Mutability::OwnedMutable,
+                    is_self: false,
+                    kind: crate::frontend::ast::ParamKind::Normal,
+                    default: None,
+                },
+            ],
+            return_type: IrType::Unit,
+            body: vec![IrStmt::new(IrStmtKind::Expr(TypedExpr::new(
+                IrExprKind::Var {
+                    name: "items".to_string(),
+                    access: VarAccess::Read,
+                    ref_kind: VarRefKind::Value,
+                },
+                items_ty,
+            )))],
+            is_async: false,
+            is_generator: false,
+            visibility: Visibility::Private,
+            type_params: Vec::new(),
+            is_extern: false,
+            rust_attributes: Vec::new(),
+            lint_allows: Vec::new(),
+        };
+
+        let emitted = emitter.emit_trait_method(&func)?.to_string();
+        let compact = emitted.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        assert!(
+            compact.contains("fnreplace(&self,mutitems:ProviderHandle<(&mutWidget,&mutGadget)>)"),
+            "trait default methods must keep a writable owned Rust handle, got: {emitted}"
+        );
+        Ok(())
     }
 }

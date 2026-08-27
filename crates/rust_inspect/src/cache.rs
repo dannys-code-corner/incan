@@ -1431,6 +1431,30 @@ fn generated_field_info(
     })
 }
 
+/// Extract one public tuple-field constructor position from generated Rust syntax.
+fn generated_tuple_field_info(
+    field: ast::TupleField,
+    crate_name: &str,
+    module_path: &[String],
+    external_crates: &HashSet<String>,
+) -> Option<RustFieldInfo> {
+    if !ast_visibility_is_public(field.visibility()) {
+        return None;
+    }
+    let type_display = generated_type_display(
+        field.ty()?.syntax().text().to_string().as_str(),
+        crate_name,
+        module_path,
+        external_crates,
+    );
+    let type_shape = generated_type_shape(type_display.as_str());
+    Some(RustFieldInfo {
+        name: String::new(),
+        type_display,
+        type_shape,
+    })
+}
+
 /// Convert a normalized generated Rust type display into the structural shape used by boundary coercion planning.
 fn generated_type_shape(text: &str) -> RustTypeShape {
     parse_rust_type_shape_text(text, |_| None, RustTypeShapePathFallback::RustPath)
@@ -2626,6 +2650,20 @@ fn source_field_info(field: ast::RecordField, ctx: &SourceMetadataContext<'_>) -
     })
 }
 
+/// Build source metadata for one public tuple-struct field.
+fn source_tuple_field_info(field: ast::TupleField, ctx: &SourceMetadataContext<'_>) -> Option<RustFieldInfo> {
+    if !ast_visibility_is_public(field.visibility()) {
+        return None;
+    }
+    let type_display = ctx.type_display(field.ty()?.syntax().text().to_string().as_str());
+    let type_shape = generated_type_shape(type_display.as_str());
+    Some(RustFieldInfo {
+        name: String::new(),
+        type_display,
+        type_shape,
+    })
+}
+
 /// Build public source struct metadata without loading rust-analyzer.
 fn source_struct_metadata(
     struct_item: ast::Struct,
@@ -2654,7 +2692,11 @@ fn source_struct_metadata(
             .fields()
             .filter_map(|field| source_field_info(field, ctx))
             .collect(),
-        _ => Vec::new(),
+        Some(ast::FieldList::TupleFieldList(list)) => list
+            .fields()
+            .filter_map(|field| source_tuple_field_info(field, ctx))
+            .collect(),
+        None => Vec::new(),
     };
     Some(RustItemMetadata {
         canonical_path: canonical_path.to_string(),
@@ -2968,10 +3010,13 @@ fn dependency_source_metadata_from_reexport_target(
 ) -> Option<RustItemMetadata> {
     let (target_crate, target_tail) = target_segments.split_first()?;
     if external_crates.contains(target_crate)
-        // Re-export edges are resolved from the crate that declares them, not from the original generated root. A
-        // facade can publicly expose its own path dependency even when the generated root only names the facade.
+        // Re-export edges normally resolve from the crate that declares them: a facade can publicly expose a path
+        // dependency even when the generated root only names the facade. Registry source trees have no lockfile of
+        // their own, though, so Oven's sealed selection is recorded in the generated root lock instead. Fall back to
+        // that root without consulting ambient Cargo sources.
         && let Some(target_root) = resolve_dependency_manifest_dir(inner, source_root, target_crate, registry_src_roots)
-            .and_then(|dep_root| non_root_dependency_manifest_dir(source_root, dep_root))
+            .or_else(|| resolve_dependency_manifest_dir(inner, root, target_crate, registry_src_roots))
+            .and_then(|dep_root| non_root_dependency_manifest_dir(root, dep_root))
     {
         let payload = fs::read_to_string(target_root.join("Cargo.toml")).ok()?;
         let manifest = toml::from_str::<toml::Value>(payload.as_str()).ok()?;
@@ -3444,7 +3489,10 @@ fn generated_struct_metadata(
             .fields()
             .filter_map(|field| generated_field_info(field, crate_name, module_path, external_crates))
             .collect(),
-        _ => Vec::new(),
+        ast::FieldList::TupleFieldList(list) => list
+            .fields()
+            .filter_map(|field| generated_tuple_field_info(field, crate_name, module_path, external_crates))
+            .collect(),
     };
     let generics = source_owner_generics(struct_item.generic_param_list());
     Some(RustTypeInfo {
@@ -4647,6 +4695,30 @@ impl RustMetadataCache {
         manifest_dir: &Path,
         canonical_path: &str,
     ) -> Result<Option<CacheLookupHit>, RustMetadataError> {
+        self.get_cached_or_extract_fast_with_search_roots(manifest_dir, canonical_path, None)
+    }
+
+    /// Return fast metadata whose fresh source extraction uses caller-authorized registry source roots.
+    ///
+    /// Existing metadata cache hits remain available before source lookup. Oven consumers retain their selected
+    /// registry sources under a receipt-bound inspection authority rather than Cargo's ambient cache, which keeps a
+    /// hot identity prewarm Cargo-free while letting a public API signature name `bevy_math::Vec2`.
+    pub fn get_cached_or_extract_fast_with_registry_src_roots(
+        &self,
+        manifest_dir: &Path,
+        canonical_path: &str,
+        registry_src_roots: &[PathBuf],
+    ) -> Result<Option<CacheLookupHit>, RustMetadataError> {
+        self.get_cached_or_extract_fast_with_search_roots(manifest_dir, canonical_path, Some(registry_src_roots))
+    }
+
+    /// Share the fast cache-only extraction path while optionally constraining source resolution to sealed roots.
+    fn get_cached_or_extract_fast_with_search_roots(
+        &self,
+        manifest_dir: &Path,
+        canonical_path: &str,
+        registry_src_roots: Option<&[PathBuf]>,
+    ) -> Result<Option<CacheLookupHit>, RustMetadataError> {
         let root = manifest_dir.canonicalize()?;
         let timing_enabled = rust_inspect_timing_enabled();
         let key_item = (root.clone(), canonical_path.to_owned());
@@ -4689,7 +4761,7 @@ impl RustMetadataCache {
                 &mut inner,
                 &root,
                 candidate.as_str(),
-                None,
+                registry_src_roots,
                 &|_| (),
                 timing_enabled,
                 ExtractionPolicy::FastOnly,
@@ -4755,10 +4827,10 @@ impl RustMetadataCache {
         Ok(())
     }
 
-    /// Return metadata for tests that need custom registry source roots.
+    /// Return metadata whose source extraction uses only caller-authorized registry source roots.
     ///
-    /// Production callers should use `get_or_extract`; this hook lets tests use synthetic cargo registry directories.
-    #[doc(hidden)]
+    /// Prepared Oven consumers use this for a full identity query when their receipt-bound source authority supplies
+    /// the exact selected registry closure instead of Cargo's ambient cache.
     pub fn get_or_extract_with_registry_src_roots(
         &self,
         manifest_dir: &Path,

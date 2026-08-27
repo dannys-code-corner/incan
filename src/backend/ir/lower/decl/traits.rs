@@ -133,15 +133,13 @@ impl AstLowering {
                             &mut hidden_type_params,
                             &mut hidden_counter,
                         );
+                        let base_ty =
+                            self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty.node, base_ty);
                         let ty = Self::lower_param_container_type(p.node.kind, base_ty);
                         Ok(FunctionParam {
                             name: p.node.name.clone(),
                             ty,
-                            mutability: if p.node.is_mut {
-                                Mutability::Mutable
-                            } else {
-                                Mutability::Immutable
-                            },
+                            mutability: self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node),
                             is_self: false,
                             kind: p.node.kind,
                             default: self.lower_param_default_expr(p.node.default.as_ref())?,

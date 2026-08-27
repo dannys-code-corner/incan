@@ -496,12 +496,21 @@ impl TypeChecker {
                                         || (type_info.variants.is_empty() && args.is_empty()) =>
                                 {
                                     let error_count_before = self.errors.len();
-                                    let result = self.check_rust_named_field_constructor_call(
-                                        info.path.as_str(),
-                                        type_info,
-                                        args,
-                                        span,
-                                    );
+                                    let result = if type_info.fields.iter().all(|field| field.name.is_empty()) {
+                                        self.check_rust_tuple_struct_constructor_call(
+                                            info.path.as_str(),
+                                            type_info,
+                                            args,
+                                            span,
+                                        )
+                                    } else {
+                                        self.check_rust_named_field_constructor_call(
+                                            info.path.as_str(),
+                                            type_info,
+                                            args,
+                                            span,
+                                        )
+                                    };
                                     if self.errors.len() == error_count_before {
                                         self.record_expr_type(callee.span, ResolvedType::RustPath(info.path.clone()));
                                         self.type_info
@@ -2034,6 +2043,64 @@ impl TypeChecker {
         if !has_shape_error {
             self.type_info
                 .record_rust_named_field_constructor_fields(span, selected_fields);
+        }
+        ResolvedType::RustPath(path.to_string())
+    }
+
+    /// Type-check a positional imported Rust tuple-struct constructor using rust-inspect field metadata.
+    ///
+    /// Empty field labels are the shared metadata representation for tuple positions. Keeping that distinction in
+    /// metadata lets lowering emit `Type(value)` instead of incorrectly treating the type as an unconstructible
+    /// named-field record.
+    fn check_rust_tuple_struct_constructor_call(
+        &mut self,
+        path: &str,
+        type_info: &RustTypeInfo,
+        args: &[CallArg],
+        span: Span,
+    ) -> ResolvedType {
+        let mut has_shape_error = false;
+        let mut positional_index = 0usize;
+        let mut emitted_arity_error = false;
+
+        for arg in args {
+            match arg {
+                CallArg::Positional(expr) => {
+                    let Some(field) = type_info.fields.get(positional_index) else {
+                        self.check_expr(expr);
+                        if !emitted_arity_error {
+                            self.errors
+                                .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+                            emitted_arity_error = true;
+                        }
+                        has_shape_error = true;
+                        continue;
+                    };
+                    positional_index += 1;
+                    let arg_ty = self.check_rust_struct_field_expr(path, field, expr);
+                    self.validate_rust_boundary_value(path, field.type_display.as_str(), expr, &arg_ty, true);
+                }
+                CallArg::Named(_, expr) | CallArg::PositionalUnpack(expr) | CallArg::KeywordUnpack(expr) => {
+                    self.check_expr(expr);
+                    if !emitted_arity_error {
+                        self.errors
+                            .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+                        emitted_arity_error = true;
+                    }
+                    has_shape_error = true;
+                }
+            }
+        }
+
+        if positional_index != type_info.fields.len() && !emitted_arity_error {
+            self.errors
+                .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+            has_shape_error = true;
+        }
+
+        if !has_shape_error {
+            self.type_info
+                .record_rust_named_field_constructor_fields(span, vec![String::new(); type_info.fields.len()]);
         }
         ResolvedType::RustPath(path.to_string())
     }

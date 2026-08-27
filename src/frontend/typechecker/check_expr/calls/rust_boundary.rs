@@ -129,44 +129,59 @@ impl TypeChecker {
         self.prewarm_rust_type_identity_metadata(ty);
     }
 
-    /// Reuse Rust identity metadata for nominal paths nested inside Rust display types.
-    ///
-    /// rust-inspect can report public signatures such as `Arc<crate::Type>` while another API returns the same type
-    /// through its defining module, for example `Arc<crate::private::Type>`. The outer generic wrapper is not the
-    /// semantic identity; the nested Rust path is. Reading prepared metadata for those nested paths lets compatibility
-    /// use known definition aliases without doing hidden extraction from this hot path.
-    fn prewarm_rust_type_identity_metadata(&self, ty: &ResolvedType) {
+    /// Visit nominal Rust paths nested inside a resolved type with one metadata probe policy.
+    fn prewarm_rust_type_identity_metadata_with(&self, ty: &ResolvedType, probe: &impl Fn(&Self, &str)) {
         match ty {
             ResolvedType::RustPath(path) => {
                 let (base, args) = self.rust_path_base_and_args(path);
                 if Self::rust_identity_metadata_base_should_probe(base.as_str()) {
-                    let _ = self.rust_item_metadata_for_path(base.as_str());
+                    probe(self, base.as_str());
                 }
                 for arg in args {
-                    self.prewarm_rust_type_identity_metadata(&arg);
+                    self.prewarm_rust_type_identity_metadata_with(&arg, probe);
                 }
             }
-            ResolvedType::Ref(inner) | ResolvedType::RefMut(inner) => self.prewarm_rust_type_identity_metadata(inner),
+            ResolvedType::Ref(inner) | ResolvedType::RefMut(inner) => {
+                self.prewarm_rust_type_identity_metadata_with(inner, probe)
+            }
             ResolvedType::Generic(_, args) | ResolvedType::Tuple(args) => {
                 for arg in args {
-                    self.prewarm_rust_type_identity_metadata(arg);
+                    self.prewarm_rust_type_identity_metadata_with(arg, probe);
                 }
             }
             ResolvedType::FrozenList(inner) | ResolvedType::FrozenSet(inner) => {
-                self.prewarm_rust_type_identity_metadata(inner);
+                self.prewarm_rust_type_identity_metadata_with(inner, probe);
             }
             ResolvedType::FrozenDict(key, value) => {
-                self.prewarm_rust_type_identity_metadata(key);
-                self.prewarm_rust_type_identity_metadata(value);
+                self.prewarm_rust_type_identity_metadata_with(key, probe);
+                self.prewarm_rust_type_identity_metadata_with(value, probe);
             }
             ResolvedType::Function(params, ret) => {
                 for param in params {
-                    self.prewarm_rust_type_identity_metadata(&param.ty);
+                    self.prewarm_rust_type_identity_metadata_with(&param.ty, probe);
                 }
-                self.prewarm_rust_type_identity_metadata(ret);
+                self.prewarm_rust_type_identity_metadata_with(ret, probe);
             }
             _ => {}
         }
+    }
+
+    /// Reuse cache-only Rust identity metadata while checking ordinary compatibility.
+    fn prewarm_rust_type_identity_metadata(&self, ty: &ResolvedType) {
+        self.prewarm_rust_type_identity_metadata_with(ty, &|checker, path| {
+            let _ = checker.rust_item_metadata_for_path(path);
+        });
+    }
+
+    /// Prewarm Rust identity metadata for a type explicitly named by a Rust call boundary.
+    ///
+    /// The ordinary compatibility path must remain metadata-light, but a public Rust API can name a type that is
+    /// re-exported through macro-generated source. This permits blocking inspection on a cache miss and is invoked
+    /// only while validating an explicit call argument, never from [`Self::types_compatible`].
+    fn prewarm_rust_boundary_type_identity_metadata(&self, ty: &ResolvedType) {
+        self.prewarm_rust_type_identity_metadata_with(ty, &|checker, path| {
+            let _ = checker.rust_item_metadata_for_path_blocking(path);
+        });
     }
 
     /// Return whether cache-only identity prewarm should ask rust-inspect for this Rust display base.
@@ -621,7 +636,7 @@ impl TypeChecker {
         let target_ty =
             self.resolved_rust_boundary_target_from_param_display_for_owner_path(rust_type_display, owner_path);
         self.prewarm_rust_type_identity_metadata(arg_ty);
-        self.prewarm_rust_type_identity_metadata(&target_ty);
+        self.prewarm_rust_boundary_type_identity_metadata(&target_ty);
         match self.rust_arg_boundary_match(arg_ty, param_display.as_str()) {
             RustArgBoundaryMatch::Exact => {
                 if record_exact_builtin_coercion

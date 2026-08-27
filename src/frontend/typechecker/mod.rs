@@ -89,7 +89,9 @@ use crate::frontend::symbols::*;
 use crate::library_manifest::LibraryManifest;
 use crate::provider::ProviderPlan;
 #[cfg(feature = "rust_inspect")]
-use crate::rust_inspect::{Inspector, RustMetadataCache};
+use crate::rust_inspect::{
+    Inspector, OVEN_DIRECT_INSPECTION_AUTHORITY_FILE, RustMetadataCache, oven_inspection_registry_source_roots,
+};
 use helpers::{collection_name, collection_type_id, render_resolved_type_as_rust_arg, stringlike_type_id};
 use incan_core::interop::{
     RUST_NEVER_TYPE_DISPLAY, RustFunctionSig, RustItemKind, RustItemMetadata, RustParam, RustTypeShape,
@@ -478,6 +480,22 @@ pub struct TypeChecker {
     /// Manifest/workspace root used for rust-analyzer metadata extraction.
     #[cfg(feature = "rust_inspect")]
     pub(crate) rust_inspect_manifest_dir: Option<PathBuf>,
+    /// Receipt-bound Oven registry source authority available to fast identity preparation.
+    #[cfg(feature = "rust_inspect")]
+    pub(crate) rust_inspect_registry_source_authority: RustInspectRegistrySourceAuthority,
+}
+
+/// Fast Rust metadata lookup authority selected for the current compiler-owned inspection workspace.
+///
+/// A malformed authority must remain distinct from an ordinary Cargo-backed workspace: silently treating it as
+/// ambient would let host cache contents influence an Oven consumer's nominal Rust identity.
+#[cfg(feature = "rust_inspect")]
+#[derive(Debug, Clone, Default)]
+pub(crate) enum RustInspectRegistrySourceAuthority {
+    #[default]
+    Ambient,
+    Sealed(Vec<PathBuf>),
+    Invalid,
 }
 
 /// Dependency-owned registry contracts and their canonical source-module identity.
@@ -578,6 +596,8 @@ impl TypeChecker {
             rust_inspect_cache: RustMetadataCache::new(),
             #[cfg(feature = "rust_inspect")]
             rust_inspect_manifest_dir: None,
+            #[cfg(feature = "rust_inspect")]
+            rust_inspect_registry_source_authority: RustInspectRegistrySourceAuthority::default(),
         }
     }
 
@@ -669,6 +689,21 @@ impl TypeChecker {
     /// generated metadata workspace explicitly.
     #[cfg(feature = "rust_inspect")]
     pub fn set_rust_inspect_manifest_dir(&mut self, dir: PathBuf) {
+        let authority_path = dir.join(OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
+        self.rust_inspect_registry_source_authority = if !authority_path.is_file() {
+            RustInspectRegistrySourceAuthority::Ambient
+        } else {
+            match oven_inspection_registry_source_roots(&dir) {
+                Ok(roots) => RustInspectRegistrySourceAuthority::Sealed(roots),
+                Err(error) => {
+                    tracing::debug!(
+                        manifest_dir = %dir.display(),
+                        "sealed Oven registry source authority is invalid; fast Rust identity metadata will fail closed: {error}"
+                    );
+                    RustInspectRegistrySourceAuthority::Invalid
+                }
+            }
+        };
         self.rust_inspect_manifest_dir = Some(dir);
     }
 
@@ -681,13 +716,36 @@ impl TypeChecker {
             return Some(metadata);
         }
         let dir = self.rust_inspect_manifest_dir.as_ref()?;
-        if let Ok(Some(hit)) = self.rust_inspect_cache.get_cached(dir, lookup_path) {
-            return Some((*hit.metadata).clone());
+        match &self.rust_inspect_registry_source_authority {
+            RustInspectRegistrySourceAuthority::Invalid => {
+                tracing::debug!(
+                    manifest_dir = %dir.display(),
+                    "refusing fast Rust identity lookup because sealed Oven source authority is invalid"
+                );
+                return None;
+            }
+            RustInspectRegistrySourceAuthority::Ambient | RustInspectRegistrySourceAuthority::Sealed(_) => {
+                // Cached metadata is already associated with this manifest directory. Consult it before
+                // deciding whether this namespace is eligible for a new source extraction: standard-library
+                // paths, for example, intentionally remain cache-only.
+                if let Ok(Some(hit)) = self.rust_inspect_cache.get_cached(dir, lookup_path) {
+                    return Some((*hit.metadata).clone());
+                }
+            }
         }
         if !Self::rust_identity_metadata_base_should_probe(lookup_path) {
             return None;
         }
-        match self.rust_inspect_cache.get_cached_or_extract_fast(dir, lookup_path) {
+        let metadata = match &self.rust_inspect_registry_source_authority {
+            RustInspectRegistrySourceAuthority::Ambient => {
+                self.rust_inspect_cache.get_cached_or_extract_fast(dir, lookup_path)
+            }
+            RustInspectRegistrySourceAuthority::Sealed(roots) => self
+                .rust_inspect_cache
+                .get_cached_or_extract_fast_with_registry_src_roots(dir, lookup_path, roots.as_slice()),
+            RustInspectRegistrySourceAuthority::Invalid => unreachable!("invalid authority returned above"),
+        };
+        match metadata {
             Ok(Some(hit)) => Some((*hit.metadata).clone()),
             Err(err) => {
                 tracing::debug!(
@@ -713,6 +771,16 @@ impl TypeChecker {
             return Some(metadata);
         }
         let dir = self.rust_inspect_manifest_dir.as_ref()?;
+        if matches!(
+            self.rust_inspect_registry_source_authority,
+            RustInspectRegistrySourceAuthority::Invalid
+        ) {
+            tracing::debug!(
+                manifest_dir = %dir.display(),
+                "refusing blocking Rust identity lookup because sealed Oven source authority is invalid"
+            );
+            return None;
+        }
         match self.rust_inspect_cache.get_cached(dir, lookup_path) {
             Ok(Some(hit)) => return Some((*hit.metadata).clone()),
             Ok(None) => {}
@@ -733,17 +801,28 @@ impl TypeChecker {
         }
         match self.rust_inspect_cache.get_cached(dir, lookup_path) {
             Ok(Some(hit)) => Some((*hit.metadata).clone()),
-            Ok(None) => match self.rust_inspect_cache.get_or_extract(dir, lookup_path, &|_| ()) {
-                Ok(hit) => Some((*hit).clone()),
-                Err(err) => {
-                    tracing::debug!(
-                        "rust-inspect extraction failed for `{}` (query `{}`): {err}",
-                        canonical_path,
-                        lookup_path
-                    );
-                    None
+            Ok(None) => {
+                let extracted = match &self.rust_inspect_registry_source_authority {
+                    RustInspectRegistrySourceAuthority::Ambient => {
+                        self.rust_inspect_cache.get_or_extract(dir, lookup_path, &|_| ())
+                    }
+                    RustInspectRegistrySourceAuthority::Sealed(roots) => self
+                        .rust_inspect_cache
+                        .get_or_extract_with_registry_src_roots(dir, lookup_path, roots.as_slice(), &|_| ()),
+                    RustInspectRegistrySourceAuthority::Invalid => unreachable!("invalid authority returned above"),
+                };
+                match extracted {
+                    Ok(hit) => Some((*hit).clone()),
+                    Err(err) => {
+                        tracing::debug!(
+                            "rust-inspect extraction failed for `{}` (query `{}`): {err}",
+                            canonical_path,
+                            lookup_path
+                        );
+                        None
+                    }
                 }
-            },
+            }
             Err(err) => {
                 tracing::debug!(
                     "rust-inspect cache lookup failed for `{}` (query `{}`): {err}",

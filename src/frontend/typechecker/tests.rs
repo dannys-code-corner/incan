@@ -1609,6 +1609,213 @@ def main() -> None:
 }
 
 #[test]
+fn exact_width_float_arithmetic_preserves_f32_results_issue1219() -> Result<(), String> {
+    let source = r#"
+def subtract(left: f32, right: f32) -> f32:
+  return left - right
+
+def scale(time: f32, velocity: f32) -> f32:
+  return time * velocity
+
+def negate(value: f32) -> f32:
+  return -value
+
+def main() -> None:
+  zero: f32 = 0.0
+  speed: f32 = 120.0
+  left: f32 = zero - speed
+  negative: f32 = -speed
+  print(left)
+  print(negative)
+"#;
+    check_str(source).map_err(|errors| format!("expected f32 arithmetic to preserve f32, got: {errors:?}"))
+}
+
+#[test]
+fn exact_width_float_const_literals_preserve_f32_results_issue1219() -> Result<(), String> {
+    let source = r#"
+const WALK_SPEED: f32 = 120.0
+const WALK_LIMIT: f32 = 280.0
+
+def distance(time: f32) -> f32:
+  return WALK_SPEED * time - WALK_LIMIT
+"#;
+    check_str(source).map_err(|errors| format!("expected f32 const literals to preserve f32, got: {errors:?}"))
+}
+
+#[test]
+fn exact_width_float_const_literals_reject_out_of_range_f32_issue1219() {
+    let source = r#"
+const TOO_LARGE: f32 = 1e100
+"#;
+    let errors = check_str_err(source, "expected out-of-range f32 const literal to fail");
+    assert!(
+        errors.iter().any(|error| error.message.contains("does not fit in f32")),
+        "expected an f32 range diagnostic, got: {errors:?}"
+    );
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn invalid_sealed_oven_authority_refuses_cached_or_ambient_identity_lookup() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    fs::write(
+        manifest_dir.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_AUTHORITY_FILE),
+        "{ not valid json",
+    )?;
+
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    assert!(matches!(
+        checker.rust_inspect_registry_source_authority,
+        RustInspectRegistrySourceAuthority::Invalid
+    ));
+    checker.rust_inspect_cache.insert_test_item(
+        &manifest_dir,
+        RustItemMetadata {
+            canonical_path: "demo::Thing".to_string(),
+            definition_path: Some("demo::Thing".to_string()),
+            visibility: RustVisibility::Public,
+            kind: RustItemKind::Type(RustTypeInfo {
+                type_params: Vec::new(),
+                has_const_params: false,
+                alias_target: None,
+                metadata_completeness: Default::default(),
+                methods: Vec::new(),
+                implemented_traits: Vec::new(),
+                fields: Vec::new(),
+                variants: Vec::new(),
+            }),
+        },
+    )?;
+
+    assert!(checker.rust_item_metadata_for_path("demo::Thing").is_none());
+    assert!(checker.rust_item_metadata_for_path_blocking("demo::Thing").is_none());
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn sealed_rust_reexport_identity_crosses_the_call_boundary_without_accepting_distinct_types()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("probe");
+    let facade = tmp.path().join("facade-0.1.0");
+    let inner = tmp.path().join("inner-0.1.0");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(facade.join("src"))?;
+    fs::create_dir_all(inner.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "sealed_identity_probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+facade = "0.1.0"
+"#,
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn probe() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        r#"version = 3
+
+[[package]]
+name = "sealed_identity_probe"
+version = "0.1.0"
+dependencies = ["facade 0.1.0"]
+
+[[package]]
+name = "facade"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "facade-checksum"
+dependencies = ["inner 0.1.0"]
+
+[[package]]
+name = "inner"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "inner-checksum"
+"#,
+    )?;
+    fs::write(
+        facade.join("Cargo.toml"),
+        r#"[package]
+name = "facade"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+inner = "0.1.0"
+"#,
+    )?;
+    fs::write(
+        facade.join("src/lib.rs"),
+        "pub use inner::Vec2;\npub struct Other;\npub fn consume(_value: Vec2) {}\n",
+    )?;
+    fs::write(
+        inner.join("Cargo.toml"),
+        r#"[package]
+name = "inner"
+version = "0.1.0"
+edition = "2021"
+"#,
+    )?;
+    fs::write(inner.join("src/lib.rs"), "pub struct Vec2;\n")?;
+    fs::write(
+        root.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER),
+        "sealed\n",
+    )?;
+    let authority = format!(
+        r#"{{"schema_version":2,"source_validation":"sealed_oven_selection","sources":[{{"package":"facade","version":"0.1.0","registry":"registry+https://github.com/rust-lang/crates.io-index","checksum":"facade-checksum","features":[],"source_root":{},"source_digest":"sha256:facade"}},{{"package":"inner","version":"0.1.0","registry":"registry+https://github.com/rust-lang/crates.io-index","checksum":"inner-checksum","features":[],"source_root":{},"source_digest":"sha256:inner"}}]}}"#,
+        serde_json::to_string(&facade)?,
+        serde_json::to_string(&inner)?,
+    );
+    fs::write(
+        root.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_AUTHORITY_FILE),
+        authority,
+    )?;
+
+    let accepted = r#"
+from rust::facade import Vec2, consume
+
+def pass_value(value: Vec2) -> None:
+  consume(value)
+"#;
+    let accepted_tokens = lexer::lex(accepted).map_err(|errors| format!("accepted lex failed: {errors:?}"))?;
+    let accepted_ast =
+        parser::parse(&accepted_tokens).map_err(|errors| format!("accepted parse failed: {errors:?}"))?;
+    let mut accepted_checker = TypeChecker::new();
+    accepted_checker.set_rust_inspect_manifest_dir(root.clone());
+    accepted_checker
+        .check_program(&accepted_ast)
+        .map_err(|errors| format!("facade Vec2 should satisfy inner Vec2 boundary: {errors:?}"))?;
+
+    let rejected = r#"
+from rust::facade import Other, consume
+
+def reject_value(value: Other) -> None:
+  consume(value)
+"#;
+    let rejected_tokens = lexer::lex(rejected).map_err(|errors| format!("rejected lex failed: {errors:?}"))?;
+    let rejected_ast =
+        parser::parse(&rejected_tokens).map_err(|errors| format!("rejected parse failed: {errors:?}"))?;
+    let mut rejected_checker = TypeChecker::new();
+    rejected_checker.set_rust_inspect_manifest_dir(root);
+    let errors = rejected_checker.check_program(&rejected_ast).err().ok_or_else(|| {
+        std::io::Error::other("a distinct Rust nominal type must not satisfy the facade Vec2 boundary")
+    })?;
+    assert!(
+        errors.iter().any(|error| error.message.contains("Type mismatch")),
+        "expected a Rust boundary mismatch for facade::Other, got {errors:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn rfc009_decimal_annotation_accepts_decimal_literal() -> Result<(), String> {
     let source = r#"
 def main() -> None:

@@ -23,6 +23,19 @@ fn normalize_crate_name(name: &str) -> String {
     name.replace('-', "_")
 }
 
+/// Return whether one exact source directory is the registry package selected by a lock entry.
+///
+/// Cargo's conventional registry layout nests package directories below an index directory. Oven keeps the same
+/// sealed sources as individually addressed roots instead, so support both layouts without ever searching ambient
+/// sources when a caller supplies an explicit authority list.
+fn exact_registry_package_dir(root: &Path, package: &str, version: &str) -> Option<PathBuf> {
+    let manifest_path = root.join("Cargo.toml");
+    let manifest = toml::from_str::<toml::Value>(fs::read_to_string(manifest_path).ok()?.as_str()).ok()?;
+    let manifest_package = manifest.get("package")?.get("name")?.as_str()?;
+    let manifest_version = manifest.get("package")?.get("version")?.as_str()?;
+    (manifest_package == package && manifest_version == version).then(|| root.to_path_buf())
+}
+
 /// Return the first path segment that identifies the crate for a canonical path.
 pub(crate) fn crate_name_for_path(canonical_path: &str) -> &str {
     canonical_path.split("::").next().unwrap_or(canonical_path)
@@ -225,6 +238,9 @@ pub(crate) fn dependency_manifest_dir_from_lock_with_search_roots(
         }
         let dir_name = format!("{}-{}", pkg.name, pkg.version);
         for root in registry_src_roots {
+            if let Some(candidate) = exact_registry_package_dir(root, pkg.name.as_str(), pkg.version.as_str()) {
+                return Some(candidate);
+            }
             let Ok(entries) = fs::read_dir(root) else {
                 continue;
             };

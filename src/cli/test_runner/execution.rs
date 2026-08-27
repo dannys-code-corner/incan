@@ -1237,6 +1237,7 @@ fn builtin_fixture_arg(
     index: usize,
     setup: &mut String,
     created_builtins: &mut HashSet<String>,
+    owned_builtin_consumers: &mut HashMap<String, usize>,
 ) -> Option<String> {
     let safe_name: String = name
         .chars()
@@ -1270,12 +1271,16 @@ fn builtin_fixture_arg(
             Some(format!("{ident}.clone()"))
         }
         "env" => {
-            if created_builtins.insert(name.to_string()) {
-                setup.push_str(&format!(
-                    "        let mut {ident} = incan_stdlib::testing::TestEnv::new();\n"
-                ));
-            }
-            Some(format!("&mut {ident}"))
+            // A mutable direct Rust parameter retains its owned ABI (`mut env: TestEnv`). Each consumer receives an
+            // independently named helper: the runner may inject `env` into an autouse fixture and the test itself,
+            // and an owned `TestEnv` cannot be moved into both calls.
+            let consumer = owned_builtin_consumers.entry(name.to_string()).or_default();
+            let owned_ident = format!("{ident}_{consumer}");
+            *consumer += 1;
+            setup.push_str(&format!(
+                "        let mut {owned_ident} = incan_stdlib::testing::TestEnv::new();\n"
+            ));
+            Some(owned_ident)
         }
         _ => None,
     }
@@ -1454,6 +1459,7 @@ struct FixtureArgRender<'a> {
     setup: &'a mut String,
     fixtures: &'a HashMap<String, FixtureExecutionInfo>,
     created_builtins: &'a mut HashSet<String>,
+    owned_builtin_consumers: &'a mut HashMap<String, usize>,
     teardown_steps: &'a mut Vec<String>,
     session_cache_module: Option<&'a str>,
 }
@@ -1461,7 +1467,13 @@ struct FixtureArgRender<'a> {
 impl FixtureArgRender<'_> {
     /// Generate an expression that calls a fixture, recursively filling fixture dependencies.
     fn arg(&mut self, name: &str, index: usize, visiting: &mut Vec<String>) -> String {
-        if let Some(expr) = builtin_fixture_arg(name, index, self.setup, self.created_builtins) {
+        if let Some(expr) = builtin_fixture_arg(
+            name,
+            index,
+            self.setup,
+            self.created_builtins,
+            self.owned_builtin_consumers,
+        ) {
             return expr;
         }
 
@@ -1572,6 +1584,7 @@ fn harness_call(
     let mut teardown_steps = Vec::new();
     let mut used_fixtures = HashSet::new();
     let mut created_builtins = HashSet::new();
+    let mut owned_builtin_consumers = HashMap::new();
     let parametrize = test.parametrize_call.as_ref();
 
     {
@@ -1579,6 +1592,7 @@ fn harness_call(
             setup: &mut setup,
             fixtures,
             created_builtins: &mut created_builtins,
+            owned_builtin_consumers: &mut owned_builtin_consumers,
             teardown_steps: &mut teardown_steps,
             session_cache_module,
         };
@@ -2417,6 +2431,9 @@ fn run_file_tests_batch_oven(
 
     let generation_start = Instant::now();
     let mut codegen = IrCodegen::new();
+    if let Some(manifest) = manifest.as_ref() {
+        codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
+    }
     #[cfg(feature = "rust_inspect")]
     if let Some(workspace) = rust_inspect_manifest_dir.as_ref() {
         codegen.set_rust_inspect_manifest_dir(workspace.manifest_dir().to_path_buf());
