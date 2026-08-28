@@ -3127,7 +3127,7 @@ mod tests {
     }
 
     #[test]
-    fn qualified_rust_receiver_does_not_inherit_same_named_incan_method_signature() {
+    fn qualified_rust_receiver_does_not_inherit_same_named_incan_method_signature() -> Result<(), String> {
         let registry = FunctionRegistry::new();
         let mut emitter = IrEmitter::new(&registry);
         emitter.method_signatures.insert(
@@ -3207,42 +3207,37 @@ mod tests {
             }],
             return_type: IrType::Unit,
         };
+        let direct_alias_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("App".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a direct Rust import alias receiver should produce a call signature")?;
         assert!(
-            emitter
-                .method_call_signature_for_receiver(
-                    &IrType::Struct("App".to_string()),
-                    Some(&signature_with_source_default),
-                )
-                .expect("call signature")
-                .params[0]
-                .default
-                .is_none(),
+            direct_alias_signature.params[0].default.is_none(),
             "a direct Rust import alias must not retain source-language defaults"
         );
+        let qualified_chain_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("std::web::App".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a source-qualified call-chain receiver should produce a call signature")?;
         assert!(
-            emitter
-                .method_call_signature_for_receiver(
-                    &IrType::Struct("std::web::App".to_string()),
-                    Some(&signature_with_source_default),
-                )
-                .expect("call signature")
-                .params[0]
-                .default
-                .is_none(),
+            qualified_chain_signature.params[0].default.is_none(),
             "a call-chain receiver retaining a source-qualified spelling must still respect its Rust import alias"
         );
+        let newtype_carrier_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("RustJsonValue".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a source newtype carrier receiver should produce a call signature")?;
         assert!(
-            emitter
-                .method_call_signature_for_receiver(
-                    &IrType::Struct("RustJsonValue".to_string()),
-                    Some(&signature_with_source_default),
-                )
-                .expect("call signature")
-                .params[0]
-                .default
-                .is_some(),
+            newtype_carrier_signature.params[0].default.is_some(),
             "a source newtype carrier retains its source-owned defaults"
         );
+        Ok(())
     }
 
     fn checked_source_class(
