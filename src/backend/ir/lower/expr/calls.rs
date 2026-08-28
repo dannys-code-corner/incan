@@ -1451,6 +1451,7 @@ impl AstLowering {
                     IrExprKind::Struct {
                         name: step.newtype_name,
                         fields: vec![(String::new(), expr)],
+                        fill_defaults: false,
                     },
                     struct_ty,
                 )
@@ -1609,6 +1610,7 @@ impl AstLowering {
             IrExprKind::Struct {
                 name: name.to_string(),
                 fields: vec![(String::new(), value_ref())],
+                fill_defaults: false,
             },
             struct_ty.clone(),
         );
@@ -1870,6 +1872,7 @@ impl AstLowering {
                 IrExprKind::Struct {
                     name: name.to_string(),
                     fields: vec![(String::new(), lowered_value)],
+                    fill_defaults: false,
                 },
                 struct_ty.clone(),
             ),
@@ -1903,6 +1906,7 @@ impl AstLowering {
                 IrExprKind::Struct {
                     name: name.to_string(),
                     fields: vec![(String::new(), lowered_value)],
+                    fill_defaults: false,
                 },
                 struct_ty.clone(),
             ),
@@ -2395,6 +2399,7 @@ impl AstLowering {
                     IrExprKind::Struct {
                         name: name.to_string(),
                         fields,
+                        fill_defaults: false,
                     },
                     struct_ty.clone(),
                 ))),
@@ -2847,6 +2852,10 @@ impl AstLowering {
                 .and_then(|info| info.rust_named_field_constructor_fields(call_span))
                 .map(|fields| fields.to_vec())
             {
+                let fill_defaults = self
+                    .type_info
+                    .as_ref()
+                    .is_some_and(|info| info.rust_named_field_constructor_fills_defaults(call_span));
                 let lowered_args = self.lower_call_args(args)?;
                 let fields = field_names
                     .into_iter()
@@ -2867,6 +2876,7 @@ impl AstLowering {
                     IrExprKind::Struct {
                         name: name.clone(),
                         fields,
+                        fill_defaults,
                     },
                     expr_ty,
                 ));
@@ -3278,6 +3288,7 @@ impl AstLowering {
                     IrExprKind::Struct {
                         name: name.clone(),
                         fields,
+                        fill_defaults: false,
                     },
                     IrType::Struct(name.clone()),
                 ))
@@ -3443,6 +3454,7 @@ impl AstLowering {
             IrExprKind::Struct {
                 name: name.to_string(),
                 fields,
+                fill_defaults: false,
             },
             struct_ty,
         ))
@@ -4221,6 +4233,7 @@ mod tests {
             ResolvedType::RustPath("demo::FunctionOption".to_string()),
         );
         type_info.record_rust_named_field_constructor_fields(call_span, vec!["name".to_string()]);
+        type_info.record_rust_named_field_constructor_fills_defaults(call_span);
         type_info.rust.arg_coercions.insert(
             (arg_span.start, arg_span.end),
             RustArgCoercionInfo {
@@ -4245,7 +4258,13 @@ mod tests {
             .map_err(|err| format!("expected successful lowering, got {err:?}"))?;
 
         match lowered.kind {
-            IrExprKind::Struct { fields, .. } => {
+            IrExprKind::Struct {
+                fields, fill_defaults, ..
+            } => {
+                assert!(
+                    fill_defaults,
+                    "expected the checked Default fill decision to survive lowering"
+                );
                 let Some((field_name, field_expr)) = fields.first() else {
                     return Err("expected one lowered Rust constructor field".to_string());
                 };

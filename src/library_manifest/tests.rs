@@ -684,6 +684,9 @@ fn manifest_io_round_trip_preserves_rust_abi_metadata() -> Result<(), Box<dyn st
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),

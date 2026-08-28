@@ -1679,6 +1679,9 @@ fn invalid_sealed_oven_authority_refuses_cached_or_ambient_identity_lookup() -> 
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -5156,6 +5159,9 @@ fn test_rust_item_metadata_lookup_reuses_cached_nominal_item_for_instantiated_ru
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5252,6 +5258,9 @@ fn test_types_compatible_accepts_rust_alias_definition_without_metadata_lookup()
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5293,6 +5302,9 @@ fn test_types_compatible_accepts_rust_path_alias_with_attached_definition_metada
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5315,6 +5327,98 @@ fn test_types_compatible_accepts_rust_path_alias_with_attached_definition_metada
     assert!(
         checker.types_compatible(&actual, &expected),
         "RustPath aliases should reuse attached import metadata instead of forcing external metadata lookup"
+    );
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn test_types_compatible_accepts_reexported_rust_types_with_expanded_default_arguments() {
+    let mut checker = TypeChecker::new();
+    let mut define_rust_type = |name: &str,
+                                path: &str,
+                                definition_path: &str,
+                                type_params: Vec<String>,
+                                type_param_defaults: Vec<Option<String>>| {
+        checker.symbols.define(Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::RustItem(RustItemInfo {
+                crate_name: path.split("::").next().unwrap_or_default().to_string(),
+                path: path.to_string(),
+                binding: RustImportBindingKind::FromImport,
+                metadata: Some(RustItemMetadata {
+                    canonical_path: path.to_string(),
+                    definition_path: Some(definition_path.to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params,
+                        type_param_defaults,
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        fields: Vec::new(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                }),
+            }),
+            span: Span::default(),
+            scope: 0,
+        });
+    };
+    define_rust_type(
+        "RustNamedTemporaryFile",
+        "tempfile::NamedTempFile",
+        "tempfile::file::NamedTempFile",
+        vec!["F".to_string()],
+        vec![Some("std::fs::File".to_string())],
+    );
+    define_rust_type(
+        "RustTemporaryDirectory",
+        "tempfile::TempDir",
+        "tempfile::dir::TempDir",
+        Vec::new(),
+        Vec::new(),
+    );
+    define_rust_type(
+        "RustIoError",
+        "std::io::Error",
+        "core::io::error::Error",
+        Vec::new(),
+        Vec::new(),
+    );
+
+    let expected_file = ResolvedType::Generic(
+        collection_name(CollectionTypeId::Result).to_string(),
+        vec![
+            ResolvedType::Named("RustNamedTemporaryFile".to_string()),
+            ResolvedType::Named("RustIoError".to_string()),
+        ],
+    );
+    let actual_file = checker.resolved_type_from_rust_display(
+        "Result<tempfile::file::NamedTempFile<std::fs::File>, core::io::error::Error>",
+    );
+    let file_matches = checker.types_compatible(&actual_file, &expected_file);
+
+    let expected_directory = ResolvedType::Generic(
+        collection_name(CollectionTypeId::Result).to_string(),
+        vec![
+            ResolvedType::Named("RustTemporaryDirectory".to_string()),
+            ResolvedType::Named("RustIoError".to_string()),
+        ],
+    );
+    let actual_directory =
+        checker.resolved_type_from_rust_display("Result<tempfile::dir::TempDir, core::io::error::Error>");
+    let directory_matches = checker.types_compatible(&actual_directory, &expected_directory);
+    assert!(
+        file_matches,
+        "a public Rust type with an omitted default parameter must match its expanded defining type; non-generic re-export match = {directory_matches}"
+    );
+    assert!(
+        directory_matches,
+        "non-generic public Rust re-exports must match the same defining types"
     );
 }
 
@@ -5531,6 +5635,9 @@ def f() -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5561,6 +5668,9 @@ def f() -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5647,6 +5757,9 @@ def f(holder: Holder) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5678,6 +5791,9 @@ def f(holder: Holder) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5766,6 +5882,9 @@ def f() -> FunctionOption:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5799,6 +5918,90 @@ def f() -> FunctionOption:
     Ok(())
 }
 
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn imported_rust_named_constructor_fills_omitted_fields_only_with_proven_default()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import DefaultRecord, RequiredRecord
+
+def accepted() -> DefaultRecord:
+  return DefaultRecord(name="kept")
+
+def rejected() -> RequiredRecord:
+  return RequiredRecord(name="kept")
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    for (name, has_default) in [("DefaultRecord", true), ("RequiredRecord", false)] {
+        checker.rust_inspect_cache.insert_test_item(
+            &manifest_dir,
+            RustItemMetadata {
+                canonical_path: format!("demo::{name}"),
+                definition_path: Some(format!("demo::{name}")),
+                visibility: RustVisibility::Public,
+                kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
+                    has_const_params: false,
+                    alias_target: None,
+                    metadata_completeness: Default::default(),
+                    methods: Vec::new(),
+                    implemented_traits: has_default
+                        .then(|| RustImplementedTrait {
+                            path: "core::default::Default".to_string(),
+                            mutable_reference: false,
+                        })
+                        .into_iter()
+                        .collect(),
+                    fields: vec![
+                        RustFieldInfo {
+                            name: "name".to_string(),
+                            type_display: "String".to_string(),
+                            type_shape: RustTypeShape::Str,
+                        },
+                        RustFieldInfo {
+                            name: "count".to_string(),
+                            type_display: "u32".to_string(),
+                            type_shape: RustTypeShape::Int,
+                        },
+                    ],
+                    variants: Vec::new(),
+                }),
+            },
+        )?;
+    }
+
+    let errors = checker
+        .check_program(&ast)
+        .expect_err("the non-Default Rust record must still reject an omitted field");
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|error| error.message.contains("Missing required field 'count'"))
+            .count(),
+        1,
+        "only the non-Default record should reject its omitted field: {errors:?}"
+    );
+    let call_start = source
+        .find("DefaultRecord(name=\"kept\")")
+        .ok_or_else(|| std::io::Error::other("expected DefaultRecord call"))?;
+    let call_span = Span::new(call_start, call_start + "DefaultRecord(name=\"kept\")".len());
+    assert!(
+        checker
+            .type_info()
+            .rust_named_field_constructor_fills_defaults(call_span),
+        "the metadata-proven Default constructor must retain its fill decision for lowering"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_imported_rust_named_constructor_resolves_bare_field_display_through_alias()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -5825,6 +6028,9 @@ def f(payload: DemoPayload) -> Container:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -5853,6 +6059,9 @@ def f(payload: DemoPayload) -> Container:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6035,6 +6244,9 @@ def render[T](value: Label[T]) -> str:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6095,6 +6307,9 @@ fn seed_async_rust_method_probe_with_options_param(
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -6151,6 +6366,9 @@ fn seed_async_rust_method_probe_with_options_param(
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -6327,6 +6545,9 @@ def render(value: Label) -> str:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6416,6 +6637,9 @@ def f(x: Envelope) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6444,6 +6668,9 @@ def f(x: Envelope) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6496,6 +6723,9 @@ def f(x: Envelope) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6524,6 +6754,9 @@ def f(x: Envelope) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6579,6 +6812,9 @@ def inspect(rel: Rel) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6607,6 +6843,9 @@ def inspect(rel: Rel) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6634,6 +6873,9 @@ def inspect(rel: Rel) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -6662,6 +6904,9 @@ def inspect(rel: Rel) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -11142,6 +11387,7 @@ def f(w: Widget) -> None:
                                 is_unsafe: false,
                             },
                         }],
+                        derive_macro: None,
                     }),
                 },
             )
@@ -11157,12 +11403,16 @@ def f(w: Widget) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
                     implemented_traits: vec![RustImplementedTrait {
                         path: "demo::AlphaRender".to_string(),
+                        mutable_reference: false,
                     }],
                     fields: Vec::new(),
                     variants: Vec::new(),
@@ -11223,6 +11473,7 @@ def open(device: Device) -> None:
                         is_unsafe: false,
                     },
                 }],
+                derive_macro: None,
             }),
         },
     )?;
@@ -11234,12 +11485,16 @@ def open(device: Device) -> None:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
                 methods: Vec::new(),
                 implemented_traits: vec![RustImplementedTrait {
                     path: "demo::DeviceTrait".to_string(),
+                    mutable_reference: false,
                 }],
                 fields: Vec::new(),
                 variants: Vec::new(),
@@ -11296,6 +11551,7 @@ def f(encoded: bytes) -> None:
                             is_unsafe: false,
                         },
                     }],
+                    derive_macro: None,
                 }),
             },
         )
@@ -11311,12 +11567,16 @@ def f(encoded: bytes) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
                     implemented_traits: vec![RustImplementedTrait {
                         path: "demo::Message".to_string(),
+                        mutable_reference: false,
                     }],
                     fields: Vec::new(),
                     variants: Vec::new(),
@@ -11409,6 +11669,7 @@ def f(encoded: bytes) -> None:
                             is_unsafe: false,
                         },
                     }],
+                    derive_macro: None,
                 }),
             },
         )
@@ -11423,6 +11684,9 @@ def f(encoded: bytes) -> None:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
@@ -11482,6 +11746,123 @@ def f(encoded: bytes) -> None:
 
 #[cfg(feature = "rust_inspect")]
 #[test]
+fn rust_trait_associated_call_uses_callable_shape_from_dependency_namespace_source()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::prost import Message
+from rust::prost_types import FileDescriptorSet, ProducerPlan
+
+def main() -> None:
+  producer = ProducerPlan.new()
+  encoded = producer.encode_to_vec()
+  match FileDescriptorSet.decode(encoded):
+    Ok(_) => println("ok")
+    Err(_) => println("err")
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let prost = tmp.path().join("prost");
+    let prost_types = tmp.path().join("prost-types");
+    for dir in [&root, &prost, &prost_types] {
+        std::fs::create_dir_all(dir.join("src"))?;
+    }
+    std::fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = { path = "../prost" }
+prost_types = { package = "prost-types", path = "../prost-types" }
+"#,
+    )?;
+    std::fs::write(root.join("src/main.rs"), "fn main() {}\n")?;
+    std::fs::write(
+        prost.join("Cargo.toml"),
+        "[package]\nname = \"prost\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    std::fs::write(
+        prost.join("src/lib.rs"),
+        r#"pub trait Buf {}
+
+pub struct DecodeError;
+
+pub trait Message: Sized {
+    fn decode(buf: impl Buf) -> Result<Self, DecodeError>;
+}
+"#,
+    )?;
+    std::fs::write(
+        prost_types.join("Cargo.toml"),
+        r#"[package]
+name = "prost-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = { path = "../prost" }
+"#,
+    )?;
+    std::fs::write(
+        prost_types.join("src/lib.rs"),
+        r#"pub struct ProducerPlan;
+
+impl ProducerPlan {
+    pub fn new() -> Self {
+        Self
+    }
+
+    pub fn encode_to_vec(&self) -> Vec<u8> {
+        Vec::new()
+    }
+}
+
+pub struct FileDescriptorSet;
+"#,
+    )?;
+
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(root.clone());
+    checker
+        .check_program(&ast)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+    let call_start = source
+        .find("FileDescriptorSet.decode(encoded)")
+        .ok_or_else(|| std::io::Error::other("test source should contain decode call"))?;
+    let call_span = crate::frontend::ast::Span::new(call_start, call_start + "FileDescriptorSet.decode(encoded)".len());
+    let params = checker
+        .type_info()
+        .call_site_callable_params(call_span)
+        .ok_or_else(|| std::io::Error::other("source-extracted decode call should record params"))?;
+    assert_eq!(params.len(), 1);
+    assert_eq!(params[0].ty, ResolvedType::TypeVar("implBuf".to_string()));
+    let encoded_arg_start = source
+        .rfind("encoded)")
+        .ok_or_else(|| std::io::Error::other("test source should contain encoded argument"))?;
+    let encoded_arg_span = crate::frontend::ast::Span::new(encoded_arg_start, encoded_arg_start + "encoded".len());
+    assert_eq!(
+        checker.type_info().expr_type(encoded_arg_span),
+        Some(&ResolvedType::Bytes)
+    );
+    let mut codegen = crate::backend::ir::IrCodegen::new();
+    codegen.set_rust_inspect_manifest_dir(root);
+    codegen.set_prechecked_type_info(checker.type_info().clone(), HashMap::new());
+    let generated = codegen
+        .try_generate(&ast)
+        .map_err(|error| std::io::Error::other(format!("codegen failed: {error:?}")))?;
+    assert!(
+        generated.contains("FileDescriptorSet::decode((encoded).as_slice())"),
+        "source-extracted Buf metadata should adapt owned bytes; got:\n{generated}"
+    );
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
 fn test_rust_trait_method_unbound_generic_return_stays_unknown_for_source_typing()
 -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
@@ -11530,6 +11911,7 @@ def choose(rng: ThreadRng, items: List[str]) -> str:
                             is_unsafe: false,
                         },
                     }],
+                    derive_macro: None,
                 }),
             },
         )
@@ -11544,12 +11926,16 @@ def choose(rng: ThreadRng, items: List[str]) -> str:
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: Vec::new(),
                     implemented_traits: vec![RustImplementedTrait {
                         path: "demo::Rng".to_string(),
+                        mutable_reference: false,
                     }],
                     fields: Vec::new(),
                     variants: Vec::new(),
@@ -11598,7 +11984,10 @@ type Thing = rusttype RustThing with Labelled
                 canonical_path: "demo::Labelled".to_string(),
                 definition_path: Some("demo::Labelled".to_string()),
                 visibility: RustVisibility::Public,
-                kind: RustItemKind::Trait(RustTraitInfo { items: vec![] }),
+                kind: RustItemKind::Trait(RustTraitInfo {
+                    items: vec![],
+                    derive_macro: None,
+                }),
             },
         )
         .map_err(|err| std::io::Error::other(format!("seed trait metadata: {err}")))?;
@@ -11612,12 +12001,16 @@ type Thing = rusttype RustThing with Labelled
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),
                     methods: vec![],
                     implemented_traits: vec![RustImplementedTrait {
                         path: "demo::Labelled".to_string(),
+                        mutable_reference: false,
                     }],
                     fields: vec![],
                     variants: vec![],
@@ -11679,6 +12072,7 @@ type Items = newtype int with Iterable
                     items: vec![RustTraitAssoc::TypeAlias {
                         name: "Item".to_string(),
                     }],
+                    derive_macro: None,
                 }),
             },
         )
@@ -19916,6 +20310,9 @@ def complete(device: Device) -> None:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -19978,6 +20375,9 @@ def run(device: Device) -> None:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -20048,6 +20448,9 @@ def direct_contextual() -> Factory[f32]:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -20096,6 +20499,9 @@ def invalid() -> Factory[f32]:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -20163,6 +20569,9 @@ def parameter_context() -> None:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string(), "U".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -20259,6 +20668,9 @@ fn receiver_factory_manifest(library_name: &str, value_type: &str) -> LibraryMan
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
             type_params: vec!["T".to_string(), "U".to_string()],
+            type_param_defaults: Vec::new(),
+            mutable_reference_type_params: Vec::new(),
+            expanded_derive_traits: Vec::new(),
             has_const_params: false,
             alias_target: None,
             metadata_completeness: Default::default(),
@@ -20383,6 +20795,9 @@ def invalid() -> Factory[i64]:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -20444,6 +20859,9 @@ def contextual() -> Factory[f32]:
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: vec!["T".to_string()],
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: true,
                 alias_target: None,
                 metadata_completeness: Default::default(),

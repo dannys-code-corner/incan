@@ -2385,6 +2385,7 @@ fn run_file_tests_batch_oven(
                 .join(&dir_suffix)
                 .join("oven/rust-inspect"),
             rust_inspect_query_paths: &metadata_query_paths,
+            rust_derive_probe_paths: &common::collect_rust_inspect_derive_probe_paths(&dependency_modules),
             prepare_when_empty: false,
             direct_oven_inspection: true,
             force_direct_prewarm: false,
@@ -2431,9 +2432,6 @@ fn run_file_tests_batch_oven(
 
     let generation_start = Instant::now();
     let mut codegen = IrCodegen::new();
-    if let Some(manifest) = manifest.as_ref() {
-        codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
-    }
     #[cfg(feature = "rust_inspect")]
     if let Some(workspace) = rust_inspect_manifest_dir.as_ref() {
         codegen.set_rust_inspect_manifest_dir(workspace.manifest_dir().to_path_buf());

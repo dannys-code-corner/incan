@@ -828,7 +828,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
                     self.scan_expr(item);
                 }
             }
-            IrExprKind::Struct { name, fields } => {
+            IrExprKind::Struct { name, fields, .. } => {
                 self.mark_reachable_item(name);
                 for (_, expr) in fields {
                     self.scan_expr(expr);

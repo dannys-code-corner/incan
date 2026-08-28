@@ -323,65 +323,6 @@ pub struct IncanToolSection {
     /// RFC 048 checked metadata configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetadataToolSection>,
-    /// Explicit Rust interop projections that cannot be recovered from Rust item metadata alone.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub interop: Option<RustInteropToolSection>,
-}
-
-/// Project-declared Rust type argument projections.
-///
-/// Rust metadata records generic arity but not the ownership shape required by every foreign generic parameter. A
-/// project can therefore declare an exact `rust::` import projection without teaching the compiler about a particular
-/// crate or type name.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct RustInteropToolSection {
-    /// Explicit projections for generic arguments of imported Rust types.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub type_argument_projections: Vec<RustTypeArgumentProjection>,
-}
-
-/// One explicit ownership projection for one imported Rust generic argument.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct RustTypeArgumentProjection {
-    /// Exact `rust::` import path, such as `bevy::prelude::Query`.
-    pub import: String,
-    /// Zero-based generic argument position to project.
-    pub argument: usize,
-    /// Ownership transformation required by the foreign generic parameter.
-    pub projection: RustTypeArgumentProjectionKind,
-}
-
-/// The ownership transformation selected for one foreign generic argument.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum RustTypeArgumentProjectionKind {
-    /// For a matching `mut` parameter, project the argument and every element of a tuple argument as a mutable Rust
-    /// reference.
-    MutableReference,
-}
-
-impl RustInteropToolSection {
-    /// Validate projection identity before a compiler session consumes it.
-    fn validate(&self) -> Result<(), String> {
-        let mut seen = HashSet::new();
-        for projection in &self.type_argument_projections {
-            if projection.import.split("::").any(str::is_empty) {
-                return Err(format!(
-                    "Rust interop projection import `{}` must be a non-empty `::` path",
-                    projection.import
-                ));
-            }
-            if !seen.insert((projection.import.as_str(), projection.argument)) {
-                return Err(format!(
-                    "Rust interop projection duplicates argument {} of `{}`",
-                    projection.argument, projection.import
-                ));
-            }
-        }
-        Ok(())
-    }
 }
 
 /// RFC 048 metadata inputs owned by the Incan toolchain.
@@ -723,13 +664,6 @@ impl ProjectManifest {
     /// Optional Incan-owned tool configuration.
     pub fn incan_tool(&self) -> Option<&IncanToolSection> {
         self.tool.as_ref().and_then(|tool| tool.incan.as_ref())
-    }
-
-    /// Explicit foreign-generic ownership projections declared by this project.
-    pub fn rust_type_argument_projections(&self) -> &[RustTypeArgumentProjection] {
-        self.incan_tool()
-            .and_then(|tool| tool.interop.as_ref())
-            .map_or(&[], |interop| interop.type_argument_projections.as_slice())
     }
 
     /// Optional RFC 077 workspace declaration owned by this root manifest.
@@ -1085,17 +1019,6 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
             .validate()
             .map_err(|message| manifest_invalid(path, spans.table_location(&["oven", "interop"]), message))?;
     }
-    if let Some(interop) = raw
-        .tool
-        .as_ref()
-        .and_then(|tool| tool.incan.as_ref())
-        .and_then(|tool| tool.interop.as_ref())
-    {
-        interop
-            .validate()
-            .map_err(|message| manifest_invalid(path, spans.table_location(&["tool", "incan", "interop"]), message))?;
-    }
-
     if let Some(vocab) = &raw.vocab {
         if let Some(crate_path) = &vocab.crate_path {
             if crate_path.trim().is_empty() {
@@ -2142,61 +2065,6 @@ model-bundles = ["contracts/order_summary.json"]
             vec!["contracts/order_summary.json".to_string()]
         );
         Ok(())
-    }
-
-    #[test]
-    fn parses_rust_type_argument_projections() -> TestResult {
-        let content = r#"
-[tool.incan.interop]
-
-[[tool.incan.interop.type-argument-projections]]
-import = "demo::FooBar"
-argument = 0
-projection = "mutable-reference"
-"#;
-        let manifest = ProjectManifest::from_str(content, Path::new("incan.toml"))?;
-        assert_eq!(
-            manifest.rust_type_argument_projections(),
-            &[RustTypeArgumentProjection {
-                import: "demo::FooBar".to_string(),
-                argument: 0,
-                projection: RustTypeArgumentProjectionKind::MutableReference,
-            }]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn rejects_duplicate_rust_type_argument_projections() {
-        let content = r#"
-[tool.incan.interop]
-
-[[tool.incan.interop.type-argument-projections]]
-import = "demo::FooBar"
-argument = 0
-projection = "mutable-reference"
-
-[[tool.incan.interop.type-argument-projections]]
-import = "demo::FooBar"
-argument = 0
-projection = "mutable-reference"
-"#;
-        let err = ProjectManifest::from_str(content, Path::new("incan.toml"));
-        assert!(matches!(err, Err(ManifestError::Invalid { .. })));
-    }
-
-    #[test]
-    fn rejects_malformed_rust_type_argument_projection_import() {
-        let content = r#"
-[tool.incan.interop]
-
-[[tool.incan.interop.type-argument-projections]]
-import = "demo::::FooBar"
-argument = 0
-projection = "mutable-reference"
-"#;
-        let err = ProjectManifest::from_str(content, Path::new("incan.toml"));
-        assert!(matches!(err, Err(ManifestError::Invalid { .. })));
     }
 
     #[test]

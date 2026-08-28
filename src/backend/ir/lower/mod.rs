@@ -49,7 +49,6 @@ use crate::frontend::symbols::ResolvedType;
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint};
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
 use crate::frontend::typechecker::{CBindingType, TypeCheckInfo};
-use crate::manifest::RustTypeArgumentProjection;
 use crate::provider::ProviderPlan;
 use decl::callable_docstring;
 use incan_core::lang::conventions;
@@ -188,8 +187,6 @@ pub struct AstLowering {
     pub(super) import_aliases: HashMap<String, Vec<String>>,
     /// Direct Rust import aliases mapped to Rust path segments.
     pub(super) rust_import_aliases: HashMap<String, Vec<String>>,
-    /// Explicit ownership projections for generic arguments of imported Rust types.
-    pub(super) rust_type_argument_projections: Vec<RustTypeArgumentProjection>,
     /// Function-typed parameters for the currently lowered callable body.
     pub(super) callable_param_scopes: Vec<HashSet<String>>,
     /// Declared return types for callable bodies currently being lowered.
@@ -449,7 +446,6 @@ impl AstLowering {
             closure_param_scopes: Vec::new(),
             import_aliases: HashMap::new(),
             rust_import_aliases: HashMap::new(),
-            rust_type_argument_projections: Vec::new(),
             callable_param_scopes: Vec::new(),
             callable_return_types: Vec::new(),
             symbol_aliases: HashMap::new(),
@@ -484,11 +480,6 @@ impl AstLowering {
     /// Provide the immutable provider plan for metadata-backed lowering.
     pub fn set_provider_plan(&mut self, plan: Option<Arc<ProviderPlan>>) {
         self.provider_plan = plan;
-    }
-
-    /// Supply the project-declared ownership projections for imported Rust generic arguments.
-    pub(crate) fn set_rust_type_argument_projections(&mut self, projections: Vec<RustTypeArgumentProjection>) {
-        self.rust_type_argument_projections = projections;
     }
 
     /// Select crate-local stdlib dispatch paths while compiling an SDK-provider artifact.
@@ -548,7 +539,7 @@ impl AstLowering {
                     (
                         self.apply_mutable_rust_type_argument_projections(
                             source_param.node.is_mut,
-                            &source_param.node.ty.node,
+                            &source_param.node.ty,
                             base_ty,
                         ),
                         self.lower_parameter_mutability(source_param.node.is_mut, &source_param.node.ty.node),
@@ -668,7 +659,7 @@ impl AstLowering {
                     (
                         self.apply_mutable_rust_type_argument_projections(
                             source_param.node.is_mut,
-                            &source_param.node.ty.node,
+                            &source_param.node.ty,
                             base_ty,
                         ),
                         self.lower_parameter_mutability(source_param.node.is_mut, &source_param.node.ty.node),
@@ -1860,7 +1851,7 @@ impl AstLowering {
                                     self.lower_type_with_type_params(&p.node.ty.node, Some(&type_param_names));
                                 let base_ty = self.apply_mutable_rust_type_argument_projections(
                                     p.node.is_mut,
-                                    &p.node.ty.node,
+                                    &p.node.ty,
                                     base_ty,
                                 );
                                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);

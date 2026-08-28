@@ -134,7 +134,7 @@ impl AstLowering {
                             &mut hidden_counter,
                         );
                         let base_ty =
-                            self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty.node, base_ty);
+                            self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty, base_ty);
                         let ty = Self::lower_param_container_type(p.node.kind, base_ty);
                         Ok(FunctionParam {
                             name: p.node.name.clone(),

@@ -186,9 +186,10 @@ main = "src/main.incn"
 }
 
 #[test]
-fn build_manifest_projection_reaches_codegen_through_normal_cli_path() -> Result<(), Box<dyn std::error::Error>> {
+fn build_explicit_mutable_rust_generic_reaches_codegen_through_normal_cli_path()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let project_name = unique_test_project_name("manifest_projection");
+    let project_name = unique_test_project_name("explicit_mutable_rust_generic");
     let src_dir = tmp.path().join("src");
     let out_dir = tmp.path().join("out");
     let oven_home = tmp.path().join("oven-home");
@@ -199,13 +200,6 @@ fn build_manifest_projection_reaches_codegen_through_normal_cli_path() -> Result
             r#"[project]
 name = "{project_name}"
 version = "0.1.0"
-
-[tool.incan.interop]
-
-[[tool.incan.interop.type-argument-projections]]
-import = "std::vec::Vec"
-argument = 0
-projection = "mutable-reference"
 "#
         ),
     )?;
@@ -214,12 +208,12 @@ projection = "mutable-reference"
         &main_path,
         r#"from rust::std::vec import Vec as ProviderHandle
 
-def replace_items(mut items: ProviderHandle[tuple[int, int]]) -> None:
+def replace_items(mut items: ProviderHandle[tuple[&mut int, &mut int]]) -> None:
   pass
 
 def main() -> None:
   replace_items(ProviderHandle.new())
-  println("projection CLI path")
+  println("explicit mutable Rust generic CLI path")
 "#,
     )?;
 
@@ -232,7 +226,7 @@ def main() -> None:
     let bake_output = bake_command.output()?;
     assert!(
         bake_output.status.success(),
-        "explicit bake for the manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        "explicit bake for the mutable Rust generic failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
         bake_output.status,
         String::from_utf8_lossy(&bake_output.stdout),
         String::from_utf8_lossy(&bake_output.stderr)
@@ -250,7 +244,7 @@ def main() -> None:
         .output()?;
     assert!(
         output.status.success(),
-        "normal build with manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        "normal build with explicit mutable Rust generic failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -259,7 +253,7 @@ def main() -> None:
     let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
     assert!(
         generated.contains("fn replace_items(_: ProviderHandle<(&mut i64, &mut i64)>)"),
-        "normal CLI codegen must apply the declared projection through an alias, got:\n{generated}"
+        "normal CLI codegen must preserve explicit mutable Rust references through an alias, got:\n{generated}"
     );
     assert!(
         generated.contains("replace_items(ProviderHandle::new())"),
@@ -269,9 +263,10 @@ def main() -> None:
 }
 
 #[test]
-fn decorated_method_manifest_projection_keeps_static_and_wrapper_abi() -> Result<(), Box<dyn std::error::Error>> {
+fn decorated_method_explicit_mutable_rust_generic_keeps_static_and_wrapper_abi()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
-    let project_name = unique_test_project_name("decorated_manifest_projection");
+    let project_name = unique_test_project_name("decorated_explicit_mutable_rust_generic");
     let src_dir = tmp.path().join("src");
     let out_dir = tmp.path().join("out");
     let oven_home = tmp.path().join("oven-home");
@@ -282,13 +277,6 @@ fn decorated_method_manifest_projection_keeps_static_and_wrapper_abi() -> Result
             r#"[project]
 name = "{project_name}"
 version = "0.1.0"
-
-[tool.incan.interop]
-
-[[tool.incan.interop.type-argument-projections]]
-import = "std::vec::Vec"
-argument = 0
-projection = "mutable-reference"
 "#
         ),
     )?;
@@ -308,7 +296,7 @@ def to_int(function: (ProviderHandle[tuple[&mut int, &mut int]]) -> int) -> ((in
 
 class Container:
   @preserve()
-  def replace(self, mut items: ProviderHandle[tuple[int, int]]) -> None:
+  def replace(self, mut items: ProviderHandle[tuple[&mut int, &mut int]]) -> None:
     pass
 
 @to_int
@@ -318,7 +306,7 @@ def transformed(mut items: ProviderHandle[tuple[&mut int, &mut int]]) -> int:
 def main() -> None:
   Container().replace(ProviderHandle.new())
   println(transformed(7))
-  println("decorated projection CLI path")
+  println("decorated explicit mutable Rust generic CLI path")
 "#,
     )?;
 
@@ -331,7 +319,7 @@ def main() -> None:
     let bake_output = bake_command.output()?;
     assert!(
         bake_output.status.success(),
-        "explicit bake for the decorated manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        "explicit bake for the decorated mutable Rust generic failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
         bake_output.status,
         String::from_utf8_lossy(&bake_output.stdout),
         String::from_utf8_lossy(&bake_output.stderr)
@@ -349,7 +337,7 @@ def main() -> None:
         .output()?;
     assert!(
         output.status.success(),
-        "normal decorated-method build with manifest projection failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+        "normal decorated-method build with explicit mutable Rust generic failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
@@ -359,11 +347,11 @@ def main() -> None:
     let projected = "ProviderHandle<(&mut i64, &mut i64)>";
     assert!(
         generated.match_indices(projected).count() >= 3,
-        "the decorated method, its static binding, and wrapper must share the projected ABI, got:\n{generated}"
+        "the decorated method, its static binding, and wrapper must share the explicit Rust-reference ABI, got:\n{generated}"
     );
     assert!(
         !generated.contains("ProviderHandle<(i64, i64)>"),
-        "no decorated-method adapter may retain an unprojected Rust generic ABI, got:\n{generated}"
+        "no decorated-method adapter may erase an explicit Rust-reference ABI, got:\n{generated}"
     );
     assert!(
         generated.contains("fn transformed(__incan_arg_0: i64) -> i64"),
@@ -371,7 +359,7 @@ def main() -> None:
     );
     assert!(
         generated.contains("fn __incan_original_transformed(_: ProviderHandle<(&mut i64, &mut i64)>)"),
-        "the original function must retain its independently projected Rust ABI, got:\n{generated}"
+        "the original function must retain its explicit Rust-reference ABI, got:\n{generated}"
     );
     Ok(())
 }
@@ -12417,6 +12405,102 @@ def main() -> None:
         bake_project_with_package_features(project_root, &[])
     }
 
+    /// Write an unrelated Rust provider whose generic data wrapper admits either owned handles or mutable references.
+    fn write_foreign_reference_provider(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let provider_root = root.join("foreign_reference_provider");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("Cargo.toml"),
+            "[package]\nname = \"foreign_reference_provider\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.rs"),
+            r#"use core::marker::PhantomData;
+
+pub trait QueryData {}
+pub trait Component {}
+
+pub struct FooBar<T: QueryData>(PhantomData<T>);
+
+impl<T: QueryData> FooBar<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+pub struct Widget;
+pub struct Gadget;
+pub struct Entity;
+
+impl Component for Widget {}
+impl Component for Gadget {}
+impl<T: Component> QueryData for &mut T {}
+impl<A: QueryData, B: QueryData> QueryData for (A, B) {}
+impl QueryData for Entity {}
+"#,
+        )?;
+        Ok(())
+    }
+
+    /// Write a provider whose derive macro deliberately differs between the compiler probe and a field-bearing type.
+    fn write_shape_sensitive_reference_provider(root: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let derive_root = root.join("shape_sensitive_derive");
+        std::fs::create_dir_all(derive_root.join("src"))?;
+        std::fs::write(
+            derive_root.join("Cargo.toml"),
+            "[package]\nname = \"shape_sensitive_derive\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nproc-macro = true\n",
+        )?;
+        std::fs::write(
+            derive_root.join("src/lib.rs"),
+            r#"use proc_macro::TokenStream;
+
+#[proc_macro_derive(Component)]
+pub fn component(input: TokenStream) -> TokenStream {
+    let source = input.to_string();
+    let name = source
+        .split_whitespace()
+        .nth(1)
+        .expect("derive input should contain a type name")
+        .trim_end_matches(';');
+    if !name.starts_with("__IncanDeriveProbe") {
+        return TokenStream::new();
+    }
+    format!("impl shape_sensitive_provider::Component for {name} {{}}")
+        .parse()
+        .expect("generated Component implementation should parse")
+}
+"#,
+        )?;
+
+        let provider_root = root.join("shape_sensitive_provider");
+        std::fs::create_dir_all(provider_root.join("src"))?;
+        std::fs::write(
+            provider_root.join("Cargo.toml"),
+            "[package]\nname = \"shape_sensitive_provider\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[dependencies]\nshape_sensitive_derive = { path = \"../shape_sensitive_derive\" }\n",
+        )?;
+        std::fs::write(
+            provider_root.join("src/lib.rs"),
+            r#"use core::marker::PhantomData;
+
+pub use shape_sensitive_derive::Component;
+
+pub trait Component {}
+pub trait QueryData {}
+
+pub struct FooBar<T: QueryData>(PhantomData<T>);
+
+impl<T: QueryData> FooBar<T> {
+    pub fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: Component> QueryData for &mut T {}
+"#,
+        )?;
+        Ok(())
+    }
+
     /// Publish one project for an explicit package-feature selection.
     fn bake_project_with_package_features(
         project_root: &Path,
@@ -12430,6 +12514,138 @@ def main() -> None:
             .env("CARGO_NET_OFFLINE", "true");
         support::configure_explicit_oven_bake_command(&mut command)?;
         run_timed_incan_command("incan oven bake --project", command)
+    }
+
+    #[test]
+    fn oven_build_projects_structural_mutable_reference_generics_for_an_unrelated_provider()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = tempfile::tempdir()?;
+        write_foreign_reference_provider(fixture.path())?;
+        let project_root = fixture.path().join("consumer");
+        let _main_path = write_project_files(
+            &project_root,
+            "[project]\nname = \"foreign_reference_projection\"\nversion = \"0.1.0\"\n\n[project.scripts]\nmain = \"src/main.incn\"\n\n[rust-dependencies]\nforeign_reference_provider = { path = \"../foreign_reference_provider\" }\n",
+            r#"from rust::foreign_reference_provider import Entity, FooBar, Gadget, Widget
+
+def update(mut values: FooBar[tuple[Widget, Gadget]]) -> None:
+    pass
+
+def inspect(values: FooBar[Entity]) -> None:
+    pass
+
+def main() -> None:
+    update(FooBar.new())
+    inspect(FooBar.new())
+"#,
+        )?;
+
+        let oven_home = fixture.path().join("oven-home");
+        let mut bake = super::incan_command();
+        bake.args(["oven", "bake", "--project", "."])
+            .current_dir(&project_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home);
+        support::configure_explicit_oven_bake_command(&mut bake)?;
+        let bake_output = run_timed_incan_command("incan oven bake --project", bake)?;
+        assert!(
+            bake_output.status.success(),
+            "expected the unrelated provider closure to bake.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bake_output.stdout),
+            String::from_utf8_lossy(&bake_output.stderr)
+        );
+        let inspection_root = project_root.join("target/incan_lock/rust_inspect");
+        let inspection_workspaces = std::fs::read_dir(&inspection_root)?
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect::<Vec<_>>();
+        assert!(
+            !inspection_workspaces.is_empty(),
+            "expected the bake to prepare a Rust inspection workspace"
+        );
+        assert!(
+            inspection_workspaces.iter().all(|workspace| workspace
+                .join(incan::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER)
+                .is_file()),
+            "a successful bake must retire every exact Cargo bootstrap workspace to direct inspection: {inspection_workspaces:?}"
+        );
+        assert!(
+            inspection_workspaces.iter().all(|workspace| !workspace
+                .join(incan::rust_inspect::OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER)
+                .exists()),
+            "ordinary consumers must not inherit a completed bake's Cargo inspection capability: {inspection_workspaces:?}"
+        );
+
+        let mut build = super::incan_command();
+        build
+            .args(["build", "--locked"])
+            .current_dir(&project_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home);
+        let build_output = run_timed_incan_command("incan build --locked", build)?;
+        assert!(
+            build_output.status.success(),
+            "expected the freshly baked closure to build in a separate compiler process.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+
+        let generated =
+            std::fs::read_to_string(project_root.join("target/incan/foreign_reference_projection/src/main.rs"))?;
+        assert!(
+            generated.contains("FooBar<(&mut Widget, &mut Gadget)>"),
+            "the generic mutable-reference contract must project mutable tuple leaves without provider-name matching:\n{generated}"
+        );
+        assert!(
+            generated.contains("FooBar<Entity>"),
+            "the same generic contract must retain a directly valid owned argument:\n{generated}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn oven_bake_fails_closed_when_a_derive_probe_differs_from_the_real_type() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let fixture = tempfile::tempdir()?;
+        write_shape_sensitive_reference_provider(fixture.path())?;
+        let project_root = fixture.path().join("consumer");
+        let _main_path = write_project_files(
+            &project_root,
+            "[project]\nname = \"shape_sensitive_projection\"\nversion = \"0.1.0\"\n\n[project.scripts]\nmain = \"src/main.incn\"\n\n[rust-dependencies]\nshape_sensitive_provider = { path = \"../shape_sensitive_provider\" }\n",
+            r#"from rust::shape_sensitive_provider import Component, FooBar
+
+@rust.derive(Component)
+model Widget:
+    value: int
+
+def update(mut values: FooBar[Widget]) -> None:
+    pass
+
+def main() -> None:
+    update(FooBar.new())
+"#,
+        )?;
+
+        let oven_home = fixture.path().join("oven-home");
+        let mut bake = super::incan_command();
+        bake.args(["oven", "bake", "--project", "."])
+            .current_dir(&project_root)
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home);
+        support::configure_explicit_oven_bake_command(&mut bake)?;
+        let bake_output = run_timed_incan_command("incan oven bake --project", bake)?;
+        let stderr = String::from_utf8_lossy(&bake_output.stderr);
+        assert!(
+            !bake_output.status.success(),
+            "an input-sensitive derive must not produce a runnable artifact from probe-only evidence"
+        );
+        assert!(
+            stderr.contains("E0277")
+                && stderr.contains("Widget: shape_sensitive_provider::Component")
+                && stderr.contains("FooBar<&mut Widget>"),
+            "native rustc must reject the candidate ABI when the real derive omits the probed trait.\nstderr:\n{stderr}"
+        );
+        Ok(())
     }
 
     #[test]

@@ -27,8 +27,8 @@
     {
       "path": "crates/rust_inspect/src/cache_tests.rs",
       "category": "rust-inspect generated metadata regression assertions",
-      "expected_count": 18,
-      "expected_fingerprint": "0x9479828cc53614a2"
+      "expected_count": 20,
+      "expected_fingerprint": "0x7e81de1942d4d62e"
     },
     {
       "path": "crates/rust_inspect/src/cache_timing.rs",
@@ -39,8 +39,8 @@
     {
       "path": "crates/rust_inspect/src/extractor.rs",
       "category": "rust-inspect display-shape normalization",
-      "expected_count": 9,
-      "expected_fingerprint": "0xfe72d3181174ad90"
+      "expected_count": 12,
+      "expected_fingerprint": "0xabb7f3a0bf9be9dc"
     },
     {
       "path": "crates/rust_inspect/src/lib.rs",

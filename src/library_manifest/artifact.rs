@@ -1258,8 +1258,12 @@ fn hash_directory_with_normalization(
         })?;
         if file_type.is_dir() {
             let is_mutable_output = matches!(file_name, Some(".git" | ".incan" | ".ralph-cache" | "target"));
+            // v0.5 providers briefly placed the compiler-owned Rust-inspection Cargo target below the published
+            // `oven/` directory. It is mutable preparation state, not provider content. Exclude the legacy location
+            // so an existing generated provider remains loadable while current builders place it under `target/`.
+            let is_legacy_rust_inspect_output = relative == Path::new("oven/rust-inspect");
             let is_nested_target = file_name == Some("target");
-            if is_mutable_output || (exclude_nested_targets && is_nested_target) {
+            if is_mutable_output || is_legacy_rust_inspect_output || (exclude_nested_targets && is_nested_target) {
                 continue;
             }
         }
@@ -2165,6 +2169,26 @@ mod tests {
             digest_toolchain_source_tree(artifact.path()),
             Err(ProviderArtifactDigestError::UnsupportedEntry { .. })
         ));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn digest_ignores_legacy_compiler_owned_rust_inspect_output() -> TestResult {
+        use std::os::unix::fs::symlink;
+
+        let artifact = tempfile::tempdir()?;
+        fs::write(artifact.path().join("provider.incnlib"), "manifest")?;
+        fs::create_dir_all(artifact.path().join("oven/debug"))?;
+        fs::write(artifact.path().join("oven/debug/libprovider.rlib"), "provider")?;
+        let initial = digest_provider_artifact(artifact.path())?;
+
+        let inspection_output = artifact.path().join("oven/rust-inspect/debug/build/tool/out/bin");
+        fs::create_dir_all(&inspection_output)?;
+        fs::write(inspection_output.join("tool-1"), "compiler-owned output")?;
+        symlink("tool-1", inspection_output.join("tool"))?;
+
+        assert_eq!(initial, digest_provider_artifact(artifact.path())?);
         Ok(())
     }
 }

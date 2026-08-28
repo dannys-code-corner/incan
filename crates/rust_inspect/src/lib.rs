@@ -24,11 +24,11 @@ mod loader;
 
 pub use cache::RustMetadataCache;
 pub use error::RustMetadataError;
-pub use extractor::extract_rust_item;
+pub use extractor::{extract_rust_item, rust_type_implements_trait};
 pub use loader::{
-    OVEN_DIRECT_INSPECTION_AUTHORITY_FILE, OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustWorkspace,
-    oven_inspection_registry_source_roots, write_oven_inspection_source_authority,
-    write_sealed_oven_inspection_source_authority,
+    OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER, OVEN_DIRECT_INSPECTION_AUTHORITY_FILE, OVEN_DIRECT_INSPECTION_MARKER,
+    OvenInspectionRegistrySource, RustWorkspace, oven_inspection_registry_source_roots,
+    write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -303,6 +303,9 @@ mod tests {
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),

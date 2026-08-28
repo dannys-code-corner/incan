@@ -122,7 +122,10 @@ use super::common::{
     resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
 };
 #[cfg(feature = "rust_inspect")]
-use super::common::{collect_rust_inspect_query_paths, collect_rust_inspect_query_paths_from_programs};
+use super::common::{
+    collect_rust_inspect_derive_probe_paths, collect_rust_inspect_query_paths,
+    collect_rust_inspect_query_paths_from_programs, mark_oven_direct_rust_inspection,
+};
 use super::lock::{
     LockResolution, LockResolutionRequest, PublishedOvenProjectLock, publish_oven_project_lock, resolve_lock_context,
     validate_oven_lock_policy,
@@ -191,6 +194,8 @@ struct OvenPreparedProject {
     rust_edition: String,
     caller_owned_libraries: Vec<OvenCallerOwnedRustcLibrary>,
     report: BuildReportDraft,
+    #[cfg(feature = "rust_inspect")]
+    rust_inspect_manifest_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -246,6 +251,8 @@ struct PreparedLibraryProject {
     timings_ms: BTreeMap<String, u64>,
     report: BuildReportDraft,
     oven: Option<OvenPreparedLibrary>,
+    #[cfg(feature = "rust_inspect")]
+    rust_inspect_manifest_dir: Option<PathBuf>,
 }
 
 /// Receipt-selected direct-rustc materialization state for a normal Oven library build.
@@ -2908,7 +2915,6 @@ fn prepare_project_with_options(
     codegen.set_root_source_module_name(path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
     if let Some(m) = manifest.as_ref() {
         codegen.set_declared_crate_names(m.declared_rust_crate_names());
-        codegen.set_rust_type_argument_projections(m.rust_type_argument_projections().to_vec());
     }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     for module in dep_modules
@@ -3043,6 +3049,7 @@ fn prepare_project_with_options(
             cargo_policy_flags: cargo_flags.clone(),
             cargo_target_dir: &rust_inspect_target_path,
             rust_inspect_query_paths: &metadata_query_paths,
+            rust_derive_probe_paths: &collect_rust_inspect_derive_probe_paths(&modules),
             prepare_when_empty: true,
             direct_oven_inspection: false,
             force_direct_prewarm: false,
@@ -5087,7 +5094,6 @@ fn prepare_oven_project(
     codegen.set_root_source_module_name(path.file_stem().and_then(|stem| stem.to_str()).map(str::to_string));
     if let Some(manifest) = manifest.as_ref() {
         codegen.set_declared_crate_names(manifest.declared_rust_crate_names());
-        codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
     }
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     for module in dep_modules
@@ -5208,6 +5214,7 @@ fn prepare_oven_project(
             cargo_policy_flags: Vec::new(),
             cargo_target_dir: &generator.output_dir().join("oven").join("rust-inspect"),
             rust_inspect_query_paths: &metadata_query_paths,
+            rust_derive_probe_paths: &collect_rust_inspect_derive_probe_paths(&modules),
             prepare_when_empty: false,
             direct_oven_inspection: true,
             force_direct_prewarm: loaf_codegen_mode(),
@@ -5452,6 +5459,10 @@ fn prepare_oven_project(
         rust_edition,
         caller_owned_libraries,
         report,
+        #[cfg(feature = "rust_inspect")]
+        rust_inspect_manifest_dir: rust_inspect_manifest_dir
+            .as_ref()
+            .map(|workspace| workspace.manifest_dir().to_path_buf()),
     })
 }
 
@@ -9365,7 +9376,10 @@ fn prepare_library_project(
     .then(|| {
         if normal_oven {
             Ok((
-                out_dir.join("oven").join("rust-inspect"),
+                // Rust inspection is compiler-owned preparation state, not part of the generated provider artifact.
+                // Keeping its Cargo target below `target/lib` leaks build-script outputs (including valid symlinks)
+                // into the provider integrity boundary and needlessly makes every consumer traverse that cache.
+                crate::lockfile::compiler_lock_state_dir(&project_root).join("rust_inspect_target"),
                 None::<crate::generated_cache::GeneratedCacheLease>,
             ))
         } else {
@@ -9402,6 +9416,7 @@ fn prepare_library_project(
             cargo_policy_flags: cargo_flags.clone(),
             cargo_target_dir: &rust_inspect_target_path,
             rust_inspect_query_paths: &metadata_query_paths,
+            rust_derive_probe_paths: &collect_rust_inspect_derive_probe_paths(&modules),
             prepare_when_empty: true,
             direct_oven_inspection: normal_oven,
             force_direct_prewarm: false,
@@ -9630,7 +9645,6 @@ fn prepare_library_project(
     );
     codegen.set_stdlib_cache(stdlib_cache);
     codegen.set_declared_crate_names(declared);
-    codegen.set_rust_type_argument_projections(manifest.rust_type_argument_projections().to_vec());
     codegen.set_provider_plan(Arc::clone(&provider_plan));
     let main_type_info = checked_type_info_by_path
         .get(&lib_module.file_path)
@@ -10096,6 +10110,10 @@ fn prepare_library_project(
         timings_ms,
         report: report_draft,
         oven,
+        #[cfg(feature = "rust_inspect")]
+        rust_inspect_manifest_dir: rust_inspect_manifest_dir
+            .as_ref()
+            .map(|workspace| workspace.manifest_dir().to_path_buf()),
     })
 }
 
@@ -12699,6 +12717,8 @@ pub(crate) fn bake_oven_project_targets(
     let mut profiles = Vec::new();
     let mut pending_outputs = Vec::new();
     let mut debug_target_receipts = Vec::new();
+    #[cfg(feature = "rust_inspect")]
+    let mut rust_inspect_manifest_dirs = BTreeSet::new();
 
     for (target, entrypoint) in targets {
         match target {
@@ -12718,6 +12738,10 @@ pub(crate) fn bake_oven_project_targets(
                     OvenProjectPlanMode::ExplicitBake,
                     Some(&mut authority_context),
                 )?;
+                #[cfg(feature = "rust_inspect")]
+                if let Some(manifest_dir) = prepared.rust_inspect_manifest_dir.as_ref() {
+                    rust_inspect_manifest_dirs.insert(manifest_dir.clone());
+                }
                 write_library_manifest_artifacts(&mut prepared)?;
                 let selected = prepared.oven.as_ref().ok_or_else(|| {
                     CliError::failure("explicit Oven library preparation did not produce a direct-rustc selection")
@@ -12884,6 +12908,10 @@ pub(crate) fn bake_oven_project_targets(
                         OvenProjectPlanMode::ExplicitBake,
                         Some(&mut authority_context),
                     )?;
+                    #[cfg(feature = "rust_inspect")]
+                    if let Some(manifest_dir) = prepared.rust_inspect_manifest_dir.as_ref() {
+                        rust_inspect_manifest_dirs.insert(manifest_dir.clone());
+                    }
                     if profile == "debug" {
                         debug_target_receipts.push(prepared.receipt.clone());
                     }
@@ -12985,6 +13013,10 @@ pub(crate) fn bake_oven_project_targets(
     // every output Loaf is visible: otherwise a later output admission can prune the now-unleased constituent and
     // leave a source-current authority that points at a missing closure.
     let _complete_publication_set = (test_dependency_envelope, inspection_authority, published_outputs);
+    #[cfg(feature = "rust_inspect")]
+    for manifest_dir in rust_inspect_manifest_dirs {
+        mark_oven_direct_rust_inspection(&manifest_dir)?;
+    }
     Ok(OvenProjectBakeReport {
         project: project_root,
         generated_sources,

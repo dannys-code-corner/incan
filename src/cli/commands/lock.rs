@@ -73,7 +73,8 @@ use super::common::{
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
-    collect_rust_inspect_query_paths, ensure_rust_inspect_workspace_with_cargo_package_name,
+    collect_rust_inspect_derive_probe_paths, collect_rust_inspect_query_paths,
+    ensure_rust_inspect_workspace_with_cargo_package_name, mark_oven_cargo_bootstrap_rust_inspection,
     mark_oven_direct_rust_inspection, prewarm_rust_inspect_workspace,
 };
 
@@ -423,6 +424,8 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     pub cargo_policy_flags: Vec<String>,
     pub cargo_target_dir: &'a Path,
     pub rust_inspect_query_paths: &'a [String],
+    /// Exact external Rust derive macros used by concrete Incan declarations.
+    pub rust_derive_probe_paths: &'a [String],
     pub prepare_when_empty: bool,
     /// Select rust-analyzer's direct source graph before any inspection action can run Cargo.
     pub direct_oven_inspection: bool,
@@ -496,6 +499,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         cargo_policy_flags,
         cargo_target_dir,
         rust_inspect_query_paths,
+        rust_derive_probe_paths,
         prepare_when_empty,
         direct_oven_inspection,
         force_direct_prewarm,
@@ -503,7 +507,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         prepared_project_source_authorities,
         explicit_oven_bake,
     } = request;
-    if rust_inspect_query_paths.is_empty() && !prepare_when_empty {
+    if rust_inspect_query_paths.is_empty() && rust_derive_probe_paths.is_empty() && !prepare_when_empty {
         return Ok(None);
     }
 
@@ -519,6 +523,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         clear_cargo_lock,
         cargo_target_dir,
         &cargo_policy_flags,
+        rust_derive_probe_paths,
     )?;
     let mut source_loaf = None;
     let mut project_source_authorities = None;
@@ -638,7 +643,11 @@ pub(crate) fn prepare_rust_inspect_workspace(
                 ));
             }
         }
-        mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
+        if explicit_oven_bake {
+            mark_oven_cargo_bootstrap_rust_inspection(&rust_inspect_manifest_dir)?;
+        } else {
+            mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
+        }
     }
     prewarm_rust_inspect_workspace(
         &rust_inspect_manifest_dir,
@@ -1198,7 +1207,10 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         provider_plan,
     } = request;
     let metadata_query_paths = collect_rust_inspect_query_paths(modules);
-    if metadata_query_paths.is_empty() {
+    let rust_derive_probe_paths = collect_rust_inspect_derive_probe_paths(modules);
+    // A quoted `@rust.derive("crate::path::Macro")` needs a prepared workspace for its expansion evidence even when
+    // the module imports no other `rust::` items, so probe paths keep this preparation alive on their own.
+    if metadata_query_paths.is_empty() && rust_derive_probe_paths.is_empty() {
         return Ok(None);
     }
 
@@ -1271,6 +1283,7 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         cargo_policy_flags: rust_inspect_cargo_flags,
         cargo_target_dir: &cargo_target_dir,
         rust_inspect_query_paths: &metadata_query_paths,
+        rust_derive_probe_paths: &rust_derive_probe_paths,
         prepare_when_empty: false,
         // This workspace supports ordinary `incan check` metadata queries. It is an inspectable projection only:
         // Rust-analyzer must load its receipt-derived `rust-project.json`, not rediscover a Cargo workspace from a

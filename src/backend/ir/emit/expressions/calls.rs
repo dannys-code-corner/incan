@@ -509,7 +509,7 @@ impl<'a> IrEmitter<'a> {
                 Ok(None)
             }
             // ---- Context: seed `Ok`/`Err` constructors lowered as struct-like IR ----
-            (IrExprKind::Struct { name, fields }, IrType::Result(ok_ty, err_ty)) => {
+            (IrExprKind::Struct { name, fields, .. }, IrType::Result(ok_ty, err_ty)) => {
                 let Some((_, first_arg)) = fields.first() else {
                     return Ok(None);
                 };
@@ -1700,6 +1700,7 @@ mod tests {
             IrExprKind::Struct {
                 name: constructors::as_str(constructor).to_string(),
                 fields: vec![(String::new(), payload)],
+                fill_defaults: false,
             },
             ty,
         )

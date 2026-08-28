@@ -7,7 +7,6 @@ use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 use crate::frontend::rust_type_display;
-use crate::manifest::RustTypeArgumentProjectionKind;
 use incan_core::lang::derives::{self, DeriveId};
 
 impl AstLowering {
@@ -212,59 +211,66 @@ impl AstLowering {
         }
     }
 
-    /// Apply a project-declared ownership projection to one mutable imported Rust generic.
+    /// Apply a frontend-recorded ownership projection to one mutable imported Rust generic.
     ///
-    /// Foreign Rust metadata exposes generic arity but not the ownership convention of each generic parameter. The
-    /// manifest therefore names the exact source import and argument position; this lowering step stays structural
-    /// and never recognises provider or type names itself.
+    /// The typechecker has already inspected the foreign generic contract and keyed its structural decision by this
+    /// annotation span. Lowering deliberately does not consult provider/type names or project configuration.
     pub(in crate::backend::ir::lower) fn apply_mutable_rust_type_argument_projections(
         &self,
         is_mut: bool,
-        source_ty: &ast::Type,
+        source_ty: &Spanned<ast::Type>,
         lowered_ty: IrType,
     ) -> IrType {
         if !is_mut {
             return lowered_ty;
         }
-        let ast::Type::Generic(alias, _) = source_ty else {
+        let Some(projections) = self.type_info.as_ref().and_then(|type_info| {
+            type_info
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(source_ty.span.start, source_ty.span.end))
+        }) else {
             return lowered_ty;
         };
-        let Some(import_path) = self.rust_import_aliases.get(alias) else {
-            return lowered_ty;
-        };
-        let projections: Vec<_> = self
-            .rust_type_argument_projections
-            .iter()
-            .filter(|projection| projection.import.split("::").eq(import_path.iter().map(String::as_str)))
-            .collect();
-        if projections.is_empty() {
-            return lowered_ty;
-        }
         let IrType::NamedGeneric(name, mut arguments) = lowered_ty else {
             return lowered_ty;
         };
         for projection in projections {
-            if let Some(argument) = arguments.get_mut(projection.argument) {
-                match projection.projection {
-                    RustTypeArgumentProjectionKind::MutableReference => {
-                        *argument = Self::project_mutable_rust_reference(argument.clone());
-                    }
-                }
+            if let Some(argument) = arguments.get_mut(projection.argument_position) {
+                *argument = Self::project_mutable_rust_reference_paths(
+                    argument.clone(),
+                    projection.reference_leaf_paths.as_slice(),
+                );
             }
         }
         IrType::NamedGeneric(name, arguments)
     }
 
-    /// Project one foreign generic argument as a mutable Rust reference, preserving explicit source references and
-    /// recursing through tuples because Rust APIs commonly use tuples as composite payloads.
-    fn project_mutable_rust_reference(ty: IrType) -> IrType {
-        match ty {
-            IrType::Tuple(items) => {
-                IrType::Tuple(items.into_iter().map(Self::project_mutable_rust_reference).collect())
-            }
-            IrType::Ref(_) | IrType::RefMut(_) => ty,
-            other => IrType::RefMut(Box::new(other)),
+    /// Project the exact tuple leaves the frontend proved need a mutable Rust reference.
+    fn project_mutable_rust_reference_paths(ty: IrType, paths: &[Vec<usize>]) -> IrType {
+        if paths.iter().any(Vec::is_empty) {
+            return match ty {
+                IrType::Ref(_) | IrType::RefMut(_) => ty,
+                other => IrType::RefMut(Box::new(other)),
+            };
         }
+        let IrType::Tuple(mut items) = ty else {
+            return ty;
+        };
+        for (index, item) in items.iter_mut().enumerate() {
+            let child_paths = paths
+                .iter()
+                .filter_map(|path| {
+                    path.first()
+                        .filter(|first| **first == index)
+                        .map(|_| path[1..].to_vec())
+                })
+                .collect::<Vec<_>>();
+            if !child_paths.is_empty() {
+                *item = Self::project_mutable_rust_reference_paths(item.clone(), child_paths.as_slice());
+            }
+        }
+        IrType::Tuple(items)
     }
 
     /// Recursively collect all methods from this class and parent classes.

@@ -694,6 +694,12 @@ pub struct RustInteropArtifacts {
     /// resolved the underlying type to [`ResolvedType::RustPath`]. Used by lowering so `m::T` spellings emit full
     /// paths without re-running import resolution.
     pub rusttype_canonical_paths: HashMap<String, String>,
+    /// Typechecker-approved mutable-reference projections for generic Rust type annotations.
+    ///
+    /// Keys are annotation spans. The frontend derives these from complete foreign generic metadata, so lowering
+    /// preserves the checked ownership decision without matching a provider/type name or consulting application
+    /// manifest configuration.
+    pub mutable_reference_type_argument_projections: HashMap<(usize, usize), Vec<MutableRustTypeArgumentProjection>>,
     /// Rust-boundary coercion decisions keyed by argument expression span.
     pub arg_coercions: HashMap<(usize, usize), RustArgCoercionInfo>,
     /// Rust trait imports keyed by the source binding name with the trait path and method names they can place in
@@ -718,6 +724,12 @@ pub struct RustInteropArtifacts {
     /// Populated when metadata shows a `rusttype` method's actual Rust return type requires coercion to the
     /// Incan-declared type (e.g. `&str` → `String` for a method declared `-> str`).
     pub return_coercions: HashMap<(usize, usize), RustArgCoercionInfo>,
+    /// Borrowed Rust call results that must remain in their native Rust representation at the next call boundary.
+    ///
+    /// Exact generic parameters provide this evidence directly. An unresolved imported Rust call also preserves its
+    /// direct Rust-return arguments rather than inventing an Incan-owned conversion before rustc sees the boundary.
+    /// The marker makes either decision independent of whether result or argument checking runs first.
+    pub native_return_consumers: HashSet<(usize, usize)>,
     /// Regular method calls whose arguments must keep Rust method-call lookup shape.
     ///
     /// Keyed by `(receiver_span.start, receiver_span.end, method_name)` so lowering can preserve borrow-sensitive
@@ -729,6 +741,9 @@ pub struct RustInteropArtifacts {
     /// resolved field names so `Range(1, 3)` can emit `Range { start: 1, end: 3 }` instead of an invalid tuple-style
     /// Rust constructor.
     pub named_field_constructor_fields: HashMap<(usize, usize), Vec<String>>,
+    /// Imported Rust named-field constructors whose omitted fields are filled through a metadata-proven `Default`
+    /// implementation.
+    pub default_filled_named_field_constructors: HashSet<(usize, usize)>,
     /// Imported Rust field accesses keyed by full field-expression span.
     ///
     /// The parser may use an Incan-safe source spelling such as `type_` for a Rust field whose metadata name is the
@@ -753,6 +768,19 @@ pub struct RustInteropArtifacts {
     /// this artifact so direct async Rust calls still realize to their output type without reintroducing import-time
     /// extraction or relying on stale symbol metadata.
     pub async_call_realizations: HashSet<(usize, usize)>,
+}
+
+/// Reference leaves selected for one generic argument of a mutable imported Rust type.
+///
+/// An empty path borrows the argument itself. A non-empty path selects a nested tuple leaf, letting one foreign
+/// contract retain an owned `Handle` while borrowing an adjacent `MutableData` without assigning special meaning to
+/// the provider's type name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutableRustTypeArgumentProjection {
+    /// Zero-based position in the foreign generic's explicit type arguments.
+    pub argument_position: usize,
+    /// Tuple-index paths to the leaves lowered as `&mut`.
+    pub reference_leaf_paths: Vec<Vec<usize>>,
 }
 
 /// Declaration-level binding rewrites and visibility facts consumed by lowering.
@@ -1643,6 +1671,20 @@ impl TypeCheckInfo {
         self.rust
             .named_field_constructor_fields
             .insert((span.start, span.end), fields);
+    }
+
+    /// Whether lowering should emit a Rust struct update using `Default::default()` for omitted named fields.
+    pub fn rust_named_field_constructor_fills_defaults(&self, span: Span) -> bool {
+        self.rust
+            .default_filled_named_field_constructors
+            .contains(&(span.start, span.end))
+    }
+
+    /// Record that an imported Rust named-field constructor may fill omitted fields through `Default`.
+    pub(crate) fn record_rust_named_field_constructor_fills_defaults(&mut self, span: Span) {
+        self.rust
+            .default_filled_named_field_constructors
+            .insert((span.start, span.end));
     }
 
     /// Return the Rust field name resolved for one Rust field-access expression, if one was recorded.

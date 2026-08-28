@@ -380,8 +380,7 @@ impl AstLowering {
                     &mut hidden_type_params,
                     &mut hidden_counter,
                 );
-                let base_ty =
-                    self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty.node, base_ty);
+                let base_ty = self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty, base_ty);
                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);
                 let mutability = self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node);
                 // Ordinary mutable Incan parameters are references. Direct Rust handles keep owned ABI identity.

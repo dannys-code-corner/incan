@@ -1784,6 +1784,40 @@ impl TypeChecker {
             .collect()
     }
 
+    /// Record canonical Rust derive paths applied directly to one local concrete type.
+    ///
+    /// Unlike `@derive(...)`, RFC 043 `@rust.derive(...)` is emitted verbatim and does not adopt an Incan trait.
+    /// Its inspected probe expansion can select a candidate Rust generic ABI, so retain the exact resolved macro
+    /// namespace without mixing it into [`TypeInfo`](crate::frontend::symbols::TypeInfo) derive names. Native rustc
+    /// compilation remains authoritative for the real generated declaration.
+    pub(crate) fn record_local_rust_derive_paths(&mut self, type_name: &str, decorators: &[Spanned<Decorator>]) {
+        let mut paths = Vec::new();
+        for decorator in decorators_named(decorators, &self.symbols, DecoratorId::RustDerive) {
+            for argument in &decorator.node.args {
+                let DecoratorArg::Positional(expression) = argument else {
+                    continue;
+                };
+                let path = match &expression.node {
+                    Expr::Ident(name) => self.rust_import_path_for_local_name(name),
+                    Expr::Literal(Literal::String(path)) if self.rust_derive_path_has_declared_crate(path) => {
+                        Some(path.clone())
+                    }
+                    _ => None,
+                };
+                if let Some(path) = path
+                    && !paths.contains(&path)
+                {
+                    paths.push(path);
+                }
+            }
+        }
+        if paths.is_empty() {
+            self.local_rust_derive_paths.remove(type_name);
+        } else {
+            self.local_rust_derive_paths.insert(type_name.to_string(), paths);
+        }
+    }
+
     /// Extract `@requires` constraints from decorators as `(name, type)` pairs.
     pub(super) fn extract_requires(&mut self, decorators: &[Spanned<Decorator>]) -> Vec<(String, ResolvedType)> {
         let mut seen: HashSet<String> = HashSet::new();

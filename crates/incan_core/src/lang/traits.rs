@@ -238,6 +238,21 @@ pub fn as_str(id: TraitId) -> &'static str {
     info_for(id).canonical
 }
 
+/// Return the canonical Rust paths under which inspected metadata may record a builtin trait implementation.
+///
+/// Rust exposes some builtin traits through more than one canonical namespace, such as a `core` definition with a
+/// `std` re-export, and inspected Rust metadata records whichever path rust-analyzer resolves. Compiler layers that
+/// match those records must take every admitted spelling from this registry rather than hardcoding path literals.
+/// The list stays empty for traits interop does not yet need to recognize; extend it alongside new metadata
+/// consumers.
+#[must_use]
+pub const fn rust_paths(id: TraitId) -> &'static [&'static str] {
+    match id {
+        TraitId::Default => &["core::default::Default", "std::default::Default"],
+        _ => &[],
+    }
+}
+
 /// Return canonical source-declared method names for builtin traits whose method set is compiler-observed.
 pub fn method_names(id: TraitId) -> &'static [&'static str] {
     match id {

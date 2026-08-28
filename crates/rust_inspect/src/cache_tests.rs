@@ -12,6 +12,9 @@ fn dummy_type_metadata(path: &str) -> RustItemMetadata {
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
             type_params: Vec::new(),
+            type_param_defaults: Vec::new(),
+            mutable_reference_type_params: Vec::new(),
+            expanded_derive_traits: Vec::new(),
             has_const_params: false,
             alias_target: None,
             metadata_completeness: Default::default(),
@@ -50,6 +53,9 @@ fn dummy_reexported_type_metadata(path: &str, definition_path: &str) -> RustItem
         visibility: RustVisibility::Public,
         kind: RustItemKind::Type(RustTypeInfo {
             type_params: Vec::new(),
+            type_param_defaults: Vec::new(),
+            mutable_reference_type_params: Vec::new(),
+            expanded_derive_traits: Vec::new(),
             has_const_params: false,
             alias_target: None,
             metadata_completeness: Default::default(),
@@ -68,6 +74,23 @@ fn source_and_generated_type_displays_preserve_never_type() {
     let aliases = HashMap::new();
     let preferred_external_paths = HashMap::new();
     let source_public_reexports = HashMap::new();
+    let errors_module_path = ["errors".to_string()];
+    let errors_context = SourceMetadataContext {
+        crate_name: "demo",
+        module_path: &errors_module_path,
+        external_crates: &external_crates,
+        aliases: &aliases,
+        preferred_external_paths: &preferred_external_paths,
+        source_public_reexports: &source_public_reexports,
+    };
+    let root_context = SourceMetadataContext {
+        crate_name: "demo",
+        module_path: &[],
+        external_crates: &external_crates,
+        aliases: &aliases,
+        preferred_external_paths: &preferred_external_paths,
+        source_public_reexports: &source_public_reexports,
+    };
 
     assert_eq!(
         generated_type_display(
@@ -79,16 +102,13 @@ fn source_and_generated_type_displays_preserve_never_type() {
         RUST_NEVER_TYPE_DISPLAY,
     );
     assert_eq!(
-        source_type_display(
-            RUST_NEVER_TYPE_DISPLAY,
-            "demo",
-            &["errors".to_string()],
-            &external_crates,
-            &aliases,
-            &preferred_external_paths,
-            &source_public_reexports,
-        ),
+        source_type_display(RUST_NEVER_TYPE_DISPLAY, &errors_context),
         RUST_NEVER_TYPE_DISPLAY,
+    );
+    assert_eq!(
+        source_type_display("self", &root_context),
+        "self",
+        "a relative namespace marker with no item tail must fail closed instead of indexing an empty path"
     );
 }
 
@@ -104,23 +124,94 @@ fn source_type_display_resolves_public_reexport_after_qualifying_super_path() {
         "datafusion::execution::options::ParquetReadOptions".to_string(),
         "datafusion::datasource::file_format::options::ParquetReadOptions".to_string(),
     )]);
+    let module_path = [
+        "execution".to_string(),
+        "context".to_string(),
+        "parquet".to_string(),
+    ];
+    let context = SourceMetadataContext {
+        crate_name: "datafusion",
+        module_path: &module_path,
+        external_crates: &external_crates,
+        aliases: &aliases,
+        preferred_external_paths: &preferred_external_paths,
+        source_public_reexports: &source_public_reexports,
+    };
 
     assert_eq!(
-        source_type_display(
-            "super::super::options::ParquetReadOptions",
-            "datafusion",
-            &[
-                "execution".to_string(),
-                "context".to_string(),
-                "parquet".to_string(),
-            ],
-            &external_crates,
-            &aliases,
-            &preferred_external_paths,
-            &source_public_reexports,
-        ),
+        source_type_display("super::super::options::ParquetReadOptions", &context),
         "datafusion::datasource::file_format::options::ParquetReadOptions"
     );
+}
+
+/// Sysroot namespace inspection follows public re-exports and inherited `extern crate` aliases without Cargo.
+#[test]
+fn sysroot_source_metadata_resolves_public_identity_across_std_alloc_and_core()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let library_root = tmp.path().join("library");
+    let generated_root = tmp.path().join("generated");
+    fs::create_dir_all(&generated_root)?;
+    for crate_name in ["std", "alloc", "core"] {
+        let crate_root = library_root.join(crate_name);
+        fs::create_dir_all(crate_root.join("src/io/error"))?;
+        fs::write(
+            crate_root.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{crate_name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
+            ),
+        )?;
+    }
+    fs::write(
+        library_root.join("std/src/lib.rs"),
+        "extern crate alloc as alloc_crate;\npub mod io;\npub mod time;\n",
+    )?;
+    fs::write(
+        library_root.join("std/src/io/mod.rs"),
+        "pub use alloc_crate::io::Error;\npub trait Read { fn take(self, limit: u64); }\n",
+    )?;
+    fs::write(
+        library_root.join("std/src/time.rs"),
+        "pub struct SystemTime;\npub const UNIX_EPOCH: SystemTime = SystemTime;\n",
+    )?;
+    fs::write(library_root.join("alloc/src/lib.rs"), "pub mod io;\n")?;
+    fs::write(
+        library_root.join("alloc/src/io/mod.rs"),
+        "pub use core::io::Error;\n",
+    )?;
+    fs::write(library_root.join("core/src/lib.rs"), "pub mod io;\n")?;
+    fs::write(
+        library_root.join("core/src/io/mod.rs"),
+        "mod error;\npub use error::Error;\n",
+    )?;
+    fs::write(
+        library_root.join("core/src/io/error.rs"),
+        "pub struct Error;\n",
+    )?;
+
+    let mut inner = CacheInner {
+        rust_library_source_root: Some(Some(library_root)),
+        ..CacheInner::default()
+    };
+    let metadata = sysroot_source_metadata(&mut inner, &generated_root, "std::io::Error")
+        .ok_or_else(|| std::io::Error::other("expected std::io::Error namespace metadata"))?;
+    assert_eq!(metadata.canonical_path, "std::io::Error");
+    assert_eq!(metadata.definition_path.as_deref(), Some("core::io::error::Error"));
+    let RustItemKind::Type(type_info) = metadata.kind else {
+        return Err("expected std::io::Error type identity metadata".into());
+    };
+    assert!(type_info.methods.is_empty());
+    assert!(
+        sysroot_source_metadata(&mut inner, &generated_root, "std::io::Read").is_none(),
+        "identity-only sysroot inspection must not widen legacy trait-method checking"
+    );
+    let epoch = sysroot_source_metadata(&mut inner, &generated_root, "std::time::UNIX_EPOCH")
+        .ok_or_else(|| std::io::Error::other("expected typed sysroot constant metadata"))?;
+    let RustItemKind::Constant { type_display } = epoch.kind else {
+        return Err("expected std::time::UNIX_EPOCH constant metadata".into());
+    };
+    assert_eq!(type_display, "std::time::SystemTime");
+    Ok(())
 }
 
 /// Syntax-only metadata preserves owner type parameters while excluding unsupported lifetime and const parameters.
@@ -264,6 +355,63 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
     Ok(())
 }
 
+/// Public trait methods from a path dependency must retain their callable shapes on the fast namespace route.
+#[test]
+fn fast_source_metadata_retains_cross_crate_trait_method_signatures() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let prost = tmp.path().join("prost");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(prost.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+prost = { path = "../prost" }
+"#,
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        prost.join("Cargo.toml"),
+        "[package]\nname = \"prost\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        prost.join("src/lib.rs"),
+        r#"pub trait Buf {}
+
+pub trait Message: Sized {
+    /// Decode one message from an accepted buffer implementation.
+    fn decode(buf: impl Buf) -> Self;
+}
+"#,
+    )?;
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast(&root, "prost::Message")?
+        .ok_or_else(|| std::io::Error::other("expected fast trait metadata from dependency source"))?;
+    let RustItemKind::Trait(info) = &hit.metadata.kind else {
+        return Err("expected source trait metadata".into());
+    };
+    let decode = info
+        .items
+        .iter()
+        .find_map(|item| match item {
+            RustTraitAssoc::Function { name, signature } if name == "decode" => Some(signature),
+            RustTraitAssoc::Function { .. } | RustTraitAssoc::TypeAlias { .. } | RustTraitAssoc::Constant { .. } => {
+                None
+            }
+        })
+        .ok_or_else(|| std::io::Error::other("expected Message::decode metadata"))?;
+    assert_eq!(decode.params.len(), 1);
+    assert_eq!(decode.params[0].type_display, "implBuf");
+    Ok(())
+}
+
 /// Compiler-authored generated manifests resolve path dependencies without starting Cargo metadata discovery.
 #[test]
 fn manifest_path_dependency_resolves_renamed_package_without_cargo() -> Result<(), Box<dyn std::error::Error>> {
@@ -318,6 +466,66 @@ fn disk_cache_round_trips_inserted_items() -> Result<(), Box<dyn std::error::Err
     let cache = RustMetadataCache::new();
     let meta = cache.get_or_extract(tmp.path(), "demo::Thing", &|_| ())?;
     assert_eq!(meta.canonical_path, "demo::Thing");
+    Ok(())
+}
+
+/// Complete type metadata must not persist downstream consumer-only implementations as intrinsic type facts.
+#[test]
+fn complete_metadata_excludes_root_only_cross_crate_implementations()
+-> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let trait_owner = tmp.path().join("trait-owner");
+    let type_owner = tmp.path().join("type-owner");
+    for root in [tmp.path(), trait_owner.as_path(), type_owner.as_path()] {
+        fs::create_dir_all(root.join("src"))?;
+    }
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        r#"[package]
+name = "solver_root"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+trait-owner = { path = "trait-owner" }
+"#,
+    )?;
+    fs::write(tmp.path().join("src/lib.rs"), "pub fn load_root() {}\n")?;
+    fs::write(
+        trait_owner.join("Cargo.toml"),
+        r#"[package]
+name = "trait-owner"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+type-owner = { path = "../type-owner" }
+"#,
+    )?;
+    fs::write(
+        trait_owner.join("src/lib.rs"),
+        "pub trait Marker {}\nimpl Marker for type_owner::Thing {}\n",
+    )?;
+    fs::write(
+        type_owner.join("Cargo.toml"),
+        "[package]\nname = \"type-owner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(type_owner.join("src/lib.rs"), "pub struct Thing;\n")?;
+
+    // Seed and reload a dependency-type record to reproduce the cross-process consumer path.
+    let cache = RustMetadataCache::new();
+    cache.get_or_extract_complete(tmp.path(), "type_owner::Thing", &|_| ())?;
+    let fresh_cache = RustMetadataCache::new();
+    let cached = fresh_cache
+        .get_cached(tmp.path(), "type_owner::Thing")?
+        .ok_or("complete metadata was not persisted")?;
+    let RustItemKind::Type(info) = &cached.metadata.kind else {
+        return Err("expected type metadata".into());
+    };
+    assert!(!info
+        .implemented_traits
+        .iter()
+        .any(|implementation| implementation.path == "trait_owner::Marker"));
     Ok(())
 }
 
@@ -504,6 +712,38 @@ fn disk_cache_invalidates_when_workspace_fingerprint_changes() -> Result<(), Box
     Ok(())
 }
 
+/// Ownership metadata added by the current cache format must never be read from an older record with serde defaults,
+/// because that would silently turn a supported composite borrowing contract into a cache-dependent failure.
+#[test]
+fn disk_cache_rejects_pre_mutable_reference_metadata_format() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    fs::write(
+        tmp.path().join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    write_disk_cache(
+        tmp.path(),
+        &DiskCacheEnvelope {
+            cache_format: 21,
+            inspector_version: "cache-format-21".to_string(),
+            workspace_fingerprint: workspace_fingerprint(tmp.path())?,
+            items: HashMap::from([("demo::Thing".to_string(), dummy_type_metadata("demo::Thing"))]),
+            complete_items: HashSet::from(["demo::Thing".to_string()]),
+            misses: HashMap::new(),
+        },
+    )?;
+
+    let root = tmp.path().canonicalize()?;
+    let mut inner = CacheInner::default();
+    let report = ensure_disk_cache_loaded(&mut inner, root.as_path())?;
+    assert_eq!(report.reason, "miss.cache_format_changed");
+    assert!(
+        !inner.items.contains_key(&(root, "demo::Thing".to_string())),
+        "a pre-v22 record must be re-extracted rather than supplying empty tuple-composition metadata"
+    );
+    Ok(())
+}
+
 /// `Cargo.lock` does not content-checksum a `path = "..."` dependency, so editing that dependency's own source must
 /// still change the workspace fingerprint or the disk cache would keep serving pre-edit extracted metadata.
 #[test]
@@ -660,6 +900,9 @@ fn raw_identifier_alias_hits_existing_cached_item() -> Result<(), Box<dyn std::e
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -1070,9 +1313,14 @@ pub type ScalarFunctionImplementation =
     fs::write(
         dep.join("src").join("types.rs"),
         r#"use arrow::datatypes::DataType;
+use std::fs::File;
 
 pub struct ColumnarValue;
+pub struct Defaulted<OwnerName, F = File, Wrapped = Option<OwnerName>> {
+    marker: std::marker::PhantomData<(OwnerName, F, Wrapped)>,
+}
 pub struct Frame;
+pub const DEFAULT_FRAME: Frame = Frame;
 pub struct ScalarUDF {
     pub name: String,
     pub input_count: usize,
@@ -1147,6 +1395,27 @@ impl NestedFrame {
         "source_dep::ScalarFunctionImplementation"
     );
     assert_eq!(sig.return_type, "source_dep::types::ScalarUDF");
+
+    let default_frame = cache.get_or_extract(&root, "source_dep::types::DEFAULT_FRAME", &|_| ())?;
+    let RustItemKind::Constant { type_display } = &default_frame.kind else {
+        return Err("expected source dependency DEFAULT_FRAME constant metadata".into());
+    };
+    assert_eq!(type_display, "source_dep::types::Frame");
+
+    let defaulted = cache.get_or_extract(&root, "source_dep::types::Defaulted", &|_| ())?;
+    let RustItemKind::Type(defaulted_info) = &defaulted.kind else {
+        return Err("expected source dependency Defaulted metadata".into());
+    };
+    assert_eq!(defaulted_info.type_params, ["OwnerName", "F", "Wrapped"]);
+    assert_eq!(
+        defaulted_info.type_param_defaults,
+        [
+            None,
+            Some("std::fs::File".to_string()),
+            Some("Option<OwnerName>".to_string()),
+        ],
+        "syntax-only metadata must resolve imported defaults without reinterpreting owner parameters as types"
+    );
 
     let array_ref = cache.get_or_extract(&root, "public_api::arrow::array::ArrayRef", &|_| ())?;
     let RustItemKind::Type(type_info) = &array_ref.kind else {
@@ -1483,7 +1752,7 @@ pub use writer::Builder;
         .ok_or("expected append_data method metadata")?;
     assert_eq!(
         append_data.signature.params[1].type_display,
-        "&mut super::Header"
+        "&mut source_dep::Header"
     );
     let repeated = complete_cache.get_or_extract_complete(&root, "source_dep::Builder", &|_| ())?;
     assert!(

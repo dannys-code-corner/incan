@@ -239,7 +239,7 @@ impl<'a> IrEmitter<'a> {
                 let elems = elems?;
                 Ok(quote! { (#(#elems),*) })
             }
-            (T::Struct(_), IrExprKind::Struct { name, fields }) => self.emit_const_struct_value(name, fields),
+            (T::Struct(_), IrExprKind::Struct { name, fields, .. }) => self.emit_const_struct_value(name, fields),
             (T::StaticStr, IrExprKind::String(s)) => Ok(quote! { #s }),
             (T::StaticBytes, IrExprKind::Bytes(bytes)) => {
                 let lit = Literal::byte_string(bytes);

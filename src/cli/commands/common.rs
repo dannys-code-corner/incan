@@ -2919,12 +2919,13 @@ fn rust_inspect_workspace_fingerprint(
     cargo_lock_projection_root: Option<&str>,
     clear_cargo_lock: bool,
     cargo_target_dir: &Path,
+    rust_derive_probe_paths: &[String],
 ) -> String {
     let mut hasher = Sha256::new();
-    // Version 4 records a generated projection whose local package metadata matches the canonical Incan manifest.
+    // Version 5 also fingerprints semantic derive probes emitted into the generated inspection root.
     // This prevents `cargo metadata --locked` from rejecting an otherwise exact dependency lock solely because the
     // inspectable local root was previously emitted with the compiler's version.
-    hasher.update(b"incan_rust_inspect_workspace/4\0");
+    hasher.update(b"incan_rust_inspect_workspace/5\0");
     hasher.update(project_name.as_bytes());
     hasher.update(b"\0");
     hasher.update(cargo_package_name.as_bytes());
@@ -2950,6 +2951,11 @@ fn rust_inspect_workspace_fingerprint(
     }
     // Matches `ProjectGenerator::new(..., is_binary: true)` + `set_include_dev_dependencies(true)` for this workspace.
     hasher.update(b"layout_bin_devdeps\0");
+    hasher.update(b"derive_probes\0");
+    for path in rust_derive_probe_paths {
+        hasher.update(path.as_bytes());
+        hasher.update(b"\0");
+    }
 
     let stdlib = normalized_stdlib_features_for_rust_inspect_fingerprint(stdlib_features);
     for f in &stdlib {
@@ -3046,6 +3052,33 @@ fn rust_inspect_workspace_fingerprint(
         RUST_INSPECT_WORKSPACE_FINGERPRINT_PREFIX,
         hex::encode(hasher.finalize())
     )
+}
+
+/// Keep derive probes within the generated inspection root's declared Cargo dependency namespaces.
+///
+/// SDK path catalogs and dependency rebindings may also describe private or transitive artifact edges, so they are
+/// deliberately not namespace authority for source-level `@rust.derive(...)` paths.
+#[cfg(feature = "rust_inspect")]
+fn declared_rust_derive_probe_paths(
+    resolved: &ResolvedDependencies,
+    rust_derive_probe_paths: &[String],
+) -> Vec<String> {
+    let declared_crates = resolved
+        .dependencies
+        .iter()
+        .chain(resolved.dev_dependencies.iter())
+        .map(|dependency| dependency.crate_name.replace('-', "_"))
+        .collect::<BTreeSet<_>>();
+
+    rust_derive_probe_paths
+        .iter()
+        .filter(|path| {
+            path.split("::")
+                .next()
+                .is_some_and(|crate_name| declared_crates.contains(crate_name))
+        })
+        .cloned()
+        .collect()
 }
 
 /// Return the workspace directory used for Rust inspection metadata.
@@ -3276,6 +3309,7 @@ pub(crate) fn ensure_rust_inspect_workspace(
         false,
         cargo_target_dir,
         cargo_policy_flags,
+        &[],
     )
 }
 
@@ -3294,11 +3328,13 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     clear_cargo_lock: bool,
     cargo_target_dir: &Path,
     cargo_policy_flags: &[String],
+    rust_derive_probe_paths: &[String],
 ) -> CliResult<PathBuf> {
     let project_manifest =
         ProjectManifest::discover(project_root).map_err(|error| CliError::failure(error.to_string()))?;
     let cargo_lock_payload =
         project_rust_inspect_lock_projection(cargo_lock_payload, cargo_package_name, project_manifest.as_ref())?;
+    let rust_derive_probe_paths = declared_rust_derive_probe_paths(resolved, rust_derive_probe_paths);
     let fingerprint = rust_inspect_workspace_fingerprint(
         project_name,
         cargo_package_name,
@@ -3312,6 +3348,7 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
         cargo_lock_projection_root,
         clear_cargo_lock,
         cargo_target_dir,
+        rust_derive_probe_paths.as_slice(),
     );
     let rust_inspect_manifest_dir = rust_inspect_workspace_dir(project_root, project_name, &fingerprint);
     let fingerprint_path = rust_inspect_manifest_dir.join(RUST_INSPECT_WORKSPACE_FINGERPRINT_FILE);
@@ -3355,6 +3392,9 @@ pub(crate) fn ensure_rust_inspect_workspace_with_cargo_package_name(
     let mut rust_inspect_stub = String::new();
     for crate_name in referenced_crates {
         rust_inspect_stub.push_str(format!("use {crate_name} as _;\n").as_str());
+    }
+    for (index, derive_path) in rust_derive_probe_paths.iter().enumerate() {
+        rust_inspect_stub.push_str(format!("#[derive({derive_path})]\nstruct __IncanDeriveProbe{index};\n").as_str());
     }
     rust_inspect_stub.push_str("fn main() {}");
 
@@ -3513,6 +3553,111 @@ pub(crate) fn collect_rust_inspect_query_paths_from_programs<'a>(
     paths.into_iter().collect()
 }
 
+/// Collect exact Rust derive paths used by concrete Incan type declarations.
+///
+/// The explicit Cargo-backed inspection bootstrap emits one synthetic Rust type per path. Expanding that type records
+/// a candidate trait and associated-type contract for ABI selection; native rustc remains authoritative for the real
+/// Incan-authored declaration. This collector admits direct `rust::` item imports used by `@derive(...)` or
+/// `@rust.derive(...)` plus syntactically valid explicit Rust macro paths. The preparation boundary later limits those
+/// paths to declared dependency namespaces before generating the probe workspace.
+#[cfg(feature = "rust_inspect")]
+pub(crate) fn collect_rust_inspect_derive_probe_paths(modules: &[ParsedModule]) -> Vec<String> {
+    use crate::frontend::ast::{Declaration, Decorator, DecoratorArg, Expr, Literal};
+
+    /// Return decorators only for declarations that can emit a concrete Rust type.
+    fn declaration_decorators(declaration: &Declaration) -> Option<&[crate::frontend::ast::Spanned<Decorator>]> {
+        match declaration {
+            Declaration::Model(item) => Some(&item.decorators),
+            Declaration::Class(item) => Some(&item.decorators),
+            Declaration::Newtype(item) => Some(&item.decorators),
+            Declaration::Enum(item) => Some(&item.decorators),
+            Declaration::Import(_)
+            | Declaration::Const(_)
+            | Declaration::Static(_)
+            | Declaration::Trait(_)
+            | Declaration::Alias(_)
+            | Declaration::Partial(_)
+            | Declaration::TypeAlias(_)
+            | Declaration::Function(_)
+            | Declaration::TestModule(_)
+            | Declaration::VocabBlock(_)
+            | Declaration::Docstring(_) => None,
+        }
+    }
+
+    /// Validate a canonical Rust item path, including raw-identifier segments, before generating a derive probe.
+    fn is_valid_rust_path(path: &str) -> bool {
+        path.split("::").all(|segment| {
+            let segment = segment.strip_prefix("r#").unwrap_or(segment);
+            let mut chars = segment.chars();
+            chars
+                .next()
+                .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+                && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+        })
+    }
+
+    let mut probes = BTreeSet::new();
+    for module in modules {
+        let mut imported_paths = HashMap::new();
+        for declaration in &module.ast.declarations {
+            let Declaration::Import(import) = &declaration.node else {
+                continue;
+            };
+            let ImportKind::RustFrom {
+                crate_name,
+                path,
+                items,
+                ..
+            } = &import.kind
+            else {
+                continue;
+            };
+            let mut base = Vec::with_capacity(path.len() + 1);
+            base.push(crate_name.replace('-', "_"));
+            base.extend(path.iter().cloned());
+            for item in items {
+                let binding = item.alias.as_ref().unwrap_or(&item.name);
+                let mut segments = base.clone();
+                segments.push(item.name.clone());
+                imported_paths.insert(binding.clone(), segments.join("::"));
+            }
+        }
+        for declaration in &module.ast.declarations {
+            let Some(decorators) = declaration_decorators(&declaration.node) else {
+                continue;
+            };
+            for decorator in decorators {
+                let Some(decorator_id) = incan_core::lang::decorators::from_segments(&decorator.node.path.segments)
+                else {
+                    continue;
+                };
+                for argument in &decorator.node.args {
+                    let DecoratorArg::Positional(argument) = argument else {
+                        continue;
+                    };
+                    match (decorator_id, &argument.node) {
+                        (incan_core::lang::decorators::DecoratorId::Derive, Expr::Ident(name))
+                        | (incan_core::lang::decorators::DecoratorId::RustDerive, Expr::Ident(name)) => {
+                            if let Some(path) = imported_paths.get(name) {
+                                probes.insert(path.clone());
+                            }
+                        }
+                        (
+                            incan_core::lang::decorators::DecoratorId::RustDerive,
+                            Expr::Literal(Literal::String(path)),
+                        ) if path.contains("::") && is_valid_rust_path(path) => {
+                            probes.insert(path.clone());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    probes.into_iter().collect()
+}
+
 /// Return whether rust-inspect prewarm should run for the supplied environment value.
 #[cfg(feature = "rust_inspect")]
 fn parse_rust_inspect_prewarm_env(raw: Option<&str>) -> bool {
@@ -3554,16 +3699,47 @@ fn print_rust_inspect_prewarm_progress(message: String) {
 
 /// Marker understood by `rust_inspect` that selects its build-system-neutral `rust-project.json` loader.
 ///
-/// The generated projection still carries a manifest as structured dependency input, but a normal Oven command must
-/// never ask Cargo to interpret or build that projection.
-#[cfg(feature = "rust_inspect")]
 /// Mark one compiler-authored Rust inspection projection for receipt-bound direct-Rustc loading.
 #[cfg(feature = "rust_inspect")]
 pub(crate) fn mark_oven_direct_rust_inspection(manifest_dir: &Path) -> CliResult<()> {
+    let bootstrap_marker = manifest_dir.join(crate::rust_inspect::OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER);
+    if bootstrap_marker.is_file() {
+        fs::remove_file(&bootstrap_marker).map_err(|error| {
+            CliError::failure(format!(
+                "failed to retire explicit Oven Cargo inspection marker {}: {error}",
+                bootstrap_marker.display()
+            ))
+        })?;
+    }
     let marker = manifest_dir.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER);
     fs::write(&marker, b"receipt-bound direct-rustc inspection\n").map_err(|error| {
         CliError::failure(format!(
             "failed to mark Oven Rust inspection projection {}: {error}",
+            marker.display()
+        ))
+    })
+}
+
+/// Mark the explicit Oven publisher's generated inspection workspace for one Cargo-backed semantic bootstrap.
+///
+/// The publisher already owns Cargo authority while preparing a new dependency closure. Letting rust-analyzer load
+/// real proc-macro output here records generated trait implementations without teaching ordinary build/run paths to
+/// invoke Cargo or infer macro behavior from source text.
+#[cfg(feature = "rust_inspect")]
+pub(crate) fn mark_oven_cargo_bootstrap_rust_inspection(manifest_dir: &Path) -> CliResult<()> {
+    let direct_marker = manifest_dir.join(crate::rust_inspect::OVEN_DIRECT_INSPECTION_MARKER);
+    if direct_marker.is_file() {
+        fs::remove_file(&direct_marker).map_err(|error| {
+            CliError::failure(format!(
+                "failed to retire direct Oven inspection marker {}: {error}",
+                direct_marker.display()
+            ))
+        })?;
+    }
+    let marker = manifest_dir.join(crate::rust_inspect::OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER);
+    fs::write(&marker, b"explicit Oven Cargo semantic bootstrap\n").map_err(|error| {
+        CliError::failure(format!(
+            "failed to mark explicit Oven Cargo inspection projection {}: {error}",
             marker.display()
         ))
     })
@@ -5536,6 +5712,152 @@ from rust::rustix::fs import flock
         Ok(())
     }
 
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_derive_probes_include_only_used_direct_rust_imports() -> Result<(), Box<dyn std::error::Error>> {
+        let module = parsed_module_for_test(
+            r#"
+from rust::provider::prelude import Component as ForeignComponent, UnusedDerive
+
+@derive(ForeignComponent, Clone)
+model Velocity:
+  x: f32
+
+@rust.derive(ForeignComponent, "provider::derive::ExplicitComponent", "provider::r#async::Component", "provider::derive::Bad;Drop", Clone)
+model ExplicitVelocity:
+  x: f32
+"#,
+        )?;
+
+        assert_eq!(
+            collect_rust_inspect_derive_probe_paths(&[module]),
+            vec![
+                "provider::derive::ExplicitComponent".to_string(),
+                "provider::prelude::Component".to_string(),
+                "provider::r#async::Component".to_string(),
+            ],
+            "directly imported and explicit-path Rust derives that are actually invoked must become semantic probes"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_derive_probe_aliases_remain_module_scoped() -> Result<(), Box<dyn std::error::Error>> {
+        let left = parsed_module_for_test(
+            r#"
+from rust::left_provider import Component as SharedDerive
+
+@derive(SharedDerive)
+model LeftValue:
+  value: int
+"#,
+        )?;
+        let right = parsed_module_for_test(
+            r#"
+from rust::right_provider import Component as SharedDerive
+
+@rust.derive(SharedDerive)
+model RightValue:
+  value: int
+"#,
+        )?;
+
+        assert_eq!(
+            collect_rust_inspect_derive_probe_paths(&[left, right]),
+            vec![
+                "left_provider::Component".to_string(),
+                "right_provider::Component".to_string(),
+            ],
+            "the same visible alias in separate modules must retain both module-local Rust identities"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_derive_probes_are_limited_to_declared_dependency_namespaces() {
+        let resolved = ResolvedDependencies {
+            dependencies: vec![DependencySpec {
+                crate_name: "provider".to_string(),
+                version: Some("1".to_string()),
+                features: Vec::new(),
+                default_features: true,
+                source: DependencySource::Registry,
+                optional: false,
+                package: None,
+            }],
+            dev_dependencies: Vec::new(),
+        };
+        let probes = super::declared_rust_derive_probe_paths(
+            &resolved,
+            &["missing::Component".to_string(), "provider::Component".to_string()],
+        );
+        assert_eq!(probes, vec!["provider::Component"]);
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_workspace_does_not_emit_an_undeclared_derive_probe() -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        fs::write(
+            tmp.path().join("incan.toml"),
+            "[project]\nname = \"derive_probe\"\nversion = \"0.1.0\"\n",
+        )?;
+        let requirements = ProjectRequirements {
+            sdk_path_dependencies: vec![DependencySpec {
+                crate_name: "private_sdk".to_string(),
+                version: None,
+                features: Vec::new(),
+                default_features: true,
+                source: DependencySource::Path {
+                    path: tmp.path().join("private-sdk"),
+                },
+                optional: false,
+                package: None,
+            }],
+            sdk_dependency_rebindings: vec![SdkDependencyRebinding {
+                containing_artifact: LibraryArtifactMetadata {
+                    dependency_key: "compiled_provider".to_string(),
+                    manifest_name: "compiled_provider".to_string(),
+                    manifest_path: tmp.path().join("compiled-provider.incnlib"),
+                    crate_root: tmp.path().join("compiled-provider"),
+                    cargo_toml_path: tmp.path().join("compiled-provider/Cargo.toml"),
+                    crate_lib_path: tmp.path().join("compiled-provider/src/lib.rs"),
+                    kind: crate::frontend::library_manifest_index::LibraryArtifactKind::Materialized,
+                },
+                source_crate_root: tmp.path().join("old-private-sdk"),
+                provider_name: "private_sdk".to_string(),
+                dependency_key: "private_sdk".to_string(),
+                active_crate_root: tmp.path().join("private-sdk"),
+            }],
+            ..ProjectRequirements::default()
+        };
+        let resolved = ResolvedDependencies {
+            dependencies: Vec::new(),
+            dev_dependencies: Vec::new(),
+        };
+        let workspace = ensure_rust_inspect_workspace_with_cargo_package_name(
+            tmp.path(),
+            "derive_probe",
+            "derive_probe",
+            Some("2021".to_string()),
+            &resolved,
+            &requirements,
+            None,
+            None,
+            false,
+            &tmp.path().join("cargo-target"),
+            &[],
+            &["missing::Component".to_string(), "private_sdk::Component".to_string()],
+        )?;
+        let source = fs::read_to_string(workspace.join("src/main.rs"))?;
+        assert!(!source.contains("missing::Component"));
+        assert!(!source.contains("private_sdk::Component"));
+        assert!(!source.contains("__IncanDeriveProbe"));
+        Ok(())
+    }
+
     #[test]
     fn cargo_policy_uses_cli_extra_args_before_env_extra_args() {
         let policy = CargoPolicy::from_sources(
@@ -6689,6 +7011,7 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/target"),
+            &[],
         );
         let fp_b = super::rust_inspect_workspace_fingerprint(
             "probe",
@@ -6703,6 +7026,7 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/target"),
+            &[],
         );
         let workspace_fp = super::rust_inspect_workspace_fingerprint(
             "probe",
@@ -6717,6 +7041,7 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/target"),
+            &[],
         );
         let target_fp = super::rust_inspect_workspace_fingerprint(
             "probe",
@@ -6731,6 +7056,7 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/other-target"),
+            &[],
         );
         assert_eq!(fp_a, fp_b);
         assert_ne!(fp_a, workspace_fp);
@@ -6759,6 +7085,7 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/target"),
+            &[],
         );
         let fp_two = super::rust_inspect_workspace_fingerprint(
             "p",
@@ -6773,8 +7100,37 @@ pub def main() -> int:
             None,
             false,
             Path::new("/cache/target"),
+            &[],
         );
         assert_ne!(fp_one, fp_two);
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn rust_inspect_workspace_fingerprint_changes_when_derive_probes_change() {
+        let requirements = ProjectRequirements::default();
+        let resolved = ResolvedDependencies {
+            dependencies: Vec::new(),
+            dev_dependencies: Vec::new(),
+        };
+        let fingerprint = |probe: &str| {
+            super::rust_inspect_workspace_fingerprint(
+                "p",
+                "p",
+                None,
+                &resolved,
+                &requirements.stdlib_features,
+                &requirements.sdk_dependency_rebindings,
+                &requirements.sdk_path_dependencies,
+                &requirements.sdk_artifact_projections,
+                None,
+                None,
+                false,
+                Path::new("/cache/target"),
+                &[probe.to_string()],
+            )
+        };
+        assert_ne!(fingerprint("provider::A"), fingerprint("provider::B"));
     }
 
     #[cfg(feature = "rust_inspect")]
@@ -6847,6 +7203,7 @@ checksum = "fixture-checksum"
             None,
             false,
             &tmp.path().join("cargo-target"),
+            &[],
         );
         let output_dir = super::rust_inspect_workspace_dir(tmp.path(), "policy_probe", &fingerprint);
 
@@ -6861,6 +7218,7 @@ checksum = "fixture-checksum"
             None,
             false,
             &tmp.path().join("cargo-target"),
+            &[],
             &[],
         )?;
         assert_eq!(result, output_dir);
@@ -6907,6 +7265,7 @@ checksum = "fixture-checksum"
             None,
             false,
             &workspace.path().join("cargo-target"),
+            &[],
         );
         fs::write(artifact.join("src/lib.rs"), "pub fn value() -> u8 { 2 }\n")?;
         let after = super::rust_inspect_workspace_fingerprint(
@@ -6922,6 +7281,7 @@ checksum = "fixture-checksum"
             None,
             false,
             &workspace.path().join("cargo-target"),
+            &[],
         );
 
         assert_ne!(before, after);
@@ -7078,6 +7438,7 @@ checksum = "fixture-checksum"
             false,
             &workspace.path().join("cargo-target"),
             &[],
+            &[],
         )?;
 
         let cargo_manifest = fs::read_to_string(generated.join("Cargo.toml"))?;
@@ -7181,6 +7542,7 @@ checksum = "fixture-checksum"
             None,
             false,
             &workspace.path().join("cargo-target"),
+            &[],
             &[],
         )?;
         assert_eq!(generated, regenerated);
