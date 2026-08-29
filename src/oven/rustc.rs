@@ -2437,9 +2437,14 @@ fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcR
 /// or any leaf in a plan with no prebuilt project crates — may swap onto the release copy even when identities
 /// differ: that swap is exactly what unifies the root's trait identities (`serde::Serialize`) with the sealed
 /// standard library. A leaf that prebuilt extension crates recorded by exact identity hash must not: substituting a
-/// different identity removes the only artifact those records can resolve and the sealed closure stops loading, so
-/// such a leaf substitutes only onto the same filename — a pure byte-canonicalization onto the release's published
-/// copy.
+/// different identity removes the only artifact those records can resolve and the sealed closure stops loading.
+///
+/// In that conservative regime a matching filename is still not enough. The `-<hash>` suffix summarizes Cargo's
+/// declared unit inputs, but the strict version hash recorded by consumers also reflects the concrete build
+/// environment — a release base prebuilt on another machine publishes the same filename with a different SVH, and a
+/// retained consumer compiled here can only load the local build (#1227, published-toolchain lane). Substitution is
+/// therefore restricted to bit-identical artifacts — same filename and same content digest — making it a pure
+/// byte-canonicalization onto the release's published copy and nothing more.
 ///
 /// A build-script artifact is excluded in both regimes: `build.rs` can probe the ambient build environment and
 /// diverge despite identical recorded inputs. It is staged under `build/<package>/<identity>/out/`, unlike an
@@ -2466,7 +2471,9 @@ fn registry_leaf_substitution_is_safe(
     }
     let project_file_name = Path::new(&project_leaf.artifact.relative_path).file_name();
     let release_file_name = Path::new(&release_leaf.artifact.relative_path).file_name();
-    project_file_name.is_some() && project_file_name == release_file_name
+    project_file_name.is_some()
+        && project_file_name == release_file_name
+        && project_leaf.artifact.digest == release_leaf.artifact.digest
 }
 
 /// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
@@ -7914,11 +7921,13 @@ mod tests {
 
     #[test]
     fn registry_leaf_substitution_requires_the_same_compilation_identity() {
-        // Cargo's `-<hash>` extra-filename suffix summarizes the unit's full compilation identity, including
+        // Cargo's `-<hash>` extra-filename suffix summarizes the unit's declared compilation identity, including
         // resolved transitive features and dependency identities. Two closures can share every declared coordinate
         // and still compile a crate to different identities (#1227); substituting across identities removes the only
-        // artifact that satisfies retained dependents' recorded hashes.
-        let leaf = |relative_path: &str| OvenRustcRegistryLeaf {
+        // artifact that satisfies retained dependents' recorded hashes. The filename alone is still not a build
+        // witness: a base prebuilt on another machine publishes the same filename with a different strict version
+        // hash, so the conservative regime additionally demands bit-identical content.
+        let leaf = |relative_path: &str, digest_input: &str| OvenRustcRegistryLeaf {
             package: "rand_core".to_string(),
             version: "0.6.4".to_string(),
             crate_name: "rand_core".to_string(),
@@ -7927,16 +7936,21 @@ mod tests {
             artifact: OvenRustcArtifactExtern {
                 crate_name: "rand_core".to_string(),
                 relative_path: relative_path.to_string(),
-                digest: digest_bytes(relative_path.as_bytes()),
+                digest: digest_bytes(digest_input.as_bytes()),
             },
         };
-        let project = leaf("entry/deps/librand_core-cf99342fb36f73de.rlib");
-        let matching_release = leaf("base/deps/librand_core-cf99342fb36f73de.rlib");
-        let divergent_release = leaf("base/deps/librand_core-50f0d7ca30c6ae15.rlib");
+        let project = leaf("entry/deps/librand_core-cf99342fb36f73de.rlib", "local-build");
+        let matching_release = leaf("base/deps/librand_core-cf99342fb36f73de.rlib", "local-build");
+        let foreign_release = leaf("base/deps/librand_core-cf99342fb36f73de.rlib", "foreign-build");
+        let divergent_release = leaf("base/deps/librand_core-50f0d7ca30c6ae15.rlib", "foreign-build");
         assert!(super::same_registry_leaf_semantics(&project, &divergent_release));
         assert!(
             super::registry_leaf_substitution_is_safe(&project, &matching_release, false),
-            "an identical compilation identity in a different directory is a pure byte-canonicalization"
+            "a bit-identical artifact in a different directory is a pure byte-canonicalization"
+        );
+        assert!(
+            !super::registry_leaf_substitution_is_safe(&project, &foreign_release, false),
+            "a same-filename artifact from a foreign build has a different SVH: retained dependents cannot load it"
         );
         assert!(
             !super::registry_leaf_substitution_is_safe(&project, &divergent_release, false),
