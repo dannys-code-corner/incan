@@ -22641,3 +22641,49 @@ capability refund:
         "expected the unresolved-requirement diagnostic; got: {errs:?}"
     );
 }
+
+/// A `description` clause that is not compile-time text is rejected rather than silently stored as nothing.
+///
+/// Presence alone was not enough: collection keeps only text it can read, so a clause it cannot read left the
+/// declaration carrying no description while appearing to have one.
+#[test]
+fn a_capability_description_that_is_not_text_is_rejected() {
+    for source in [
+        "\ncapability refund:\n    description = 42\n",
+        "\ncapability refund:\n    description = [\"a\", \"b\"]\n",
+    ] {
+        let errs = check_str_err(source, "capability with a non-text description");
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("`description` that is not a text literal")),
+            "expected the non-text description diagnostic for {source:?}; got: {errs:?}"
+        );
+    }
+}
+
+/// Collection and checking must agree about what counts as a description, so a rejected clause never reaches the
+/// symbol table as a silently absent one while the declaration still typechecks.
+#[test]
+fn a_rejected_description_never_leaves_a_capability_looking_documented() -> Result<(), String> {
+    let source = "\ncapability refund:\n    description = 42\n";
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    let result = checker.check_program(&program);
+
+    assert!(result.is_err(), "a non-text description must not typecheck");
+
+    let symbol_id = checker
+        .symbols
+        .lookup("refund")
+        .ok_or("the capability was not collected")?;
+    let symbol = checker.symbols.get(symbol_id).ok_or("the symbol id did not resolve")?;
+    let SymbolKind::Capability(info) = &symbol.kind else {
+        return Err(format!("expected a capability symbol, got {:?}", symbol.kind));
+    };
+    assert_eq!(
+        info.description, None,
+        "collection stores nothing it cannot read, which is exactly why checking must reject the clause"
+    );
+    Ok(())
+}

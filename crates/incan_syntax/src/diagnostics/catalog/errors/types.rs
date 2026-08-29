@@ -2069,3 +2069,17 @@ pub fn capability_requirement_not_a_capability(path: &str, found: &str, span: Sp
     )
     .with_hint("Reference a `capability` declaration, or remove the entry")
 }
+
+/// Build the error emitted when a `description` clause is present but is not compile-time text.
+///
+/// The description's audience is a person deciding whether to grant the capability, and there is no later moment at
+/// which that review happens — so an expression to be evaluated at runtime cannot serve as one. Accepting a
+/// non-string would also record no description at all, leaving a declaration that looks documented while carrying
+/// nothing, which is worse than an obviously missing clause.
+pub fn capability_description_must_be_text(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Capability '{name}' has a `description` that is not a text literal"),
+        span,
+    )
+    .with_hint("Write the description as a quoted string, such as `description = \"Issue a refund\"`")
+}

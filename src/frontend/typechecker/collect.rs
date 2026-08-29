@@ -23,6 +23,22 @@ use self::decl_helpers::{
     collect_properties, inject_validate_methods, owner_resolved_type, resolve_declared_type, type_param_name_set,
 };
 
+/// Read a capability's `description` clause as compile-time text.
+///
+/// Shared by collection and checking so the two cannot disagree about what counts as a description. Collection uses
+/// it to decide what to store; checking uses it to decide whether the clause is acceptable. When the two carried
+/// separate rules, `description = 42` satisfied checking and stored nothing, leaving a declaration that looked
+/// documented while carrying no description at all.
+///
+/// The text has to exist at compile time because the audience is a person deciding whether to grant the capability.
+/// There is no later moment at which that review happens, so an expression to be evaluated at runtime cannot serve.
+pub(super) fn capability_description_text(expr: &Expr) -> Option<&str> {
+    match expr {
+        Expr::Literal(Literal::String(text)) => Some(text.as_str()),
+        _ => None,
+    }
+}
+
 /// Flatten a dotted reference expression into its path segments.
 ///
 /// A capability's `requires` entries parse as ordinary expressions so they can be checked symbol references rather
@@ -982,10 +998,11 @@ impl TypeChecker {
     /// are only recorded: a capability may require one declared later in the same module, so resolving them during
     /// collection would make declaration order significant.
     fn collect_capability(&mut self, cap: &CapabilityDecl, span: Span) {
-        let description = cap.description.as_ref().and_then(|expr| match &expr.node {
-            Expr::Literal(Literal::String(text)) => Some(text.clone()),
-            _ => None,
-        });
+        let description = cap
+            .description
+            .as_ref()
+            .and_then(|expr| capability_description_text(&expr.node))
+            .map(str::to_string);
 
         let scope = cap
             .scope

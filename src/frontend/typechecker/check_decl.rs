@@ -13,7 +13,7 @@ use crate::frontend::testing_markers::{
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty};
 
 use super::collect::decorators::resolve_decorator_id;
-use super::collect::dotted_path_segments;
+use super::collect::{capability_description_text, dotted_path_segments};
 use super::type_info::{
     RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
 };
@@ -2218,9 +2218,17 @@ impl TypeChecker {
         self.validate_decorators_rejecting_user_defined(&cap.decorators, "capability");
         self.reject_registry_description_decorators(&cap.decorators, "capability");
 
-        if cap.description.is_none() {
-            self.errors
-                .push(errors::capability_description_required(&cap.name, span));
+        match cap.description.as_ref() {
+            None => self
+                .errors
+                .push(errors::capability_description_required(&cap.name, span)),
+            // Presence is not enough. Collection stores only compile-time text, so a clause it cannot read leaves
+            // the declaration carrying no description while appearing to have one -- the same silent drop the
+            // `requires` list had.
+            Some(expr) if capability_description_text(&expr.node).is_none() => self
+                .errors
+                .push(errors::capability_description_must_be_text(&cap.name, expr.span)),
+            Some(_) => {}
         }
 
         for entry in &cap.requires {
