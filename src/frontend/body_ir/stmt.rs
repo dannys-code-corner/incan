@@ -107,6 +107,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let ty = self
             .callable_value_ty(&assignment.value)
             .unwrap_or_else(|| self.resolve_ty(assignment.value.span));
+        let materializes_range = self.expr_has_materialized_range_layout(&assignment.value);
         let value = self.lower_expr_to_operand(&assignment.value, scope, out);
         let local = match assignment.binding {
             ast::BindingKind::Reassign => self
@@ -125,6 +126,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             },
             span,
         });
+        if materializes_range {
+            self.materialized_range_locals.insert(local);
+        } else {
+            self.materialized_range_locals.remove(&local);
+        }
     }
 
     /// Lower `obj.field = value` (including the compound `obj.field <op>= value` form). The parser already

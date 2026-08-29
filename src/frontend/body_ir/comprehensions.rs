@@ -1,6 +1,7 @@
 //! Lowering for list and dict comprehensions and generator expressions, and the clause/terminal machinery they share.
 
 use super::args::*;
+use super::control_flow::intersect_range_layouts;
 use super::free_vars::*;
 use super::reads::*;
 use super::*;
@@ -159,6 +160,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // enclosing place directly after this point, and restoring the full binding map below prevents generator
         // clause/capture names from leaking into the following enclosing statement.
         let enclosing_bindings = self.bindings.clone();
+        // Only the first source is evaluated at construction. The rest is deferred until polling, so range-layout
+        // facts it creates belong to the generator frame rather than the enclosing straight-line body.
+        let saved_materialized_range_locals = self.materialized_range_locals.clone();
         let free_names = free_vars_in_generator_deferred_body(generator);
         let mut captured_operands = Vec::with_capacity(free_names.len());
         let mut capture_locals = Vec::with_capacity(free_names.len());
@@ -265,6 +269,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             span: hir_span_value,
         });
         self.bindings = enclosing_bindings;
+        self.materialized_range_locals = saved_materialized_range_locals;
 
         // `Generator::new` owns a boxed iterator in the legacy runtime, even when every captured source value is
         // Copy-shaped. Record that allocation fact directly rather than relying on incidental temporary locals.
@@ -302,8 +307,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out: &mut Vec<bir::Statement>,
     ) {
         let enclosing_bindings = self.bindings.clone();
+        let range_layouts_before = self.materialized_range_locals.clone();
         self.lower_comprehension_clauses(clauses, terminal, scope, span, out);
         self.bindings = enclosing_bindings;
+        // A comprehension clause may execute zero times, so a source-local range layout constructed only inside
+        // its body cannot become a fact about the following enclosing statement.
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
     }
 
     /// Recursively desugar a comprehension/generator clause chain into nested `Loop`/`If` statements, terminating

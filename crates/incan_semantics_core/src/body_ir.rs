@@ -1758,7 +1758,7 @@ pub enum AggregateKind {
 }
 
 impl AggregateKind {
-    /// Declared name of an [`Self::Range`] aggregate's inclusive lower bound.
+    /// Declared name of an [`Self::Range`] aggregate's lower bound.
     pub const RANGE_FIELD_START: &'static str = "start";
     /// Declared name of an [`Self::Range`] aggregate's upper bound, whose own inclusivity is
     /// [`Self::RANGE_FIELD_INCLUSIVE`].

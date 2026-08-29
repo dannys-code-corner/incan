@@ -88,6 +88,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
 
         // ---- Lower the body under the closure's own bindings, then restore the enclosing scope's ----
+        // The closure body is deferred. Its assignments must not update the enclosing body's proof that a local
+        // currently has the source-local range aggregate layout; its captured/writeable locals are a distinct
+        // invocation frame.
+        let saved_materialized_range_locals = self.materialized_range_locals.clone();
         let mut body_stmts = Vec::new();
         let result = self.lower_expr_to_operand(body_expr, closure_scope, &mut body_stmts);
         for (name, previous) in saved_bindings {
@@ -100,6 +104,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 }
             }
         }
+        self.materialized_range_locals = saved_materialized_range_locals;
 
         let closure_body = bir::ClosureBody {
             capture_locals,

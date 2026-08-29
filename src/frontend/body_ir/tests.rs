@@ -1274,26 +1274,30 @@ fn trait_method_default_uses_a_deferred_source_computation() -> Result<(), Box<d
 }
 
 #[test]
-fn unrepresentable_default_is_a_parameter_refusal_at_its_own_span() -> Result<(), Box<dyn std::error::Error>> {
+fn byte_string_default_is_a_deferred_body_ir_constant_at_its_own_span() -> Result<(), Box<dyn std::error::Error>> {
     let source = "def keep(payload: bytes = b\"x\") -> bytes:\n  return payload\n";
     let module = build(source, &["m", "unsupported_default"])?;
     let keep = module.bodies.first().ok_or("expected the keep function Body IR")?;
     let payload = keep.params.first().ok_or("expected the payload parameter")?;
 
-    let bir::CallableParamDefault::Unsupported { span, description } = &payload.default else {
-        return Err("bytes defaults must refuse instead of pretending to be executable".into());
+    let bir::CallableParamDefault::Source(default) = &payload.default else {
+        return Err("bytes defaults must retain their representable Body-IR constant".into());
     };
-    assert_eq!(description, "bytes literal");
     let default_start = source.find("b\"x\"").ok_or("missing bytes default spelling")?;
     assert_eq!(
-        *span,
+        default.span,
         HirSourceSpan::new(default_start, default_start + "b\"x\"".len()),
-        "the refusal must retain the unsupported default expression's exact source span"
+        "the deferred computation must retain the default expression's exact source span"
+    );
+    assert!(default.stmts.is_empty());
+    assert_eq!(
+        default.result,
+        bir::Operand::Constant(bir::Constant::Bytes(b"x".to_vec()))
     );
     assert_eq!(
         keep.locals.len(),
         1,
-        "refused speculative lowering must not leak a default temporary or external local: {keep:?}"
+        "a literal default must not allocate a speculative temporary or external local: {keep:?}"
     );
     assert!(
         !keep
@@ -1301,7 +1305,7 @@ fn unrepresentable_default_is_a_parameter_refusal_at_its_own_span() -> Result<()
             .stmts
             .iter()
             .any(|statement| matches!(&statement.kind, bir::StatementKind::Unsupported { .. })),
-        "the refusal belongs to the parameter contract, not the normal function body: {keep:?}"
+        "the deferred default belongs to parameter metadata, not the normal function body: {keep:?}"
     );
 
     Ok(())
@@ -1446,10 +1450,10 @@ fn invalid_default_is_rejected_before_body_ir_is_built() -> Result<(), Box<dyn s
 
 #[test]
 fn refused_default_restores_ownership_state_before_local_ids_are_reused() -> Result<(), Box<dyn std::error::Error>> {
-    // Lowering the partial moves one of its synthesized forwarding locals before the bytes literal refuses.
+    // Lowering the partial moves one of its synthesized forwarding locals before the unsupported binary refuses.
     // The transaction must discard that move before `second` reuses the local id in the normal body, or the
     // required root-scope drop would silently disappear.
-    let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + b\"x\") -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
+    let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + missing) -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
     let (module, _diagnostics) = build_after_expected_typecheck_errors(source, &["m", "default_ownership_rollback"])?;
     let choose = module
         .bodies
@@ -1457,10 +1461,13 @@ fn refused_default_restores_ownership_state_before_local_ids_are_reused() -> Res
         .find(|body| body.name == "choose")
         .ok_or("expected the choose Body IR")?;
     let value = choose.params.first().ok_or("expected choose's value parameter")?;
-    assert!(matches!(
-        &value.default,
-        bir::CallableParamDefault::Unsupported { description, .. } if description == "bytes literal"
-    ));
+    let bir::CallableParamDefault::Unsupported { description, .. } = &value.default else {
+        return Err(format!("the unsupported default must remain a refusal: {:?}", value.default).into());
+    };
+    assert!(
+        description.contains("binary operator Add"),
+        "the refusal must name the unsupported default operation: {description}"
+    );
     let second = choose
         .locals
         .iter()
@@ -2546,10 +2553,9 @@ fn lowers_a_nested_tuple_pattern_with_field_projected_bindings() -> Result<(), B
 
 #[test]
 fn byte_string_literal_pattern_lowers_to_an_explicit_placeholder() -> Result<(), Box<dyn std::error::Error>> {
-    // `bir::Constant` has no byte-string variant (mirrors `lower_literal`'s own gap for a plain literal
-    // *expression*), so a match with an unrepresentable arm bails the whole expression to `Unsupported` before
-    // lowering the scrutinee, rather than silently mis-rendering the pattern as a catch-all wildcard the way
-    // the existing Rust-emission backend's own `lower_pattern` does.
+    // `bir::Constant::Bytes` represents a byte value, but the closed `bir::Pattern` vocabulary does not yet model
+    // byte-pattern matching semantics. Refuse before lowering the scrutinee rather than silently mis-rendering
+    // the pattern as a catch-all wildcard the existing Rust-emission backend's own `lower_pattern` would emit.
     let source = concat!(
         "def check(data: bytes) -> str:\n",
         "  match data:\n",
@@ -2610,6 +2616,17 @@ fn local_for_binding(snapshot: &str, name: &str) -> Option<String> {
         let (id, tail) = line.trim().strip_prefix("local ")?.split_once(' ')?;
         tail.starts_with(&format!("{name} : ")).then(|| format!("_{id}"))
     })
+}
+
+/// Find the last binding with `name`, used where a later same-name assignment shadows the earlier value.
+fn last_local_for_binding(snapshot: &str, name: &str) -> Option<String> {
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let (id, tail) = line.trim().strip_prefix("local ")?.split_once(' ')?;
+            tail.starts_with(&format!("{name} : ")).then(|| format!("_{id}"))
+        })
+        .next_back()
 }
 
 #[test]
@@ -6180,6 +6197,7 @@ fn a_bound_range_iterates_with_the_same_facts_as_the_inline_range() -> Result<()
 fn a_bound_range_loop_drives_itself_from_the_range_value_fields() -> Result<(), Box<dyn std::error::Error>> {
     let source = concat!(
         "def total() -> int:\n",
+        "  mut r = 0..5\n",
         "  r = 1..=5\n",
         "  mut acc = 0\n",
         "  for i in r:\n",
@@ -6188,7 +6206,7 @@ fn a_bound_range_loop_drives_itself_from_the_range_value_fields() -> Result<(), 
     );
     let module = build(source, &["m", "bound_range_fields"])?;
     let snapshot = module.render_snapshot();
-    let range = local_for_binding(&snapshot, "r").ok_or("expected a local for `r`")?;
+    let range = last_local_for_binding(&snapshot, "r").ok_or("expected a local for `r`")?;
 
     for field in bir::AggregateKind::RANGE_FIELDS {
         assert!(
@@ -6200,6 +6218,79 @@ fn a_bound_range_loop_drives_itself_from_the_range_value_fields() -> Result<(), 
         !snapshot.contains("iter_next("),
         "a bound range must not be polled as a general iterable: {snapshot}"
     );
+    for operator in [">", ">=", "not", " and ", " or "] {
+        assert!(
+            snapshot.contains(operator),
+            "the loop must derive its stop condition from the bound value's dynamic inclusivity: {snapshot}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_range_returned_by_a_local_callable_refuses_before_field_projection() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def identity[T](value: T) -> T:\n",
+        "  return value\n",
+        "\n",
+        "def total() -> int:\n",
+        "  values = identity(0..4)\n",
+        "  for value in values:\n",
+        "    return value\n",
+        "  return 0\n",
+    );
+    let module = build(source, &["m", "opaque_range_parameter"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        snapshot.contains("unsupported(range value without a source-local Body IR range aggregate)"),
+        "a type spelling alone must not invent a Range aggregate layout: {snapshot}"
+    );
+    for field in bir::AggregateKind::RANGE_FIELDS {
+        assert!(
+            !snapshot.contains(&format!("values.{field}")),
+            "a callable result with no local range aggregate must never acquire a synthetic `{field}` projection: {snapshot}"
+        );
+    }
+    Ok(())
+}
+
+/// Deferred or zero-or-more expression scopes cannot make an enclosing call result into a source-local range
+/// aggregate. Closures and comprehension elements are expression-only in the current grammar, so assignments cannot
+/// occur in those bodies; these source fixtures instead pin the reachable boundary: capturing or yielding the opaque
+/// `Range[int]` value does not authorize later range-field projections from the enclosing binding.
+#[test]
+fn nested_or_deferred_range_uses_do_not_authorize_an_outer_range_projection() -> Result<(), Box<dyn std::error::Error>>
+{
+    let prefix = concat!(
+        "def identity[T](value: T) -> T:\n",
+        "  return value\n",
+        "\n",
+        "def total() -> int:\n",
+        "  mut r = identity(0..4)\n",
+    );
+    let suffix = concat!("  for value in r:\n", "    return value\n", "  return 0\n",);
+    let nested_bodies = [
+        "  unused = () => r\n",
+        "  unused = (r for ignored in [])\n",
+        "  unused = [r for ignored in []]\n",
+    ];
+
+    for (index, nested_body) in nested_bodies.iter().enumerate() {
+        let source = format!("{prefix}{nested_body}{suffix}");
+        let module = build(&source, &["m", "nested_range_provenance"])?;
+        let snapshot = module.render_snapshot();
+        assert!(
+            snapshot.contains("unsupported(range value without a source-local Body IR range aggregate)"),
+            "nested fixture {index} must leave the outer call result unproven: {snapshot}"
+        );
+        for field in bir::AggregateKind::RANGE_FIELDS {
+            assert!(
+                !snapshot.contains(&format!("r.{field}")),
+                "nested fixture {index} must not project a range field from the outer call result: {snapshot}"
+            );
+        }
+    }
     Ok(())
 }
 

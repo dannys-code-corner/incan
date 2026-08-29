@@ -33,10 +33,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
                 bir::Operand::place(place, fact, last_use)
             }
-            ast::Expr::Literal(lit) => match lower_literal(lit) {
-                Some(constant) => bir::Operand::Constant(constant),
-                None => self.unsupported_operand("bytes literal".to_string(), scope, span, out),
-            },
+            ast::Expr::Literal(lit) => bir::Operand::Constant(lower_literal(lit)),
             ast::Expr::Paren(inner) => self.lower_expr_to_operand(inner, scope, out),
             ast::Expr::Field(base, name) => {
                 if let Some(target) = self.local_fieldless_enum_variant_target(base, name) {

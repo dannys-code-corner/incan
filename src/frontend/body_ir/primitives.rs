@@ -122,30 +122,28 @@ pub(super) fn lower_binary_op(op: ast::BinaryOp) -> Option<bir::BinOp> {
 ///
 /// Every literal kind the AST can hold now maps to a [`bir::Constant`], byte strings included -- a `b"..."`
 /// becomes [`bir::Constant::Bytes`] and never a [`bir::Constant::Str`], because the two are distinct source types
-/// whose ownership and equality differ (see that variant's own docs for the owned-buffer rationale). The `Option`
-/// return therefore has no `None` case left; it is kept because [`BodyBuilder::lower_match_pattern`] consumes this
-/// through the same signature, and byte-string *patterns* are still refused up front by
-/// [`match_pattern_is_supported`] rather than lowered here.
-pub(super) fn lower_literal(lit: &ast::Literal) -> Option<bir::Constant> {
+/// whose ownership and equality differ (see that variant's own docs for the owned-buffer rationale). Byte-string
+/// *patterns* remain a separate, deliberately unsupported pattern-admission boundary; they do not make literal
+/// expression lowering partial.
+pub(super) fn lower_literal(lit: &ast::Literal) -> bir::Constant {
     match lit {
-        ast::Literal::Int(int_lit) => Some(bir::Constant::Int(int_lit.value)),
-        ast::Literal::Float(float_lit) => Some(bir::Constant::Float(float_lit.repr.clone())),
-        ast::Literal::Decimal(decimal_lit) => Some(bir::Constant::Float(decimal_lit.repr.clone())),
-        ast::Literal::String(s) => Some(bir::Constant::Str(s.clone())),
-        ast::Literal::Bool(b) => Some(bir::Constant::Bool(*b)),
-        ast::Literal::None => Some(bir::Constant::None),
-        ast::Literal::Bytes(bytes) => Some(bir::Constant::Bytes(bytes.clone())),
+        ast::Literal::Int(int_lit) => bir::Constant::Int(int_lit.value),
+        ast::Literal::Float(float_lit) => bir::Constant::Float(float_lit.repr.clone()),
+        ast::Literal::Decimal(decimal_lit) => bir::Constant::Float(decimal_lit.repr.clone()),
+        ast::Literal::String(s) => bir::Constant::Str(s.clone()),
+        ast::Literal::Bool(b) => bir::Constant::Bool(*b),
+        ast::Literal::None => bir::Constant::None,
+        ast::Literal::Bytes(bytes) => bir::Constant::Bytes(bytes.clone()),
     }
 }
 /// Canonical base name of the checked range-value type, as the typechecker spells it (`Range[int]`).
 ///
-/// `TypeChecker::check_range_expr` (`src/frontend/typechecker/check_expr/control_flow.rs`) is the only place that
-/// mints this generic, and the collection-type registry carries no entry for it, so lowering matches the base name
-/// that one producer writes rather than a [`CollectionTypeId`] that does not exist. Because that producer is
-/// unique, every value of this type in a well-typed program came from a `start..end` / `start..=end` expression --
-/// which is what lets [`BodyBuilder::lower_for`] read a range value's declared fields back without first proving
-/// where the value was built. The `range()` builtin is deliberately *not* this type: it resolves to a plain
-/// `Named("Range")` iterator (`src/frontend/symbols.rs`) and keeps its existing iteration path.
+/// `TypeChecker::check_range_expr` (`src/frontend/typechecker/check_expr/control_flow.rs`) produces this spelling,
+/// but a type spelling is not evidence of a Body-IR aggregate layout: parameters, returns, and user declarations
+/// can cross the frontend boundary with the same generic base. [`BodyBuilder::lower_for`] therefore combines this
+/// helper with a local provenance check before reading [`bir::AggregateKind::Range`] fields. The `range()` builtin
+/// is deliberately *not* this type: it resolves to a plain `Named("Range")` iterator
+/// (`src/frontend/symbols.rs`) and keeps its existing iteration path.
 pub(super) const RANGE_TYPE_BASE: &str = "Range";
 /// The per-iteration increment of every range the surface can spell.
 ///
@@ -156,9 +154,8 @@ pub(super) const RANGE_TYPE_BASE: &str = "Range";
 pub(super) const RANGE_UNIT_STEP: i64 = 1;
 /// The element type a checked range value yields per iteration, or `None` when `ty` is not a range value.
 ///
-/// Used both to recognise a range in iterable position and to recover the loop item type: the typechecker's
-/// `infer_iterator_element_type` has no `Range` arm, so `for i in some_range` resolves its pattern to
-/// [`IncanType::Unknown`], while the range's own single type argument says exactly what it produces.
+/// Used to recognise a range-shaped type and recover a checked loop item type. A caller must not use this
+/// type-level fact alone as permission to project a range aggregate's fields; see [`RANGE_TYPE_BASE`].
 pub(super) fn range_value_element_type(ty: &IncanType) -> Option<&IncanType> {
     match ty {
         IncanType::Generic { base, args } if base == RANGE_TYPE_BASE => args.first(),

@@ -1,5 +1,6 @@
 //! Lowering for `match` expressions and their patterns.
 
+use super::control_flow::intersect_range_layouts;
 use super::primitives::*;
 use super::reads::*;
 use super::refusals::*;
@@ -38,9 +39,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// union-type pattern narrowing, no RFC 021 field-alias resolution).
     ///
     /// Bails the whole expression to an explicit unsupported placeholder *before* lowering the scrutinee when any
-    /// arm's pattern contains a byte-string literal (the one pattern shape [`bir::Constant`] cannot represent --
-    /// see [`match_pattern_is_supported`]), mirroring [`Self::lower_binary`]'s "check before partially lowering"
-    /// precedent so an unrepresentable pattern never produces a partially-lowered `Rvalue::Match`.
+    /// arm's pattern contains a byte-string literal (a pattern form outside Body IR's current closed matching
+    /// vocabulary -- see [`match_pattern_is_supported`]), mirroring [`Self::lower_binary`]'s "check before
+    /// partially lowering" precedent so an unrepresentable pattern never produces a partially-lowered
+    /// `Rvalue::Match`.
     pub(super) fn lower_match(
         &mut self,
         subject: &ast::Spanned<ast::Expr>,
@@ -69,8 +71,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // more precise facts against projected places rooted at this same scrutinee.
         let scrutinee_operand = bir::Operand::place(scrutinee_place.clone(), bir::OwnershipFact::Borrow, false);
 
+        let range_layouts_before = self.materialized_range_locals.clone();
+        let mut range_layouts_after_arms = Vec::with_capacity(arms.len());
         let mut lowered_arms = Vec::with_capacity(arms.len());
         for arm in arms {
+            // At runtime exactly one arm executes. Lower every arm from the predecessor fact set so a range
+            // constructed only in an earlier textual arm cannot authorize field projections in a later one.
+            self.materialized_range_locals = range_layouts_before.clone();
             let arm_span = hir_span(arm.span);
             let arm_scope = self.new_scope(Some(scope), arm_span);
 
@@ -121,6 +128,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     }
                 }
             }
+            range_layouts_after_arms.push(self.materialized_range_locals.clone());
 
             lowered_arms.push(bir::MatchArm {
                 pattern,
@@ -130,6 +138,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 result,
             });
         }
+        // Code after a match must be valid for whichever arm matched. Preserve a layout fact only when every
+        // arm leaves it true; no-arm matches conservatively retain no constructed-layout fact.
+        self.materialized_range_locals = intersect_range_layouts(range_layouts_after_arms);
 
         let ty = self.resolve_ty(expr_span);
         self.push_assign_temp(
@@ -209,11 +220,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 let (fact, last_use) = self.ownership_fact_for_place(place, expected_ty);
                 bir::Pattern::Var(bir::PatternBinding { local, fact, last_use })
             }
-            // `match_pattern_is_supported` has already ruled out the one shape `lower_literal` cannot represent
-            // (a byte-string literal) for every arm in this match before `Self::lower_match` calls this method at
-            // all, so the `None` case here is unreachable in practice; `Constant::Unit` is a harmless, structurally
-            // valid fallback rather than a panic if that invariant is ever violated.
-            ast::Pattern::Literal(lit) => bir::Pattern::Literal(lower_literal(lit).unwrap_or(bir::Constant::Unit)),
+            // `match_pattern_is_supported` has already ruled out byte-string patterns before
+            // `Self::lower_match` calls this method. Literal expression lowering is total; this is a separate
+            // pattern-vocabulary boundary, retained until Body IR models byte-pattern matching semantics.
+            ast::Pattern::Literal(lit) => bir::Pattern::Literal(lower_literal(lit)),
             ast::Pattern::Tuple(items) => {
                 let element_types = tuple_element_types(expected_ty, items.len());
                 let fields = items

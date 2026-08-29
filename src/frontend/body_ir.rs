@@ -17,11 +17,11 @@
 //! and [`bir::Body::is_generator`]), all three RFC 018 `assert` forms -- plain condition, `assert value is P`
 //! (whose bindings stay live for the rest of the enclosing block), and `assert call() raises E` (see
 //! [`BodyBuilder::lower_assert`]) -- `pass`, `break` (including a value-producing `break` inside a `loop`
-//! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
+//! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string/bytes),
 //! arithmetic/comparison/boolean binary operators and all three unary operators, calls and method calls (including
 //! named, out-of-order, defaulted, and explicitly generic argument spellings -- see [`BodyBuilder::lower_call`]),
-//! field access, indexing, slicing, parenthesization, tuples, list/dict/set literals (list and dict spread entries
-//! included; set literals have no spread spelling), `model`/`class`
+//! field access, indexing, slicing, parenthesization, range values, tuples, list/dict/set literals (list and dict
+//! spread entries included; set literals have no spread spelling), `model`/`class`
 //! construction (named-only at the source level, bound to declared field order -- see
 //! [`BodyBuilder::lower_nominal_construction`]), expression-position `if`/`loop`, `try` (`?`), f-strings,
 //! list/dict comprehensions, lazy generator expressions, closure literals, partial callables (see
@@ -36,8 +36,7 @@
 //! with no statically proven shape against a callee whose fixed signature *is* resolvable, whose arity no stage can
 //! establish; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
 //! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
-//! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
-//! literals and a `Range` used as a value outside a `for` header; and
+//! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; and
 //! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
 //! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
 //!
@@ -367,6 +366,11 @@ struct BodyBuilder<'type_info, 'source> {
     /// Locals whose value has been moved out via a full-value (non-projected) read, so scope-exit drop insertion
     /// skips them.
     moved_out: HashSet<bir::LocalId>,
+    /// Locals whose current value was built by `lower_range_value` or copied from another such local. A checked
+    /// `Range[T]` spelling alone is not a layout contract: parameters, call results, imports, and user
+    /// declarations can use it without the four-field `AggregateKind::Range` representation. Only this
+    /// source-local provenance permits a later `for` loop to project range fields.
+    materialized_range_locals: HashSet<bir::LocalId>,
     /// Stack of the innermost-to-outermost enclosing loop's `break`-value target, pushed/popped by every loop-
     /// lowering path (`while`, `for`, and value-producing `loop` expressions) around its own body. `Some(local)`
     /// means the innermost loop is a value-producing `loop:` expression (see [`Self::lower_loop_expr`]) whose
@@ -401,6 +405,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             external_locals: HashMap::new(),
             remaining_reads: HashMap::new(),
             moved_out: HashSet::new(),
+            materialized_range_locals: HashSet::new(),
             loop_break_targets: Vec::new(),
             runtime_requirements: Vec::new(),
             panic_facts: Vec::new(),

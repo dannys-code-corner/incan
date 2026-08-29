@@ -31,6 +31,31 @@ fn index_read(idx_local: bir::LocalId) -> bir::Operand {
     bir::Operand::place(bir::Place::from_local(idx_local), bir::OwnershipFact::Copy, false)
 }
 
+/// Retain a local range-layout fact only when every control-flow successor retains it.
+pub(super) fn intersect_range_layouts(
+    states: Vec<std::collections::HashSet<bir::LocalId>>,
+) -> std::collections::HashSet<bir::LocalId> {
+    let mut states = states.into_iter();
+    let Some(mut common) = states.next() else {
+        return std::collections::HashSet::new();
+    };
+    for state in states {
+        common.retain(|local| state.contains(local));
+    }
+    common
+}
+
+/// Return the immediate inline range parts through redundant source parentheses.
+fn inline_range_parts(
+    expr: &ast::Spanned<ast::Expr>,
+) -> Option<(&ast::Spanned<ast::Expr>, &ast::Spanned<ast::Expr>, bool)> {
+    match &expr.node {
+        ast::Expr::Range { start, end, inclusive } => Some((start, end, *inclusive)),
+        ast::Expr::Paren(inner) => inline_range_parts(inner),
+        _ => None,
+    }
+}
+
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Lower `if`/`elif`/`else` into a [`bir::StatementKind::If`] chain. `elif` branches are folded into nested
     /// `else { if ... }` wrappers from the last branch inward (see the inline comment above the fold loop), and an
@@ -49,15 +74,21 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         };
         let cond = self.lower_expr_to_operand(cond_expr, scope, out);
 
+        let range_layouts_before = self.materialized_range_locals.clone();
         let then_block = self.lower_branch_block(&if_stmt.then_body, scope, span);
+        let mut range_layouts_after_branches = vec![self.materialized_range_locals.clone()];
+
+        self.materialized_range_locals = range_layouts_before.clone();
         let mut else_block = if_stmt
             .else_body
             .as_ref()
             .map(|else_body| self.lower_branch_block(else_body, scope, span));
+        range_layouts_after_branches.push(self.materialized_range_locals.clone());
 
         // Fold `elif` branches into nested `else { if ... }` wrappers, innermost (last elif) first, so the earlier
         // conditions end up evaluated first at the top of the chain once wrapped by the outer `if` pushed below.
         for (elif_cond, elif_body) in if_stmt.elif_branches.iter().rev() {
+            self.materialized_range_locals = range_layouts_before.clone();
             let mut wrapper = Vec::new();
             let cond_operand = self.lower_expr_to_operand(elif_cond, scope, &mut wrapper);
             let then_block = self.lower_branch_block(elif_body, scope, span);
@@ -70,7 +101,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 span,
             });
             else_block = Some(bir::Block { scope, stmts: wrapper });
+            range_layouts_after_branches.push(self.materialized_range_locals.clone());
         }
+
+        self.materialized_range_locals = intersect_range_layouts(range_layouts_after_branches);
 
         out.push(bir::Statement {
             kind: bir::StatementKind::If {
@@ -116,11 +150,16 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     ) -> bir::Operand {
         let hir_span_value = hir_span(span);
         let cond = self.lower_expr_to_operand(&if_expr.condition, scope, out);
+        let range_layouts_before = self.materialized_range_locals.clone();
         let then_block = self.lower_branch_block(&if_expr.then_body, scope, hir_span_value);
+        let then_range_layouts = self.materialized_range_locals.clone();
+        self.materialized_range_locals = range_layouts_before;
         let else_block = if_expr
             .else_body
             .as_ref()
             .map(|body| self.lower_branch_block(body, scope, hir_span_value));
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![then_range_layouts, self.materialized_range_locals.clone()]);
         out.push(bir::Statement {
             kind: bir::StatementKind::If {
                 cond,
@@ -149,6 +188,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let hir_span_value = hir_span(span);
         let ty = self.resolve_ty(span);
         let loop_scope = self.new_scope(Some(scope), hir_span_value);
+        let range_layouts_before = self.materialized_range_locals.clone();
         let result_local = self.new_temp(ty.clone(), loop_scope, hir_span_value);
 
         self.loop_break_targets.push(Some(result_local));
@@ -156,6 +196,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         self.lower_block_into(&loop_expr.body, loop_scope, &mut body_stmts);
         self.insert_scope_drops(&mut body_stmts, loop_scope);
         self.loop_break_targets.pop();
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
 
         out.push(bir::Statement {
             kind: bir::StatementKind::Loop {
@@ -185,6 +227,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         };
 
         let loop_scope = self.new_scope(Some(scope), span);
+        let range_layouts_before = self.materialized_range_locals.clone();
         // `while` never produces a value from `break`, so push `None`: a `break` inside this loop's body must
         // resolve to a plain valueless exit even if this `while` is lexically nested inside a value-producing
         // `loop:` expression (see `Self::loop_break_targets`'s docs for why the stack exists).
@@ -212,6 +255,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         self.lower_block_into(&while_stmt.body, loop_scope, &mut body_stmts);
         self.insert_scope_drops(&mut body_stmts, loop_scope);
         self.loop_break_targets.pop();
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
 
         out.push(bir::Statement {
             kind: bir::StatementKind::Loop {
@@ -267,7 +312,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // pattern must disappear after the statement. Keep the active lookup map for restoration while leaving the
         // loop locals themselves in Body IR for the loop's statements to reference.
         let enclosing_bindings = self.bindings.clone();
-        let Some(range) = self.range_loop_source(&for_stmt.iter, &iter_ty, scope, out) else {
+        let range_layouts_before = self.materialized_range_locals.clone();
+        let range = match self.range_loop_source(&for_stmt.iter, &iter_ty) {
+            Ok(range) => range,
+            Err(reason) => {
+                self.push_unsupported_stmt(reason, span, out);
+                self.bindings = enclosing_bindings;
+                self.materialized_range_locals = range_layouts_before;
+                return;
+            }
+        };
+        let Some(range) = range else {
             let loop_scope = self.new_scope(Some(scope), span);
             let item_local = self.declare_for_item_local(&for_stmt.pattern, &item_ty, loop_scope, span, &for_stmt.body);
             self.lower_general_iteration(
@@ -291,21 +346,22 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 },
             );
             self.bindings = enclosing_bindings;
+            self.materialized_range_locals =
+                intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
             return;
         };
         self.lower_range_counting_loop(for_stmt, &item_ty, &range, scope, span, out);
         self.bindings = enclosing_bindings;
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
     }
 
     /// The item type a `for` loop's pattern binds, falling back to a range value's own element type.
     ///
-    /// Normally this is just the typechecker's recorded type for the pattern span. A range value is the one case
-    /// that needs help: `TypeChecker::infer_iterator_element_type` has no `Range` arm, so `for i in some_range`
-    /// records `i` as [`IncanType::Unknown`] even though the range's own type argument says exactly what it
-    /// yields. Taking the element type from there is not lowering inventing a type -- it is reading the one the
-    /// typechecker already resolved for the range -- and without it the item local would declare as `?` and every
-    /// read of it would carry [`bir::OwnershipFact::Unknown`] rather than the `copy` an `int` gets, which would
-    /// leave a bound range iterating with visibly different facts from the inline header form.
+    /// Normally this is just the typechecker's recorded type for the pattern span. The generic `Range[T]` spelling
+    /// carries its item type, so it supplies the recovery fallback only when the checker has no fact. That type
+    /// fallback never grants aggregate-layout authority; [`Self::range_loop_source`] separately requires local
+    /// materialization provenance before field projection.
     fn for_item_type(&self, pattern: &ast::Spanned<ast::Pattern>, iter_ty: &IncanType) -> IncanType {
         let checked = self.resolve_ty(pattern.span);
         if !matches!(checked, IncanType::Unknown) {
@@ -318,29 +374,55 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// is a range *value*, or `None` when the loop belongs on the general-iteration path.
     ///
     /// An inline `start..end` header keeps its AST sub-expressions, because its bounds are still lowered directly
-    /// (and its `end` deliberately re-lowered per iteration -- see [`Self::lower_range_counting_loop`]). Anything
-    /// else is a range only if the typechecker says so, and reading its fields back afterwards is sound because
-    /// the checked range type has exactly one producer: `TypeChecker::check_range_expr` (see [`RANGE_TYPE_BASE`]).
-    /// Every value of that type therefore came from a range expression, which [`Self::lower_range_value`] is the
-    /// only lowering for -- so the [`bir::AggregateKind::Range`] field layout this returns a place into is
-    /// guaranteed to be the layout that value actually has. The `range()` builtin resolves to a different type and
-    /// keeps its existing iterator path.
+    /// (and its `end` deliberately re-lowered per iteration -- see [`Self::lower_range_counting_loop`]). A bound
+    /// range needs an independently proven local [`bir::AggregateKind::Range`] producer. A `Range[T]` type spelling
+    /// alone cannot prove the aggregate layout: parameters, call results, imported values, and user declarations
+    /// may carry it without `start`/`end`/`step`/`inclusive` fields. Those cases refuse visibly rather than inventing
+    /// a private range ABI. The `range()` builtin resolves to a different type and keeps its existing iteration path.
     fn range_loop_source<'ast>(
-        &mut self,
+        &self,
         iter_expr: &'ast ast::Spanned<ast::Expr>,
         iter_ty: &IncanType,
-        scope: bir::ScopeId,
-        out: &mut Vec<bir::Statement>,
-    ) -> Option<RangeLoopSource<'ast>> {
-        if let ast::Expr::Range { start, end, inclusive } = &iter_expr.node {
-            return Some(RangeLoopSource::Header {
-                start,
-                end,
-                inclusive: *inclusive,
-            });
+    ) -> Result<Option<RangeLoopSource<'ast>>, String> {
+        if let Some((start, end, inclusive)) = inline_range_parts(iter_expr) {
+            return Ok(Some(RangeLoopSource::Header { start, end, inclusive }));
         }
-        range_value_element_type(iter_ty)?;
-        Some(RangeLoopSource::Value(self.lower_expr_to_place(iter_expr, scope, out)))
+        if range_value_element_type(iter_ty).is_none() {
+            return Ok(None);
+        }
+        let Some(place) = self.materialized_range_place(iter_expr) else {
+            return Err("range value without a source-local Body IR range aggregate".to_string());
+        };
+        Ok(Some(RangeLoopSource::Value(place)))
+    }
+
+    /// Whether `expr` is a source-local value whose current Body-IR representation has the declared range layout.
+    /// This follows only direct range literals, parentheses, and copies of another proven local; calls, imports,
+    /// parameters, fields, and arbitrary type spellings remain unproven.
+    pub(super) fn expr_has_materialized_range_layout(&self, expr: &ast::Spanned<ast::Expr>) -> bool {
+        match &expr.node {
+            ast::Expr::Range { .. } => true,
+            ast::Expr::Paren(inner) => self.expr_has_materialized_range_layout(inner),
+            ast::Expr::Ident(name) => self
+                .bindings
+                .get(name)
+                .is_some_and(|local| self.materialized_range_locals.contains(local)),
+            _ => false,
+        }
+    }
+
+    /// Return the plain local place for a range value whose layout provenance is still live.
+    fn materialized_range_place(&self, expr: &ast::Spanned<ast::Expr>) -> Option<bir::Place> {
+        match &expr.node {
+            ast::Expr::Paren(inner) => self.materialized_range_place(inner),
+            ast::Expr::Ident(name) => self
+                .bindings
+                .get(name)
+                .copied()
+                .filter(|local| self.materialized_range_locals.contains(local))
+                .map(bir::Place::from_local),
+            _ => None,
+        }
     }
 
     /// Read one declared field off a materialized [`bir::AggregateKind::Range`] value.

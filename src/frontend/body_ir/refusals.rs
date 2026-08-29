@@ -164,9 +164,9 @@ pub(super) fn tuple_type_elements(ty: &IncanType) -> Option<&[IncanType]> {
     }
 }
 /// Whether `pattern` is representable by [`bir::Pattern`]'s closed vocabulary. The only unrepresentable shape is a
-/// byte-string literal pattern ([`bir::Constant`] has no byte-string variant -- see [`lower_literal`]'s own `None`
-/// case for the identical gap in plain literal *expressions*); every other pattern shape lowers structurally, with
-/// [`IncanType::Unknown`] field-type fallbacks where needed rather than an outright failure (see
+/// byte-string literal pattern: [`bir::Constant::Bytes`] represents byte *values*, but Body IR does not yet model
+/// byte-pattern matching semantics. Every other pattern shape lowers structurally, with [`IncanType::Unknown`]
+/// field-type fallbacks where needed rather than an outright failure (see
 /// [`BodyBuilder::lower_match_pattern`]'s own docs). Checked for every arm before [`BodyBuilder::lower_match`]
 /// lowers any of them, mirroring [`BodyBuilder::binary_op_is_supported`]'s "check before partially lowering"
 /// precedent.

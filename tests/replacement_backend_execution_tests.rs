@@ -1485,6 +1485,40 @@ def main() -> int:
     Ok(())
 }
 
+/// A materialized range aggregate remains outside the direct runtime profile. Preflight must reject the aggregate
+/// before evaluating either bound, so an observable bound cannot turn a refusal into a partial execution.
+#[test]
+fn replacement_refuses_a_range_aggregate_before_evaluating_its_bounds() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def bound() -> int:
+  assert false
+  return 4
+
+def main() -> int:
+  values = 0..bound()
+  return 1
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let error = execute_free_function(&module, "main", &[])
+        .err()
+        .ok_or("a range aggregate must refuse before replacement execution")?;
+    let range_start = source
+        .find("0..bound()")
+        .ok_or("fixture must contain a range aggregate")?;
+    let span = error
+        .primary_span()
+        .ok_or("range aggregate refusal must retain its source span")?;
+
+    assert!(error.to_string().contains("range aggregate"));
+    assert_eq!(span.start, range_start);
+    assert_eq!(span.end, range_start + "0..bound()".len());
+    assert!(
+        !error.to_string().contains("assertion failed"),
+        "the range boundary must reject before it can execute the bound call: {error}"
+    );
+    Ok(())
+}
+
 /// A missing direct-entry argument refuses at the original declaration body, whose call is the selected entrypoint.
 #[test]
 fn replacement_refuses_a_missing_required_callable_argument_at_the_declaration_body_span()
@@ -2651,6 +2685,63 @@ def main() -> int:
             && !temporary.path().join("target/incan").exists()
             && !temporary.path().join(".incan/backend/receipt.json").exists(),
         "an unsupported default must not generate legacy output or publish a replacement receipt"
+    );
+    Ok(())
+}
+
+/// A source-selected range value is rejected at the aggregate before replacement can execute its bound call,
+/// generate a legacy artifact, or publish a receipt.
+#[test]
+fn replacement_cli_refuses_a_range_aggregate_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    let source = r#"def bound() -> int:
+  assert false
+  return 4
+
+def main() -> int:
+  values = 0..bound()
+  return 1
+"#;
+    fs::write(&entrypoint, source)?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(!output.status.success(), "a range aggregate must visibly refuse");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let range_start = source
+        .find("0..bound()")
+        .ok_or("fixture must contain a range aggregate")?;
+    let range_end = range_start + "0..bound()".len();
+    assert!(
+        combined.contains("range aggregate"),
+        "refusal must name the unsupported aggregate: {combined}"
+    );
+    assert!(
+        combined.contains(&format!(
+            "primary Incan source location: {}:{range_start}..{range_end}",
+            entrypoint.display()
+        )),
+        "refusal must retain the aggregate span: {combined}"
+    );
+    assert!(
+        !combined.contains("assertion failed")
+            && !combined.contains("Generated Rust project")
+            && !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "a range aggregate must not execute its bounds, fall back, or publish a receipt"
     );
     Ok(())
 }
