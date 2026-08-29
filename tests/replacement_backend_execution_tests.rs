@@ -1473,11 +1473,15 @@ def main() -> int:
     };
     let default_start = source
         .find("b\"x\"")
-        .ok_or("default fixture must contain bytes literal")?;
+        .ok_or("default fixture must contain a byte-string literal")?;
     let span = error.primary_span().ok_or("default refusal must retain source span")?;
     assert_eq!(span.start, default_start);
     assert_eq!(span.end, default_start + "b\"x\"".len());
-    assert!(error.to_string().contains("bytes literal"));
+    // The refusal moved but did not weaken. Before #1165 a byte-string literal had no `bir::Constant`, so
+    // *lowering* refused it; now it lowers and the executor refuses the value, because this profile carries no
+    // `bytes` runtime representation. The property under test is unchanged -- refused at the default's own span,
+    // with no receipt -- so only the construct's name in the message moves.
+    assert!(error.to_string().contains("byte-string literal"));
     Ok(())
 }
 
@@ -2632,7 +2636,7 @@ def main() -> int:
     let default_start = source.find("b\"x\"").ok_or("fixture must contain bytes default")?;
     let default_end = default_start + "b\"x\"".len();
     assert!(
-        combined.contains("bytes literal"),
+        combined.contains("byte-string literal"),
         "refusal must name the unsupported default: {combined}"
     );
     assert!(
