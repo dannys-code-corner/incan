@@ -57,7 +57,7 @@ use crate::frontend::registry_metadata::{
     collect_checked_registry_metadata, materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::frontend::{diagnostics, lexer, parser, typechecker};
+use crate::frontend::{diagnostics, lexer, parser, typechecker, vocab_desugar_pass};
 use crate::generated_cache::resolve_generated_cargo_target;
 #[cfg(feature = "rust_inspect")]
 use crate::library_manifest::LibraryRustAbi;
@@ -2560,12 +2560,53 @@ fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliR
     }
 }
 
+/// Prepare one parsed replacement-backend module for [`build_body_ir_module_v0`]'s input contract.
+///
+/// The legacy pipeline owes Body IR a desugared, feature-projected program, and it pays that debt at parse time:
+/// `CompilationSession::parse_source` (`src/cli/commands/common.rs`) parses, runs
+/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then projects the result through the session's active
+/// package features — all before the program is typechecked or lowered. This applies the same two steps in the
+/// same order for the replacement path, so a vocab-authored body means the same thing through either backend
+/// (#1166).
+///
+/// Ordering matters beyond the pair itself. The caller applies this immediately after parsing, ahead of
+/// [`replacement_module_profile_error`] and typechecking, because both of those must see the projected program: an
+/// import behind an inactive feature is not part of this compilation, and refusing it as an unsupported profile
+/// boundary would report a declaration the build does not contain.
+///
+/// Two deliberate differences from the legacy session, both consequences of this path reading no project manifest.
+/// No package feature is active, so every `when feature(...)` declaration projects away here — which is the
+/// correct answer for a compilation with no feature graph, not a shortcut. And feature *names* are not validated
+/// against a declared-feature set, because there is no manifest to declare one; that check stays a project-level
+/// concern rather than becoming a manifest-free approximation that could disagree with the legacy path.
+///
+/// # Errors
+///
+/// Returns the desugar pass's own diagnostics unchanged. A scoped-DSL surface whose owning library manifest is
+/// unavailable is refused there, at that boundary, and this deliberately adds no second diagnostic for it.
+fn apply_body_ir_input_contract(
+    mut program: crate::frontend::ast::Program,
+    entrypoint: &Path,
+) -> Result<crate::frontend::ast::Program, Vec<diagnostics::CompileError>> {
+    let entrypoint_display = entrypoint.to_string_lossy();
+    vocab_desugar_pass::desugar_program_vocab_blocks(
+        &mut program,
+        Some(entrypoint_display.as_ref()),
+        &LibraryManifestIndex::default(),
+    )?;
+    Ok(program.projected_for_features(&BTreeSet::new()))
+}
+
 /// Execute the first #988 replacement-backend profile directly from typed Body IR.
 ///
 /// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
 /// containing free functions and executes its zero-argument `main` body through the replacement executor. A
 /// requested replacement build therefore either records a replacement receipt over a real Body-IR result or fails
 /// visibly at the original Incan span; it can never reach `IrCodegen` as an implicit compatibility fallback.
+///
+/// The pipeline is lex, parse, [`apply_body_ir_input_contract`], module-profile gate, typecheck, then
+/// [`build_body_ir_module_v0`]. The contract step is not optional sequencing: without it this path would hand
+/// lowering a program the legacy path would never have produced, which is the divergence #1166 closes.
 fn build_replacement_file_report(
     file_path: &str,
     options: BuildCommandOptions,
@@ -2595,6 +2636,12 @@ fn build_replacement_file_report(
     let program = parser::parse(&tokens).map_err(|errors| {
         CliError::failure(format!(
             "replacement backend could not parse {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let program = apply_body_ir_input_contract(program, &entrypoint).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not desugar {}: {errors:?}",
             entrypoint.display()
         ))
     })?;
@@ -18635,6 +18682,158 @@ pub model Nested:
             .err()
             .ok_or("a source-free provider without a sealed package Loaf must fail closed")?;
         assert!(missing_handoff.to_string().contains("without its sealed package Loaf"));
+        Ok(())
+    }
+
+    // ---- Body IR input contract (#1166) ----
+
+    /// A raw vocab declaration whose owning library manifest this compilation never loaded.
+    ///
+    /// The parser only produces one of these when an import activates a library vocabulary, which the replacement
+    /// module profile still refuses, so building it by hand is the only way to put the desugar pass in front of a
+    /// node it must resolve.
+    fn undesugared_vocab_declaration() -> Spanned<Declaration> {
+        Spanned::new(
+            Declaration::VocabBlock(crate::frontend::ast::VocabBlockStmt {
+                keyword: "query".to_string(),
+                keyword_binding: crate::frontend::ast::VocabKeywordBinding {
+                    is_declaration_owned_clause: false,
+                    dependency_key: "demo.query".to_string(),
+                    activation_namespace: "demo".to_string(),
+                    surface_kind: incan_vocab::KeywordSurfaceKind::FunctionDecl,
+                    compound_tokens: Vec::new(),
+                    placement: incan_vocab::KeywordPlacement::TopLevel,
+                    clause_body_kind: None,
+                },
+                decorators: Vec::new(),
+                signature_head: None,
+                header_args: Vec::new(),
+                body: Vec::new(),
+                body_item_trailing_commas: Vec::new(),
+            }),
+            Span::new(0, 1),
+        )
+    }
+
+    /// Build the replacement-backend options a `--backend replacement` build resolves to.
+    fn replacement_build_options() -> BuildCommandOptions {
+        BuildCommandOptions {
+            backend: BackendSelectionOptions {
+                requested: BackendKind::Replacement,
+                explicit: true,
+                shadow: false,
+                fallback_policy: FallbackPolicy::Refuse,
+            },
+            ..BuildCommandOptions::default()
+        }
+    }
+
+    #[test]
+    fn the_contract_step_refuses_a_vocab_declaration_with_the_desugar_pass_own_diagnostic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The replacement path owes Body IR a desugared program. This is what "owes" means concretely: a vocab
+        // declaration whose library is unavailable stops here, with the resolution failure the desugar pass already
+        // reports, rather than travelling on to become a lowering refusal at the same span.
+        let program = crate::frontend::ast::Program {
+            declarations: vec![undesugared_vocab_declaration()],
+            ..Default::default()
+        };
+
+        let errors = apply_body_ir_input_contract(program, Path::new("/fixture/main.incn"))
+            .err()
+            .ok_or("an undesugared vocab declaration must not pass the Body IR input contract")?;
+        let messages = errors
+            .iter()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            messages.contains("desugarer resolution failed") && messages.contains("demo.query"),
+            "the desugar pass must own this diagnostic, naming the unavailable dependency: {messages}"
+        );
+        assert!(
+            !messages.contains("input-contract violation"),
+            "one unavailable-manifest condition must not produce two divergent diagnostics: {messages}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_contract_step_projects_a_body_behind_an_inactive_feature_out_of_the_program()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Feature projection has to happen before the module-profile gate and before lowering, so this checks the
+        // program the rest of the pipeline actually receives rather than only the eventual build outcome.
+        let source =
+            "when feature(\"beta\"):\n    def gated() -> int:\n        return 7\n\ndef main() -> int:\n    return 1\n";
+        let tokens = lexer::lex(source).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        assert_eq!(
+            parsed.declarations.len(),
+            2,
+            "the fixture must carry a gated declaration, or the assertion below proves nothing"
+        );
+
+        let projected = apply_body_ir_input_contract(parsed, Path::new("/fixture/main.incn"))
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let names = projected
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.node {
+                Declaration::Function(function) => Some(function.name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["main"],
+            "a declaration behind an inactive feature must not survive the contract step"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_never_executes_a_main_behind_an_inactive_feature() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The end-to-end consequence, through the real CLI entry point: with no active feature there is no `main`
+        // to lower, so the build must refuse rather than execute a body this compilation does not contain.
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(
+            &entrypoint,
+            "when feature(\"beta\"):\n    def main() -> int:\n        return 7\n",
+        )?;
+
+        let error = build_replacement_file_report(
+            &entrypoint.to_string_lossy(),
+            replacement_build_options(),
+            &BuildReportOptions::default(),
+        )
+        .err()
+        .ok_or("a `main` behind an inactive feature must not produce a successful replacement build")?;
+        assert!(
+            !error.to_string().contains("7"),
+            "no gated body may have been executed: {error}"
+        );
+
+        // Same source, same contract, through the direct API the parity corpus and unit tests use: both entry
+        // points must agree that nothing was lowered, which is the point of stating the contract at all.
+        let tokens =
+            lexer::lex(&fs::read_to_string(&entrypoint)?).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let program = apply_body_ir_input_contract(parsed, &entrypoint)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let module_path = vec!["main".to_string()];
+        let mut checker = typechecker::TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+        assert!(
+            body_ir.bodies.is_empty(),
+            "the direct API must lower the same nothing the CLI path did: {:?}",
+            body_ir.bodies.iter().map(|body| &body.name).collect::<Vec<_>>()
+        );
         Ok(())
     }
 }

@@ -35,9 +35,13 @@
 //! which refuses as an unresolved field layout because the typechecker records no field binding for it; a spread
 //! with no statically proven shape against a callee whose fixed signature *is* resolvable, whose arity no stage can
 //! establish; a spread to a locally held callable value; `if let`/`while let` conditions and destructuring
-//! comprehension/generator clauses; `await` and `race for`; and
-//! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
-//! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
+//! comprehension/generator clauses; and `await` and `race for`. The sub-issues are #1158 through #1167, plus
+//! #1172 for evaluable callable defaults.
+//!
+//! Vocab and scoped-DSL surface nodes are deliberately *not* on that list. They are not unmodeled language
+//! constructs awaiting a lowering; the desugar pass resolves them before this module runs, and one reaching here
+//! means a caller skipped it. See [`build_body_ir_module_v0`]'s input contract (#1166) for what a caller owes and
+//! for how such a node is named when it arrives anyway.
 //!
 //! One entry in that residue is a decided boundary rather than pending work, and is stated here so it is not read
 //! as a gap. An `unsafe:` region refuses permanently: it introduces no Incan scope, so inlining its statements
@@ -82,6 +86,34 @@ use crate::provider::ProviderPlan;
 /// there is no body to lower. Method [`CompilerNodeId`]s are *not* assigned by [`crate::frontend::hir::build_hir_v0`]
 /// today (declaration-level HIR only assigns ids to top-level declarations), so this function constructs its own
 /// method ids by scoping the method name under its owning declaration's name — see [`lower_method_body`].
+///
+/// # Input contract
+///
+/// `program` must be a **desugared, feature-projected, typechecked** module, and `type_info` must be the checker
+/// output for exactly that projected program. Every caller owes the same preparation the legacy pipeline performs
+/// before emission (`CompilationSession::parse_source` in `src/cli/commands/common.rs`: parse, then
+/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then feature projection, and only then typecheck), so a
+/// vocab-authored body means the same thing through either backend (#1166).
+///
+/// What must **not** cross this boundary:
+///
+/// - Raw vocabulary syntax — `ast::Declaration::VocabBlock`, `ast::Statement::VocabBlock`,
+///   `ast::Statement::VocabExpressionItem`, `ast::Expr::VocabBlock` — and scoped-DSL surface nodes
+///   ([`SurfaceFeatureKey::ScopedDslSurface`], and the `LeadingDotPath`/`ScopedGlyph`/`ScopedSymbolCall` payloads of
+///   `ast::Expr::Surface`). The desugar pass owns their meaning; lowering them here would give one source construct two
+///   independent definitions.
+/// - Declarations gated behind a package feature that is not active. Feature projection is part of the contract, not an
+///   optimization: a body behind an inactive feature must not be lowered at all, because lowering it would put a body
+///   into Body IR that the compilation does not contain.
+///
+/// What must cross it: ordinary declarations, statements, and expressions, including the async surface
+/// (`await`, `race for`), which is genuine language surface no desugarer removes.
+///
+/// The contract is enforced rather than assumed. A vocab or scoped-DSL node that still arrives lowers to a
+/// `bir::StatementKind::Unsupported` whose description names it as a caller contract violation (see the `refusals`
+/// submodule), so a broken caller is a visible diagnostic at the original span instead of a silently missing body.
+/// Those refusals are a safety net, never the normal path; the desugar pass keeps ownership of the real diagnostic
+/// when a vocabulary's library manifest is unavailable.
 pub fn build_body_ir_module_v0(
     program: &ast::Program,
     module_path: &[String],
@@ -114,6 +146,10 @@ pub fn build_body_ir_module_v0_with_provider_plan(
 ///
 /// The catalogue is deliberately private to this frontend bridge. Its entries must come from a selected checked
 /// [`ProviderPlan`], never from a backend-specific caller or a source-name convention.
+///
+/// The input contract on `program` and `type_info` is [`build_body_ir_module_v0`]'s, unchanged: a desugared,
+/// feature-projected, typechecked module. The catalogue widens which *calls* lower, never which source surface is
+/// admitted, so a caller that skips the desugar pass violates the contract here exactly as it would there.
 fn build_body_ir_module_v0_with_provider_operations(
     program: &ast::Program,
     module_path: &[String],

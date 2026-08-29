@@ -2,20 +2,58 @@
 
 use super::*;
 
+/// Name one node that [`build_body_ir_module_v0`]'s input contract required the *caller* to resolve before
+/// lowering, rather than one this stage has simply not modeled yet (#1166).
+///
+/// The distinction is worth carrying in the diagnostic text. An unmodeled construct is remaining work on Body IR
+/// and tells a reader to wait for the owning sub-issue; a node the desugar pass should have removed is a broken
+/// pipeline, and the repair belongs to whoever assembled the program. Wording every such refusal the same way
+/// keeps the second from being read as the first.
+///
+/// This never becomes the primary diagnostic for a vocabulary whose library manifest is unavailable. The desugar
+/// pass already refuses that, at that boundary, and a second message for one condition would be two answers to
+/// the same question. This fires only when a caller skipped the pass altogether.
+fn undesugared_label(node: &str) -> String {
+    format!("undesugared {node} (Body IR input-contract violation: caller skipped the vocab desugar pass)")
+}
 /// Short diagnostic label for a statement kind v0 does not lower.
 ///
 /// Statement-position `loop:` is named explicitly because it is the one entry here whose Body IR vocabulary
 /// already exists: [`BodyBuilder::lower_loop_expr`] emits [`bir::StatementKind::Loop`] for the expression
 /// spelling, and only [`BodyBuilder::lower_stmt_into`]'s dispatch is missing (#1101). Leaving it under the
 /// generic "statement" label made a five-line dispatch gap read like an unmodeled construct.
+///
+/// The raw vocabulary forms take the [`undesugared_label`] wording instead, because neither is a lowering gap:
+/// both are syntax the desugar pass owns and resolves before this module ever runs. An [`ast::Statement::Surface`]
+/// could be either, so it defers to [`surface_stmt_label`] to decide from its key.
 pub(super) fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
     match stmt {
         ast::Statement::Loop(_) => "statement-position `loop:`".to_string(),
         ast::Statement::Unsafe(_) => "unsafe block".to_string(),
-        ast::Statement::VocabExpressionItem(_) => "vocab expression item".to_string(),
-        ast::Statement::Surface(_) => "surface statement".to_string(),
-        ast::Statement::VocabBlock(_) => "vocab block".to_string(),
+        ast::Statement::VocabExpressionItem(_) => undesugared_label("vocab expression item"),
+        ast::Statement::Surface(surface) => surface_stmt_label(&surface.key),
+        ast::Statement::VocabBlock(_) => undesugared_label("vocab block"),
         _ => "statement".to_string(),
+    }
+}
+/// Name an [`ast::Statement::Surface`] refusal by the surface *key* that produced it.
+///
+/// The payload shape cannot make this call. `ast::SurfaceStmtPayload::KeywordArgs` is the only payload there is,
+/// and it carries both a library's scoped-DSL statement and the stdlib-registered soft keywords (`assert` is the
+/// one registered today -- see `incan_semantics_stdlib`'s `lower_surface_stmt_action`). Only a scoped-DSL key is a
+/// contract violation. A soft-keyword surface statement is real language surface with no Body IR lowering yet, so
+/// it keeps an unmodeled-construct label and names the keyword a program actually hit rather than reading as a
+/// pipeline fault its author cannot act on.
+fn surface_stmt_label(key: &SurfaceFeatureKey) -> String {
+    match key {
+        SurfaceFeatureKey::ScopedDslSurface { dependency_key, .. } => {
+            undesugared_label(&format!("scoped DSL statement from `{dependency_key}`"))
+        }
+        SurfaceFeatureKey::SoftKeyword(keyword) => format!(
+            "soft-keyword surface statement `{}`",
+            incan_core::lang::keywords::as_str(*keyword)
+        ),
+        SurfaceFeatureKey::Decorator(_) => "decorator surface statement".to_string(),
     }
 }
 /// Why an admitted provider operation cannot become a checked execution plan, or `None` when it can (#1213).
@@ -68,32 +106,35 @@ pub(super) fn unsupported_provider_operation(
 ///
 /// Only reached from [`BodyBuilder::lower_expr_to_operand`]'s fallback arm, so every expression kind that arm
 /// dispatches by name -- closures and partial callables included, since #1124 gave both a real lowering -- is
-/// deliberately absent here. Async surface (`await`, `race for`) and vocab/scoped-DSL surface are named rather
-/// than left to the generic label, because both are tracked remaining work under #1101 (#1164 and #1166
-/// respectively) and a diagnostic reading only "expression" hides which one a program actually hit.
+/// deliberately absent here. Async surface (`await`, `race for`) and vocab/scoped-DSL surface are named rather than
+/// left to the generic label, because a diagnostic reading only "expression" hides which one a program actually
+/// hit. The two are not the same kind of finding: async surface is remaining Body IR work under #1164, while a
+/// vocab node is a violation of [`build_body_ir_module_v0`]'s input contract (#1166).
 pub(super) fn unsupported_expr_label(expr: &ast::Expr) -> String {
     match expr {
         ast::Expr::Yield(_) => "yield expression".to_string(),
         ast::Expr::Range { .. } => "range expression outside a for-loop".to_string(),
         ast::Expr::Surface(surface) => surface_expr_label(&surface.payload),
-        ast::Expr::VocabBlock(_) => "vocab block expression".to_string(),
+        ast::Expr::VocabBlock(_) => undesugared_label("vocab block expression"),
         _ => "expression".to_string(),
     }
 }
 /// Name the specific surface-expression payload behind an [`ast::Expr::Surface`] refusal.
 ///
-/// The payloads split into two very different buckets: `await`/`race for` are the async surface #1164 represents,
-/// which #1155 needs before it can execute task state, while the remaining payloads are vocab/DSL nodes that the
-/// legacy pipeline desugars away before lowering and that only reach here when a caller skips that pass (#1166).
+/// The payloads split into two very different buckets, and the wording follows that split rather than flattening
+/// it. `await`/`race for` are the async surface #1164 represents, which #1155 needs before it can execute task
+/// state: real language surface, no desugarer involved, so they keep an unmodeled-construct label. The remaining
+/// payloads are scoped-DSL nodes the desugar pass resolves before lowering, so one arriving here means a caller
+/// skipped that pass and takes the [`undesugared_label`] wording (#1166).
 pub(super) fn surface_expr_label(payload: &ast::SurfaceExprPayload) -> String {
     match payload {
         ast::SurfaceExprPayload::PrefixUnary(_) => {
             "prefix-keyword surface expression (for example `await`)".to_string()
         }
         ast::SurfaceExprPayload::RaceFor(_) => "`race for` expression".to_string(),
-        ast::SurfaceExprPayload::LeadingDotPath { .. } => "scoped DSL leading-dot path".to_string(),
-        ast::SurfaceExprPayload::ScopedGlyph { .. } => "scoped DSL glyph operator".to_string(),
-        ast::SurfaceExprPayload::ScopedSymbolCall { .. } => "scoped DSL symbol call".to_string(),
+        ast::SurfaceExprPayload::LeadingDotPath { .. } => undesugared_label("scoped DSL leading-dot path"),
+        ast::SurfaceExprPayload::ScopedGlyph { .. } => undesugared_label("scoped DSL glyph operator"),
+        ast::SurfaceExprPayload::ScopedSymbolCall { .. } => undesugared_label("scoped DSL symbol call"),
     }
 }
 /// Resolve the per-element types for a tuple-typed value being destructured into `count` targets, falling back to
