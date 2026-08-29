@@ -26,6 +26,7 @@ pub mod authority;
 pub mod body_ir;
 mod facts;
 mod hir;
+pub mod receipts;
 mod types;
 
 pub use facts::{
