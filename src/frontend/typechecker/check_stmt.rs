@@ -1649,6 +1649,14 @@ impl TypeChecker {
                 if let Some(elem) = iter_ty.iterator_item_type() {
                     return elem.clone();
                 }
+                // A range is not a collection, so it has no `collection_type_id`, but iterating one still yields its
+                // element type. The inline `for i in 0..10` header never reaches here because `check_for_stmt`
+                // resolves that expression directly; only a range *bound to a local* arrives as a `Range[T]` value.
+                // Without this arm that binding iterates with an unknown item type, which stays invisible until
+                // something downstream needs the type -- `acc + i` refusing to lower, for instance.
+                if name == "Range" && !args.is_empty() {
+                    return args[0].clone();
+                }
                 match collection_type_id(name.as_str()) {
                     Some(CollectionTypeId::List) | Some(CollectionTypeId::Set) if !args.is_empty() => args[0].clone(),
                     Some(CollectionTypeId::Dict) if args.len() >= 2 => {
