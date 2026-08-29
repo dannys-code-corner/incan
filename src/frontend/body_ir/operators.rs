@@ -125,9 +125,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         {
             self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper(helper.as_str().to_string()));
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+            // Membership is the one string operator whose surface order is the reverse of its helper's signature:
+            // `needle in haystack` reads needle-first, but `str_contains` takes the haystack first, as every
+            // `contains` in Rust does. Emit the helper's own order here rather than documenting a reversal, because a
+            // backend binding these positionally has no way to know one helper disagrees with the other eight.
+            let arguments = match helper {
+                bir::HelperOp::StrContains | bir::HelperOp::StrNotContains => vec![rhs_operand, lhs_operand],
+                _ => vec![lhs_operand, rhs_operand],
+            };
             return self.push_call_temp(
                 bir::Callee::Helper(helper),
-                fixed_elements(vec![lhs_operand, rhs_operand]),
+                fixed_elements(arguments),
                 result_ty,
                 scope,
                 span,

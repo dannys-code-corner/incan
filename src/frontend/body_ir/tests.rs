@@ -340,11 +340,12 @@ fn lowers_string_membership_as_an_explicit_helper_call_with_its_runtime_requirem
         "str_in",
     )?;
 
-    // Operands stay in source order, so the call reads `(needle, haystack)` -- the reverse of
-    // `incan_core::strings::str_contains`'s own parameter order, which `HelperOp::StrContains` documents.
+    // Membership is the one string operator whose surface order is the reverse of its helper's signature. The call
+    // is emitted haystack-first to match `incan_core::strings::str_contains`, so a backend can bind every string
+    // helper positionally without knowing that one of them disagrees with the rest.
     assert!(
-        rendered.contains("_2 = call helper:str_contains(move(_1, last_use), move(_0, last_use))"),
-        "string `in` must lower to an explicit helper call carrying the needle then the haystack: {rendered}"
+        rendered.contains("_2 = call helper:str_contains(move(_0, last_use), move(_1, last_use))"),
+        "string `in` must lower to a helper call carrying the haystack then the needle: {rendered}"
     );
     assert!(
         rendered.contains("runtime_helper(str_contains)"),
@@ -368,8 +369,8 @@ fn lowers_negated_string_membership_as_its_own_helper_rather_than_a_wrapped_nega
     )?;
 
     assert!(
-        rendered.contains("_2 = call helper:str_not_contains(move(_1, last_use), move(_0, last_use))"),
-        "string `not in` must lower to its own helper call: {rendered}"
+        rendered.contains("_2 = call helper:str_not_contains(move(_0, last_use), move(_1, last_use))"),
+        "string `not in` must lower to its own helper call, haystack first: {rendered}"
     );
     assert!(
         rendered.contains("runtime_helper(str_not_contains)"),

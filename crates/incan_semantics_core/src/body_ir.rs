@@ -2147,13 +2147,13 @@ pub enum HelperOp {
     /// silently applying it to the other. Naming the string policy as its own helper is what makes the substring
     /// choice a represented fact.
     ///
-    /// **Argument order is source order: `(needle, haystack)`.** Every helper call carries its operands as written,
-    /// left then right, and membership is the one operator whose source order puts the *subject* on the right. A
-    /// backend binding this to `incan_core::strings::str_contains`, whose parameters are `(haystack, needle)`, must
-    /// therefore swap them. The alternative — reordering the operands during lowering — would make this the only
-    /// helper whose call arguments do not correspond positionally to the expression that produced them.
+    /// **Argument order is the helper's own: `(haystack, needle)`.** Membership is the one string operator whose
+    /// surface order is the reverse of its signature — `needle in haystack` reads needle-first, while `str_contains`
+    /// takes the haystack first, as every `contains` in Rust does. Lowering swaps the operands so the call matches
+    /// the function it names. Preserving source order instead would leave one helper out of nine disagreeing with
+    /// its own signature, and a backend binding these positionally has no way to know which one.
     StrContains,
-    /// `needle not in haystack` on two strings, with the same `(needle, haystack)` source argument order as
+    /// `needle not in haystack` on two strings, with the same `(haystack, needle)` argument order as
     /// [`Self::StrContains`].
     ///
     /// A separate helper rather than a negated [`Self::StrContains`], following the [`Self::StrEq`]/[`Self::StrNe`]
