@@ -4780,6 +4780,12 @@ fn callee_label(callee: &Callee) -> String {
         Callee::Function(CallableTarget::Local(_)) => "stored callable".to_string(),
         Callee::Method(target) => format!("method `{}`", target.name),
         Callee::Helper(helper) => format!("runtime helper `{}`", helper_label(*helper)),
+        // Executing a provider operation is #1156's, and needs an authority decision this executor cannot make.
+        // The label names the operation's *declaration* rather than the call site's spelling, because the plan's
+        // canonical identity is the only thing that says which operation this is.
+        Callee::ProviderOperation(plan) => {
+            format!("provider operation `{}`", plan.operation.declaration_name)
+        }
     }
 }
 

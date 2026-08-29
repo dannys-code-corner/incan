@@ -1448,6 +1448,21 @@ fn compiled_provider_metadata_roundtrips_feature_and_facet_facts() -> Result<(),
                 source: ProviderCargoDependencySource::Registry,
             }],
         }],
+        operation_descriptors: vec![ProviderOperationMetadata {
+            operation: incan_semantics_core::CanonicalSymbolId::module_declaration(
+                vec!["reports".to_string()],
+                "emit",
+                incan_semantics_core::SemanticSourceTargetKind::Function,
+                incan_semantics_core::HirSourceSpan::new(10, 14),
+            ),
+            required_capability: incan_semantics_core::CanonicalSymbolId::module_declaration(
+                vec!["reports".to_string()],
+                "publish",
+                incan_semantics_core::SemanticSourceTargetKind::Capability,
+                incan_semantics_core::HirSourceSpan::new(1, 8),
+            ),
+            runtime_requirements: vec![incan_semantics_core::AbiV0RuntimeRequirement::HostedStd],
+        }],
         ..Default::default()
     };
     let dir = tempfile::tempdir()?;
@@ -1457,6 +1472,42 @@ fn compiled_provider_metadata_roundtrips_feature_and_facet_facts() -> Result<(),
     let loaded = LibraryManifest::read_from_path(&path)?;
 
     assert_eq!(loaded.contract_metadata.provider, manifest.contract_metadata.provider);
+    Ok(())
+}
+
+#[test]
+fn compiled_provider_metadata_rejects_non_capability_operation_requirements() -> Result<(), Box<dyn std::error::Error>>
+{
+    let mut manifest = LibraryManifest::new("reporting", "0.5.0");
+    manifest
+        .contract_metadata
+        .provider
+        .operation_descriptors
+        .push(ProviderOperationMetadata {
+            operation: incan_semantics_core::CanonicalSymbolId::module_declaration(
+                vec!["reports".to_string()],
+                "emit",
+                incan_semantics_core::SemanticSourceTargetKind::Function,
+                incan_semantics_core::HirSourceSpan::new(10, 14),
+            ),
+            required_capability: incan_semantics_core::CanonicalSymbolId::module_declaration(
+                vec!["reports".to_string()],
+                "not_a_capability",
+                incan_semantics_core::SemanticSourceTargetKind::Function,
+                incan_semantics_core::HirSourceSpan::new(1, 8),
+            ),
+            runtime_requirements: Vec::new(),
+        });
+
+    let dir = tempfile::tempdir()?;
+    let error = manifest
+        .write_to_path(&dir.path().join("reporting.incnlib"))
+        .err()
+        .ok_or("a non-capability provider requirement must fail manifest validation")?;
+    assert!(
+        matches!(error, LibraryManifestError::Invalid(ref message) if message.contains("non-capability requirement")),
+        "unexpected validation error: {error}"
+    );
     Ok(())
 }
 

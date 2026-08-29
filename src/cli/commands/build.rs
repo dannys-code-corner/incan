@@ -64,8 +64,8 @@ use crate::library_manifest::LibraryRustAbi;
 use crate::library_manifest::{
     CompiledProviderMetadata, LibraryManifest, ProviderCargoDependency, ProviderCargoDependencySource,
     ProviderDependencyKind, ProviderDependencyMetadata, ProviderFactKind, ProviderFactRequirement,
-    ProviderImplementationFacet, ProviderModuleClaim, digest_cargo_path_source_tree_with_cache,
-    digest_provider_artifact, digest_provider_source_inputs,
+    ProviderImplementationFacet, ProviderModuleClaim, ProviderOperationMetadata,
+    digest_cargo_path_source_tree_with_cache, digest_provider_artifact, digest_provider_source_inputs,
 };
 use crate::lockfile::{CargoFeatureSelection, IncanLock, provider_semantic_identities, semantic_lock_state};
 use crate::manifest::{DependencySource, DependencySpec, GitReference, MANIFEST_FILENAME, ProjectManifest};
@@ -10089,15 +10089,16 @@ fn prepare_library_project(
     materialize_checked_api_public_namespaces(&mut checked_api)
         .map_err(|error| CliError::failure(format!("failed to publish checked module namespaces: {error}")))?;
     library_manifest.contract_metadata.api = Some(checked_api);
-    library_manifest.contract_metadata.provider = compiled_provider_metadata(
-        &manifest,
-        &package_feature_plan,
-        &provider_plan,
-        &library_manifest_index,
-        &out_dir,
-        &provider_metadata_modules,
-        lib_module,
-    )?;
+    library_manifest.contract_metadata.provider = compiled_provider_metadata(CompiledProviderMetadataInputs {
+        manifest: &manifest,
+        feature_plan: &package_feature_plan,
+        provider_plan: &provider_plan,
+        library_manifest_index: &library_manifest_index,
+        artifact_root: &out_dir,
+        modules: &provider_metadata_modules,
+        active_library_entrypoint: lib_module,
+        checked_type_info_by_path: &checked_type_info_by_path,
+    })?;
     let mut registry_metadata = CheckedRegistryMetadataPackage {
         schema_version: CHECKED_REGISTRY_METADATA_SCHEMA_VERSION,
         package: Some(CheckedRegistryPackageIdentity {
@@ -10654,33 +10655,45 @@ fn synchronize_projected_provider_dependencies(
     Ok(())
 }
 
+/// Borrowed inputs needed to freeze checked provider facts into a library artifact.
+///
+/// The checked type information stays in the compiler pipeline until this projection. It carries the canonical
+/// callable-to-capability facts that provider operation lowering consumes through the selected manifest.
+struct CompiledProviderMetadataInputs<'a> {
+    manifest: &'a ProjectManifest,
+    feature_plan: &'a PackageFeaturePlan,
+    provider_plan: &'a ProviderPlan,
+    library_manifest_index: &'a LibraryManifestIndex,
+    artifact_root: &'a Path,
+    modules: &'a [ParsedModule],
+    active_library_entrypoint: &'a ParsedModule,
+    checked_type_info_by_path: &'a BTreeMap<PathBuf, typechecker::TypeCheckInfo>,
+}
+
 /// Build transport-stable provider facts from the checked physical artifact projection.
-fn compiled_provider_metadata(
-    manifest: &ProjectManifest,
-    feature_plan: &PackageFeaturePlan,
-    provider_plan: &ProviderPlan,
-    library_manifest_index: &LibraryManifestIndex,
-    artifact_root: &Path,
-    modules: &[ParsedModule],
-    active_library_entrypoint: &ParsedModule,
-) -> CliResult<CompiledProviderMetadata> {
-    let graph = PackageFeatureGraph::from_manifest(manifest).map_err(|error| CliError::failure(error.to_string()))?;
-    let root_features = feature_plan
+fn compiled_provider_metadata(inputs: CompiledProviderMetadataInputs<'_>) -> CliResult<CompiledProviderMetadata> {
+    let graph =
+        PackageFeatureGraph::from_manifest(inputs.manifest).map_err(|error| CliError::failure(error.to_string()))?;
+    let root_features = inputs
+        .feature_plan
         .root_package()
         .map(|package| &package.features)
         .ok_or_else(|| CliError::failure("resolved package feature plan is missing its root package"))?;
-    let library_entrypoint = modules
+    let library_entrypoint = inputs
+        .modules
         .iter()
-        .find(|module| module.file_path == active_library_entrypoint.file_path)
+        .find(|module| module.file_path == inputs.active_library_entrypoint.file_path)
         .ok_or_else(|| CliError::failure("unprojected provider graph is missing its library entrypoint"))?;
-    let source_root = resolve_source_root(manifest.project_root(), Some(manifest));
-    let module_requirements = provider_module_reachability_requirements(modules, library_entrypoint, &source_root)?;
-    let mut namespace_claims = modules
+    let source_root = resolve_source_root(inputs.manifest.project_root(), Some(inputs.manifest));
+    let module_requirements =
+        provider_module_reachability_requirements(inputs.modules, library_entrypoint, &source_root)?;
+    let mut namespace_claims = inputs
+        .modules
         .iter()
         .filter(|module| {
-            module.file_path != active_library_entrypoint.file_path
+            module.file_path != inputs.active_library_entrypoint.file_path
                 && !module.path_segments.is_empty()
-                && !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments)
+                && !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments)
         })
         .flat_map(|module| {
             module_requirements
@@ -10698,9 +10711,10 @@ fn compiled_provider_metadata(
 
     let public_features = graph.provider_metadata();
     let mut fact_requirements = Vec::new();
-    for module in modules
+    for module in inputs
+        .modules
         .iter()
-        .filter(|module| !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments))
+        .filter(|module| !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments))
     {
         let requirements = module_requirements.get(&module.path_segments).ok_or_else(|| {
             CliError::failure(format!(
@@ -10733,12 +10747,18 @@ fn compiled_provider_metadata(
     fact_requirements.sort();
     fact_requirements.dedup();
 
-    let provider_dependencies =
-        compiled_provider_dependencies(feature_plan, library_manifest_index, provider_plan, artifact_root)?;
+    let provider_dependencies = compiled_provider_dependencies(
+        inputs.feature_plan,
+        inputs.library_manifest_index,
+        inputs.provider_plan,
+        inputs.artifact_root,
+    )?;
     let implementation_facets = provider_implementation_facets(&namespace_claims);
-    let semantic_source_inputs = modules
+    let operation_descriptors = provider_operation_metadata_from_checked_type_info(inputs.checked_type_info_by_path)?;
+    let semantic_source_inputs = inputs
+        .modules
         .iter()
-        .filter(|module| !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments))
+        .filter(|module| !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments))
         .map(|module| {
             let label = if module.path_segments.is_empty() {
                 "<root>".to_string()
@@ -10752,8 +10772,8 @@ fn compiled_provider_metadata(
         .into_iter()
         .collect::<Vec<_>>();
     let semantic_source_digest = digest_provider_source_inputs(
-        manifest.project_root(),
-        manifest.path(),
+        inputs.manifest.project_root(),
+        inputs.manifest.path(),
         &semantic_source_inputs,
         &trusted_source_roots,
     )
@@ -10767,8 +10787,39 @@ fn compiled_provider_metadata(
         fact_requirements,
         required_sdk_components: root_features.required_sdk_components.clone(),
         implementation_facets,
+        operation_descriptors,
         ..CompiledProviderMetadata::default()
     })
+}
+
+/// Project declaration-side provider-operation facts into the selected library artifact.
+///
+/// The typechecker is the only source of these pairs: it resolved each decorated operation's capability in the
+/// declaring module. Sorting and rejecting duplicate canonical identities makes manifest output deterministic and
+/// prevents a package with two copies of one declaration from acquiring order-dependent provider meaning.
+fn provider_operation_metadata_from_checked_type_info(
+    checked_type_info_by_path: &BTreeMap<PathBuf, typechecker::TypeCheckInfo>,
+) -> CliResult<Vec<ProviderOperationMetadata>> {
+    let mut operation_descriptors = checked_type_info_by_path
+        .values()
+        .flat_map(|type_info| type_info.declarations.provider_operations.values())
+        .map(|operation| ProviderOperationMetadata {
+            operation: operation.operation.clone(),
+            required_capability: operation.required_capability.clone(),
+            runtime_requirements: operation.runtime_requirements.clone(),
+        })
+        .collect::<Vec<_>>();
+    operation_descriptors.sort_by(|left, right| left.operation.cmp(&right.operation));
+    if let Some(duplicate) = operation_descriptors
+        .windows(2)
+        .find(|entries| entries[0].operation == entries[1].operation)
+    {
+        return Err(CliError::failure(format!(
+            "provider operation metadata contains duplicate declaration `{}`",
+            duplicate[0].operation.declaration_name
+        )));
+    }
+    Ok(operation_descriptors)
 }
 
 /// Freeze the active Incan dependency edges into artifact-owned, relocation-safe provider metadata.
@@ -13884,6 +13935,48 @@ mod tests {
     };
     use crate::oven_interop::locked_oven_interop_targets;
     use std::fs;
+
+    #[test]
+    fn provider_operation_metadata_is_projected_from_checked_declaration_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+
+        use crate::frontend::typechecker::{ProviderOperationDeclarationInfo, TypeCheckInfo};
+        use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
+
+        let operation = CanonicalSymbolId::module_declaration(
+            vec!["provider".to_string(), "billing".to_string()],
+            "charge",
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(20, 26),
+        );
+        let required_capability = CanonicalSymbolId::module_declaration(
+            vec!["provider".to_string(), "billing".to_string()],
+            "charge_card",
+            SemanticSourceTargetKind::Capability,
+            HirSourceSpan::new(1, 12),
+        );
+        let mut type_info = TypeCheckInfo::default();
+        type_info.declarations.provider_operations.insert(
+            operation.clone(),
+            ProviderOperationDeclarationInfo {
+                operation: operation.clone(),
+                required_capability: required_capability.clone(),
+                runtime_requirements: Vec::new(),
+            },
+        );
+
+        let descriptors = provider_operation_metadata_from_checked_type_info(&BTreeMap::from([(
+            PathBuf::from("src/billing.incn"),
+            type_info,
+        )]))?;
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].operation, operation);
+        assert_eq!(descriptors[0].required_capability, required_capability);
+        assert!(descriptors[0].runtime_requirements.is_empty());
+        Ok(())
+    }
 
     #[test]
     fn completed_output_reuse_requires_the_implicit_default_backend_selection() {

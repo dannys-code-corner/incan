@@ -62,11 +62,11 @@ pub use type_info::{
     CBindingSymbol, CBindingType, COutputMode, CResourceAccess, ComputedPropertyAccessInfo,
     DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FixedUnpackPlan, FunctionBindingInfo, IdentKind,
     ImportedRegistryDefinitionInfo, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind,
-    ProtocolIterationInfo, RegistryArtifacts, RegistryDefinitionInfo, RegistryDescriptionRegistry,
-    RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch, ResolvedOperatorCall, ResolvedOperatorKind,
-    RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo, StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo,
-    ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode, ValidatedNewtypeCoercionStep,
-    c_binding_descriptor_identity,
+    ProtocolIterationInfo, ProviderOperationDeclarationInfo, RegistryArtifacts, RegistryDefinitionInfo,
+    RegistryDescriptionRegistry, RegistryExplicitEntryInfo, ResolvedMethodCall, ResolvedMethodDispatch,
+    ResolvedOperatorCall, ResolvedOperatorKind, RustArgCoercionInfo, RustArgCoercionKind, SourceTargetInfo,
+    StaticBindingInfo, TestingFixtureInfo, TypeCheckInfo, ValidatedNewtypeCoercionInfo, ValidatedNewtypeCoercionMode,
+    ValidatedNewtypeCoercionStep, c_binding_descriptor_identity,
 };
 pub(crate) use type_info::{ClassFieldDefaultInfo, semantic_type_from_resolved};
 #[cfg(test)]

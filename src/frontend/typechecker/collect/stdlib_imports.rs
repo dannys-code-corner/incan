@@ -767,9 +767,7 @@ impl TypeChecker {
 
         let local_name = Self::import_item_local_name(item);
         self.record_testing_marker_import(context, item, &local_name, testing_semantics);
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if matches!(kind, SymbolKind::Static(_)) {
             self.type_info.declarations.static_bindings.insert(
                 local_name.clone(),
@@ -852,9 +850,7 @@ impl TypeChecker {
             let local_name = Self::import_item_local_name(item);
             let surface_function = surface_functions::from_str(&item.name);
             self.record_testing_marker_import(context, item, &local_name, testing_semantics);
-            if let SymbolKind::FunctionOverloads(overloads) = &kind {
-                self.record_function_overload_binding(&local_name, overloads, true);
-            }
+            self.record_imported_function_binding(&local_name, &kind);
             let symbol_id = self.define_named_import_symbol(local_name.clone(), kind, span);
             if let Some(surface_function) = surface_function {
                 self.surface_function_import_bindings
@@ -1052,9 +1048,7 @@ impl TypeChecker {
             );
             self.record_resolved_import_owner(module, item, &local_name);
         }
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let SymbolKind::Static(info) = &mut kind {
             info.is_imported = true;
             self.type_info.declarations.static_bindings.insert(
@@ -1449,9 +1443,7 @@ impl TypeChecker {
 
             if let Some(mut kind) = flat_function {
                 self.remap_symbol_kind_with_import_aliases(&mut kind, &imported_type_aliases);
-                if let SymbolKind::FunctionOverloads(overloads) = &kind {
-                    self.record_function_overload_binding(&local_name, overloads, true);
-                }
+                self.record_imported_function_binding(&local_name, &kind);
                 self.symbols.define(Symbol {
                     name: local_name,
                     kind,
@@ -1504,9 +1496,7 @@ impl TypeChecker {
         }
 
         let mut kind = member.kind;
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let Some(mut projection) = member.partial_projection {
             projection.name.clone_from(&local_name);
             self.type_info.record_partial_projection(projection);
@@ -2458,9 +2448,7 @@ impl TypeChecker {
             self.define_rust_import_binding(local_name, info, span);
             return;
         }
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let Some(projection) = partial_projection {
             self.type_info.record_partial_projection(projection);
         }

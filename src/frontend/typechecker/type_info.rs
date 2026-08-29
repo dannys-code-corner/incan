@@ -3,7 +3,7 @@
 //! This module contains the reusable semantic metadata that later compiler stages consume after typechecking. It keeps
 //! the cross-phase snapshot surface separate from the main [`TypeChecker`](super::TypeChecker) orchestration state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
 
@@ -788,6 +788,11 @@ pub struct DeclarationArtifacts {
     /// written path, so the proven identity is recorded here and is simply absent when resolution did not prove one.
     /// A re-export resolves to the identity of the module that *declares* the member, never to the facade.
     pub resolved_import_identities: HashMap<String, CanonicalSymbolId>,
+    /// Checked provider-operation declarations, keyed by their provider function's canonical identity.
+    ///
+    /// This is the producer-side fact that package publication persists. Body-IR lowering consumes the resulting
+    /// provider-plan projection rather than re-reading a decorator or inferring an operation from a module name.
+    pub provider_operations: BTreeMap<CanonicalSymbolId, ProviderOperationDeclarationInfo>,
     /// Module-local function declarations keyed by declaration span, preserving same-name overloads.
     pub function_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
     /// Concrete class/model/trait method declarations keyed by declaration span (#1121).
@@ -836,6 +841,23 @@ pub struct DeclarationArtifacts {
     pub decorated_function_bindings_by_span: HashMap<(usize, usize), DecoratedFunctionBindingInfo>,
     /// RFC 036: Method names whose declaration was rebound through a user-defined decorator chain.
     pub decorated_method_bindings: HashMap<(String, String), DecoratedMethodBindingInfo>,
+}
+
+/// One provider function's checked authority requirement.
+///
+/// The callable and capability are both resolved identities. The source decorator never contributes a stringly
+/// authority name to a backend; it only tells the typechecker which two already-resolved declarations are related.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOperationDeclarationInfo {
+    /// Canonical identity of the provider function this declaration annotates.
+    pub operation: CanonicalSymbolId,
+    /// Canonical identity of the RFC 104 capability required to invoke that operation.
+    pub required_capability: CanonicalSymbolId,
+    /// Compiler-owned requirements the operation's runtime implementation imposes.
+    ///
+    /// The first vertical currently records none. A future declaration contract may add requirements only when it
+    /// has a checked source form; lowering must not infer them from a provider name or generated implementation.
+    pub runtime_requirements: Vec<incan_semantics_core::AbiV0RuntimeRequirement>,
 }
 
 /// Checked RFC 113 registry data that later stages consume without re-parsing decorator expressions.

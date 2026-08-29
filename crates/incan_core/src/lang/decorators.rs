@@ -29,6 +29,7 @@ pub enum DecoratorId {
     ClassMethod,
     Requires,
     Describe,
+    ProviderOperation,
 }
 
 // ---- Decorator namespace constants ----
@@ -153,6 +154,14 @@ pub const DECORATORS: &[DecoratorInfo] = &[
         "Attach a compiler-checked typed registry descriptor to a declaration.",
         RFC::_113,
         Since(0, 5),
+    ),
+    info(
+        DecoratorId::ProviderOperation,
+        "provider_operation",
+        &[],
+        "Attach one checked RFC 104 capability requirement to a provider function.",
+        RFC::_104,
+        Since(0, 6),
     ),
 ];
 

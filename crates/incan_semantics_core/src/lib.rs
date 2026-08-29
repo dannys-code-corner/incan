@@ -72,6 +72,7 @@ pub enum DecoratorFeature {
     NoImplicitCoercion,
     Requires,
     Describe,
+    ProviderOperation,
     StdlibDecoratorFunction,
 }
 
@@ -375,5 +376,6 @@ pub fn decorator_feature_from_id(id: DecoratorId) -> DecoratorFeature {
         DecoratorId::NoImplicitCoercion => DecoratorFeature::NoImplicitCoercion,
         DecoratorId::Requires => DecoratorFeature::Requires,
         DecoratorId::Describe => DecoratorFeature::Describe,
+        DecoratorId::ProviderOperation => DecoratorFeature::ProviderOperation,
     }
 }

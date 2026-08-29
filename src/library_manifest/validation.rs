@@ -21,6 +21,7 @@ use crate::frontend::api_metadata::{
 };
 use crate::frontend::contract_metadata::CONTRACT_METADATA_SCHEMA_VERSION;
 use crate::frontend::registry_metadata::CHECKED_REGISTRY_METADATA_SCHEMA_VERSION;
+use incan_semantics_core::SemanticSourceTargetKind;
 
 /// Validate one raw manifest payload before it is written or decoded into the semantic model.
 pub(super) fn validate_raw_manifest(raw: &RawLibraryManifest) -> Result<(), LibraryManifestError> {
@@ -229,6 +230,28 @@ fn validate_compiled_provider_metadata(metadata: &CompiledProviderMetadata) -> R
     }
     for component in &metadata.required_sdk_components {
         validate_provider_identifier("SDK component", component)?;
+    }
+
+    let mut operation_ids = HashSet::new();
+    for descriptor in &metadata.operation_descriptors {
+        if descriptor.operation.kind != SemanticSourceTargetKind::Function {
+            return Err(LibraryManifestError::Invalid(
+                "contract_metadata.provider.operation_descriptors contains a non-function operation identity"
+                    .to_string(),
+            ));
+        }
+        if descriptor.required_capability.kind != SemanticSourceTargetKind::Capability {
+            return Err(LibraryManifestError::Invalid(
+                "contract_metadata.provider.operation_descriptors contains a non-capability requirement identity"
+                    .to_string(),
+            ));
+        }
+        if !operation_ids.insert(&descriptor.operation) {
+            return Err(LibraryManifestError::Invalid(format!(
+                "contract_metadata.provider.operation_descriptors contains duplicate operation `{}`",
+                descriptor.operation.declaration_name
+            )));
+        }
     }
 
     let mut facet_ids = HashSet::new();
