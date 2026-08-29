@@ -28,9 +28,11 @@ mod hir;
 mod types;
 
 pub use facts::{
-    CanonicalSymbolId, CompilerNodeId, CompilerNodeKind, ScopeDiscriminant, SemanticFact, SemanticFactKind,
-    SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind, SemanticRegistryValue,
-    SemanticSourceTarget, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin, module_identity_for_path,
+    AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode, AuthorityOutcome,
+    AuthorityProvenance, CanonicalSymbolId, CompilerNodeId, CompilerNodeKind, ScopeDiscriminant, SemanticFact,
+    SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind,
+    SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
+    module_identity_for_path,
 };
 pub use hir::{HirDeclaration, HirDeclarationKind, HirModule, HirSourceSpan, SemanticModuleSnapshot};
 pub use types::{
