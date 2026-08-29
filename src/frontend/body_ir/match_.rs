@@ -5,6 +5,31 @@ use super::reads::*;
 use super::refusals::*;
 use super::*;
 
+/// Where the names a pattern binds can still be read once that pattern has matched.
+///
+/// [`BodyBuilder::lower_match_pattern`] seeds each fresh binding's last-use countdown from this, and its two
+/// callers disagree about what "afterwards" means. A `match` arm's bindings are visible only inside that arm, so
+/// its guard and body are the whole live range. An `assert value is P` binding instead stays live for the rest of
+/// the enclosing block, so its live range is the statement suffix following the assertion. Passing the counting
+/// context in rather than hard-coding one keeps a single pattern lowerer serving both.
+pub(super) enum PatternReadScope<'ast> {
+    /// A `match` arm: its guard plus its body.
+    MatchArm(&'ast ast::MatchArm),
+    /// The statement suffix following an `assert value is P` in its enclosing block.
+    FollowingStatements(&'ast [ast::Spanned<ast::Statement>]),
+}
+
+impl PatternReadScope<'_> {
+    /// Count reads of `name` reachable from this scope, using the same source-order over-approximation
+    /// [`count_reads_in_stmts`] documents.
+    fn count_reads(&self, name: &str) -> usize {
+        match self {
+            Self::MatchArm(arm) => count_reads_in_match_arm(name, arm),
+            Self::FollowingStatements(stmts) => count_reads_in_stmts(name, stmts),
+        }
+    }
+}
+
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Lower a `match` expression (`ast::Expr::Match`) into a single [`bir::Rvalue::Match`], mirroring the existing
     /// Rust-emission backend's own `IrExprKind::Match { scrutinee, arms }` node -- see [`bir::Rvalue::Match`]'s docs
@@ -57,7 +82,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 &scrutinee_ty,
                 &scrutinee_place,
                 arm_scope,
-                &arm.node,
+                &PatternReadScope::MatchArm(&arm.node),
                 &mut seen,
                 &mut saved_bindings,
             );
@@ -119,14 +144,21 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         )
     }
 
-    /// Recursively lower one source `ast::Pattern` node into a [`bir::Pattern`], declaring a fresh arm-scoped local
-    /// the first time a bound name is encountered and reusing it for any later `Or`-alternative occurrence of the
-    /// same name (`seen`) -- Incan's typechecker (RFC 071) requires every alternative of an `A(x) | B(x)` pattern to
-    /// bind an identical name/type set, so Rust's own single shared binding slot per name is the correct target
-    /// shape, not one local per occurrence. `saved_bindings` accumulates `(name, previous_local)` pairs so
-    /// [`Self::lower_match`] can restore `self.bindings` to the enclosing scope once this arm's guard/body have
-    /// both been lowered, the same save/restore shape [`Self::lower_closure`] already uses around its own
-    /// params/captures.
+    /// Recursively lower one source `ast::Pattern` node into a [`bir::Pattern`], declaring a fresh local in
+    /// `arm_scope` the first time a bound name is encountered and reusing it for any later `Or`-alternative
+    /// occurrence of the same name (`seen`) -- Incan's typechecker (RFC 071) requires every alternative of an
+    /// `A(x) | B(x)` pattern to bind an identical name/type set, so Rust's own single shared binding slot per name
+    /// is the correct target shape, not one local per occurrence. `saved_bindings` accumulates
+    /// `(name, previous_local)` pairs so [`Self::lower_match`] can restore `self.bindings` to the enclosing scope
+    /// once this arm's guard/body have both been lowered, the same save/restore shape [`Self::lower_closure`]
+    /// already uses around its own params/captures.
+    ///
+    /// Both `match` arms and `assert value is P` (RFC 018) lower their patterns here, so "arm" below means
+    /// whichever construct owns this pattern. The two differ in binding lifetime, and `arm_scope`/`reads` are the
+    /// two knobs that express the difference: an arm binds into its own fresh scope and is read only within that
+    /// arm, while an assertion binds into the enclosing block's scope and is read by the statements that follow it
+    /// (see [`PatternReadScope`]). An assertion also keeps its bindings afterwards rather than restoring
+    /// `saved_bindings`, which is [`Self::lower_assert`]'s decision to make, not this method's.
     ///
     /// `place` is the (possibly already-projected) scrutinee place this pattern node corresponds to; each
     /// recursive call into a `Tuple`/`Struct`/`Enum` sub-pattern extends it with one more
@@ -149,7 +181,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         expected_ty: &IncanType,
         place: &bir::Place,
         arm_scope: bir::ScopeId,
-        arm: &ast::MatchArm,
+        reads: &PatternReadScope<'_>,
         seen: &mut HashMap<String, bir::LocalId>,
         saved_bindings: &mut Vec<(String, Option<bir::LocalId>)>,
     ) -> bir::Pattern {
@@ -160,7 +192,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 let local = match seen.get(name) {
                     Some(&local) => local,
                     None => {
-                        let total_reads = count_reads_in_match_arm(name, arm);
+                        let total_reads = reads.count_reads(name);
                         let previous = self.bindings.get(name).copied();
                         let local = self.declare_new_local_with_reads(
                             name.clone(),
@@ -191,7 +223,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     .map(|(index, (item, element_ty))| {
                         let mut field_place = place.clone();
                         field_place.projection.push(bir::PlaceElem::Field(index.to_string()));
-                        self.lower_match_pattern(item, element_ty, &field_place, arm_scope, arm, seen, saved_bindings)
+                        self.lower_match_pattern(item, element_ty, &field_place, arm_scope, reads, seen, saved_bindings)
                     })
                     .collect();
                 bir::Pattern::Tuple(fields)
@@ -218,7 +250,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                                         &IncanType::Unknown,
                                         &field_place,
                                         arm_scope,
-                                        arm,
+                                        reads,
                                         seen,
                                         saved_bindings,
                                     ),
@@ -260,7 +292,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                         bir::ResultVariantKind::Err => error_type,
                     };
                     let lowered_payload =
-                        self.lower_match_pattern(payload, payload_type, place, arm_scope, arm, seen, saved_bindings);
+                        self.lower_match_pattern(payload, payload_type, place, arm_scope, reads, seen, saved_bindings);
                     return bir::Pattern::Result {
                         variant,
                         fields: vec![lowered_payload],
@@ -286,7 +318,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                                 &IncanType::Unknown,
                                 &field_place,
                                 arm_scope,
-                                arm,
+                                reads,
                                 seen,
                                 saved_bindings,
                             );
@@ -303,7 +335,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                                 &IncanType::Unknown,
                                 &field_place,
                                 arm_scope,
-                                arm,
+                                reads,
                                 seen,
                                 saved_bindings,
                             );
@@ -325,13 +357,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 }
             }
             ast::Pattern::Group(inner) => {
-                self.lower_match_pattern(inner, expected_ty, place, arm_scope, arm, seen, saved_bindings)
+                self.lower_match_pattern(inner, expected_ty, place, arm_scope, reads, seen, saved_bindings)
             }
             ast::Pattern::Or(items) => {
                 let alternatives = items
                     .iter()
                     .map(|item| {
-                        self.lower_match_pattern(item, expected_ty, place, arm_scope, arm, seen, saved_bindings)
+                        self.lower_match_pattern(item, expected_ty, place, arm_scope, reads, seen, saved_bindings)
                     })
                     .collect();
                 bir::Pattern::Or(alternatives)

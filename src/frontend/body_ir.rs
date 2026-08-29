@@ -14,7 +14,9 @@
 //! assignment, `return`, `if`/`elif`/`else`, `while`, `for` (both a `start..end` range and a general iterable --
 //! builtin collections or a resolved `__iter__`/`__next__` protocol, including the fallible `for item in
 //! iterable?:` form), expression statements, statement-position `yield value` (see [`BodyBuilder::lower_stmt_into`]
-//! and [`bir::Body::is_generator`]), `assert`, `pass`, `break` (including a value-producing `break` inside a `loop`
+//! and [`bir::Body::is_generator`]), all three RFC 018 `assert` forms -- plain condition, `assert value is P`
+//! (whose bindings stay live for the rest of the enclosing block), and `assert call() raises E` (see
+//! [`BodyBuilder::lower_assert`]) -- `pass`, `break` (including a value-producing `break` inside a `loop`
 //! expression), `continue`. Expressions fully lowered: identifiers, literals (int/float/decimal/bool/string),
 //! arithmetic/comparison/boolean binary operators and all three unary operators, calls and method calls (including
 //! named, out-of-order, defaulted, and explicitly generic argument spellings -- see [`BodyBuilder::lower_call`]),
@@ -35,7 +37,7 @@
 //! establish; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
 //! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
 //! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; bytes
-//! literals and a `Range` used as a value outside a `for` header; the pattern and `raises` `assert` forms; and
+//! literals and a `Range` used as a value outside a `for` header; and
 //! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
 //! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
 //!

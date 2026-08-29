@@ -369,8 +369,16 @@ pub(super) fn collect_free_vars_in_stmt(stmt: &ast::Statement, bound: &mut HashS
         }
         ast::Statement::Expr(e) => collect_free_vars_in_expr(&e.node, bound, free),
         ast::Statement::Assert(a) => {
-            if let ast::AssertKind::Condition(e) = &a.kind {
-                collect_free_vars_in_expr(&e.node, bound, free);
+            // All three assertion forms lower their payload expression (#1167), and the pattern form additionally
+            // binds its names for the rest of the block -- so a closure containing one must capture what the
+            // payload reads, and must not mistake a name the pattern itself bound for a capture.
+            match &a.kind {
+                ast::AssertKind::Condition(e) => collect_free_vars_in_expr(&e.node, bound, free),
+                ast::AssertKind::Raises { call, .. } => collect_free_vars_in_expr(&call.node, bound, free),
+                ast::AssertKind::IsPattern { value, pattern } => {
+                    collect_free_vars_in_expr(&value.node, bound, free);
+                    bind_pattern_names(&pattern.node, bound);
+                }
             }
             if let Some(message) = &a.message {
                 collect_free_vars_in_expr(&message.node, bound, free);

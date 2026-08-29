@@ -71,9 +71,13 @@ pub(super) fn count_reads_in_stmt(name: &str, stmt: &ast::Statement) -> usize {
         ast::Statement::For(f) => count_reads_in_expr(name, &f.iter.node) + count_reads_in_stmts(name, &f.body),
         ast::Statement::Expr(e) => count_reads_in_expr(name, &e.node),
         ast::Statement::Assert(a) => {
+            // Every assertion form lowers its own payload expression (#1167), so all three are counted here.
+            // Missing one would let an earlier read of the same name be selected as its last use and moved out
+            // from under the assertion, which is the one direction this approximation must never take.
             let mut total = match &a.kind {
                 ast::AssertKind::Condition(e) => count_reads_in_expr(name, &e.node),
-                _ => 0,
+                ast::AssertKind::IsPattern { value, .. } => count_reads_in_expr(name, &value.node),
+                ast::AssertKind::Raises { call, .. } => count_reads_in_expr(name, &call.node),
             };
             total += a
                 .message

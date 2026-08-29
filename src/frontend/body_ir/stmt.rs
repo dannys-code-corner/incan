@@ -75,7 +75,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     });
                 }
             }
-            ast::Statement::Assert(assert_stmt) => self.lower_assert(assert_stmt, scope, span, out),
+            ast::Statement::Assert(assert_stmt) => self.lower_assert(assert_stmt, remaining, scope, span, out),
             ast::Statement::Pass => {}
             ast::Statement::Break(value) => self.lower_break(value.as_ref(), scope, span, out),
             ast::Statement::Continue => out.push(bir::Statement {

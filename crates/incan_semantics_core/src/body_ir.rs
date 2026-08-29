@@ -41,6 +41,9 @@
 
 use std::fmt::Write as _;
 
+use incan_core::errors::ErrorKind;
+use incan_core::lang::errors;
+
 use crate::{
     AbiV0RuntimeRequirement, CanonicalSymbolId, CompilerNodeId, HirSourceSpan, IncanType, module_identity_for_path,
 };
@@ -2213,7 +2216,7 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
             let _ = writeln!(out, "{indent}yield {}", value.render_snapshot());
         }
         StatementKind::Assert {
-            cond,
+            kind,
             message,
             may_panic,
         } => {
@@ -2222,7 +2225,7 @@ fn render_statement(out: &mut String, stmt: &Statement, indent: &str, depth: usi
                 .map(|m| format!(", {}", m.render_snapshot()))
                 .unwrap_or_default();
             let panic_marker = if *may_panic { " may_panic" } else { "" };
-            let _ = writeln!(out, "{indent}assert {}{msg}{panic_marker}", cond.render_snapshot());
+            let _ = writeln!(out, "{indent}assert {}{msg}{panic_marker}", kind.render_snapshot());
         }
         StatementKind::Expr { value } => {
             let _ = writeln!(out, "{indent}expr {}", value.render_snapshot());
@@ -2396,9 +2399,19 @@ pub enum StatementKind {
     /// iterator-adapter runtime path. Neither representation asks a consumer to infer a suspension point from a
     /// target-language closure shape.
     Yield { value: Operand },
-    /// `assert cond[, message]`.
+    /// One RFC 018 assertion in any of its three source forms, with the optional failure message and panic marker
+    /// every form shares.
+    ///
+    /// The form-specific payload lives in [`AssertionKind`] rather than in three sibling statement kinds, because
+    /// `message` and `may_panic` are invariant across all three forms and every assertion records the same
+    /// [`PanicReason::AssertFailure`] fact and [`crate::AbiV0RuntimeRequirement::PanicStrategy`] requirement. Three
+    /// sibling kinds would repeat those shared fields three times, let them drift apart, and force every exhaustive
+    /// walk over this vocabulary to grow three arms for one concept; a consumer that only needs "is this an
+    /// assertion" still matches one variant here, and one that cares which form matches the payload.
     Assert {
-        cond: Operand,
+        /// Which assertion form this is, plus the operands and facts only that form carries.
+        kind: AssertionKind,
+        /// Optional failure message, applicable to all three forms.
         message: Option<Operand>,
         may_panic: bool,
     },
@@ -2450,6 +2463,46 @@ pub enum StatementKind {
     /// A source construct v0 lowering does not yet model. Keeps the model total over real programs instead of
     /// panicking or silently dropping the construct.
     Unsupported { description: String },
+}
+
+/// The form-specific payload of one [`StatementKind::Assert`], covering all three RFC 018 assertion spellings.
+///
+/// See [`StatementKind::Assert`] for why the three forms are one variant with this payload rather than three
+/// sibling statement kinds.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AssertionKind {
+    /// `assert cond`: panics when `cond` is false.
+    Condition { cond: Operand },
+    /// `assert value is P`: panics when `value` does not match `P`, and on the matching path binds `P`'s names for
+    /// the remainder of the enclosing block.
+    ///
+    /// The bindings are ordinary declared locals carried inside `pattern`'s [`PatternBinding`]s, exactly as a
+    /// `match` arm's are, so a consumer reading one of those names later finds a local this body declared rather
+    /// than an unresolved name. `scrutinee` is read as [`OwnershipFact::Borrow`] for the same reason
+    /// [`Rvalue::Match::scrutinee`] is: the overall read must not risk an unconditional move while individual
+    /// bindings compute their own, more precise facts against places projected out of it.
+    Pattern { scrutinee: Operand, pattern: Pattern },
+    /// `assert call() raises E`: evaluates `call`, expecting it to raise a runtime error of type `E`, and panics
+    /// when it does not.
+    ///
+    /// `expected_error` is the resolved builtin-exception identity, not the source spelling after `raises`, so a
+    /// consumer never has to re-resolve a name against the exception registry to know which error is expected.
+    Raises { call: Operand, expected_error: ErrorKind },
+}
+
+impl AssertionKind {
+    /// Render the form-specific part of an assertion's snapshot line, without the shared message/panic suffix.
+    fn render_snapshot(&self) -> String {
+        match self {
+            Self::Condition { cond } => cond.render_snapshot(),
+            Self::Pattern { scrutinee, pattern } => {
+                format!("{} is {}", scrutinee.render_snapshot(), pattern.render_snapshot())
+            }
+            Self::Raises { call, expected_error } => {
+                format!("{} raises {}", call.render_snapshot(), errors::as_str(*expected_error))
+            }
+        }
+    }
 }
 
 /// Typechecker-proven error routing selected for one `?` operation.
