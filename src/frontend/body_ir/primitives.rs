@@ -67,8 +67,9 @@ pub(super) fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp
 /// already-evaluated operands — or `None` for operators whose meaning is not a primitive.
 ///
 /// The result type of a mapped operator is *not* this function's business: the typechecker already decided it (an
-/// `int ** int` resolves `float`, `int & int` stays `int`), and lowering carries that decision through on the
-/// assigned temporary rather than re-deriving it from the operator.
+/// `int ** int` with a dynamic exponent resolves `float`, while a non-negative integer-literal exponent stays
+/// `int`; `int & int` stays `int`), and lowering carries that decision through on the assigned temporary rather than
+/// re-deriving it from the operator.
 ///
 /// The match is exhaustive so that a new surface operator is a compile error here rather than a silent refusal.
 /// Two groups deliberately return `None`, each for a different reason:

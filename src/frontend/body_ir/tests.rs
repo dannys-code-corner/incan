@@ -260,8 +260,9 @@ fn rendered_f(source: &str, module_leaf: &str) -> Result<String, Box<dyn std::er
 #[test]
 fn lowers_the_power_operator_as_a_primitive_keeping_the_checked_float_promotion()
 -> Result<(), Box<dyn std::error::Error>> {
-    // `int ** int` resolves `float`: the typechecker owns that promotion and lowering must carry its answer onto
-    // the assigned temporary rather than re-deriving a result type from the operator.
+    // A dynamic `int ** int` exponent resolves `float`: the typechecker owns that promotion and lowering must carry
+    // its answer onto the assigned temporary rather than re-deriving a result type from the operator. A
+    // non-negative integer-literal exponent is the separate `int` case.
     let rendered = rendered_f("def f(a: int, b: int) -> float:\n  return a ** b\n", "pow")?;
 
     assert!(
@@ -402,6 +403,45 @@ fn collection_membership_is_refused_rather_than_lowered_as_a_primitive() -> Resu
 }
 
 #[test]
+fn an_unresolved_binary_operand_refuses_before_either_expression_is_lowered() -> Result<(), Box<dyn std::error::Error>>
+{
+    let binary = "def f(value: int) -> int:\n  return value & missing\n";
+    let (module, diagnostics) = build_after_expected_typecheck_errors(binary, &["m", "unknown_binary"])?;
+    let rendered = body_named(&module, "f")?.render_snapshot();
+
+    assert!(
+        !diagnostics.is_empty(),
+        "the source checker must reject the unknown operand before Body IR lowers it"
+    );
+    assert!(
+        rendered.contains("unsupported(binary operator BitAnd)"),
+        "an unresolved primitive operand must refuse at the binary expression: {rendered}"
+    );
+    assert!(
+        !rendered.contains("copy(_0)") && !rendered.contains("missing"),
+        "the refusal must precede both operand reads, not materialize an external unknown: {rendered}"
+    );
+
+    let compound = "def f() -> int:\n  mut value = 1\n  value &= missing\n  return value\n";
+    let (module, diagnostics) = build_after_expected_typecheck_errors(compound, &["m", "unknown_compound"])?;
+    let rendered = body_named(&module, "f")?.render_snapshot();
+
+    assert!(
+        !diagnostics.is_empty(),
+        "the source checker must reject the unknown compound right operand before Body IR lowers it"
+    );
+    assert!(
+        rendered.contains("unsupported(compound assignment operator BitAnd)"),
+        "an unresolved compound operand must refuse at the compound statement: {rendered}"
+    );
+    assert!(
+        !rendered.contains(" & ") && !rendered.contains("missing"),
+        "the compound refusal must not synthesize a primitive operation or external read: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
 fn lowers_every_bitwise_and_shift_compound_assignment_as_a_read_modify_write() -> Result<(), Box<dyn std::error::Error>>
 {
     // Each `<op>=` form must produce exactly the operator its binary spelling produces, plus a write back to the
@@ -448,24 +488,30 @@ fn a_compound_assignment_through_an_operator_hook_is_refused_by_name() -> Result
 }
 
 #[test]
-fn matmul_reaches_lowering_as_a_resolved_method_call_rather_than_an_operator() -> Result<(), Box<dyn std::error::Error>>
-{
+fn protocol_hook_operators_reach_lowering_as_resolved_method_calls() -> Result<(), Box<dyn std::error::Error>> {
     // #1160's refusal-boundary question, answered: `@` and both pipes are protocol hooks with no primitive form.
     // The typechecker resolves them through `__matmul__` / `__pipe_forward__` / `__pipe_backward__` and rejects
     // the expression outright when no hook resolves, so a well-typed program always arrives here with a recorded
     // dispatch. They need no operator-table entry and carry no refusal -- and so no `Disposition::Unsupported`
     // corpus row, which would otherwise have needed an owner.
-    let source = "@derive(Debug)\nmodel Vec2:\n  x: int\n  y: int\n\n  def __matmul__(self, other: Vec2) -> Vec2:\n    return Vec2(x=self.x * other.x, y=self.y * other.y)\n\ndef f(a: Vec2, b: Vec2) -> Vec2:\n  return a @ b\n";
-    let rendered = rendered_f(source, "matmul")?;
+    let source = "model OpBox:\n  value: int\n\n  def __matmul__(self, other: OpBox) -> OpBox:\n    return other\n\n  def __pipe_forward__(self, other: OpBox) -> OpBox:\n    return other\n\n  def __pipe_backward__(self, other: OpBox) -> OpBox:\n    return other\n\ndef matmul(a: OpBox, b: OpBox) -> OpBox:\n  return a @ b\n\ndef forward(a: OpBox, b: OpBox) -> OpBox:\n  return a |> b\n\ndef backward(a: OpBox, b: OpBox) -> OpBox:\n  return a <| b\n";
+    let module = build(source, &["m", "protocol_hooks"])?;
 
-    assert!(
-        rendered.contains("call method:__matmul__ unbound(borrow(_0), move(_1, last_use))"),
-        "`@` must lower as the method the typechecker resolved, receiver borrowed: {rendered}"
-    );
-    assert!(
-        !rendered.contains("unsupported("),
-        "`@` must not reach the operator table at all: {rendered}"
-    );
+    for (body_name, method, spelling) in [
+        ("matmul", "__matmul__", "@"),
+        ("forward", "__pipe_forward__", "|>"),
+        ("backward", "__pipe_backward__", "<|"),
+    ] {
+        let rendered = body_named(&module, body_name)?.render_snapshot();
+        assert!(
+            rendered.contains(&format!("call method:{method} unbound(borrow(_0), move(_1, last_use))")),
+            "`{spelling}` must lower as the method the typechecker resolved, receiver borrowed: {rendered}"
+        );
+        assert!(
+            !rendered.contains("unsupported("),
+            "`{spelling}` must not reach the operator table at all: {rendered}"
+        );
+    }
     Ok(())
 }
 

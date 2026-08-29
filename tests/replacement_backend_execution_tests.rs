@@ -2480,6 +2480,73 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
     Ok(())
 }
 
+/// New Body-IR forms stay visibly outside the deliberately bounded replacement executor until a later execution
+/// slice admits them. A helper call and a primitive exercise its two distinct refusal paths.
+#[test]
+fn replacement_cli_refuses_new_operator_forms_without_artifacts_or_receipts() -> Result<(), Box<dyn std::error::Error>>
+{
+    let cases = [
+        (
+            "string-membership",
+            "def main() -> bool:\n  return \"a\" in \"abc\"\n",
+            "\"a\" in \"abc\"",
+            "call to runtime helper `str_contains`",
+        ),
+        (
+            "power",
+            "def main() -> int:\n  return 2 ** 3\n",
+            "2 ** 3",
+            "exponentiation",
+        ),
+    ];
+
+    for (name, source, rejected_expression, expected_boundary) in cases {
+        let temporary = tempfile::tempdir()?;
+        let entrypoint = temporary.path().join(format!("{name}.incn"));
+        fs::write(&entrypoint, source)?;
+
+        let output = Command::new(incan_binary())
+            .args([
+                "build",
+                entrypoint.to_string_lossy().as_ref(),
+                "--backend",
+                "replacement",
+                "--backend-fallback",
+                "refuse",
+            ])
+            .output()?;
+        assert!(
+            !output.status.success(),
+            "{name} must refuse rather than widening the direct executor"
+        );
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let expected_start = source
+            .find(rejected_expression)
+            .ok_or("fixture must contain the rejected operator expression")?;
+        let expected_end = expected_start + rejected_expression.len();
+        assert!(
+            combined.contains(expected_boundary)
+                && combined.contains("INCAN-R988-UNSUPPORTED")
+                && combined.contains(&format!(
+                    "primary Incan source location: {}:{expected_start}..{expected_end}",
+                    entrypoint.display()
+                )),
+            "{name} refusal must name its profile boundary at the original operator span: {combined}"
+        );
+        assert!(
+            !combined.contains("Generated Rust project")
+                && !temporary.path().join("target/incan").exists()
+                && !temporary.path().join(".incan/backend/receipt.json").exists(),
+            "{name} refusal must not fall back, generate a legacy artifact, or publish a replacement receipt"
+        );
+    }
+    Ok(())
+}
+
 /// A selected entrypoint must not publish a receipt when an invoked sibling fails the same direct profile gate.
 #[test]
 fn replacement_cli_refuses_an_unsupported_sibling_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
