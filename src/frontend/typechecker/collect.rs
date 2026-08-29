@@ -23,6 +23,23 @@ use self::decl_helpers::{
     collect_properties, inject_validate_methods, owner_resolved_type, resolve_declared_type, type_param_name_set,
 };
 
+/// Flatten a dotted reference expression into its path segments.
+///
+/// A capability's `requires` entries parse as ordinary expressions so they can be checked symbol references rather
+/// than strings. Only a bare name or a chain of field accesses spells a reference; anything else — a call, a literal,
+/// a subscript — is not a path, and returning `None` lets the caller report it against the entry's own span.
+fn dotted_path_segments(expr: &Expr) -> Option<Vec<String>> {
+    match expr {
+        Expr::Ident(name) => Some(vec![name.clone()]),
+        Expr::Field(base, name) => {
+            let mut segments = dotted_path_segments(&base.node)?;
+            segments.push(name.clone());
+            Some(segments)
+        }
+        _ => None,
+    }
+}
+
 type InheritedMembers = (
     HashMap<String, FieldInfo>,
     HashMap<String, Spanned<Expr>>,
@@ -148,11 +165,11 @@ impl TypeChecker {
                 self.validate_root_namespace(&func.name, decl.span);
                 self.collect_function(func, decl.span);
             }
-            // Capability collection lands with this issue's typechecker phase; parsing it is phase 1.
-            Declaration::Capability(_)
-            | Declaration::Docstring(_)
-            | Declaration::TestModule(_)
-            | Declaration::VocabBlock(_) => {}
+            Declaration::Capability(cap) => {
+                self.validate_root_namespace(&cap.name, decl.span);
+                self.collect_capability(cap, decl.span);
+            }
+            Declaration::Docstring(_) | Declaration::TestModule(_) | Declaration::VocabBlock(_) => {}
         }
     }
 
@@ -953,6 +970,44 @@ impl TypeChecker {
                 method_aliases,
                 properties,
                 requires,
+            }),
+            span,
+            scope: 0,
+        });
+    }
+
+    /// Register a `capability` declaration with its description, typed scope dimensions, and requirements (RFC 104).
+    ///
+    /// The scope dimensions are resolved here because they are ordinary type expressions, but the `requires` entries
+    /// are only recorded: a capability may require one declared later in the same module, so resolving them during
+    /// collection would make declaration order significant.
+    fn collect_capability(&mut self, cap: &CapabilityDecl, span: Span) {
+        let description = cap.description.as_ref().and_then(|expr| match &expr.node {
+            Expr::Literal(Literal::String(text)) => Some(text.clone()),
+            _ => None,
+        });
+
+        let scope = cap
+            .scope
+            .iter()
+            .map(|dim| (dim.node.name.clone(), self.resolve_type_checked(&dim.node.ty)))
+            .collect();
+
+        let requires = cap
+            .requires
+            .iter()
+            .filter_map(|entry| {
+                dotted_path_segments(&entry.node).map(|path| CapabilityRequirement { path, span: entry.span })
+            })
+            .collect();
+
+        self.symbols.define(Symbol {
+            name: cap.name.clone(),
+            kind: SymbolKind::Capability(CapabilityInfo {
+                description,
+                scope,
+                requires,
+                is_public: matches!(cap.visibility, Visibility::Public),
             }),
             span,
             scope: 0,

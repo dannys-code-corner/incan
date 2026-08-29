@@ -22387,3 +22387,102 @@ fn test_statement_tuple_unpack_of_an_opaque_rust_value_is_refused() {
         other => panic!("a readable Rust tuple must still destructure, got {other:?}"),
     }
 }
+
+/// A `capability` declaration must reach the symbol table with its RFC 104 clauses intact.
+///
+/// `requires` is deliberately checked as unresolved path segments: collection records what was written so that a
+/// capability may reference one declared later in the same module.
+#[test]
+fn capability_declarations_collect_their_description_scope_and_requires() -> Result<(), String> {
+    let source = r#"
+capability http_request:
+    description = "Issue an outbound HTTP request"
+    scope:
+        host: str
+    requires = [process.spawn]
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    let _ = checker.check_program(&program);
+
+    let symbol_id = checker
+        .symbols
+        .lookup("http_request")
+        .ok_or("the capability declaration was not collected into the symbol table")?;
+    let symbol = checker
+        .symbols
+        .get(symbol_id)
+        .ok_or("the collected symbol id did not resolve")?;
+    let SymbolKind::Capability(info) = &symbol.kind else {
+        return Err(format!("expected a capability symbol, got {:?}", symbol.kind));
+    };
+
+    assert_eq!(info.description.as_deref(), Some("Issue an outbound HTTP request"));
+    assert_eq!(info.scope.len(), 1, "one declared scope dimension");
+    assert_eq!(info.scope[0].0, "host");
+    assert_eq!(
+        info.scope[0].1,
+        ResolvedType::Str,
+        "scope dimension types are resolved at collection"
+    );
+    assert_eq!(info.requires.len(), 1);
+    assert_eq!(info.requires[0].path, vec!["process".to_string(), "spawn".to_string()]);
+    Ok(())
+}
+
+/// A capability must carry RFC 120's `Capability` identity kind rather than falling through to a gap marker.
+#[test]
+fn a_capability_symbol_carries_the_canonical_capability_identity_kind() {
+    use incan_semantics_core::SemanticSourceTargetKind;
+
+    let kind = SymbolKind::Capability(CapabilityInfo {
+        description: None,
+        scope: Vec::new(),
+        requires: Vec::new(),
+        is_public: false,
+    });
+
+    let spelling = TypeChecker::source_target_kind_for_symbol(&kind);
+    assert_eq!(spelling, Some("capability"));
+    assert_eq!(
+        SemanticSourceTargetKind::from_kind_str("capability"),
+        SemanticSourceTargetKind::Capability,
+        "the frontend spelling must decode to the canonical kind, not to Other",
+    );
+}
+
+/// A capability names an authority, so a bare reference to one is never a value use.
+#[test]
+fn referencing_a_capability_as_a_value_is_rejected() {
+    let source = r#"
+capability refund:
+    description = "Refund a captured charge"
+
+def use_it() -> int:
+    x = refund
+    return 1
+"#;
+    let Err(errs) = check_str(source) else {
+        panic!("referencing a capability as a value must fail");
+    };
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("names a runtime authority, not a value")),
+        "expected the capability-as-value diagnostic; got: {errs:?}"
+    );
+}
+
+/// `capability` is contextual, so every non-declaration position keeps it an ordinary identifier.
+#[test]
+fn capability_remains_usable_as_an_ordinary_identifier() -> Result<(), String> {
+    let source = r#"
+model Meter:
+    capability: int
+
+def read(m: Meter) -> int:
+    capability = m.capability
+    return capability
+"#;
+    check_str(source).map_err(|errs| format!("`capability` must stay an ordinary identifier: {errs:?}"))
+}

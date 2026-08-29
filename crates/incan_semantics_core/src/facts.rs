@@ -378,6 +378,8 @@ pub enum SemanticSourceTargetKind {
     Variant,
     /// A `trait` declaration.
     Trait,
+    /// A `capability` declaration naming an RFC 104 ambient runtime authority.
+    Capability,
     /// A field on a nominal type.
     Field,
     /// A method on a nominal type or trait.
@@ -421,6 +423,7 @@ impl SemanticSourceTargetKind {
             "partial" => Self::Partial,
             "variant" => Self::Variant,
             "trait" => Self::Trait,
+            "capability" => Self::Capability,
             "field" => Self::Field,
             "method" => Self::Method,
             "property" => Self::Property,
@@ -450,6 +453,7 @@ impl SemanticSourceTargetKind {
             Self::Partial => "partial",
             Self::Variant => "variant",
             Self::Trait => "trait",
+            Self::Capability => "capability",
             Self::Field => "field",
             Self::Method => "method",
             Self::Property => "property",
@@ -714,6 +718,7 @@ mod tests {
             K::Partial,
             K::Variant,
             K::Trait,
+            K::Capability,
             K::Field,
             K::Method,
             K::Property,

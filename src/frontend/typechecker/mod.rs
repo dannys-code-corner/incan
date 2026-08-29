@@ -1996,6 +1996,7 @@ impl TypeChecker {
         match kind {
             SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_) => Some("function"),
             SymbolKind::Type(info) => Self::source_target_kind_for_type_info(info),
+            SymbolKind::Capability(_) => Some("capability"),
             _ => None,
         }
     }
