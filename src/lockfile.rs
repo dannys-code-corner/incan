@@ -612,7 +612,7 @@ pub fn workspace_semantic_lock_state(
 ///
 /// Absolute coordinates are retained as their original targets before portability is applied. Relative coordinates,
 /// including the empty member-root marker, are first resolved against the member root. Targets outside the workspace
-/// remain absolute because [`portable_project_path`] only strips paths contained by its project root.
+/// render with `..` traversal through [`portable_project_path`], so sibling coordinates stay machine-independent.
 fn rebase_member_semantic_path(workspace_root: &Path, member_root: &Path, path: &str) -> String {
     let member_path = Path::new(path);
     let resolved = if member_path.is_absolute() {
@@ -655,15 +655,70 @@ fn backend_requirement_name(requirement: &BackendImplementationRequirement) -> S
     }
 }
 
-/// Render a project-relative path when possible so semantic lock fingerprints survive relocation.
+/// Render a project-relative path so semantic lock coordinates and fingerprints survive relocation.
+///
+/// A coordinate inside the project root renders without traversal, as before. A coordinate outside it — most
+/// commonly a sibling provider such as `../producer` — renders with `..` components the way Cargo renders path
+/// dependencies, so the same checkout produces the same lock bytes on every machine (#1226). Only when no relative
+/// rendering exists (different Windows path prefixes, or a path that cannot be anchored) does the coordinate stay
+/// absolute, which then genuinely is machine state.
 fn portable_project_path(project_root: &Path, path: &Path) -> String {
-    let normalized_root = fs::canonicalize(project_root).unwrap_or_else(|_| project_root.to_path_buf());
-    let normalized_path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    normalized_path
-        .strip_prefix(&normalized_root)
-        .unwrap_or(&normalized_path)
-        .to_string_lossy()
-        .replace('\\', "/")
+    let canonical_root = fs::canonicalize(project_root);
+    let canonical_path = fs::canonicalize(path);
+    let both_canonical = canonical_root.is_ok() && canonical_path.is_ok();
+    let normalized_root = canonical_root.unwrap_or_else(|_| project_root.to_path_buf());
+    let normalized_path = canonical_path.unwrap_or_else(|_| path.to_path_buf());
+    if let Ok(contained) = normalized_path.strip_prefix(&normalized_root) {
+        return contained.to_string_lossy().replace('\\', "/");
+    }
+    // Traversal is meaningful only when both coordinates resolved in the same real namespace. A half-canonicalized
+    // pair (one side missing on disk, or split across a symlink alias such as macOS's `/var` vs `/private/var`)
+    // would walk across the alias boundary and render a traversal that resolves to the wrong place.
+    if both_canonical {
+        if let Some(traversal) = relative_traversal_path(&normalized_root, &normalized_path) {
+            return traversal;
+        }
+    }
+    normalized_path.to_string_lossy().replace('\\', "/")
+}
+
+/// Render `path` relative to `root` using `..` traversal, or `None` when the two share no common anchor.
+///
+/// Both inputs must be absolute for the component walk to be meaningful; prefix components (Windows drives) must
+/// match exactly, since no traversal crosses drives.
+fn relative_traversal_path(root: &Path, path: &Path) -> Option<String> {
+    use std::path::Component;
+
+    if !root.is_absolute() || !path.is_absolute() {
+        return None;
+    }
+    let root_components = root.components().collect::<Vec<_>>();
+    let path_components = path.components().collect::<Vec<_>>();
+    if matches!(root_components.first(), Some(Component::Prefix(_)))
+        || matches!(path_components.first(), Some(Component::Prefix(_)))
+    {
+        let (Some(Component::Prefix(root_prefix)), Some(Component::Prefix(path_prefix))) =
+            (root_components.first(), path_components.first())
+        else {
+            return None;
+        };
+        if root_prefix != path_prefix {
+            return None;
+        }
+    }
+    let shared = root_components
+        .iter()
+        .zip(&path_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+    let mut rendered = Vec::new();
+    rendered.resize(root_components.len() - shared, "..".to_string());
+    rendered.extend(
+        path_components[shared..]
+            .iter()
+            .map(|component| component.as_os_str().to_string_lossy().replace('\\', "/")),
+    );
+    Some(rendered.join("/"))
 }
 
 /// Return the canonical SHA-256 identity for one serialized semantic lock payload.
@@ -1105,6 +1160,50 @@ mod tests {
     use super::*;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    #[test]
+    fn portable_project_path_renders_sibling_coordinates_with_traversal() -> TestResult {
+        // A consumer's sibling provider is the ordinary workspace layout (#1226). The rendered coordinate must be
+        // identical on every machine, so the lock's semantic fingerprint survives relocation and repeated bakes stop
+        // re-dirtying tracked example locks with checkout-absolute paths.
+        let fixture = tempfile::tempdir()?;
+        let consumer = fixture.path().join("examples/vocab/consumer");
+        let producer = fixture.path().join("examples/vocab/producer");
+        fs::create_dir_all(&consumer)?;
+        fs::create_dir_all(producer.join("src"))?;
+
+        fs::create_dir_all(consumer.join("src"))?;
+
+        assert_eq!(portable_project_path(&consumer, &producer), "../producer");
+        assert_eq!(
+            portable_project_path(&consumer, &producer.join("src")),
+            "../producer/src"
+        );
+        assert_eq!(portable_project_path(&consumer, &consumer.join("src")), "src");
+        assert_eq!(portable_project_path(&consumer, &consumer), "");
+        let missing = fixture.path().join("examples/vocab/not-yet-created");
+        assert!(
+            Path::new(&portable_project_path(&consumer, &missing)).is_absolute(),
+            "a coordinate that cannot canonicalize must stay absolute rather than risk an alias-crossing traversal"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn relative_traversal_path_requires_absolute_anchors() {
+        assert_eq!(
+            relative_traversal_path(Path::new("relative/root"), Path::new("/absolute/path")),
+            None
+        );
+        assert_eq!(
+            relative_traversal_path(Path::new("/absolute/root"), Path::new("relative/path")),
+            None
+        );
+        assert_eq!(
+            relative_traversal_path(Path::new("/a/b/c"), Path::new("/a/x/y")).as_deref(),
+            Some("../../x/y")
+        );
+    }
 
     const PUBLICATION_LOCK_HELPER_MODE_ENV: &str = "INCAN_TEST_PUBLICATION_LOCK_HELPER_MODE";
     const PUBLICATION_LOCK_HELPER_PATH_ENV: &str = "INCAN_TEST_PUBLICATION_LOCK_HELPER_PATH";
@@ -2052,16 +2151,18 @@ mod tests {
         assert_eq!(member.member_root, "consumer");
         assert_eq!(member.packages[0].project_root, "consumer");
         assert_eq!(member.packages[1].project_root, "");
-        assert_eq!(
-            member.packages[2].project_root,
-            fs::canonicalize(external.path())?.to_string_lossy().replace('\\', "/")
+        // An out-of-workspace coordinate renders with `..` traversal (#1226) so the lock stays machine-independent.
+        let expected_external =
+            relative_traversal_path(&fs::canonicalize(&workspace_root)?, &fs::canonicalize(external.path())?)
+                .ok_or("external coordinate should render relative to the workspace root")?;
+        assert!(
+            expected_external.starts_with(".."),
+            "an out-of-workspace coordinate must render as traversal, got `{expected_external}`"
         );
+        assert_eq!(member.packages[2].project_root, expected_external);
         assert_eq!(member.feature_edges[0].from, "consumer");
         assert_eq!(member.feature_edges[0].to, "");
-        assert_eq!(
-            member.feature_edges[1].to,
-            fs::canonicalize(external.path())?.to_string_lossy().replace('\\', "/")
-        );
+        assert_eq!(member.feature_edges[1].to, expected_external);
         Ok(())
     }
 
