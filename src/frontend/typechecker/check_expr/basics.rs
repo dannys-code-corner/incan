@@ -152,6 +152,17 @@ impl TypeChecker {
                     (IdentKind::Module, ResolvedType::Named(name.to_string()))
                 }
             }
+            SymbolKind::Capability(_) => {
+                // RFC 104 capabilities name an authority to perform an operation. Nothing in the language holds one as
+                // a value, so a bare reference is always a mistake rather than a use this stage should type.
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "Capability '{name}' names a runtime authority, not a value; grant it or list it under `requires` instead of referencing it directly"
+                    ),
+                    span,
+                ));
+                return ResolvedType::Unknown;
+            }
             SymbolKind::Trait(_) => {
                 if !self.is_type_receiver_span(span) {
                     self.errors.push(errors::type_name_used_as_value(name, span));

@@ -1025,6 +1025,7 @@ pub(super) fn collect_dependency_symbol_metadata(
                     | Declaration::Enum(_)
                     | Declaration::TestModule(_)
                     | Declaration::VocabBlock(_)
+                    | Declaration::Capability(_)
                     | Declaration::Docstring(_) => None,
                 }
             {

@@ -132,6 +132,7 @@ pub enum SemanticFactKind {
     RuntimeRequirement,
     Diagnostic,
     BackendObligation,
+    AuthorityDecision,
 }
 
 impl SemanticFactKind {
@@ -144,6 +145,7 @@ impl SemanticFactKind {
             Self::RuntimeRequirement => "runtime_requirement",
             Self::Diagnostic => "diagnostic",
             Self::BackendObligation => "backend_obligation",
+            Self::AuthorityDecision => "authority_decision",
         }
     }
 }
@@ -159,6 +161,7 @@ pub enum SemanticFactValue {
     Type(IncanType),
     SourceTarget(SemanticSourceTarget),
     RegistryEntry(SemanticRegistryEntry),
+    AuthorityDecision(AuthorityDecision),
     Flag(bool),
 }
 
@@ -183,6 +186,11 @@ impl SemanticFactValue {
         Self::RegistryEntry(value)
     }
 
+    /// Build one RFC 104 authority-decision fact value.
+    pub fn authority_decision(value: AuthorityDecision) -> Self {
+        Self::AuthorityDecision(value)
+    }
+
     /// Render a deterministic maintainer-facing fact payload snapshot.
     pub fn render_snapshot(&self) -> String {
         match self {
@@ -190,6 +198,7 @@ impl SemanticFactValue {
             Self::Type(value) => value.to_string(),
             Self::SourceTarget(value) => value.to_string(),
             Self::RegistryEntry(value) => value.to_string(),
+            Self::AuthorityDecision(value) => value.to_string(),
             Self::Flag(value) => value.to_string(),
         }
     }
@@ -378,6 +387,8 @@ pub enum SemanticSourceTargetKind {
     Variant,
     /// A `trait` declaration.
     Trait,
+    /// A `capability` declaration naming an RFC 104 ambient runtime authority.
+    Capability,
     /// A field on a nominal type.
     Field,
     /// A method on a nominal type or trait.
@@ -421,6 +432,7 @@ impl SemanticSourceTargetKind {
             "partial" => Self::Partial,
             "variant" => Self::Variant,
             "trait" => Self::Trait,
+            "capability" => Self::Capability,
             "field" => Self::Field,
             "method" => Self::Method,
             "property" => Self::Property,
@@ -450,6 +462,7 @@ impl SemanticSourceTargetKind {
             Self::Partial => "partial",
             Self::Variant => "variant",
             Self::Trait => "trait",
+            Self::Capability => "capability",
             Self::Field => "field",
             Self::Method => "method",
             Self::Property => "property",
@@ -464,6 +477,188 @@ impl SemanticSourceTargetKind {
             Self::Builtin => "builtin",
             Self::Other(kind) => kind,
         }
+    }
+}
+
+/// RFC 104 run mode.
+///
+/// The mode is part of the decision rather than ambient context: the same request produces a different outcome under
+/// `Governed` than under `Permissive`, and a consumer reading a stored decision must be able to tell which rule
+/// produced it without re-deriving the run's configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AuthorityMode {
+    /// Operations run normally and receipts may be disabled.
+    Permissive,
+    /// Operations run normally and receipts are emitted.
+    Observe,
+    /// Operations require granted capabilities and receipts are emitted.
+    Governed,
+}
+
+impl AuthorityMode {
+    /// Return the compact snapshot spelling for this mode.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Permissive => "permissive",
+            Self::Observe => "observe",
+            Self::Governed => "governed",
+        }
+    }
+}
+
+/// Why a governed authority request was denied.
+///
+/// This is the machine-usable denial reason RFC 104 requires. A consumer branches on the variant; the prose belongs to
+/// the diagnostic that renders it, never to this fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AuthorityDenialReason {
+    /// The invocation never requested this capability.
+    NotGranted,
+    /// The invocation requested the capability, but a host ceiling did not permit it.
+    OutsideCeiling,
+    /// The capability was granted, but not for the scope this operation requested.
+    OutOfScope,
+    /// A budget for this capability was exhausted before the operation ran.
+    BudgetExhausted,
+    /// Replay required a recorded fixture that was not available.
+    FixtureRequired,
+}
+
+impl AuthorityDenialReason {
+    /// Return the compact snapshot spelling for this denial reason.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotGranted => "not_granted",
+            Self::OutsideCeiling => "outside_ceiling",
+            Self::OutOfScope => "out_of_scope",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::FixtureRequired => "fixture_required",
+        }
+    }
+}
+
+/// The effect of an authority decision on one operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AuthorityOutcome {
+    /// The operation may perform its authority-bearing behavior.
+    Allowed,
+    /// The operation must fail before performing its authority-bearing behavior.
+    Denied(AuthorityDenialReason),
+}
+
+/// The grant context a decision was reached against.
+///
+/// RFC 104 makes the ceiling a distinct grant source from the per-invocation request, and requires the effective grant
+/// to be their **intersection, never their union**: an invocation can only ever receive less than its ceiling allows,
+/// regardless of what it asks for. Recording whether a ceiling applied is therefore part of the decision, because
+/// `Allowed` under a ceiling and `Allowed` with no ceiling are different facts about the run.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AuthorityGrantContext {
+    /// Scope dimensions the operation requested, as `(dimension, value)` in the capability's declaration order.
+    pub requested_scope: Vec<(String, String)>,
+    /// Whether a host ceiling bounded this invocation.
+    pub ceiling_applied: bool,
+}
+
+/// Enough provenance to raise a source-owned governed denial diagnostic.
+///
+/// RFC 104 requires a denial to identify the required capability and to be reportable against the source that asked
+/// for it. The requesting operation's canonical identity and the use-site span are what make that possible without a
+/// consumer re-reading source text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AuthorityProvenance {
+    /// Canonical identity of the operation that requested the authority.
+    pub operation: CanonicalSymbolId,
+    /// The use site the request came from, which is where a denial is reported.
+    pub request_span: crate::HirSourceSpan,
+    /// Grant spelling to suggest in a denial diagnostic, such as `host.http.request`.
+    pub suggested_grant: String,
+}
+
+/// One RFC 104 authority decision about one operation.
+///
+/// This is deliberately generic over capability publishers and provider operations: both the capability and the
+/// requesting operation are named by [`CanonicalSymbolId`], so the stdlib, a library-defined domain capability, and a
+/// provider operation all produce the same fact. A consumer can act on an allowed or denied decision without
+/// consulting source text or emitted Rust, which is what lets a provider backend avoid inventing its own grant model.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct AuthorityDecision {
+    /// The capability whose authority was requested.
+    pub capability: CanonicalSymbolId,
+    /// The mode this decision was reached under.
+    pub mode: AuthorityMode,
+    /// Whether the operation may proceed.
+    pub outcome: AuthorityOutcome,
+    /// The grant context the decision was reached against.
+    pub grant: AuthorityGrantContext,
+    /// Where the decision can be reported in source.
+    pub provenance: AuthorityProvenance,
+}
+
+impl AuthorityDecision {
+    /// Build an allowed decision.
+    pub fn allowed(
+        capability: CanonicalSymbolId,
+        mode: AuthorityMode,
+        grant: AuthorityGrantContext,
+        provenance: AuthorityProvenance,
+    ) -> Self {
+        Self {
+            capability,
+            mode,
+            outcome: AuthorityOutcome::Allowed,
+            grant,
+            provenance,
+        }
+    }
+
+    /// Build a denied decision carrying its machine-usable reason.
+    pub fn denied(
+        capability: CanonicalSymbolId,
+        mode: AuthorityMode,
+        reason: AuthorityDenialReason,
+        grant: AuthorityGrantContext,
+        provenance: AuthorityProvenance,
+    ) -> Self {
+        Self {
+            capability,
+            mode,
+            outcome: AuthorityOutcome::Denied(reason),
+            grant,
+            provenance,
+        }
+    }
+
+    /// Whether the operation may perform its authority-bearing behavior.
+    pub const fn is_allowed(&self) -> bool {
+        matches!(self.outcome, AuthorityOutcome::Allowed)
+    }
+
+    /// The denial reason, when this decision denied the operation.
+    pub const fn denial_reason(&self) -> Option<AuthorityDenialReason> {
+        match self.outcome {
+            AuthorityOutcome::Allowed => None,
+            AuthorityOutcome::Denied(reason) => Some(reason),
+        }
+    }
+}
+
+impl std::fmt::Display for AuthorityDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let outcome = match self.outcome {
+            AuthorityOutcome::Allowed => "allowed".to_string(),
+            AuthorityOutcome::Denied(reason) => format!("denied:{}", reason.as_str()),
+        };
+        let ceiling = if self.grant.ceiling_applied { " ceiling" } else { "" };
+        write!(
+            f,
+            "{} {} {}{} <- {}",
+            self.capability.declaration_name,
+            self.mode.as_str(),
+            outcome,
+            ceiling,
+            self.provenance.operation.declaration_name
+        )
     }
 }
 
@@ -700,6 +895,141 @@ mod tests {
     ///
     /// The two arms are hand-written and 22 variants long; a typo in either would silently reclassify a declaration
     /// as `Other`, which compares unequal to the variant it came from and would split one declaration's identity.
+    /// Build a capability identity and a requesting-operation identity for authority-decision tests.
+    fn authority_fixture() -> (super::CanonicalSymbolId, super::AuthorityProvenance) {
+        use super::{AuthorityProvenance, CanonicalSymbolId, SemanticSourceTargetKind};
+
+        let capability = CanonicalSymbolId::module_declaration(
+            vec!["host".to_string(), "http".to_string()],
+            "request",
+            SemanticSourceTargetKind::Capability,
+            crate::HirSourceSpan::new(10, 20),
+        );
+        let operation = CanonicalSymbolId::module_declaration(
+            vec!["app".to_string(), "billing".to_string()],
+            "charge",
+            SemanticSourceTargetKind::Function,
+            crate::HirSourceSpan::new(80, 96),
+        );
+        let provenance = AuthorityProvenance {
+            operation,
+            request_span: crate::HirSourceSpan::new(120, 140),
+            suggested_grant: "host.http.request".to_string(),
+        };
+        (capability, provenance)
+    }
+
+    /// An allowed decision must be actionable without a consumer re-reading source or emitted Rust.
+    #[test]
+    fn an_allowed_authority_decision_carries_its_mode_and_grant_context() {
+        use super::{AuthorityDecision, AuthorityGrantContext, AuthorityMode};
+
+        let (capability, provenance) = authority_fixture();
+        let decision = AuthorityDecision::allowed(
+            capability,
+            AuthorityMode::Governed,
+            AuthorityGrantContext {
+                requested_scope: vec![("host".to_string(), "api.example.com".to_string())],
+                ceiling_applied: true,
+            },
+            provenance,
+        );
+
+        assert!(decision.is_allowed());
+        assert_eq!(decision.denial_reason(), None);
+        assert_eq!(decision.mode, AuthorityMode::Governed);
+        assert!(
+            decision.grant.ceiling_applied,
+            "a ceiling bounds the effective grant by intersection, so whether one applied is part of the decision",
+        );
+        assert_eq!(decision.provenance.suggested_grant, "host.http.request");
+    }
+
+    /// A denied decision must carry a machine-usable reason and enough provenance to raise a source-owned diagnostic.
+    #[test]
+    fn a_denied_authority_decision_carries_a_machine_usable_reason_and_its_use_site() {
+        use super::{AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode};
+
+        let (capability, provenance) = authority_fixture();
+        let decision = AuthorityDecision::denied(
+            capability,
+            AuthorityMode::Governed,
+            AuthorityDenialReason::OutsideCeiling,
+            AuthorityGrantContext {
+                requested_scope: Vec::new(),
+                ceiling_applied: true,
+            },
+            provenance,
+        );
+
+        assert!(!decision.is_allowed());
+        assert_eq!(decision.denial_reason(), Some(AuthorityDenialReason::OutsideCeiling));
+        assert_eq!(
+            decision.provenance.request_span,
+            crate::HirSourceSpan::new(120, 140),
+            "a denial is reported at the use site, not at the capability declaration",
+        );
+        assert_eq!(
+            decision.provenance.operation.declaration_name, "charge",
+            "the requesting operation stays identified so the diagnostic can name it",
+        );
+    }
+
+    /// The fact must be generic over capability publishers rather than assuming a stdlib host capability.
+    #[test]
+    fn authority_decisions_work_for_a_library_defined_capability() {
+        use super::{
+            AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode, CanonicalSymbolId,
+            SemanticSourceTargetKind,
+        };
+
+        let (_, provenance) = authority_fixture();
+        let package_capability = CanonicalSymbolId::module_declaration(
+            vec!["acme".to_string(), "ledger".to_string()],
+            "post_entry",
+            SemanticSourceTargetKind::Capability,
+            crate::HirSourceSpan::new(4, 14),
+        );
+        let decision = AuthorityDecision::denied(
+            package_capability,
+            AuthorityMode::Governed,
+            AuthorityDenialReason::NotGranted,
+            AuthorityGrantContext {
+                requested_scope: Vec::new(),
+                ceiling_applied: false,
+            },
+            provenance,
+        );
+
+        assert_eq!(decision.capability.kind, SemanticSourceTargetKind::Capability);
+        assert_eq!(decision.capability.declaration_name, "post_entry");
+        assert_eq!(decision.denial_reason(), Some(AuthorityDenialReason::NotGranted));
+    }
+
+    /// Every mode and denial reason needs a distinct snapshot spelling.
+    #[test]
+    fn authority_modes_and_denial_reasons_have_distinct_spellings() {
+        use super::{AuthorityDenialReason as R, AuthorityMode as M};
+
+        let modes = [M::Permissive, M::Observe, M::Governed];
+        let mode_spellings: std::collections::HashSet<&str> = modes.iter().map(|m| m.as_str()).collect();
+        assert_eq!(mode_spellings.len(), modes.len(), "two modes share one spelling");
+
+        let reasons = [
+            R::NotGranted,
+            R::OutsideCeiling,
+            R::OutOfScope,
+            R::BudgetExhausted,
+            R::FixtureRequired,
+        ];
+        let reason_spellings: std::collections::HashSet<&str> = reasons.iter().map(|r| r.as_str()).collect();
+        assert_eq!(
+            reason_spellings.len(),
+            reasons.len(),
+            "two denial reasons share one spelling",
+        );
+    }
+
     #[test]
     fn every_source_target_kind_round_trips_through_its_spelling() {
         use super::SemanticSourceTargetKind as K;
@@ -714,6 +1044,7 @@ mod tests {
             K::Partial,
             K::Variant,
             K::Trait,
+            K::Capability,
             K::Field,
             K::Method,
             K::Property,

@@ -2020,3 +2020,66 @@ pub fn tuple_unpack_count_mismatch(expected: usize, found: usize, span: Span) ->
         span,
     )
 }
+
+// -- RFC 104 capabilities -----------------------------------------------------
+
+/// Build the error emitted when a `capability` declaration omits its `description` clause.
+///
+/// The grammar accepts the omission so that a missing description is reported here, against the declaration's own
+/// span, rather than as a parse failure that cannot say which clause is missing. RFC 104 treats the description as
+/// part of the authority's public contract: a policy author deciding whether to grant a capability reads it, so a
+/// capability without one cannot be reviewed.
+pub fn capability_description_required(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(format!("Capability '{name}' has no `description`"), span)
+        .with_hint("Add `description = \"...\"` saying what granting this capability authorizes")
+}
+
+/// Build the error emitted when a `requires` entry is not a symbol reference.
+///
+/// RFC 104 requires these to be checked references to other capabilities rather than strings, so that a misspelling
+/// is a compile error instead of a runtime denial discovered later. An entry that is a call, a literal, or any other
+/// expression cannot name a declaration at all.
+pub fn capability_requirement_not_a_reference(span: Span) -> CompileError {
+    CompileError::type_error(
+        "A capability `requires` entry must be a capability reference".to_string(),
+        span,
+    )
+    .with_hint("Write the capability's name or dotted path, such as `host.http.request`, not an expression")
+}
+
+/// Build the error emitted when a `requires` entry names nothing the compiler can find.
+///
+/// This is deliberately an unresolved-symbol error at compile time. RFC 104 is explicit that a misspelled or
+/// nonexistent capability reference must fail here rather than surviving to become a runtime capability denial,
+/// which would surface far from the declaration that caused it.
+pub fn capability_requirement_unresolved(path: &str, span: Span) -> CompileError {
+    CompileError::type_error(format!("Unknown capability '{path}' in `requires`"), span)
+        .with_hint("Declare the capability, or import the module that declares it")
+}
+
+/// Build the error emitted when a `requires` entry resolves to something that is not a capability.
+///
+/// Holding a capability never grants what it requires, so the entries are a documentation and policy surface rather
+/// than a dispatch mechanism. A `requires` list naming a function or a type would describe an authority relationship
+/// that cannot exist, and a policy reading it would draw a false conclusion.
+pub fn capability_requirement_not_a_capability(path: &str, found: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("`requires` entry '{path}' is a {found}, not a capability"),
+        span,
+    )
+    .with_hint("Reference a `capability` declaration, or remove the entry")
+}
+
+/// Build the error emitted when a `description` clause is present but is not compile-time text.
+///
+/// The description's audience is a person deciding whether to grant the capability, and there is no later moment at
+/// which that review happens — so an expression to be evaluated at runtime cannot serve as one. Accepting a
+/// non-string would also record no description at all, leaving a declaration that looks documented while carrying
+/// nothing, which is worse than an obviously missing clause.
+pub fn capability_description_must_be_text(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Capability '{name}' has a `description` that is not a text literal"),
+        span,
+    )
+    .with_hint("Write the description as a quoted string, such as `description = \"Issue a refund\"`")
+}

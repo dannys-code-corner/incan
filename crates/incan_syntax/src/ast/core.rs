@@ -129,6 +129,7 @@ pub enum Declaration {
     Const(super::ConstDecl),
     Static(super::StaticDecl),
     Model(super::ModelDecl),
+    Capability(super::CapabilityDecl),
     Class(super::ClassDecl),
     Trait(super::TraitDecl),
     Alias(super::AliasDecl),

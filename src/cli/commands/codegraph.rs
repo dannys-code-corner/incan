@@ -1289,6 +1289,7 @@ impl CodegraphBuilder {
             | Declaration::Partial(_)
             | Declaration::TypeAlias(_)
             | Declaration::VocabBlock(_)
+            | Declaration::Capability(_)
             | Declaration::Docstring(_) => {}
         }
     }
@@ -2465,6 +2466,13 @@ fn declaration_summary(declaration: &Declaration) -> Option<DeclarationSummary> 
             visibility: decl.visibility,
             type_params: Vec::new(),
             signature: decl.ty.as_ref().map(|ty| format!("const {}: {}", decl.name, ty.node)),
+        }),
+        Declaration::Capability(decl) => Some(DeclarationSummary {
+            kind: "capability".to_string(),
+            name: decl.name.clone(),
+            visibility: decl.visibility,
+            type_params: Vec::new(),
+            signature: Some(format!("capability {}", decl.name)),
         }),
         Declaration::Static(decl) => Some(DeclarationSummary {
             kind: "static".to_string(),

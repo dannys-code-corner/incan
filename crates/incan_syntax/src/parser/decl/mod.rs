@@ -9,6 +9,7 @@
 // - The implementation is split into focused include files to avoid a god-module.
 
 include!("entrypoints.rs");
+include!("capabilities.rs");
 include!("decorators.rs");
 include!("imports.rs");
 include!("models.rs");

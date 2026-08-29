@@ -508,6 +508,8 @@ pub enum SymbolKind {
     Property(PropertyInfo),
     /// Rust dependency import (`import rust::...` / `from rust::... import ...`, RFC 005 / RFC 041).
     RustItem(RustItemInfo),
+    /// `capability` declaration naming an ambient runtime authority (RFC 104).
+    Capability(CapabilityInfo),
 }
 
 /// Variable information
@@ -788,6 +790,39 @@ pub struct TraitInfo {
     pub method_aliases: HashMap<String, String>,
     pub properties: HashMap<String, PropertyInfo>,
     pub requires: Vec<(String, ResolvedType)>, // Required fields
+}
+
+/// A `capability` declaration's collected shape (RFC 104).
+///
+/// A capability names an authority to perform a side-effecting operation, not a value and not a type, so it carries no
+/// `ResolvedType`: no expression in the language ever holds a capability. What it does carry is the authority's own
+/// description, the typed dimensions a grant may constrain, and the other capabilities its implementation needs.
+///
+/// `requires` is deliberately unresolved at collection time. Capabilities may reference each other in any order within
+/// a module, so resolving those references is a checking concern; collection records what was written and where, and
+/// checking turns each into a symbol reference. Holding this capability never grants what it requires — that is the
+/// invariant the separate list exists to preserve.
+#[derive(Debug, Clone)]
+pub struct CapabilityInfo {
+    /// Prose from the `description` clause, when the declaration supplied a string literal.
+    pub description: Option<String>,
+    /// Typed scope dimensions from the `scope:` block, in declaration order.
+    pub scope: Vec<(String, ResolvedType)>,
+    /// Other capabilities this one needs, as written, in declaration order.
+    pub requires: Vec<CapabilityRequirement>,
+    pub is_public: bool,
+}
+
+/// One entry of a capability's `requires` list, before it is resolved to a capability symbol.
+///
+/// The span is kept so a later diagnostic can point at the reference the author wrote rather than at the enclosing
+/// declaration.
+#[derive(Debug, Clone)]
+pub struct CapabilityRequirement {
+    /// Dotted path exactly as written, split into segments — `host.http.request` becomes three segments.
+    pub path: Vec<String>,
+    /// Span of the reference itself.
+    pub span: Span,
 }
 
 /// Module/import information

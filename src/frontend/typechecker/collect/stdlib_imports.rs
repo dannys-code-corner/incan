@@ -2379,6 +2379,7 @@ impl TypeChecker {
             SymbolKind::Field(_) => "field",
             SymbolKind::Property(_) => "property",
             SymbolKind::RustItem(_) => "rust import",
+            SymbolKind::Capability(_) => "capability",
         };
         Some(kind)
     }
@@ -2500,6 +2501,11 @@ impl TypeChecker {
         }
 
         match kind {
+            SymbolKind::Capability(info) => {
+                for (_, ty) in &mut info.scope {
+                    Self::remap_resolved_type_with_import_aliases(ty, imported_type_aliases);
+                }
+            }
             SymbolKind::Variable(info) => {
                 Self::remap_resolved_type_with_import_aliases(&mut info.ty, imported_type_aliases);
             }
@@ -3213,6 +3219,9 @@ impl TypeChecker {
     /// Apply a consumer namespace grant to provider-local trait provenance carried by checked artifact facts.
     fn qualify_provider_symbol_bounds(kind: &mut SymbolKind, namespace_prefix: &[String]) {
         match kind {
+            // A capability declares an authority rather than a callable or a nominal type, so it carries no trait
+            // bounds for a consumer namespace grant to qualify.
+            SymbolKind::Capability(_) => {}
             SymbolKind::Function(info) => Self::qualify_provider_function_bounds(info, namespace_prefix),
             SymbolKind::FunctionOverloads(overloads) => {
                 for overload in overloads {
@@ -3637,6 +3646,7 @@ impl TypeChecker {
                 | ExportedSymbol::Type(name)
                 | ExportedSymbol::Trait(name)
                 | ExportedSymbol::Function(name)
+                | ExportedSymbol::Capability(name)
                 | ExportedSymbol::Reexported(name) => {
                     exported_names.insert(name.clone());
                 }

@@ -90,6 +90,8 @@ pub enum HirDeclarationKind {
     Const,
     Static,
     Model,
+    /// An RFC 104 runtime authority declaration.
+    Capability,
     Class,
     Trait,
     Alias,
@@ -111,6 +113,7 @@ impl HirDeclarationKind {
             Self::Const => "const",
             Self::Static => "static",
             Self::Model => "model",
+            Self::Capability => "capability",
             Self::Class => "class",
             Self::Trait => "trait",
             Self::Alias => "alias",

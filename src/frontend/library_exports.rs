@@ -778,6 +778,7 @@ fn checked_partial_target_kind(partial: &PartialDecl, checker: &TypeChecker) -> 
         | Some(SymbolKind::Module(_))
         | Some(SymbolKind::Variant(_))
         | Some(SymbolKind::RustItem(_))
+        | Some(SymbolKind::Capability(_))
         | None => CheckedPartialTargetKind::Unknown,
     }
 }

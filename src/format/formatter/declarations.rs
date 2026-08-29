@@ -78,6 +78,7 @@ impl Formatter {
             Declaration::Static(static_decl) => self.format_static(static_decl),
             Declaration::Model(model) => self.format_model(model),
             Declaration::Class(class) => self.format_class(class),
+            Declaration::Capability(cap) => self.format_capability(cap),
             Declaration::Trait(tr) => self.format_trait(tr),
             Declaration::Alias(alias) => self.format_alias(alias),
             Declaration::Partial(partial) => self.format_partial(partial),
@@ -546,6 +547,58 @@ impl Formatter {
     }
 
     /// Format a trait declaration, including same-trait method aliases.
+    /// Format an RFC 104 `capability` declaration.
+    ///
+    /// Clause order is normalized to description, scope, then requires, regardless of how the source ordered them:
+    /// the parser accepts any order, and a formatter that preserved it would make two identical capabilities format
+    /// differently.
+    fn format_capability(&mut self, cap: &CapabilityDecl) {
+        for dec in &cap.decorators {
+            self.format_decorator(&dec.node);
+        }
+
+        self.write_visibility(cap.visibility);
+        self.writer.write("capability ");
+        self.writer.write(&cap.name);
+        self.writer.writeln(":");
+        self.writer.indent();
+
+        if let Some(docstring) = &cap.docstring {
+            self.format_docstring(docstring);
+        }
+
+        if let Some(description) = &cap.description {
+            self.writer.write("description = ");
+            self.format_expr(&description.node);
+            self.writer.newline();
+        }
+
+        if !cap.scope.is_empty() {
+            self.writer.writeln("scope:");
+            self.writer.indent();
+            for dim in &cap.scope {
+                self.writer.write(&dim.node.name);
+                self.writer.write(": ");
+                self.writer.write(&dim.node.ty.node.to_string());
+                self.writer.newline();
+            }
+            self.writer.dedent();
+        }
+
+        if !cap.requires.is_empty() {
+            self.writer.write("requires = [");
+            for (index, entry) in cap.requires.iter().enumerate() {
+                if index > 0 {
+                    self.writer.write(", ");
+                }
+                self.format_expr(&entry.node);
+            }
+            self.writer.writeln("]");
+        }
+
+        self.writer.dedent();
+    }
+
     fn format_trait(&mut self, tr: &TraitDecl) {
         for dec in &tr.decorators {
             self.format_decorator(&dec.node);

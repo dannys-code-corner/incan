@@ -1996,6 +1996,7 @@ impl TypeChecker {
         match kind {
             SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_) => Some("function"),
             SymbolKind::Type(info) => Self::source_target_kind_for_type_info(info),
+            SymbolKind::Capability(_) => Some("capability"),
             _ => None,
         }
     }
@@ -5161,7 +5162,8 @@ impl TypeChecker {
                     | ExportedSymbol::Static(name)
                     | ExportedSymbol::Type(name)
                     | ExportedSymbol::Trait(name)
-                    | ExportedSymbol::Function(name) => Some(name),
+                    | ExportedSymbol::Function(name)
+                    | ExportedSymbol::Capability(name) => Some(name),
                     ExportedSymbol::Variant { variant_name, .. } => Some(variant_name),
                     ExportedSymbol::Reexported(_) => None,
                 })
@@ -5190,6 +5192,7 @@ impl TypeChecker {
                 Declaration::Newtype(decl) => Some(decl.name.clone()),
                 Declaration::Enum(decl) => Some(decl.name.clone()),
                 Declaration::Function(decl) => Some(decl.name.clone()),
+                Declaration::Capability(decl) => Some(decl.name.clone()),
                 Declaration::Import(_)
                 | Declaration::Docstring(_)
                 | Declaration::TestModule(_)
@@ -6388,6 +6391,7 @@ impl Default for TypeChecker {
 /// Return whether a declaration participates in public module import collection.
 fn is_public_decl(decl: &Spanned<Declaration>) -> bool {
     match &decl.node {
+        Declaration::Capability(c) => matches!(c.visibility, Visibility::Public),
         Declaration::Const(c) => matches!(c.visibility, Visibility::Public),
         Declaration::Static(s) => matches!(s.visibility, Visibility::Public),
         Declaration::Model(m) => matches!(m.visibility, Visibility::Public),
@@ -6409,6 +6413,7 @@ fn is_public_decl(decl: &Spanned<Declaration>) -> bool {
 /// Return the root symbol name declared by a declaration, when it has one.
 fn declaration_name(decl: &Spanned<Declaration>) -> Option<&str> {
     match &decl.node {
+        Declaration::Capability(c) => Some(c.name.as_str()),
         Declaration::Const(c) => Some(c.name.as_str()),
         Declaration::Static(s) => Some(s.name.as_str()),
         Declaration::Model(m) => Some(m.name.as_str()),

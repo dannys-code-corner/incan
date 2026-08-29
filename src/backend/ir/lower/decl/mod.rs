@@ -212,6 +212,14 @@ impl AstLowering {
                     span: IrSpan::default(),
                 });
             }
+            ast::Declaration::Capability(_) => {
+                // A capability declares authority, not code. It carries no body to lower and emits no Rust item;
+                // consumers reach it through its checked identity, not through IR.
+                return Err(LoweringError {
+                    message: "capability declarations are not lowered to IR".to_string(),
+                    span: IrSpan::default(),
+                });
+            }
             ast::Declaration::Docstring(_) => {
                 // Skip docstrings in codegen
                 return Err(LoweringError {

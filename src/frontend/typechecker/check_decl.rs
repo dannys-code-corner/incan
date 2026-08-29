@@ -13,6 +13,7 @@ use crate::frontend::testing_markers::{
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty};
 
 use super::collect::decorators::resolve_decorator_id;
+use super::collect::{capability_description_text, dotted_path_segments};
 use super::type_info::{
     RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
 };
@@ -29,6 +30,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::testing;
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
+use incan_semantics_core::SemanticSourceTargetKind;
 use incan_semantics_core::{SemanticRegistrySubjectKind, SemanticRegistryValue, SurfaceModifierTypeCheck};
 use std::collections::{HashMap, HashSet};
 
@@ -2198,7 +2200,102 @@ impl TypeChecker {
                 "raw vocabulary declarations must be desugared before type checking".to_string(),
                 decl.span,
             )),
+            Declaration::Capability(cap) => self.check_capability_decl(cap, decl.span),
             Declaration::Docstring(_) => {} // Docstrings don't need checking
+        }
+    }
+
+    /// Check one RFC 104 `capability` declaration.
+    ///
+    /// Collection records what the declaration wrote; this decides whether what it wrote means anything. The two are
+    /// separate passes because capabilities may reference each other in any order within a module, so resolution
+    /// cannot happen while the symbols are still being collected.
+    ///
+    /// Every `requires` entry is validated from the AST rather than from the collected symbol, because collection
+    /// keeps only the entries that parsed as a reference. Re-walking the source list is what lets an entry that is
+    /// not a reference at all be reported instead of silently disappearing.
+    fn check_capability_decl(&mut self, cap: &CapabilityDecl, span: Span) {
+        self.validate_decorators_rejecting_user_defined(&cap.decorators, "capability");
+        self.reject_registry_description_decorators(&cap.decorators, "capability");
+
+        match cap.description.as_ref() {
+            None => self
+                .errors
+                .push(errors::capability_description_required(&cap.name, span)),
+            // Presence is not enough. Collection stores only compile-time text, so a clause it cannot read leaves
+            // the declaration carrying no description while appearing to have one -- the same silent drop the
+            // `requires` list had.
+            Some(expr) if capability_description_text(&expr.node).is_none() => self
+                .errors
+                .push(errors::capability_description_must_be_text(&cap.name, expr.span)),
+            Some(_) => {}
+        }
+
+        for entry in &cap.requires {
+            let Some(path) = dotted_path_segments(&entry.node) else {
+                self.errors
+                    .push(errors::capability_requirement_not_a_reference(entry.span));
+                continue;
+            };
+            self.check_capability_requirement(&path, entry.span);
+        }
+    }
+
+    /// Resolve one `requires` entry and confirm it names a capability.
+    ///
+    /// A bare name resolves against the current module's own symbols; a dotted path resolves as a member of the
+    /// module its leading segments name, the same way an import resolves against a definition. RFC 104 asks for
+    /// exactly that equivalence, so that a misspelled capability is an unresolved-symbol error at the reference
+    /// rather than a runtime denial reported somewhere else entirely.
+    fn check_capability_requirement(&mut self, path: &[String], span: Span) {
+        let rendered = path.join(".");
+        let Some((item_name, module_segments)) = path.split_last() else {
+            return;
+        };
+
+        if module_segments.is_empty() {
+            match self.lookup_symbol(item_name).map(|symbol| &symbol.kind) {
+                Some(SymbolKind::Capability(_)) => {}
+                Some(other) => {
+                    let found = Self::symbol_kind_noun(other);
+                    self.errors
+                        .push(errors::capability_requirement_not_a_capability(&rendered, found, span));
+                }
+                None => self
+                    .errors
+                    .push(errors::capability_requirement_unresolved(&rendered, span)),
+            }
+            return;
+        }
+
+        let module = ImportPath::simple(module_segments.to_vec());
+        match self.dependency_member_identity(&module, item_name) {
+            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => {}
+            Some(identity) => {
+                let found = identity.kind.as_str();
+                self.errors
+                    .push(errors::capability_requirement_not_a_capability(&rendered, found, span));
+            }
+            None => self
+                .errors
+                .push(errors::capability_requirement_unresolved(&rendered, span)),
+        }
+    }
+
+    /// Name a symbol kind for a diagnostic that reports the wrong kind was referenced.
+    fn symbol_kind_noun(kind: &SymbolKind) -> &'static str {
+        match kind {
+            SymbolKind::Variable(_) => "variable",
+            SymbolKind::Static(_) => "static",
+            SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_) => "function",
+            SymbolKind::Type(_) => "type",
+            SymbolKind::Trait(_) => "trait",
+            SymbolKind::Module(_) => "module",
+            SymbolKind::Variant(_) => "enum variant",
+            SymbolKind::Field(_) => "field",
+            SymbolKind::Property(_) => "property",
+            SymbolKind::RustItem(_) => "rust import",
+            SymbolKind::Capability(_) => "capability",
         }
     }
 
