@@ -22486,3 +22486,158 @@ def read(m: Meter) -> int:
 "#;
     check_str(source).map_err(|errs| format!("`capability` must stay an ordinary identifier: {errs:?}"))
 }
+
+/// RFC 104 treats the description as part of the authority's public contract, so its absence is a checked error
+/// rather than a parse failure — the grammar accepts the omission precisely so this can report it by name.
+#[test]
+fn a_capability_without_a_description_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    scope:
+        tenant: str
+"#,
+        "capability without a description",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("has no `description`")),
+        "expected the missing-description diagnostic; got: {errs:?}"
+    );
+}
+
+/// A `requires` entry is a checked symbol reference, so an expression that cannot name a declaration is refused at
+/// the entry's own span rather than being dropped during collection.
+#[test]
+fn a_requires_entry_that_is_not_a_reference_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = ["host.http.request"]
+"#,
+        "capability requiring a string",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("must be a capability reference")),
+        "expected the non-reference diagnostic; got: {errs:?}"
+    );
+}
+
+/// RFC 104 is explicit that a misspelled capability reference must fail at compile time rather than surviving to
+/// become a runtime denial reported far from the declaration that caused it.
+#[test]
+fn an_unknown_capability_requirement_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [nonexistent]
+"#,
+        "capability requiring an unknown name",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'nonexistent'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
+    );
+}
+
+/// A `requires` list naming a function describes an authority relationship that cannot exist, and a policy reading
+/// it would draw a false conclusion — so the wrong kind is refused as firmly as a missing one.
+#[test]
+fn a_requires_entry_naming_a_non_capability_is_rejected() {
+    let errs = check_str_err(
+        r#"
+def helper() -> int:
+    return 1
+
+capability refund:
+    description = "Refund a captured charge"
+    requires = [helper]
+"#,
+        "capability requiring a function",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("is a function, not a capability")),
+        "expected the wrong-kind diagnostic; got: {errs:?}"
+    );
+}
+
+/// Capabilities may reference each other in any order, which is why resolution is a checking pass rather than part
+/// of collection: requiring one declared further down the file must not depend on declaration order.
+#[test]
+fn a_capability_may_require_another_declared_later_in_the_module() -> Result<(), String> {
+    check_str(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [audit_write]
+
+capability audit_write:
+    description = "Append to the audit log"
+"#,
+    )
+    .map_err(|errs| format!("declaration order must not matter for `requires`: {errs:?}"))
+}
+
+/// A `pub capability` is exported and referenceable across a module boundary.
+///
+/// The stdlib is only the first capability publisher: a library author declares domain capabilities in their own
+/// module and consumers reference them by import. Withholding capabilities from the export set would make `pub`
+/// meaningless on the one declaration form whose entire purpose is to be referenced from elsewhere.
+#[test]
+fn a_public_capability_crosses_a_module_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    let dependency = parse_program(
+        r#"
+pub capability audit_write:
+    description = "Append to the audit log"
+"#,
+        "capability publisher",
+    );
+    let consumer = parse_program(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [publisher.audit_write]
+"#,
+        "capability consumer",
+    );
+
+    let mut checker = TypeChecker::new();
+    checker
+        .check_with_imports(&consumer, &[("publisher", &dependency)])
+        .map_err(|errs| format!("a `pub capability` must be referenceable across modules: {errs:?}"))?;
+    Ok(())
+}
+
+/// A capability that is *not* `pub` stays private, so a consumer referencing it fails to resolve.
+#[test]
+fn a_private_capability_does_not_cross_a_module_boundary() {
+    let dependency = parse_program(
+        r#"
+capability audit_write:
+    description = "Append to the audit log"
+"#,
+        "private capability publisher",
+    );
+    let consumer = parse_program(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [publisher.audit_write]
+"#,
+        "private capability consumer",
+    );
+
+    let mut checker = TypeChecker::new();
+    let Err(errs) = checker.check_with_imports(&consumer, &[("publisher", &dependency)]) else {
+        panic!("a private capability must not be referenceable from another module");
+    };
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'publisher.audit_write'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
+    );
+}

@@ -608,10 +608,12 @@ pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
                     }
                 }
             }
-            Declaration::Capability(_)
-            | Declaration::Docstring(_)
-            | Declaration::TestModule(_)
-            | Declaration::VocabBlock(_) => {}
+            Declaration::Capability(cap) => {
+                if matches!(cap.visibility, Visibility::Public) {
+                    exports.push(ExportedSymbol::Capability(cap.name.clone()));
+                }
+            }
+            Declaration::Docstring(_) | Declaration::TestModule(_) | Declaration::VocabBlock(_) => {}
         }
     }
 
@@ -706,11 +708,21 @@ pub fn exported_type_like_docs(ast: &Program) -> Vec<ExportedTypeLikeDoc> {
 pub enum ExportedSymbol {
     Type(String),
     Trait(String),
+    /// A `pub capability` declaration (RFC 104).
+    ///
+    /// A capability is exported like any other public declaration because the stdlib is only the *first* capability
+    /// publisher: a library author declares domain capabilities in their own module and consumers reference them by
+    /// import. Withholding them from the export set would make `pub` meaningless on the one declaration form whose
+    /// entire purpose is to be referenced from elsewhere.
+    Capability(String),
     Function(String),
     Const(String),
     Static(String),
     Reexported(String),
-    Variant { enum_name: String, variant_name: String },
+    Variant {
+        enum_name: String,
+        variant_name: String,
+    },
 }
 
 #[cfg(test)]

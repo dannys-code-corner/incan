@@ -5162,7 +5162,8 @@ impl TypeChecker {
                     | ExportedSymbol::Static(name)
                     | ExportedSymbol::Type(name)
                     | ExportedSymbol::Trait(name)
-                    | ExportedSymbol::Function(name) => Some(name),
+                    | ExportedSymbol::Function(name)
+                    | ExportedSymbol::Capability(name) => Some(name),
                     ExportedSymbol::Variant { variant_name, .. } => Some(variant_name),
                     ExportedSymbol::Reexported(_) => None,
                 })
@@ -5191,8 +5192,8 @@ impl TypeChecker {
                 Declaration::Newtype(decl) => Some(decl.name.clone()),
                 Declaration::Enum(decl) => Some(decl.name.clone()),
                 Declaration::Function(decl) => Some(decl.name.clone()),
+                Declaration::Capability(decl) => Some(decl.name.clone()),
                 Declaration::Import(_)
-                | Declaration::Capability(_)
                 | Declaration::Docstring(_)
                 | Declaration::TestModule(_)
                 | Declaration::VocabBlock(_) => None,

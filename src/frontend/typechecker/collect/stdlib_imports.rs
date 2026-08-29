@@ -3646,6 +3646,7 @@ impl TypeChecker {
                 | ExportedSymbol::Type(name)
                 | ExportedSymbol::Trait(name)
                 | ExportedSymbol::Function(name)
+                | ExportedSymbol::Capability(name)
                 | ExportedSymbol::Reexported(name) => {
                     exported_names.insert(name.clone());
                 }

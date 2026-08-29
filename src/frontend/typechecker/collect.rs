@@ -28,7 +28,7 @@ use self::decl_helpers::{
 /// A capability's `requires` entries parse as ordinary expressions so they can be checked symbol references rather
 /// than strings. Only a bare name or a chain of field accesses spells a reference; anything else — a call, a literal,
 /// a subscript — is not a path, and returning `None` lets the caller report it against the entry's own span.
-fn dotted_path_segments(expr: &Expr) -> Option<Vec<String>> {
+pub(super) fn dotted_path_segments(expr: &Expr) -> Option<Vec<String>> {
     match expr {
         Expr::Ident(name) => Some(vec![name.clone()]),
         Expr::Field(base, name) => {
