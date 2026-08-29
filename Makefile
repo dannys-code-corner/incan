@@ -161,10 +161,10 @@ lint:
 	@echo "\033[1mRunning clippy...\033[0m"
 	@cargo clippy --all-targets --all-features -- -D warnings
 
-.PHONY: lint-fast  ## quality - Run faster clippy profile (workspace + all-features)
+.PHONY: lint-fast  ## quality - Run faster clippy profile (workspace + all targets + all-features)
 lint-fast:
 	@echo "\033[1mRunning clippy (fast profile)...\033[0m"
-	@cargo clippy --workspace --all-features -- -D warnings
+	@cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 .PHONY: fmt-check-ci
 fmt-check-ci:
@@ -175,9 +175,11 @@ fmt-check-ci:
 	)
 	@cargo +nightly fmt --all -- --check
 
+# Matches hosted CI's clippy surface (.github/workflows/ci.yml): without --all-targets, test and bench targets are
+# never linted locally, and feature-gated test-module violations (deny(clippy::expect_used)) surface only on CI.
 .PHONY: lint-fast-ci
 lint-fast-ci:
-	@cargo clippy --workspace --all-features -- -D warnings
+	@cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 .PHONY: rustdoc-gate  ## quality - Require rustdoc on changed Rust functions/methods
 rustdoc-gate:

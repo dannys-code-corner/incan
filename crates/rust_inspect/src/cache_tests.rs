@@ -287,13 +287,13 @@ name = "foo_bar"
     let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", &[registry_src_root])
         .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to resolve foo-bar source dir"))?;
     assert_eq!(resolved, dep_dir);
-    let sealed_root = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", &[dep_dir.clone()])
+    let sealed_root = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", std::slice::from_ref(&dep_dir))
         .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to accept an exact sealed source root"))?;
     assert_eq!(sealed_root, dep_dir);
 
     let cache = RustMetadataCache::new();
     let hit = cache
-        .get_cached_or_extract_fast_with_registry_src_roots(&root, "foo_bar::consume", &[dep_dir.clone()])?
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "foo_bar::consume", std::slice::from_ref(&dep_dir))?
         .ok_or_else(|| std::io::Error::other("expected fast metadata from the sealed source root"))?;
     assert_eq!(hit.metadata.canonical_path, "foo_bar::consume");
     assert!(matches!(hit.metadata.kind, RustItemKind::Function(_)));
