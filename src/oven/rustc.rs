@@ -2427,15 +2427,18 @@ fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcR
 
 /// Return whether a project registry leaf may be replaced by its matching release-base counterpart.
 ///
-/// Matching package, version, source checksum, and declared features proves two registry leaves compiled from
-/// identical source. That is sufficient for an ordinary crate: identical source under the same toolchain, target,
-/// and profile compiles to byte-identical output, so substituting the release's already-published copy is a safe
-/// deduplication. It is not sufficient for a crate with a build script: `build.rs` can probe the ambient build
-/// environment (target-detection `cfg`s, feature unification pulled in from an unrelated part of each closure's own
-/// dependency graph) and legitimately compile differently despite identical declared inputs, in which case the two
-/// artifacts are not link-compatible even though every recorded coordinate matches. A build-script artifact is
-/// staged under `build/<package>/<identity>/out/`, unlike an ordinary crate's `deps/` output, so restrict
-/// substitution to leaves on both sides that are not build-script-shaped.
+/// Matching package, version, source checksum, and declared features is necessary but not sufficient: Cargo's unit
+/// identity — the `-<hash>` extra-filename suffix — also folds in resolved transitive features, profile details,
+/// and the identities of the unit's own dependencies, so the same declared coordinates can legitimately compile to
+/// a different crate identity inside a different closure (Bevy's `rand_core` vs the release closure's, #1227).
+/// Retained extension crates record their dependencies by that exact identity hash; substituting an artifact with a
+/// different hash removes the only file that can satisfy those records and the sealed closure stops loading.
+/// Substitution is therefore admitted only when both artifacts carry the same filename, which encodes the same
+/// compilation identity and makes the swap a pure byte-canonicalization onto the release's published copy.
+///
+/// A build-script artifact is excluded even then: `build.rs` can probe the ambient build environment and diverge
+/// despite identical recorded inputs. It is staged under `build/<package>/<identity>/out/`, unlike an ordinary
+/// crate's `deps/` output, so restrict substitution to leaves on both sides that are not build-script-shaped.
 fn registry_leaf_substitution_is_safe(
     project_leaf: &OvenRustcRegistryLeaf,
     release_leaf: &OvenRustcRegistryLeaf,
@@ -2446,8 +2449,12 @@ fn registry_leaf_substitution_is_safe(
             .and_then(Path::file_name)
             .is_some_and(|name| name == "out")
     };
+    let project_file_name = Path::new(&project_leaf.artifact.relative_path).file_name();
+    let release_file_name = Path::new(&release_leaf.artifact.relative_path).file_name();
     !is_build_script_shaped(&project_leaf.artifact.relative_path)
         && !is_build_script_shaped(&release_leaf.artifact.relative_path)
+        && project_file_name.is_some()
+        && project_file_name == release_file_name
 }
 
 /// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
@@ -7818,6 +7825,38 @@ mod tests {
         let conflict = manifest.partition_against_base(&conflicting_base);
         assert!(matches!(conflict, Err(OvenRustcError::InvalidInput { .. })));
         Ok(())
+    }
+
+    #[test]
+    fn registry_leaf_substitution_requires_the_same_compilation_identity() {
+        // Cargo's `-<hash>` extra-filename suffix summarizes the unit's full compilation identity, including
+        // resolved transitive features and dependency identities. Two closures can share every declared coordinate
+        // and still compile a crate to different identities (#1227); substituting across identities removes the only
+        // artifact that satisfies retained dependents' recorded hashes.
+        let leaf = |relative_path: &str| OvenRustcRegistryLeaf {
+            package: "rand_core".to_string(),
+            version: "0.6.4".to_string(),
+            crate_name: "rand_core".to_string(),
+            features: vec!["std".to_string()],
+            source: fixture_registry_source(),
+            artifact: OvenRustcArtifactExtern {
+                crate_name: "rand_core".to_string(),
+                relative_path: relative_path.to_string(),
+                digest: digest_bytes(relative_path.as_bytes()),
+            },
+        };
+        let project = leaf("entry/deps/librand_core-cf99342fb36f73de.rlib");
+        let matching_release = leaf("base/deps/librand_core-cf99342fb36f73de.rlib");
+        let divergent_release = leaf("base/deps/librand_core-50f0d7ca30c6ae15.rlib");
+        assert!(super::same_registry_leaf_semantics(&project, &divergent_release));
+        assert!(
+            super::registry_leaf_substitution_is_safe(&project, &matching_release),
+            "an identical compilation identity in a different directory is a pure byte-canonicalization"
+        );
+        assert!(
+            !super::registry_leaf_substitution_is_safe(&project, &divergent_release),
+            "matching declared coordinates must not substitute across different compilation identities"
+        );
     }
 
     #[test]
