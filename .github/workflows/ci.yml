@@ -241,7 +241,6 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     outputs:
       oven_suite_cache_key: ${{ steps.oven-suite-cache-key.outputs.key }}
     steps:
@@ -315,7 +314,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -431,7 +429,6 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

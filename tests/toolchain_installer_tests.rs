@@ -1269,10 +1269,10 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("{ partition: 1, display: 2 }")
             && workflow.contains("{ partition: 2, display: 3 }")
             && workflow.contains("{ partition: 3, display: 4 }")
-            && workflow.matches("timeout-minutes: 20").count() >= 3
+            && !workflow.contains("timeout-minutes:")
             && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and retain the Oven prewarm/replay/release jobs' documented 20-minute budgets; the platform C-ABI gate and tool handoff deliberately carry no explicit budget so their completion-gated caches can always save after a cold build"
+        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and carry no explicit per-job budgets: a version bump cold-starts every completion-gated cache, and any budget below a cold build means the job can never re-warm, so the runner-level 6-hour ceiling is the only bound"
     );
     let replay_gate = workflow
         .find("oven-linux-replay:")
@@ -1299,11 +1299,11 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
     );
     assert!(
         release_gate.contains("needs:\n      - changes\n      - linux-tool-handoff")
-            && release_gate.contains("timeout-minutes: 20")
+            && !release_gate.contains("timeout-minutes:")
             && release_gate.contains("restore-sdk-provider-store")
             && release_gate.contains("make -s test-oven-release-smoke")
             && !release_gate.contains("test-oven-partition"),
-        "normal-command Cargo-guard proof must remain a bounded independent Linux gate rather than extend the heaviest replay worker"
+        "normal-command Cargo-guard proof must remain an independent Linux gate rather than extend the heaviest replay worker; per-job budgets are deliberately absent so completion-gated caches can save after a cold build"
     );
     assert!(
         platform_gate.contains("make -s test-prewarm-sdk")
