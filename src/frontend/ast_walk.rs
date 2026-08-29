@@ -65,6 +65,7 @@ where
         | Declaration::Alias(_)
         | Declaration::Partial(_)
         | Declaration::TypeAlias(_)
+        | Declaration::Capability(_)
         | Declaration::Docstring(_) => false,
         Declaration::VocabBlock(block) => any_expr_in_body_impl(&block.body, pred),
         Declaration::Const(c) => expr_has(&c.value.node, pred),

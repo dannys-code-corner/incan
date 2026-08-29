@@ -148,7 +148,11 @@ impl TypeChecker {
                 self.validate_root_namespace(&func.name, decl.span);
                 self.collect_function(func, decl.span);
             }
-            Declaration::Docstring(_) | Declaration::TestModule(_) | Declaration::VocabBlock(_) => {} /* Docstrings/tests don't need root collection */
+            // Capability collection lands with this issue's typechecker phase; parsing it is phase 1.
+            Declaration::Capability(_)
+            | Declaration::Docstring(_)
+            | Declaration::TestModule(_)
+            | Declaration::VocabBlock(_) => {}
         }
     }
 

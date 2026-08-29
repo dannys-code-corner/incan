@@ -408,7 +408,8 @@ impl Formatter {
             }
             Declaration::Docstring(_) => DeclSpacingClass::Docstring,
             Declaration::TypeAlias(_) | Declaration::Newtype(_) => DeclSpacingClass::TypeLike,
-            Declaration::Model(_)
+            Declaration::Capability(_)
+            | Declaration::Model(_)
             | Declaration::Class(_)
             | Declaration::Trait(_)
             | Declaration::Enum(_)

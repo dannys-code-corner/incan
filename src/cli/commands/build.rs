@@ -11330,6 +11330,7 @@ fn provider_declaration_name(declaration: &Declaration) -> Option<&str> {
         Declaration::Enum(item) => Some(&item.name),
         Declaration::Function(item) => Some(&item.name),
         Declaration::TestModule(item) => Some(&item.name),
+        Declaration::Capability(item) => Some(&item.name),
         Declaration::Import(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => None,
     }
 }
@@ -11337,6 +11338,7 @@ fn provider_declaration_name(declaration: &Declaration) -> Option<&str> {
 /// Return whether one declaration contributes to the package's public checked surface.
 fn provider_declaration_is_public(declaration: &Declaration) -> bool {
     let visibility = match declaration {
+        Declaration::Capability(item) => item.visibility,
         Declaration::Const(item) => item.visibility,
         Declaration::Static(item) => item.visibility,
         Declaration::Model(item) => item.visibility,

@@ -2198,6 +2198,8 @@ impl TypeChecker {
                 "raw vocabulary declarations must be desugared before type checking".to_string(),
                 decl.span,
             )),
+            // Capability checking lands with this issue's typechecker phase; parsing it is phase 1.
+            Declaration::Capability(_) => {}
             Declaration::Docstring(_) => {} // Docstrings don't need checking
         }
     }

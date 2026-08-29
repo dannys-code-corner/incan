@@ -608,7 +608,10 @@ pub fn exported_symbols(ast: &Program) -> Vec<ExportedSymbol> {
                     }
                 }
             }
-            Declaration::Docstring(_) | Declaration::TestModule(_) | Declaration::VocabBlock(_) => {}
+            Declaration::Capability(_)
+            | Declaration::Docstring(_)
+            | Declaration::TestModule(_)
+            | Declaration::VocabBlock(_) => {}
         }
     }
 

@@ -65,6 +65,7 @@ fn hir_decl_kind_and_name(decl: &Declaration) -> (HirDeclarationKind, Option<Str
         Declaration::Const(decl) => (HirDeclarationKind::Const, Some(decl.name.clone())),
         Declaration::Static(decl) => (HirDeclarationKind::Static, Some(decl.name.clone())),
         Declaration::Model(decl) => (HirDeclarationKind::Model, Some(decl.name.clone())),
+        Declaration::Capability(decl) => (HirDeclarationKind::Capability, Some(decl.name.clone())),
         Declaration::Class(decl) => (HirDeclarationKind::Class, Some(decl.name.clone())),
         Declaration::Trait(decl) => (HirDeclarationKind::Trait, Some(decl.name.clone())),
         Declaration::Alias(decl) => (HirDeclarationKind::Alias, Some(decl.name.clone())),
