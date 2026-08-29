@@ -133,7 +133,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
+    # 20 minutes is too tight on cold-cache runner days: the job is killed as "cancelled" and the needs: chain
+    # skips the rest of the run.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +193,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
+    # Same cold-cache allowance as oven-platform-smoke: a 20-minute kill here cancels the whole run.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
