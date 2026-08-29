@@ -22,6 +22,7 @@
 use incan_core::lang::decorators::DecoratorId;
 use incan_core::lang::keywords::KeywordId;
 
+pub mod authority;
 pub mod body_ir;
 mod facts;
 mod hir;
