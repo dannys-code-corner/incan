@@ -1270,10 +1270,9 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("{ partition: 2, display: 3 }")
             && workflow.contains("{ partition: 3, display: 4 }")
             && workflow.matches("timeout-minutes: 20").count() >= 3
-            && workflow.matches("timeout-minutes: 60").count() >= 2
             && workflow.matches("Install WASI target for vocab desugarers").count() == 6
             && !workflow.contains("make test-oven-focused"),
-        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and retain each job's documented bounded budget: 20 minutes for the Oven prewarm/replay/release jobs and a 60-minute cold-build allowance for the platform C-ABI gate and tool handoff so their completion-gated caches can re-warm"
+        "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and retain the Oven prewarm/replay/release jobs' documented 20-minute budgets; the platform C-ABI gate and tool handoff deliberately carry no explicit budget so their completion-gated caches can always save after a cold build"
     );
     let replay_gate = workflow
         .find("oven-linux-replay:")
