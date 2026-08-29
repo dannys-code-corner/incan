@@ -15,6 +15,14 @@
 //! callable/default forms, general destructuring, and other projections remain visible refusals. Its enclosing
 //! declaration snapshot retains a deferred generator's shape, but the frame executes and adds execution-frame
 //! evidence only when collection polls it; no path falls back to generated Rust.
+//!
+//! One checked provider-service operation also executes directly, from the already-lowered
+//! [`ProviderOperationPlan`] rather than from source or generated Rust (#1156). That vertical is owned by
+//! [`provider`], which consumes the RFC 104 authority and operation-receipt contracts instead of restating them;
+//! this module supplies it with evaluated operands and refuses an unresolved, inactive, or unauthorized operation
+//! at the original source span.
+
+pub mod provider;
 
 use std::{
     cell::RefCell,
@@ -33,14 +41,17 @@ use incan_semantics_core::body_ir::{
     FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp,
     IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget,
     NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem,
-    ResultVariant, ResultVariantKind, Rvalue, ScopeId, Statement, StatementKind, TryErrorRouting, UnOp,
-    ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
+    ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue, ScopeId, Statement,
+    StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration,
+    ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
+    SemanticSourceTargetKind,
 };
 
 use crate::backend::selection::digest_output;
+use provider::{ProviderExecutionRecord, ProviderInputValue, ProviderRuntime, canonical_provider_execution_summary};
 
 /// Bounded instruction count for one replacement execution.
 ///
@@ -452,7 +463,14 @@ pub struct ReplacementExecution {
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     /// Every direct task-frame transition observed during this successful execution, in source execution order.
     task_lifecycle: Vec<TaskLifecycleEvent>,
-    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, and observed result.
+    /// Every provider operation this execution ran, each referencing its own RFC 104 operation receipt.
+    ///
+    /// Empty for a run that executed no provider operation. A run that was *refused* by a governed denial or a
+    /// provider failure never produces a [`ReplacementExecution`] at all, so its receipts are read from the
+    /// [`provider::ProviderRuntime`] the caller supplied rather than from here.
+    provider_executions: Vec<ProviderExecutionRecord>,
+    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, provider executions, and
+    /// observed result.
     pub output_identity: String,
 }
 
@@ -465,6 +483,11 @@ pub struct ValidatedFreeFunctionExecution<'module, 'args> {
     module: &'module BodyIrModule,
     name: String,
     args: &'args [ReplacementValue],
+    /// The provider runtime this execution's admitted provider operations were validated against.
+    ///
+    /// Retained on the capability rather than passed again at execution time so the runtime that answered
+    /// "does any host execute this operation" is necessarily the one that later invokes it.
+    providers: Option<Rc<ProviderRuntime>>,
 }
 
 impl ReplacementExecution {
@@ -484,6 +507,18 @@ impl ReplacementExecution {
     #[must_use]
     pub fn task_lifecycle_evidence(&self) -> Vec<TaskLifecycleProjection> {
         task_lifecycle_projection(&self.task_lifecycle)
+    }
+
+    /// Return the backend provider-execution receipts bound into this execution's output identity.
+    ///
+    /// Each entry references its RFC 104 operation receipt by sequence id rather than restating it, so a consumer
+    /// that needs the authority decision or the recorded attributes reads the operation receipt itself.
+    #[must_use]
+    pub fn provider_execution_evidence(&self) -> Vec<provider::ProviderExecutionProjection> {
+        self.provider_executions
+            .iter()
+            .map(ProviderExecutionRecord::projection)
+            .collect()
     }
 }
 
@@ -532,6 +567,51 @@ pub enum ReplacementExecutionError {
         /// End byte offset duplicated for typed error formatting.
         span_end: usize,
     },
+    /// An RFC 104 authority decision refused an admitted provider operation, so it never ran.
+    ///
+    /// Deliberately distinct from [`Self::RuntimeFailure`]: nothing executed, and the remedy is a grant rather than
+    /// a change to the program. The referenced receipt is the denial's own record — a denied operation still emits
+    /// one, which is why this error names it rather than reporting a bare refusal.
+    #[error(
+        "replacement backend refused provider operation `{operation}` at original Incan source span \
+         {span_start}..{span_end}: {reason}"
+    )]
+    ProviderAuthorityDenied {
+        /// Declaration name of the refused operation, from its canonical identity.
+        operation: String,
+        /// Why authority was refused, and which grant would permit it.
+        reason: String,
+        /// Sequence id of the denied RFC 104 operation receipt this refusal produced.
+        receipt_sequence_id: u64,
+        /// Original Incan source span carried by the operation's plan.
+        span: HirSourceSpan,
+        /// Start byte offset duplicated for typed error formatting.
+        span_start: usize,
+        /// End byte offset duplicated for typed error formatting.
+        span_end: usize,
+    },
+    /// Authority was granted and the provider operation itself failed.
+    ///
+    /// Separate from a denial because the two have nothing in common but their visibility: here the operation ran,
+    /// its receipt records `failed` over an *allowing* decision, and any resource it acquired was released.
+    #[error(
+        "replacement backend provider operation `{operation}` failed at original Incan source span \
+         {span_start}..{span_end}: {detail}"
+    )]
+    ProviderOperationFailed {
+        /// Declaration name of the failed operation, from its canonical identity.
+        operation: String,
+        /// Source-observable description of the provider's own failure.
+        detail: String,
+        /// Sequence id of the failed RFC 104 operation receipt this invocation produced.
+        receipt_sequence_id: u64,
+        /// Original Incan source span carried by the operation's plan.
+        span: HirSourceSpan,
+        /// Start byte offset duplicated for typed error formatting.
+        span_start: usize,
+        /// End byte offset duplicated for typed error formatting.
+        span_end: usize,
+    },
 }
 
 impl ReplacementExecutionError {
@@ -547,14 +627,41 @@ impl ReplacementExecutionError {
             Self::MissingFunction { .. } | Self::ArgumentCount { .. } => "INCAN-R988-ENTRYPOINT",
             Self::Unsupported { .. } => "INCAN-R988-UNSUPPORTED",
             Self::RuntimeFailure { .. } => "INCAN-R988-RUNTIME",
+            Self::ProviderAuthorityDenied { .. } => "INCAN-R1156-DENIED",
+            Self::ProviderOperationFailed { .. } => "INCAN-R1156-PROVIDER",
         }
     }
 
     /// Return the original Incan source location when this outcome arose from Body IR.
     pub const fn primary_span(&self) -> Option<HirSourceSpan> {
         match self {
-            Self::Unsupported { span, .. } | Self::RuntimeFailure { span, .. } => Some(*span),
+            Self::Unsupported { span, .. }
+            | Self::RuntimeFailure { span, .. }
+            | Self::ProviderAuthorityDenied { span, .. }
+            | Self::ProviderOperationFailed { span, .. } => Some(*span),
             Self::MissingFunction { .. } | Self::ArgumentCount { .. } => None,
+        }
+    }
+
+    /// Return the RFC 104 operation receipt this outcome emitted, when it emitted one.
+    ///
+    /// Only the two provider outcomes do. A refusal that happened before the operation was invoked — an unsupported
+    /// construct, an inactive provider, an unresolved operation — deliberately has no receipt to name, which is the
+    /// structural form of "nothing ran, so nothing was recorded".
+    pub const fn operation_receipt(&self) -> Option<super::replacement::provider::ProviderReceiptLink> {
+        match self {
+            Self::ProviderAuthorityDenied {
+                receipt_sequence_id, ..
+            }
+            | Self::ProviderOperationFailed {
+                receipt_sequence_id, ..
+            } => Some(super::replacement::provider::ProviderReceiptLink {
+                sequence_id: *receipt_sequence_id,
+            }),
+            Self::MissingFunction { .. }
+            | Self::ArgumentCount { .. }
+            | Self::Unsupported { .. }
+            | Self::RuntimeFailure { .. } => None,
         }
     }
 }
@@ -568,6 +675,21 @@ pub fn prepare_free_function_execution<'module, 'args>(
     name: &str,
     args: &'args [ReplacementValue],
 ) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
+    prepare_free_function_execution_with_providers(module, name, args, None)
+}
+
+/// Validate and prepare one Body-IR free function that may invoke admitted provider operations.
+///
+/// A `None` runtime is not a permissive default: it means no host executes any provider operation in this run, so
+/// every admitted provider call refuses at its own source span during this pre-execution gate rather than part-way
+/// through the body. That is what keeps [`prepare_free_function_execution`]'s existing contract — refuse before
+/// executing, and emit no receipt for a refusal — true for the provider vocabulary too.
+pub fn prepare_free_function_execution_with_providers<'module, 'args>(
+    module: &'module BodyIrModule,
+    name: &str,
+    args: &'args [ReplacementValue],
+    providers: Option<&Rc<ProviderRuntime>>,
+) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
     let body = named_free_function(module, name)?;
     if body.is_generator() {
         return Err(unsupported("generator body", body.span));
@@ -580,11 +702,12 @@ pub fn prepare_free_function_execution<'module, 'args>(
         });
     }
     validate_scalar_arguments(args, body.span)?;
-    validate_direct_body_profile(body)?;
+    validate_direct_body_profile(body, providers.map(Rc::as_ref))?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
         args,
+        providers: providers.cloned(),
     })
 }
 
@@ -593,7 +716,11 @@ pub fn prepare_free_function_execution<'module, 'args>(
 /// The selected entrypoint and every same-module named callee use this one gate. Applying it only at the entrypoint
 /// would let an otherwise admitted call dispatch an unvalidated sibling body and publish a receipt for a profile the
 /// runtime promises to refuse.
-fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
+fn validate_direct_body_profile(
+    body: &Body,
+    providers: Option<&ProviderRuntime>,
+) -> Result<(), ReplacementExecutionError> {
+    validate_provider_operation_hosts(&body.block.stmts, providers)?;
     // An `async def` produces an awaitable even when its body has no explicit `await`. Executing its statements as
     // an ordinary scalar body would erase task construction, suspension, wake, cancellation, and receipt semantics
     // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
@@ -617,6 +744,64 @@ fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionE
     } else {
         validate_block_profile(&body.block, &tuple_iteration_locals, &scalar_tuple_collection_locals)
     }
+}
+
+/// Refuse every admitted provider operation this body invokes that no host in this run executes.
+///
+/// This is a separate pass rather than another clause of the structural profile validator because it asks a
+/// different question. The structural gate asks whether the *plan* is executable at all — an active provider, a
+/// capability-kinded authority, one input per argument — and needs nothing but the plan to answer. This asks
+/// whether *this run* has a host for the operation, which only the supplied runtime knows. Splitting them keeps the
+/// structural refusal identical whether or not a runtime was supplied, and keeps both refusals before execution, so
+/// an unresolved operation never leaves a partially executed body or an execution receipt behind.
+fn validate_provider_operation_hosts(
+    statements: &[Statement],
+    providers: Option<&ProviderRuntime>,
+) -> Result<(), ReplacementExecutionError> {
+    for statement in statements {
+        match &statement.kind {
+            StatementKind::Call {
+                callee: Callee::ProviderOperation(plan),
+                ..
+            } => {
+                let resolved = providers.is_some_and(|runtime| runtime.resolves(&plan.operation));
+                if !resolved {
+                    return Err(unsupported(
+                        format!(
+                            "provider operation `{}` that no provider host in this run executes",
+                            plan.operation.declaration_name
+                        ),
+                        plan.call_span,
+                    ));
+                }
+            }
+            StatementKind::If {
+                then_block, else_block, ..
+            } => {
+                validate_provider_operation_hosts(&then_block.stmts, providers)?;
+                if let Some(else_block) = else_block {
+                    validate_provider_operation_hosts(&else_block.stmts, providers)?;
+                }
+            }
+            StatementKind::Loop { body } => validate_provider_operation_hosts(&body.stmts, providers)?,
+            StatementKind::Race { arms, .. } => {
+                for arm in arms {
+                    validate_provider_operation_hosts(&arm.body.stmts, providers)?;
+                }
+            }
+            StatementKind::Assign {
+                rvalue: Rvalue::Match { arms, .. },
+                ..
+            } => {
+                for arm in arms {
+                    validate_provider_operation_hosts(&arm.guard_stmts, providers)?;
+                    validate_provider_operation_hosts(&arm.body_stmts, providers)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Validate the deliberately source-local async subset without treating a task frame as a synchronous body.
@@ -721,6 +906,21 @@ pub fn execute_free_function(
     execute_prevalidated_free_function(execution)
 }
 
+/// Execute one named free function that may invoke admitted provider operations against `providers`.
+///
+/// The runtime is the caller's, and stays the caller's: a governed denial and a provider failure both stop this
+/// execution with an error, and their RFC 104 receipts are read from `providers` afterwards. Returning receipts
+/// only on success would make the two outcomes RFC 104 most wants recorded the two it could not report.
+pub fn execute_free_function_with_providers(
+    module: &BodyIrModule,
+    name: &str,
+    args: &[ReplacementValue],
+    providers: &Rc<ProviderRuntime>,
+) -> Result<ReplacementExecution, ReplacementExecutionError> {
+    let execution = prepare_free_function_execution_with_providers(module, name, args, Some(providers))?;
+    execute_prevalidated_free_function(execution)
+}
+
 /// Execute one free function that has already passed [`prepare_free_function_execution`].
 ///
 /// This consumes the validated capability, preserving the rule that callers select the source profile before the
@@ -730,7 +930,7 @@ pub fn execute_prevalidated_free_function(
 ) -> Result<ReplacementExecution, ReplacementExecutionError> {
     let body = named_free_function(execution.module, &execution.name)?;
 
-    let mut executor = BodyExecutor::new(execution.module, body, execution.args)?;
+    let mut executor = BodyExecutor::new(execution.module, body, execution.args, execution.providers.clone())?;
     let value = if body.is_async {
         let task = executor.construct_task(body.clone(), executor.locals.clone(), body.span)?;
         executor.drive_task(&task, body.span)?
@@ -752,12 +952,19 @@ pub fn execute_prevalidated_free_function(
     let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
     let requirements_summary = canonical_runtime_requirements_summary(&executor.runtime_requirements);
     let task_summary = canonical_task_lifecycle_summary(&executor.task_lifecycle);
+    let provider_executions = execution
+        .providers
+        .as_ref()
+        .map(|runtime| runtime.provider_executions())
+        .unwrap_or_default();
+    let provider_summary = canonical_provider_execution_summary(&provider_executions);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
         ownership_summary.as_str(),
         requirements_summary.as_str(),
         task_summary.as_str(),
+        provider_summary.as_str(),
     ]);
     Ok(ReplacementExecution {
         value,
@@ -765,6 +972,7 @@ pub fn execute_prevalidated_free_function(
         ownership_reads: executor.ownership_reads,
         runtime_requirements: executor.runtime_requirements,
         task_lifecycle: executor.task_lifecycle,
+        provider_executions,
         output_identity,
     })
 }
@@ -1608,6 +1816,15 @@ fn validate_call_profile(
                     binding @ ArgumentBinding::Resolved { .. } => validate_argument_binding_profile(binding),
                 }
         }
+        // An admitted provider operation is executable when its plan is: an active provider, an authority that
+        // really names a capability, and one described input per evaluated argument. Whether *this run* has a host
+        // for it is a different question, answered by `validate_provider_operation_hosts` before execution starts.
+        Callee::ProviderOperation(plan) => {
+            if let Some(description) = unexecutable_provider_plan(plan, args.len()) {
+                return Err(unsupported(description, span));
+            }
+            true
+        }
         Callee::Helper(_) => false,
         _ => false,
     };
@@ -1618,6 +1835,47 @@ fn validate_call_profile(
         validate_operand_profile(arg, span, tuple_iteration_locals)?;
     }
     Ok(())
+}
+
+/// Why one provider-operation plan cannot be executed at all, or `None` when it can.
+///
+/// Every rule here is checked against the plan's own facts, never against a provider name, a call-site spelling, or
+/// an emitted Rust name, so the same answer holds for a local call, an import, an alias, and a re-export of one
+/// operation. Lowering already refuses an inactive provider and a non-capability authority, so reaching either here
+/// means a plan arrived from somewhere that skipped that gate — which is exactly when a runtime must be
+/// fail-closed rather than trusting its input.
+fn unexecutable_provider_plan(plan: &ProviderOperationPlan, argument_count: usize) -> Option<String> {
+    let declared = &plan.operation.declaration_name;
+    if plan.provider.state != ProviderActivationState::Active {
+        return Some(format!(
+            "provider operation `{declared}` whose provider is {} in this compilation",
+            plan.provider.state.as_str()
+        ));
+    }
+    if plan.required_capability.kind != SemanticSourceTargetKind::Capability {
+        return Some(format!(
+            "provider operation `{declared}` whose required authority does not name a capability declaration"
+        ));
+    }
+    // The plan claims to describe the values execution will actually see. One input per evaluated argument, each at
+    // a distinct written position, is what makes that claim checkable before a host is handed anything.
+    if plan.inputs.len() != argument_count {
+        return Some(format!(
+            "provider operation `{declared}` whose plan describes {} inputs for {argument_count} evaluated arguments",
+            plan.inputs.len()
+        ));
+    }
+    let mut written_positions = BTreeSet::new();
+    if !plan
+        .inputs
+        .iter()
+        .all(|input| input.written_position < argument_count && written_positions.insert(input.written_position))
+    {
+        return Some(format!(
+            "provider operation `{declared}` whose plan does not describe each evaluated argument exactly once"
+        ));
+    }
+    None
 }
 
 /// Validate only the structural facts every direct callable dispatcher can enforce before execution.
@@ -2031,6 +2289,12 @@ struct BodyExecutor {
     task_lifecycle: Vec<TaskLifecycleEvent>,
     /// The task whose Body IR this executor is currently polling, if any.
     active_task: Option<usize>,
+    /// The authority source, provider host, and receipt log admitted provider operations run against.
+    ///
+    /// Shared with every nested frame rather than cloned per frame: RFC 104 receipts are sequenced across one run,
+    /// so two frames each holding their own log would each believe it emitted receipt `#0`. `None` means this run
+    /// executes no provider operation, which the pre-execution gate has already turned into a refusal.
+    providers: Option<Rc<ProviderRuntime>>,
     /// A structured match expression may execute an arm whose body returns, breaks, or continues before the
     /// enclosing assignment has a value to store. Keep that flow explicit rather than assigning a placeholder and
     /// accidentally continuing execution after source-level control flow.
@@ -2039,7 +2303,12 @@ struct BodyExecutor {
 
 impl BodyExecutor {
     /// Bind the already-typechecked call arguments to their Body-IR parameter locals.
-    fn new(module: &BodyIrModule, body: &Body, args: &[ReplacementValue]) -> Result<Self, ReplacementExecutionError> {
+    fn new(
+        module: &BodyIrModule,
+        body: &Body,
+        args: &[ReplacementValue],
+        providers: Option<Rc<ProviderRuntime>>,
+    ) -> Result<Self, ReplacementExecutionError> {
         let mut executor = Self {
             module: module.clone(),
             locals: BTreeMap::new(),
@@ -2050,6 +2319,7 @@ impl BodyExecutor {
             next_task_id: 0,
             task_lifecycle: Vec::new(),
             active_task: None,
+            providers,
             pending_flow: None,
         };
         executor.record_body(body);
@@ -2069,14 +2339,20 @@ impl BodyExecutor {
             next_task_id: 0,
             task_lifecycle: Vec::new(),
             active_task: None,
+            providers: None,
             pending_flow: None,
         }
     }
 
     /// Build one isolated child frame while preserving execution-wide task identity allocation.
+    ///
+    /// The provider runtime is shared with the child rather than withheld, so a provider operation invoked inside a
+    /// nested callable is decided, receipted, and sequenced by the same run that would have decided it at the top
+    /// level. Withholding it would have turned a nested invocation into a silent refusal.
     fn child_with_locals(&self, locals: BTreeMap<LocalId, ReplacementValue>, steps: usize) -> Self {
         let mut child = Self::with_locals(&self.module, locals, steps);
         child.next_task_id = self.next_task_id;
+        child.providers = self.providers.clone();
         child
     }
 
@@ -2565,10 +2841,61 @@ impl BodyExecutor {
             Callee::Method(target) if matches!(target.name.as_str(), "map" | "filter") => {
                 self.construct_generator_adapter(target.name.as_str(), args, span)?
             }
+            Callee::ProviderOperation(plan) => self.execute_provider_operation(plan, args, span)?,
             _ => return Err(unsupported(format!("call to {}", callee_label(callee)), span)),
         };
         self.assign_local(local, value);
         Ok(Flow::Next)
+    }
+
+    /// Execute one admitted provider operation from its already-lowered plan.
+    ///
+    /// This executor's whole part in the vertical is here: it evaluates the call's operands into the inputs the plan
+    /// describes and hands both to the provider runtime. It decides no authority, publishes no receipt, and applies
+    /// no redaction; those belong to the RFC 104 contracts the runtime consumes. Whether the plan is executable at
+    /// all is answered once by [`unexecutable_provider_plan`] — at the pre-execution profile gate, and again by the
+    /// runtime immediately before it reaches a host — rather than a third time here.
+    ///
+    /// Notably, this never dispatches to the operation's own declaration body even when this module happens to
+    /// contain one. The plan names a *provider* operation, and executing the local declaration instead would
+    /// silently substitute source-local behavior for the service's.
+    fn execute_provider_operation(
+        &mut self,
+        plan: &ProviderOperationPlan,
+        args: &[&Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let Some(runtime) = self.providers.clone() else {
+            return Err(unsupported(
+                format!(
+                    "provider operation `{}` without a provider runtime for this execution",
+                    plan.operation.declaration_name
+                ),
+                span,
+            ));
+        };
+        // The plan's runtime requirements are the executing body's too, and recording them here keeps a provider
+        // invocation's demands visible in the same evidence every other direct execution reports.
+        for requirement in &plan.runtime_requirements {
+            if !self.runtime_requirements.contains(requirement) {
+                self.runtime_requirements.push(requirement.clone());
+            }
+        }
+        let mut inputs = Vec::with_capacity(plan.inputs.len());
+        for input in &plan.inputs {
+            let operand = args
+                .get(input.written_position)
+                .ok_or_else(|| unsupported("provider operation input outside the call's arguments", span))?;
+            let value = self.evaluate_operand(operand, span)?;
+            inputs.push(ProviderInputValue {
+                slot: input.slot,
+                written_position: input.written_position,
+                ty: input.ty.clone(),
+                span: input.span,
+                value,
+            });
+        }
+        runtime.execute(plan, inputs)
     }
 
     /// Suspend the active direct task on one source-local task value and resume it with that task's result.
@@ -2787,7 +3114,7 @@ impl BodyExecutor {
                 span,
             ));
         }
-        validate_direct_body_profile(&body)?;
+        validate_direct_body_profile(&body, self.providers.as_deref())?;
         if body.is_async && !target.type_args.is_empty() {
             return Err(unsupported("generic async callable target", span));
         }
@@ -4780,7 +5107,6 @@ fn callee_label(callee: &Callee) -> String {
         Callee::Function(CallableTarget::Local(_)) => "stored callable".to_string(),
         Callee::Method(target) => format!("method `{}`", target.name),
         Callee::Helper(helper) => format!("runtime helper `{}`", helper_label(*helper)),
-        // Executing a provider operation is #1156's, and needs an authority decision this executor cannot make.
         // The label names the operation's *declaration* rather than the call site's spelling, because the plan's
         // canonical identity is the only thing that says which operation this is.
         Callee::ProviderOperation(plan) => {

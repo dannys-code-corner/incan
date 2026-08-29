@@ -5328,7 +5328,7 @@ fn assertion_kinds(body: &bir::Body) -> Vec<&bir::AssertionKind> {
 /// publication persists that checked pair into the provider manifest, and consumer lowering projects the selected
 /// manifest through its provider plan. Tests must not manually fill `ProviderOperationCatalog`, because that would
 /// bypass the compiler-owned producer contract #1213 adds.
-fn provider_plan_from_checked_source(
+pub(crate) fn provider_plan_from_checked_source(
     type_info: &TypeCheckInfo,
     state: bir::ProviderActivationState,
 ) -> Result<ProviderPlan, Box<dyn std::error::Error>> {
