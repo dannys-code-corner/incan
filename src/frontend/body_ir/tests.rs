@@ -4970,3 +4970,192 @@ enum Signal:
     );
     Ok(())
 }
+
+/// Return the [`bir::LocalId`] of the single local named `name` in `body`, failing when the body declares none or
+/// more than one.
+///
+/// Used by the `assert value is P` binding tests: the defect those cover is a *missing* declaration, so a test that
+/// merely found "some local mentioning `v`" would pass against the broken lowering, where a later read of `v`
+/// synthesizes an [`bir::LocalOrigin::External`] local under the same name.
+fn sole_local_named(body: &bir::Body, name: &str) -> Result<bir::LocalId, Box<dyn std::error::Error>> {
+    let matches: Vec<&bir::LocalDecl> = body
+        .locals
+        .iter()
+        .filter(|local| local.name.as_deref() == Some(name))
+        .collect();
+    match matches.as_slice() {
+        [local] => Ok(local.id),
+        found => Err(format!("expected exactly one local named `{name}`, found {found:?}").into()),
+    }
+}
+
+/// Return the [`bir::AssertionKind`]s of every assertion in `body`'s top-level block, in statement order.
+fn assertion_kinds(body: &bir::Body) -> Vec<&bir::AssertionKind> {
+    body.block
+        .stmts
+        .iter()
+        .filter_map(|stmt| match &stmt.kind {
+            bir::StatementKind::Assert { kind, .. } => Some(kind),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_pattern_assertion_binding_is_a_declared_local_read_by_the_statements_after_it()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The defect #1167 closes: `assert o is Some(v)` used to lower to a bare placeholder, which dropped `v`
+    // entirely. `print(v)` then lowered against a name this body never declared, and `local_for_name` invented an
+    // `External` local for it -- so Body IR described a read of something outside the body rather than of the
+    // value the assertion had just bound.
+    let source = "def run(o: Option[str]) -> None:\n  assert o is Some(v)\n  print(v)\n";
+    let module = build(source, &["m", "assert_pattern"])?;
+    let body = body_named(&module, "run")?;
+
+    let bound = sole_local_named(body, "v")?;
+    let declaration = body
+        .locals
+        .get(bound.index())
+        .ok_or("the bound local must be present in the body's locals")?;
+    assert!(
+        matches!(declaration.origin, bir::LocalOrigin::UserBinding),
+        "the assertion must declare `v` as an ordinary source binding, not an external reference: {declaration:?}"
+    );
+
+    let [bir::AssertionKind::Pattern { pattern, .. }] = assertion_kinds(body).as_slice() else {
+        return Err(format!("expected exactly one pattern assertion: {:?}", body.block.stmts).into());
+    };
+    let bir::Pattern::Enum { variant, fields, .. } = pattern else {
+        return Err(format!("expected `Some(..)` to lower to a constructor pattern: {pattern:?}").into());
+    };
+    assert_eq!(variant, "Some");
+    let [bir::Pattern::Var(binding)] = fields.as_slice() else {
+        return Err(format!("expected one `PatternBinding` payload: {fields:?}").into());
+    };
+    assert_eq!(
+        binding.local, bound,
+        "the pattern binding must name the same local the body declared"
+    );
+
+    // The read that follows the assertion resolves to that same local, and consumes it: `print(v)` is the only
+    // read, so the last-use countdown seeded from the assertion's statement suffix must reach zero here.
+    let snapshot = module.render_snapshot();
+    assert!(
+        snapshot.contains(&format!("call fn:print unbound(move(_{}, last_use))", bound.0)),
+        "the following read must resolve to the bound local: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_pattern_assertion_over_a_result_resolves_its_payload_type_and_carries_a_message()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "def run(r: Result[int, str]) -> None:\n  assert r is Ok(n), \"needed a value\"\n  print(n)\n";
+    let module = build(source, &["m", "assert_ok"])?;
+    let body = body_named(&module, "run")?;
+    let bound = sole_local_named(body, "n")?;
+    assert_eq!(
+        body.locals.get(bound.index()).map(|local| &local.ty),
+        Some(&IncanType::Primitive(IncanPrimitiveType::Int)),
+        "an intrinsic `Result` pattern resolves its payload type rather than falling back to unknown"
+    );
+
+    let snapshot = module.render_snapshot();
+    assert!(
+        snapshot.contains(&format!(
+            "assert borrow(_0) is Result::ok(bind(_{}, copy)), const(\"needed a value\") may_panic",
+            bound.0
+        )),
+        "the pattern form must carry its failure message alongside the binding: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_raises_assertion_retains_the_resolved_expected_error_rather_than_its_spelling()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "def boom() -> int:\n  return 1\n\ndef run() -> None:\n  assert boom() raises ValueError\n  assert boom() raises IndexError, \"wanted an index error\"\n";
+    let module = build(source, &["m", "assert_raises"])?;
+    let body = body_named(&module, "run")?;
+
+    let expected: Vec<incan_core::errors::ErrorKind> = assertion_kinds(body)
+        .into_iter()
+        .filter_map(|kind| match kind {
+            bir::AssertionKind::Raises { expected_error, .. } => Some(*expected_error),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        expected,
+        vec![
+            incan_core::errors::ErrorKind::ValueError,
+            incan_core::errors::ErrorKind::IndexError
+        ],
+        "the expected error must be the resolved registry identity, not a source spelling"
+    );
+
+    let snapshot = module.render_snapshot();
+    assert!(
+        snapshot.contains("raises ValueError may_panic"),
+        "a `raises` assertion without a message: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("raises IndexError, const(\"wanted an index error\") may_panic"),
+        "a `raises` assertion with a message: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn every_assert_form_records_a_panic_fact_and_the_panic_strategy_requirement() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = "def boom() -> int:\n  return 1\n\ndef run(o: Option[str]) -> None:\n  assert 1 == 1\n  assert o is Some(v)\n  assert boom() raises ValueError\n  print(v)\n";
+    let module = build(source, &["m", "assert_panic_facts"])?;
+    let body = body_named(&module, "run")?;
+
+    assert_eq!(
+        body.panic_facts
+            .iter()
+            .filter(|fact| matches!(fact.reason, bir::PanicReason::AssertFailure))
+            .count(),
+        3,
+        "all three assertion forms can panic: {:?}",
+        body.panic_facts
+    );
+    assert!(
+        body.runtime_requirements
+            .contains(&AbiV0RuntimeRequirement::PanicStrategy),
+        "an assertion of any form needs a panic strategy: {:?}",
+        body.runtime_requirements
+    );
+    let snapshot = module.render_snapshot();
+    assert!(
+        !snapshot.contains("unsupported("),
+        "no accepted assertion form may leave a placeholder behind: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unresolved_raises_error_type_refuses_by_naming_the_assert_form() -> Result<(), Box<dyn std::error::Error>> {
+    // The source checker rejects an error type outside the builtin-exception registry, so lowering only reaches
+    // this for a program that was already reported. What it must not do is fall back to the old shared
+    // `assert pattern/raises form` label, which said nothing about which of the two forms was hit.
+    let source = "def boom() -> int:\n  return 1\n\ndef run() -> None:\n  assert boom() raises NotAnError\n";
+    let (module, diagnostics) = build_after_expected_typecheck_errors(source, &["m", "assert_refusal"])?;
+    assert!(
+        diagnostics.iter().any(|message| message.contains("NotAnError")),
+        "the source checker owns the diagnostic for an unknown error type: {diagnostics:?}"
+    );
+
+    let snapshot = module.render_snapshot();
+    assert!(
+        snapshot.contains("unsupported(assert `raises` form with an unresolved error type `NotAnError`)"),
+        "the refusal must name the `raises` form and the type it could not resolve: {snapshot}"
+    );
+    assert!(
+        !snapshot.contains("assert pattern/raises form"),
+        "the shared label that could not distinguish the two forms is gone: {snapshot}"
+    );
+    Ok(())
+}

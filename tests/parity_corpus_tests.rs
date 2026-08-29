@@ -414,6 +414,97 @@ def main() -> None:
     log(1, *xs, b=2, **kw)
 "#;
 
+// ============================================================================
+// Cases 20 and 21 — Pattern and `raises` assert forms reach Body IR (#1167)
+// ============================================================================
+
+// Both rows existed as refusals before #1167: `AssertKind::IsPattern` and `AssertKind::Raises` lowered to
+// `unsupported(assert pattern/raises form)`. The pattern row is the one that mattered most, because the refusal was
+// not merely incomplete -- `assert o is Some(v)` *binds* `v`, so lowering it to a placeholder dropped the binding
+// and every later read of `v` lowered against a name the body never declared.
+const CASE_20_SRC: &str = r#"
+def run(o: Option[str]) -> None:
+    assert o is Some(v)
+    print(v)
+"#;
+
+const CASE_21_SRC: &str = r#"
+def boom() -> int:
+    return 1
+
+def run() -> None:
+    assert boom() raises ValueError
+    assert boom() raises IndexError, "wanted an index error"
+"#;
+
+/// Render one case's Body IR snapshot, or the reason it could not be produced.
+fn body_ir_snapshot_for(src: &str, expect_desc: &str) -> Result<String, ComparisonOutcome> {
+    let tokens = lexer::lex(src).map_err(|errors| ComparisonOutcome::Incompatible {
+        reason: format!("expected {expect_desc}, but lexing failed: {errors:?}"),
+    })?;
+    let program = parser::parse(&tokens).map_err(|errors| ComparisonOutcome::Incompatible {
+        reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
+    })?;
+    let module_path = vec!["parity_987_body_ir".to_string()];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    checker
+        .check_program(&program)
+        .map_err(|errors| ComparisonOutcome::Mismatch {
+            detail: format!("expected {expect_desc}, but typechecking reported {errors:?}"),
+        })?;
+    Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot())
+}
+
+fn case_pattern_assertion_binding_reaches_body_ir() -> ComparisonOutcome {
+    let outcome = outcome_from_body_ir(CASE_20_SRC, "a pattern assertion to lower without a placeholder");
+    if !matches!(outcome, ComparisonOutcome::Match) {
+        return outcome;
+    }
+    let snapshot = match body_ir_snapshot_for(CASE_20_SRC, "a pattern assertion to lower") {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
+    };
+    // Absence of a placeholder is not the property this row exists for. The binding has to survive as a declared
+    // source binding, because the defect was a silently dropped one -- a body that lowered cleanly while describing
+    // a read of something it never declared.
+    if !snapshot.contains("is Some(bind(") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("the pattern assertion did not bind its payload:\n{snapshot}"),
+        };
+    }
+    if !snapshot.contains("[binding]") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("the assertion's binding is not a declared source binding:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
+fn case_raises_assertion_reaches_body_ir() -> ComparisonOutcome {
+    let outcome = outcome_from_body_ir(CASE_21_SRC, "a `raises` assertion to lower without a placeholder");
+    if !matches!(outcome, ComparisonOutcome::Match) {
+        return outcome;
+    }
+    let snapshot = match body_ir_snapshot_for(CASE_21_SRC, "a `raises` assertion to lower") {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
+    };
+    // The expected error type is part of the assertion, so it must be carried as a resolved fact rather than left
+    // for a consumer to re-resolve from the source spelling. The optional message rides along with it.
+    if !snapshot.contains("raises ValueError may_panic") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("a `raises` assertion lost its expected error type:\n{snapshot}"),
+        };
+    }
+    if !snapshot.contains("raises IndexError, const(\"wanted an index error\") may_panic") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("a `raises` assertion lost its failure message:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
 fn case_supported_call_spreads_reach_body_ir() -> ComparisonOutcome {
     outcome_from_body_ir(
         CASE_13_SRC,
@@ -1023,6 +1114,30 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_13_SRC,
             evaluate: Some(case_supported_call_spreads_reach_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0020",
+            title: "A pattern assertion binds its payload as a declared local",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1167; src/frontend/body_ir/tests.rs::\
+                       a_pattern_assertion_binding_is_a_declared_local_read_by_the_statements_after_it",
+            disposition: Disposition::Preserved,
+            source: CASE_20_SRC,
+            evaluate: Some(case_pattern_assertion_binding_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0021",
+            title: "A `raises` assertion carries its resolved expected error type",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1167; src/frontend/body_ir/tests.rs::\
+                       a_raises_assertion_retains_the_resolved_expected_error_rather_than_its_spelling",
+            disposition: Disposition::Preserved,
+            source: CASE_21_SRC,
+            evaluate: Some(case_raises_assertion_reaches_body_ir),
             replacement_execution: None,
         },
         ParityCase {

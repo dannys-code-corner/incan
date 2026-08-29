@@ -28,13 +28,13 @@ use incan_core::{
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
-    AggregateKind, ArgumentBinding, ArgumentElement, BinOp, Body, BodyIrModule, CallableParam, CallableParamDefault,
-    CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation, FieldlessEnumDeclaration,
-    FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp, IterProtocol,
-    LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget, NominalDeclaration,
-    NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem, ResultVariant,
-    ResultVariantKind, Rvalue, ScopeId, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking,
-    ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
+    AggregateKind, ArgumentBinding, ArgumentElement, AssertionKind, BinOp, Body, BodyIrModule, CallableParam,
+    CallableParamDefault, CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation,
+    FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp,
+    IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget,
+    NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem,
+    ResultVariant, ResultVariantKind, Rvalue, ScopeId, Statement, StatementKind, TryErrorRouting, UnOp,
+    ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
@@ -1501,8 +1501,12 @@ fn validate_statement_profile(
         StatementKind::Return { value } => value.as_ref().map_or(Ok(()), |value| {
             validate_operand_profile(value, statement.span, tuple_iteration_locals)
         }),
+        // #1167 gave Body IR the pattern and `raises` assertion forms. Executing them -- match-and-bind on the
+        // panicking path, and catching a raised runtime error -- stays bounded by #1154's value-state work, so
+        // they refuse by name at the original source span rather than leaving the executor unable to compile
+        // against the representation, the same treatment `Await`/`Race` get above.
         StatementKind::Assert {
-            cond,
+            kind: AssertionKind::Condition { cond },
             message,
             may_panic: _,
         } => {
@@ -1511,6 +1515,14 @@ fn validate_statement_profile(
                 validate_operand_profile(message, statement.span, tuple_iteration_locals)
             })
         }
+        StatementKind::Assert {
+            kind: AssertionKind::Pattern { .. },
+            ..
+        } => Err(unsupported("pattern assertion", statement.span)),
+        StatementKind::Assert {
+            kind: AssertionKind::Raises { .. },
+            ..
+        } => Err(unsupported("raises assertion", statement.span)),
         StatementKind::Expr { value } => validate_operand_profile(value, statement.span, tuple_iteration_locals),
         StatementKind::IterNext {
             destination,
@@ -2453,7 +2465,7 @@ impl BodyExecutor {
                     .transpose()?,
             )),
             StatementKind::Assert {
-                cond,
+                kind: AssertionKind::Condition { cond },
                 message,
                 may_panic: _,
             } => {
@@ -2470,6 +2482,15 @@ impl BodyExecutor {
                     Err(runtime_failure(detail, statement.span))
                 }
             }
+            // Refused by `validate_statement_profile` before execution starts -- see its own `Assert` arms.
+            StatementKind::Assert {
+                kind: AssertionKind::Pattern { .. },
+                ..
+            } => Err(unsupported("pattern assertion", statement.span)),
+            StatementKind::Assert {
+                kind: AssertionKind::Raises { .. },
+                ..
+            } => Err(unsupported("raises assertion", statement.span)),
             StatementKind::Expr { value } => {
                 let _ = self.evaluate_operand(value, statement.span)?;
                 Ok(Flow::Next)
