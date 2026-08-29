@@ -3059,13 +3059,24 @@ impl OvenRustcArtifactManifest {
             .iter()
             .map(|artifact| artifact.crate_name.clone())
             .collect::<BTreeSet<_>>();
-        // A prebuilt project crate — a supporting rlib that is neither a registry leaf's own artifact nor a
-        // compiler-runtime crate (Bevy's `bevy_*` family, a workspace path dependency) — records its dependencies by
-        // exact compilation identity. When none exist, every leaf is consumed only by the generated root and the
-        // sealed release family, so cross-identity substitution is unconditionally safe and unifies the root's
-        // trait identities with the standard library. When any exist, cross-identity substitution stays limited to
-        // leaves the root consumes directly; everything else must keep the identity those prebuilt crates recorded
-        // (#1227).
+        // Cross-identity substitution is only safe for a leaf whose extension identity nothing retained records
+        // (#1227). Two structural facts force the conservative regime for the whole plan: a root-linked leaf with no
+        // semantics-matching release counterpart (Bevy, DataFusion) keeps its extension-built subtree, and a
+        // prebuilt project crate outside the leaf set (a workspace path dependency) keeps its recorded dependencies;
+        // in both cases retained prebuilt crates hold exact identity hashes of other leaves. Without either fact,
+        // every retained consumer is recompiled against the composed plan — the generated root plus the sealed
+        // release family — and swapping shared leaves onto the release copies is exactly what unifies the root's
+        // trait identities with the standard library. In the conservative regime that swap stays limited to leaves
+        // the root itself links; everything else substitutes only across identical compilation identities.
+        let leaf_is_root_linked = |leaf: &OvenRustcRegistryLeaf| {
+            root_extern_crates.contains(&leaf.crate_name)
+                || root_registry_packages.contains(&normalized_package_name(&leaf.package))
+        };
+        let leaf_has_release_counterpart = |leaf: &OvenRustcRegistryLeaf| {
+            base.registry_leaves
+                .iter()
+                .any(|candidate| same_registry_leaf_semantics(candidate, leaf))
+        };
         let leaf_artifact_paths = composed
             .registry_leaves
             .iter()
@@ -3076,6 +3087,11 @@ impl OvenRustcArtifactManifest {
                 && !leaf_artifact_paths.contains(&artifact.relative_path)
                 && compiler_runtime_name_from_artifact_path(&artifact.relative_path).is_none()
         });
+        let retains_extension_built_consumers = has_project_prebuilt_supporting
+            || composed
+                .registry_leaves
+                .iter()
+                .any(|leaf| leaf_is_root_linked(leaf) && !leaf_has_release_counterpart(leaf));
         let mut leaf_replacements = Vec::new();
         for (index, project_leaf) in composed.registry_leaves.iter().enumerate() {
             let candidates = base
@@ -3089,9 +3105,7 @@ impl OvenRustcArtifactManifest {
             if candidates.is_empty() {
                 continue;
             }
-            let allow_cross_identity = !has_project_prebuilt_supporting
-                || root_extern_crates.contains(&project_leaf.crate_name)
-                || root_registry_packages.contains(&normalized_package_name(&project_leaf.package));
+            let allow_cross_identity = !retains_extension_built_consumers || leaf_is_root_linked(project_leaf);
             let Some(release_leaf) = candidates.into_iter().find(|candidate| {
                 same_registry_leaf_semantics(candidate, project_leaf)
                     && registry_leaf_substitution_is_safe(project_leaf, candidate, allow_cross_identity)
