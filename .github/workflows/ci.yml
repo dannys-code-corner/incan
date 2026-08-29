@@ -133,9 +133,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    # 20 minutes is too tight on cold-cache runner days: the job is killed as "cancelled" and the needs: chain
-    # skips the rest of the run.
-    timeout-minutes: 30
+    # A version bump changes Cargo.lock and misses this job's build cache, and the cache only saves when the job
+    # completes, so the budget must fit a full cold workspace build on a 2-core runner or the job can never re-warm.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -193,8 +193,9 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    # Same cold-cache allowance as oven-platform-smoke: a 20-minute kill here cancels the whole run.
-    timeout-minutes: 30
+    # Same cold-build allowance as oven-platform-smoke: the budget must fit a cold workspace build so the
+    # completion-gated cache can save and re-warm later runs.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
