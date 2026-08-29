@@ -11,3 +11,7 @@ authors.workspace = true
 
 [dependencies]
 incan_core = { path = "../incan_core" }
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1.0"

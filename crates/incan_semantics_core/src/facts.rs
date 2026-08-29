@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
 
+use serde::{Deserialize, Serialize};
+
 use crate::IncanType;
 
 /// Kind of compiler-owned node that can receive semantic facts.
@@ -365,7 +367,8 @@ impl fmt::Display for SemanticSourceTarget {
 /// declaration kinds today's codegraph targets happen to record, so a member and a local never have to be told apart
 /// by a string. [`Self::Other`] remains for a frontend spelling this vocabulary has not adopted yet; it is a gap
 /// marker, never a category.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SemanticSourceTargetKind {
     /// A `def` declaration, free or associated.
     Function,
@@ -485,7 +488,8 @@ impl SemanticSourceTargetKind {
 /// The mode is part of the decision rather than ambient context: the same request produces a different outcome under
 /// `Governed` than under `Permissive`, and a consumer reading a stored decision must be able to tell which rule
 /// produced it without re-deriving the run's configuration.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AuthorityMode {
     /// Operations run normally and receipts may be disabled.
     Permissive,
@@ -510,7 +514,8 @@ impl AuthorityMode {
 ///
 /// This is the machine-usable denial reason RFC 104 requires. A consumer branches on the variant; the prose belongs to
 /// the diagnostic that renders it, never to this fact.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AuthorityDenialReason {
     /// The invocation never requested this capability.
     NotGranted,
@@ -538,7 +543,8 @@ impl AuthorityDenialReason {
 }
 
 /// The effect of an authority decision on one operation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AuthorityOutcome {
     /// The operation may perform its authority-bearing behavior.
     Allowed,
@@ -552,7 +558,7 @@ pub enum AuthorityOutcome {
 /// to be their **intersection, never their union**: an invocation can only ever receive less than its ceiling allows,
 /// regardless of what it asks for. Recording whether a ceiling applied is therefore part of the decision, because
 /// `Allowed` under a ceiling and `Allowed` with no ceiling are different facts about the run.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AuthorityGrantContext {
     /// Scope dimensions the operation requested, as `(dimension, value)` in the capability's declaration order.
     pub requested_scope: Vec<(String, String)>,
@@ -565,7 +571,7 @@ pub struct AuthorityGrantContext {
 /// RFC 104 requires a denial to identify the required capability and to be reportable against the source that asked
 /// for it. The requesting operation's canonical identity and the use-site span are what make that possible without a
 /// consumer re-reading source text.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AuthorityProvenance {
     /// Canonical identity of the operation that requested the authority.
     pub operation: CanonicalSymbolId,
@@ -581,7 +587,7 @@ pub struct AuthorityProvenance {
 /// requesting operation are named by [`CanonicalSymbolId`], so the stdlib, a library-defined domain capability, and a
 /// provider operation all produce the same fact. A consumer can act on an allowed or denied decision without
 /// consulting source text or emitted Rust, which is what lets a provider backend avoid inventing its own grant model.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AuthorityDecision {
     /// The capability whose authority was requested.
     pub capability: CanonicalSymbolId,
@@ -680,7 +686,8 @@ pub fn module_identity_for_path(module_path: &[String]) -> String {
 /// Namespaces are distinguished by *how* a name is looked up, not by what kind of thing it names: a model name and a
 /// function name share one namespace, exactly as ordinary Python-like lexical lookup expects. Carrying this in an
 /// identity is what keeps a field named `items` and a local named `items` from ever comparing equal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SymbolNamespace {
     /// Module-level declarations, imports, aliases and re-exports, bare enum variant names, generic binders,
     /// parameters and receivers, and locals. Looked up innermost scope outward, then the builtin fallback tier.
@@ -697,7 +704,8 @@ pub enum SymbolNamespace {
 ///
 /// An import, alias, or re-export carries its *target's* origin, never the referencing module's. That is the property
 /// that makes three different spellings of one declaration compare equal.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SymbolOrigin {
     /// A project source module, by canonical module path.
     Module(Vec<String>),
@@ -719,7 +727,7 @@ pub enum SymbolOrigin {
 /// Module-level declarations are already unique within their origin and carry no discriminant. Locals, parameters,
 /// receivers, and generic binders are not: two `x` bindings in sibling blocks of one module must not collapse to one
 /// identity, so those carry the scope that introduced them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ScopeDiscriminant(pub usize);
 
 /// RFC 120 canonical symbol identity: what a resolved reference *means*.
@@ -732,7 +740,7 @@ pub struct ScopeDiscriminant(pub usize);
 /// names — no phase may recover what a reference means by parsing generated Rust. And identity is stable across the
 /// stages of *one* compilation, not across edits: [`Self::declaration_span`] moves when the file does, so a consumer
 /// needing cross-edit continuity must re-resolve rather than cache.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct CanonicalSymbolId {
     /// Which namespace the binding lives in.
     pub namespace: SymbolNamespace,

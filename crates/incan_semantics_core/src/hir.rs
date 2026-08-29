@@ -6,10 +6,12 @@
 
 use std::fmt::Write;
 
+use serde::{Deserialize, Serialize};
+
 use crate::{CompilerNodeId, SemanticFactStore};
 
 /// A source byte range attached to a HIR node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct HirSourceSpan {
     pub start: usize,
     pub end: usize,
