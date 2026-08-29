@@ -2,16 +2,17 @@
 
 use super::*;
 
-/// Lower every non-abstract method in `methods` (owned by the class/model/trait named `owner_name`) into one
+/// Lower every non-abstract method in `methods` (owned by the declaration named `owner_name`) into one
 /// [`bir::Body`] each, skipping abstract methods (`body: None`). `receiver_ty` is the typechecker-equivalent type
-/// for a declared receiver: a concrete nominal type for models/classes or [`IncanType::SelfType`] for trait defaults.
+/// for a declared receiver: a concrete nominal type for models, classes, newtypes, and enums, or
+/// [`IncanType::SelfType`] for trait defaults.
 ///
-/// Newtype and enum declarations also carry a `methods` field in the AST (see `crates/incan_syntax/src/ast/
-/// decls.rs`), but #1102's own scope names only class/model/trait bodies, so this function is deliberately not
-/// called for those two declaration kinds. #1163 owns extending it. Until then this is the module's only *silent*
-/// coverage gap: every other unsupported construct leaves a `StatementKind::Unsupported` or `Operand::Unknown`
-/// marker behind, while a newtype or enum method produces no [`bir::Body`] at all, so a consumer counting bodies
-/// reads a program using one as fully represented.
+/// Exactly five declaration kinds carry a `methods` field -- model, class, trait, newtype, and enum (see
+/// `crates/incan_syntax/src/ast/decls.rs`) -- and all five reach this function. No kind that carries methods is
+/// skipped, which matters because a skipped kind is the one failure this module cannot make visible: every other
+/// unsupported construct leaves a `StatementKind::Unsupported` or `Operand::Unknown` marker behind, while a skipped
+/// declaration produces no [`bir::Body`] at all and a consumer counting bodies reads the program as fully
+/// represented. `every_declaration_kind_that_carries_methods_lowers_its_bodies` pins that.
 pub(super) fn lower_owner_method_bodies(
     methods: &[ast::Spanned<ast::MethodDecl>],
     owner_name: &str,

@@ -4732,3 +4732,241 @@ def use_str() -> int:
     }
     Ok(())
 }
+
+/// Newtype and enum methods lower like any other owner's methods.
+///
+/// The body count is asserted explicitly so a future regression shows up as a mismatch rather than a silent
+/// absence, which is how this gap went unnoticed: nothing failed when these bodies were simply never produced.
+#[test]
+fn newtype_and_enum_methods_contribute_bodies() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def value(self) -> int:
+        return self.0
+
+    def scale(mut self, factor: int) -> None:
+        self.0 = self.0 * factor
+
+enum Signal:
+    Idle
+    Active(int)
+
+    def code(self) -> int:
+        return 0
+
+def run() -> int:
+    return 1
+"#;
+    let module = build(source, &["app"])?;
+
+    let names: Vec<&str> = module.bodies.iter().map(|body| body.name.as_str()).collect();
+    assert!(
+        names.contains(&"value"),
+        "newtype method `value` must lower, got {names:?}"
+    );
+    assert!(
+        names.contains(&"scale"),
+        "newtype `mut self` method must lower, got {names:?}"
+    );
+    assert!(names.contains(&"code"), "enum method `code` must lower, got {names:?}");
+    assert!(names.contains(&"run"));
+    assert_eq!(
+        module.bodies.len(),
+        4,
+        "one body per method plus the free function, and nothing else: {names:?}"
+    );
+
+    // Each method's identity is scoped under its owning declaration, so two owners may share a method name.
+    for (owner, method) in [("Meters", "value"), ("Meters", "scale"), ("Signal", "code")] {
+        let body = module
+            .bodies
+            .iter()
+            .find(|body| body.name == method)
+            .ok_or_else(|| Box::<dyn std::error::Error>::from(format!("`{method}` body missing")))?;
+        assert!(
+            body.decl_id.path().ends_with(&format!("{owner}::{method}")),
+            "`{method}` must be scoped under `{owner}`, got {}",
+            body.decl_id.path()
+        );
+    }
+    Ok(())
+}
+
+/// An enum method that dispatches on `self`, including a payload variant, lowers a real body rather than an
+/// empty or placeholder one.
+#[test]
+fn an_enum_method_dispatching_on_self_lowers_its_match() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+    Active(int)
+
+    def level(self) -> int:
+        match self:
+            case Signal.Idle:
+                return 0
+            case Signal.Active(amount):
+                return amount
+"#;
+    let module = build(source, &["app"])?;
+
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "level")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("enum method `level` must lower"))?;
+
+    assert!(!body.block.stmts.is_empty(), "the method must lower a real body");
+    // A refused construct also produces statements, so an empty check proves nothing on its own. The snapshot
+    // carrying no `unsupported(` node is what distinguishes a lowered match from a placeholder.
+    let rendered = module.render_snapshot();
+    assert!(
+        !rendered.contains("unsupported("),
+        "the match and its payload binding must lower, not refuse:\n{rendered}"
+    );
+    Ok(())
+}
+
+/// A newtype method reading its wrapped value lowers through the nominal receiver.
+#[test]
+fn a_newtype_method_reads_its_wrapped_value() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def doubled(self) -> int:
+        return self.0 * 2
+"#;
+    let module = build(source, &["app"])?;
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "doubled")
+        .ok_or_else(|| Box::<dyn std::error::Error>::from("newtype method `doubled` must lower"))?;
+    assert!(!body.block.stmts.is_empty());
+    assert!(
+        !module.render_snapshot().contains("unsupported("),
+        "reading the wrapped value must lower, not refuse"
+    );
+    assert!(
+        body.decl_id.path().ends_with("Meters::doubled"),
+        "identity is scoped under the newtype, got {}",
+        body.decl_id.path()
+    );
+    Ok(())
+}
+
+/// A newtype method's receiver is the newtype itself, and `mut self` stays a mutable receiver.
+#[test]
+fn newtype_method_receivers_are_receiver_locals() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Meters = newtype int:
+    def value(self) -> int:
+        return self.0
+
+    def scale(mut self, factor: int) -> None:
+        self.0 = self.0 * factor
+"#;
+    let module = build(source, &["m", "newtype_receiver"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(snapshot.contains("local 0 self : Meters [receiver]"), "{snapshot}");
+    assert!(snapshot.contains("local 0 self : Meters [receiver_mut]"), "{snapshot}");
+    assert!(
+        !snapshot.contains("unsupported("),
+        "newtype receiver reads and mutation must lower without a placeholder: {snapshot}"
+    );
+    Ok(())
+}
+
+/// An enum method's receiver is the enum value it dispatches on.
+#[test]
+fn enum_method_receiver_is_a_receiver_local() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+    Active(int)
+
+    def code(self) -> int:
+        return 0
+"#;
+    let module = build(source, &["m", "enum_receiver"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(snapshot.contains("local 0 self : Signal [receiver]"), "{snapshot}");
+    Ok(())
+}
+
+/// A bodyless newtype or enum method never reaches lowering: the source checker rejects it first.
+///
+/// Only a trait declaration admits a bodyless method, so the "abstract method contributes nothing" boundary sits
+/// upstream for these two kinds rather than in the lowering walk. Lowering still has to stay total for the rejected
+/// program, which is what this pins — no body, and no `Unsupported` placeholder standing in for one.
+#[test]
+fn a_bodyless_newtype_or_enum_method_is_a_source_error_and_lowers_nothing() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+enum Signal:
+    Idle
+
+    def label(self) -> str: ...
+"#;
+    let (module, errors) = build_after_expected_typecheck_errors(source, &["m", "bodyless"])?;
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("must have a body outside trait declarations")),
+        "the source checker owns this refusal: {errors:?}"
+    );
+    assert!(
+        module.bodies.is_empty(),
+        "a rejected bodyless method must produce neither a body nor a placeholder: {:?}",
+        module.bodies.iter().map(|body| body.name.as_str()).collect::<Vec<_>>()
+    );
+    Ok(())
+}
+
+/// Every declaration kind that carries a `methods` field lowers its bodies.
+///
+/// A skipped kind is the one coverage failure this module cannot make visible — it produces no `Body` at all rather
+/// than an `Unsupported` marker — so the exhaustive set is pinned here rather than left to the walk's `_ => ` arm.
+#[test]
+fn every_declaration_kind_that_carries_methods_lowers_its_bodies() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+trait Describable:
+    def describe(self) -> int:
+        return 0
+
+model Point:
+    x: int
+
+    def get_x(self) -> int:
+        return self.x
+
+class Counter:
+    total: int
+
+    def total_now(self) -> int:
+        return self.total
+
+type Meters = newtype int:
+    def raw(self) -> int:
+        return self.0
+
+enum Signal:
+    Idle
+
+    def code(self) -> int:
+        return 1
+"#;
+    let module = build(source, &["m", "all_owners"])?;
+    let names: Vec<&str> = module.bodies.iter().map(|body| body.name.as_str()).collect();
+
+    for method in ["describe", "get_x", "total_now", "raw", "code"] {
+        assert!(names.contains(&method), "`{method}` must lower, got {names:?}");
+    }
+    assert_eq!(
+        module.bodies.len(),
+        5,
+        "one body per methods-carrying declaration kind and nothing else: {names:?}"
+    );
+    Ok(())
+}

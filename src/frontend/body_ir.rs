@@ -134,6 +134,23 @@ pub fn build_body_ir_module_v0(
                     IncanType::SelfType,
                     &lowering_facts,
                 ),
+                // A newtype's receiver is the newtype itself, not its underlying type: a method reading the wrapped
+                // value goes through the nominal receiver. `rusttype` is a flag on the same declaration rather than a
+                // separate kind, so its methods take this arm too: one with a body (a `for Trait` implementation, say)
+                // lowers like any other newtype method, and one without contributes nothing through
+                // `lower_method_body`'s existing `body: None` check.
+                ast::Declaration::Newtype(newtype) => lower_owner_method_bodies(
+                    &newtype.methods,
+                    &newtype.name,
+                    owner_self_type(&newtype.name, &newtype.type_params),
+                    &lowering_facts,
+                ),
+                ast::Declaration::Enum(enum_decl) => lower_owner_method_bodies(
+                    &enum_decl.methods,
+                    &enum_decl.name,
+                    owner_self_type(&enum_decl.name, &enum_decl.type_params),
+                    &lowering_facts,
+                ),
                 _ => Vec::new(),
             }
         })
