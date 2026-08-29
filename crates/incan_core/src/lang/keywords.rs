@@ -59,6 +59,7 @@ pub enum KeywordId {
     Def,
     Async,
     Await,
+    Capability,
     Class,
     Model,
     Trait,
@@ -343,6 +344,15 @@ pub const KEYWORDS: &[KeywordDescriptor] = &[
         RFC::_000,
         Since(0, 1),
         Stability::Stable,
+    ),
+    info(
+        KeywordId::Capability,
+        "capability",
+        &[],
+        KeywordCategory::Definition,
+        &[KeywordUsage::Statement],
+        RFC::_104,
+        Since(0, 6),
     ),
     info(
         KeywordId::Class,
