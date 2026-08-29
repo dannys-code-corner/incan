@@ -1,6 +1,6 @@
 """Compiled provider entrypoint for the mandatory Incan standard-library core component."""
 
-import capabilities
+import features
 import prelude
 import registry
 import result

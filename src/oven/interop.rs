@@ -24,8 +24,8 @@ use crate::oven::rustc::{
 use crate::oven::store::{OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore};
 use crate::oven::{OvenBuildIntent, OvenReceipt, digest_bytes, receipt_with_build_unit_input};
 use crate::oven_interop::{
-    CapabilityRequirement, InteropArtifactKind, InteropArtifactOrigin, InteropShimLanguage, InteropTargetPlatform,
-    LockedInteropInput, LockedInteropTarget, ios_target_kind, is_interop_native_library_name,
+    InteropArtifactKind, InteropArtifactOrigin, InteropShimLanguage, InteropTargetPlatform, LockedInteropInput,
+    LockedInteropTarget, ToolchainRequirement, ios_target_kind, is_interop_native_library_name,
     locked_interop_target_identity,
 };
 
@@ -1711,7 +1711,7 @@ struct OvenInteropExecutionReceiptIdentity<'a> {
 /// Check that one concrete selection satisfies the exact locked capability requirement.
 fn validate_selected_capability(
     label: &str,
-    requirement: Option<&CapabilityRequirement>,
+    requirement: Option<&ToolchainRequirement>,
     selection: Option<OvenInteropCapabilitySelection>,
 ) -> Result<Option<OvenInteropCapabilitySelection>, String> {
     let Some(requirement) = requirement else {
@@ -1798,8 +1798,8 @@ mod tests {
     };
     use crate::oven::{OvenBuildIntent, OvenGeneratedProjectRequest, digest_bytes, receipt_generated_project};
     use crate::oven_interop::{
-        CapabilityRequirement, InteropArtifactKind, InteropArtifactOrigin, InteropTargetPlatform,
-        LockedInteropArtifact, LockedInteropInput, LockedInteropShim, LockedInteropTarget,
+        InteropArtifactKind, InteropArtifactOrigin, InteropTargetPlatform, LockedInteropArtifact, LockedInteropInput,
+        LockedInteropShim, LockedInteropTarget, ToolchainRequirement,
     };
     use std::fs;
     #[cfg(unix)]
@@ -1819,11 +1819,11 @@ mod tests {
     fn locked_target() -> LockedInteropTarget {
         LockedInteropTarget {
             target: "aarch64-apple-ios-sim".to_string(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=17, <18".to_string()),
             }),
-            sdk: Some(CapabilityRequirement {
+            sdk: Some(ToolchainRequirement {
                 capability: "iphonesimulator".to_string(),
                 version: Some(">=18, <19".to_string()),
             }),
@@ -1870,7 +1870,7 @@ mod tests {
         host_target.target = "x86_64-unknown-linux-gnu".to_string();
         host_target.sdk = None;
         host_target.platform = None;
-        host_target.toolchain = Some(CapabilityRequirement {
+        host_target.toolchain = Some(ToolchainRequirement {
             capability: "host-c-compiler".to_string(),
             version: Some(">=1, <2".to_string()),
         });
@@ -1964,7 +1964,7 @@ mod tests {
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
             toolchain: None,
-            sdk: Some(CapabilityRequirement {
+            sdk: Some(ToolchainRequirement {
                 capability: "fixture-sdk".to_string(),
                 version: Some(">=1, <2".to_string()),
             }),
@@ -2615,7 +2615,7 @@ fn main() {
         })?;
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=21, <22".to_string()),
             }),
@@ -2762,7 +2762,7 @@ fn main() {
         let shim_source = "#include <Accelerate/Accelerate.h>\nfloat incan_accelerate_sum(const float *values, size_t value_count) { float output = 0.0f; vDSP_sve(values, 1, &output, value_count); return output; }\n";
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=21, <22".to_string()),
             }),
@@ -3017,7 +3017,7 @@ fn main() {
         })?;
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=21, <22".to_string()),
             }),
@@ -3213,7 +3213,7 @@ fn main() {
         })?;
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=21, <22".to_string()),
             }),
@@ -3418,7 +3418,7 @@ fn main() {
         })?;
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "host-c-compiler".to_string(),
                 version: Some(">=1, <2".to_string()),
             }),
@@ -3720,7 +3720,7 @@ fn main() {
         })?;
         let target = LockedInteropTarget {
             target: base_receipt.intent.target.clone(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "apple-clang".to_string(),
                 version: Some(">=21, <22".to_string()),
             }),

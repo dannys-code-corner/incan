@@ -6193,7 +6193,7 @@
         "internal_only_rationale": "Interop planning is a private compiler boundary."
       }
     ],
-    "capability_links": [
+    "feature_links": [
       {
         "capability_id": "AbstractTraits",
         "feature_id": "types.traits-generics-reflection",

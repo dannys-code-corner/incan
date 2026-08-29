@@ -235,7 +235,7 @@ fn render_interop_plan_text(plan: &InteropDeploymentPlan) {
 }
 
 /// Print one requested capability without representing it as an Oven-selected local tool.
-fn render_capability_requirement(label: &str, requirement: Option<&crate::oven_interop::CapabilityRequirement>) {
+fn render_capability_requirement(label: &str, requirement: Option<&crate::oven_interop::ToolchainRequirement>) {
     let Some(requirement) = requirement else {
         return;
     };

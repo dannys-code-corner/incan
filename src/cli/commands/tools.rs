@@ -18,11 +18,11 @@ use crate::frontend::api_metadata::{
     CheckedApiPackageIdentity, collect_checked_api_alias_metadata, collect_checked_api_metadata,
     materialize_api_alias_projections, materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
-use crate::frontend::capability_metadata::{PublicCapabilityDescriptor, public_capability_descriptors};
 use crate::frontend::contract_metadata::{
     CanonicalModelBundle, read_model_bundles_from_json, read_project_model_bundles,
 };
 use crate::frontend::diagnostics;
+use crate::frontend::feature_metadata::{PublicFeatureDescriptor, public_feature_descriptors};
 use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManifestIndexEntry};
 use crate::frontend::registry_metadata::{
     CHECKED_REGISTRY_METADATA_SCHEMA_VERSION, CheckedRegistryDefinition, CheckedRegistryEntry,
@@ -230,7 +230,7 @@ pub fn inspect_registry(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Regenerate the public feature inventory from the checked `std.capabilities` registry.
+/// Regenerate the public feature inventory from the checked `std.features` registry.
 ///
 /// This deliberately walks the same checked registry metadata used by `incan inspect registry`; it never scrapes
 /// Incan comments, rereads descriptor source, or evaluates the runtime registry. The descriptor shape is owned by the
@@ -240,13 +240,13 @@ pub fn write_feature_inventory_reference(path: &Path) -> CliResult<()> {
     write_feature_inventory_reference_from_source(&source, path)
 }
 
-/// Regenerate the public feature inventory from an explicit checked `std.capabilities` source.
+/// Regenerate the public feature inventory from an explicit checked `std.features` source.
 ///
 /// Build artifacts use this entry point so their source checkout can be relocated independently from the machine that
 /// compiled the generator.
 pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path) -> CliResult<()> {
     let package = collect_registry_metadata_package(source)?;
-    let entries = stdlib_capability_inventory(&package)?;
+    let entries = stdlib_feature_inventory(&package)?;
     let mut output = String::new();
     output.push_str("# Incan feature inventory\n\n");
     output.push_str("!!! warning \"Generated file\"\n");
@@ -319,11 +319,11 @@ pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path)
     fs::write(path, output).map_err(|error| CliError::failure(format!("failed to write {}: {error}", path.display())))
 }
 
-type CapabilityInventoryEntry = PublicCapabilityDescriptor;
+type FeatureInventoryEntry = PublicFeatureDescriptor;
 
 /// Decode the stable standard-library capability descriptor using only checked structural values.
-fn stdlib_capability_inventory(package: &CheckedRegistryMetadataPackage) -> CliResult<Vec<CapabilityInventoryEntry>> {
-    public_capability_descriptors(package).map_err(CliError::failure)
+fn stdlib_feature_inventory(package: &CheckedRegistryMetadataPackage) -> CliResult<Vec<FeatureInventoryEntry>> {
+    public_feature_descriptors(package).map_err(CliError::failure)
 }
 
 /// Escape table delimiters and line breaks in generated Markdown table cells.
@@ -1723,7 +1723,7 @@ mod tests {
     fn std_capability_inventory_is_checked_and_generates_reference() -> Result<(), Box<dyn std::error::Error>> {
         let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/capabilities.incn");
         let package = collect_registry_metadata_package(&source)?;
-        let entries = stdlib_capability_inventory(&package)?;
+        let entries = stdlib_feature_inventory(&package)?;
         assert!(!entries.is_empty());
         assert!(entries.iter().any(|entry| {
             entry.id == "StdRegistry"
