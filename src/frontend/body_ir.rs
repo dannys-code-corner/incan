@@ -11,8 +11,8 @@
 //! [`incan_semantics_core::body_ir`] module docs for the full rationale). Statements fully lowered: assignment
 //! (inferred/let/mutable/reassignment), field/index assignment (including their pre-desugared compound `<op>=`
 //! forms), compound assignment (`x <op>= y`), tuple unpacking, multi-target (lvalue) tuple assignment, chained
-//! assignment, `return`, `if`/`elif`/`else`, `while`, `for` (both a `start..end` range and a general iterable --
-//! builtin collections or a resolved `__iter__`/`__next__` protocol, including the fallible `for item in
+//! assignment, `return`, `if`/`elif`/`else`, `loop:`, `while`, `for` (both a `start..end` range and a general
+//! iterable -- builtin collections or a resolved `__iter__`/`__next__` protocol, including the fallible `for item in
 //! iterable?:` form), expression statements, statement-position `yield value` (see [`BodyBuilder::lower_stmt_into`]
 //! and [`bir::Body::is_generator`]), all three RFC 018 `assert` forms -- plain condition, `assert value is P`
 //! (whose bindings stay live for the rest of the enclosing block), and `assert call() raises E` (see
@@ -34,11 +34,17 @@
 //! remaining work rather than as an implied "almost everything" claim: a spread in a `model`/`class` construction,
 //! which refuses as an unresolved field layout because the typechecker records no field binding for it; a spread
 //! with no statically proven shape against a callee whose fixed signature *is* resolvable, whose arity no stage can
-//! establish; a spread to a locally held callable value; the `**`, bitwise, shift, `in`/`not
-//! in`, and `is`/`is not` operators and their compound forms; `if let`/`while let` conditions and destructuring
-//! comprehension/generator clauses; statement-position `loop:`; `unsafe:` regions; `await` and `race for`; and
+//! establish; a spread to a locally held callable value; `if let`/`while let` conditions and destructuring
+//! comprehension/generator clauses; `await` and `race for`; and
 //! vocab/scoped-DSL surface nodes, which reach this module only when a caller skips the desugar pass the legacy
 //! pipeline runs first. The sub-issues are #1158 through #1167, plus #1172 for evaluable callable defaults.
+//!
+//! One entry in that residue is a decided boundary rather than pending work, and is stated here so it is not read
+//! as a gap. An `unsafe:` region refuses permanently: it introduces no Incan scope, so inlining its statements
+//! would be trivial, and that is precisely the problem — it would erase the acknowledgement the region exists to
+//! record and let a direct replacement execution profile run an explicitly authorized region without ever being
+//! told. Body IR v0 carries no acknowledgement fact a consumer could weigh, so the honest answer is a named
+//! refusal owned by #1162 rather than a silent inline. See [`BodyBuilder::refuse_unsafe_region`].
 //!
 //! Two coverage limits are silent rather than marked, and both are deliberate. Expression-position `yield` (the
 //! two-way send/receive protocol) is a stub in the existing Rust-emission backend too, so there is no behavior to

@@ -22,6 +22,14 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// `stmt` in its enclosing block, threaded through to [`Self::lower_assignment`] for last-use seeding. Statement
     /// kinds outside v0's covered subset fall through to an explicit [`Self::push_unsupported_stmt`] rather than
     /// panicking (see this module's module-level docs for the exact covered/uncovered split).
+    ///
+    /// Two kinds are dispatched here despite refusing, rather than being left to the trailing catch-all, and both
+    /// are deliberate. `ast::Statement::Unsafe` is a stated permanent boundary that has to name its own reason —
+    /// see [`Self::refuse_unsafe_region`]. Everything the catch-all still reaches is vocab/surface residue
+    /// (`Surface`, `VocabBlock`, `VocabExpressionItem`), whose disposition belongs to the Body IR input-contract
+    /// work rather than to any single construct: those nodes reach this module only when a caller skips the
+    /// desugar pass the legacy pipeline runs first (#1166). No statement kind lowers under the bare `"statement"`
+    /// label any more (#1162).
     pub(super) fn lower_stmt_into(
         &mut self,
         stmt: &ast::Spanned<ast::Statement>,
@@ -58,8 +66,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 });
             }
             ast::Statement::If(if_stmt) => self.lower_if(if_stmt, scope, span, out),
+            ast::Statement::Loop(loop_stmt) => self.lower_loop_stmt(loop_stmt, scope, span, out),
             ast::Statement::While(while_stmt) => self.lower_while(while_stmt, scope, span, out),
             ast::Statement::For(for_stmt) => self.lower_for(for_stmt, scope, span, out),
+            ast::Statement::Unsafe(_) => self.refuse_unsafe_region(span, out),
             ast::Statement::Expr(expr) => {
                 // `yield value` parses as an ordinary expression statement wrapping `ast::Expr::Yield(Some(_))`
                 // (there is no separate `ast::Statement::Yield` AST node) -- mirror the existing Rust-emission
@@ -86,6 +96,30 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             }),
             other => self.push_unsupported_stmt(unsupported_stmt_label(other), span, out),
         }
+    }
+
+    /// Refuse an `unsafe:` region, permanently and by design, naming the boundary rather than leaving a placeholder
+    /// that reads like an unmodeled construct.
+    ///
+    /// This is a stated disposition, not a gap waiting on lowering work. `ast::UnsafeStmt` is documented as a
+    /// scoped acknowledgement region for operations requiring explicit authorization, and it introduces no separate
+    /// Incan scope — its statements are ordinary statements of the enclosing block, so lowering them inline would
+    /// be *easy*. That is exactly why the refusal has to be explicit: inlining them would erase the acknowledgement
+    /// and leave a direct replacement execution profile silently running an authorized region it was never told
+    /// about. A consumer that wants to admit such a region must do so deliberately, against a representation that
+    /// carries the acknowledgement, and Body IR v0 has no such representation.
+    ///
+    /// The refusal therefore says why rather than only what, and is the corpus's one `Disposition::Unsupported`
+    /// row (`parity-987-0018` in `tests/parity_corpus_tests.rs`), owned by #1162. Reversing it means designing the
+    /// acknowledgement fact first, not adding a dispatch arm.
+    fn refuse_unsafe_region(&self, span: HirSourceSpan, out: &mut Vec<bir::Statement>) {
+        self.push_unsupported_stmt(
+            "`unsafe:` acknowledgement region: refused by design, because Body IR v0 cannot carry the \
+             acknowledgement a consumer would need to admit it deliberately (#1162)"
+                .to_string(),
+            span,
+            out,
+        );
     }
 
     /// Lower an inferred/`let`/`mutable`/reassignment statement. A `Reassign` binding reuses the existing local for

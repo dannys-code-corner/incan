@@ -91,37 +91,60 @@ fn messages(errors: Vec<CompileError>) -> Vec<String> {
 /// about execution — a `DirectReplacementBodyIr` row owns that, and neither lane establishes a receipt-aware
 /// comparison, which #1146 owns.
 fn outcome_from_body_ir(src: &str, expect_desc: &str) -> ComparisonOutcome {
-    let tokens = match lexer::lex(src) {
-        Ok(tokens) => tokens,
-        Err(errors) => {
-            return ComparisonOutcome::Incompatible {
-                reason: format!("expected {expect_desc}, but lexing failed: {errors:?}"),
-            };
-        }
+    let snapshot = match body_ir_snapshot(src, expect_desc) {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
     };
-    let program = match parser::parse(&tokens) {
-        Ok(program) => program,
-        Err(errors) => {
-            return ComparisonOutcome::Incompatible {
-                reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
-            };
-        }
-    };
-    let module_path = vec!["parity_987_body_ir".to_string()];
-    let mut checker = typechecker::TypeChecker::new();
-    checker.set_current_module_path(Some(module_path.clone()));
-    if let Err(errors) = checker.check_program(&program) {
-        return ComparisonOutcome::Mismatch {
-            detail: format!("expected {expect_desc}, but typechecking reported {errors:?}"),
-        };
-    }
-    let snapshot = build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot();
     if snapshot.contains("unsupported(") {
         return ComparisonOutcome::Mismatch {
             detail: format!("expected {expect_desc}, but Body IR still contains a placeholder:\n{snapshot}"),
         };
     }
     ComparisonOutcome::Match
+}
+
+/// Lower `src` to Body IR and report whether it refuses under the exact label `expected_refusal` names.
+///
+/// The sibling of [`outcome_from_body_ir`] for a row whose disposition is `Disposition::Unsupported`: the case's
+/// documented behavior is a *stated refusal*, so proving it means the placeholder is present and says which
+/// construct it is, not merely that some placeholder exists. Matching on the label rather than on the bare
+/// `unsupported(` prefix is what stops this row from staying green if the construct were later inlined and some
+/// unrelated statement in the same source started refusing instead.
+fn outcome_from_body_ir_refusal(src: &str, expected_refusal: &str, expect_desc: &str) -> ComparisonOutcome {
+    let snapshot = match body_ir_snapshot(src, expect_desc) {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
+    };
+    if !snapshot.contains(expected_refusal) {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("expected {expect_desc}, but Body IR did not carry that refusal:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
+/// Lex, parse, typecheck, and lower `src`, returning the rendered Body IR snapshot.
+///
+/// The shared front half of [`outcome_from_body_ir`] and [`outcome_from_body_ir_refusal`]. A failure before
+/// lowering is returned as the `ComparisonOutcome` the caller should report rather than as an error the caller
+/// must re-describe: lex/parse failures are `Incompatible` (the probe could not run at all), while a typecheck
+/// failure is a real `Mismatch` (the source is supposed to be accepted).
+fn body_ir_snapshot(src: &str, expect_desc: &str) -> Result<String, ComparisonOutcome> {
+    let tokens = lexer::lex(src).map_err(|errors| ComparisonOutcome::Incompatible {
+        reason: format!("expected {expect_desc}, but lexing failed: {errors:?}"),
+    })?;
+    let program = parser::parse(&tokens).map_err(|errors| ComparisonOutcome::Incompatible {
+        reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
+    })?;
+    let module_path = vec!["parity_987_body_ir".to_string()];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    checker
+        .check_program(&program)
+        .map_err(|errors| ComparisonOutcome::Mismatch {
+            detail: format!("expected {expect_desc}, but typechecking reported {errors:?}"),
+        })?;
+    Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot())
 }
 
 fn outcome_from_typecheck(src: &str, expect: impl FnOnce(&[String]) -> bool, expect_desc: &str) -> ComparisonOutcome {
@@ -564,6 +587,64 @@ fn case_supported_range_value_reaches_body_ir() -> ComparisonOutcome {
     outcome_from_body_ir(
         CASE_16_SRC,
         "a range bound to a local to lower to a real range value that the loop then iterates",
+    )
+}
+
+// ============================================================================
+// Cases 17 and 18 — Statement-position `loop:` reaches Body IR; `unsafe:` is a stated boundary (#1162)
+// ============================================================================
+
+// `bir::StatementKind::Loop` already existed and the expression spelling already emitted it, so the plain
+// statement spelling -- the more common one -- was refused by a missing dispatch arm rather than by a missing
+// representation. Included with `continue` and a nested loop, because the loop's break/continue vocabulary is
+// what makes the row about the construct rather than about one keyword.
+const CASE_18_SRC: &str = r#"
+def grid(rows: int, cols: int) -> int:
+    mut cells = 0
+    mut r = 0
+    loop:
+        if r >= rows:
+            break
+        mut c = 0
+        loop:
+            if c >= cols:
+                break
+            c = c + 1
+            if c % 2 == 0:
+                continue
+            cells = cells + 1
+        r = r + 1
+    return cells
+"#;
+
+fn case_supported_statement_loop_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_18_SRC,
+        "a statement-position `loop:` to lower to a real Body IR loop, nesting and `continue` included",
+    )
+}
+
+// The corpus's first `Disposition::Unsupported` row. This is a decided boundary, not pending lowering work: an
+// `unsafe:` region introduces no Incan scope, so inlining its statements would be trivial -- and would erase the
+// acknowledgement the region exists to record, letting a direct replacement execution profile run an explicitly
+// authorized region without ever being told. The row asserts the refusal is present *and named*, so inlining the
+// region later cannot leave it silently green.
+const CASE_19_SRC: &str = r#"
+def probe(x: int) -> int:
+    return x
+
+def touch(value: int) -> int:
+    mut total = 0
+    unsafe:
+        total = probe(value)
+    return total
+"#;
+
+fn case_unsafe_region_is_a_stated_refusal() -> ComparisonOutcome {
+    outcome_from_body_ir_refusal(
+        CASE_19_SRC,
+        "unsupported(`unsafe:` acknowledgement region:",
+        "an `unsafe:` region to refuse under a named, reasoned boundary rather than lower silently",
     )
 }
 
@@ -1202,6 +1283,46 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_16_SRC,
             evaluate: Some(case_supported_range_value_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0018",
+            title: "Statement-position `loop:` is representable in Body IR, not only the expression spelling",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1162; src/frontend/body_ir/tests.rs::a_statement_position_loop_lowers_to_the_same_loop_the_expression_spelling_produces",
+            disposition: Disposition::Preserved,
+            source: CASE_18_SRC,
+            evaluate: Some(case_supported_statement_loop_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0019",
+            title: "An `unsafe:` acknowledgement region refuses in Body IR under a named, stated boundary",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1162; src/frontend/body_ir/tests.rs::an_unsafe_region_refuses_under_a_named_permanent_boundary",
+            // The corpus's first real `Unsupported` row, so it carries the full migration note the schema asks
+            // for rather than a pointer to one.
+            disposition: Disposition::Unsupported {
+                owning_issue: 1162,
+                migration_note: "An `unsafe:` region records an explicit acknowledgement that the operations \
+                                 inside it require authorization. It introduces no separate Incan scope, so \
+                                 lowering its statements into the enclosing block would be a two-line change — \
+                                 and would erase exactly the fact the region exists to carry, leaving a direct \
+                                 replacement execution profile running an authorized region it was never told \
+                                 about. Body IR v0 has no acknowledgement fact a consumer could weigh, so the \
+                                 region refuses under a named label stating that it is refused by design \
+                                 (`BodyBuilder::refuse_unsafe_region` in src/frontend/body_ir/stmt.rs). \
+                                 Cutover impact: a program whose `unsafe:` region must execute cannot use the \
+                                 replacement backend; the legacy Rust-emission backend keeps compiling it \
+                                 unchanged, so no accepted program regresses. Reversing this disposition means \
+                                 designing the acknowledgement representation first and deciding who may admit \
+                                 it — adding a dispatch arm alone would be the silent execution this row \
+                                 exists to prevent. Owned by #1162 until that design lands.",
+            },
+            source: CASE_19_SRC,
+            evaluate: Some(case_unsafe_region_is_a_stated_refusal),
             replacement_execution: None,
         },
         ParityCase {
