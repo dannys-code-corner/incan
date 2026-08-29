@@ -3880,7 +3880,7 @@ fn an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race() -> 
     // The issue's explicit requirement: a construct Body IR cannot represent keeps its own node *inside* a
     // represented race, so a consumer loses only that construct rather than the entire expression.
     let source = format!(
-        "{ASYNC_PRELUDE}async def f() -> int:\n  race for value:\n    await fast() => value\n    await slow() => value ** 2\n"
+        "{ASYNC_PRELUDE}async def f() -> bool:\n  race for value:\n    await fast() => value == 1\n    await slow() => value in [1, 2]\n"
     );
     let module = build(&source, &["m", "race_partial"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();
