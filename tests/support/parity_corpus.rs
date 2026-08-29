@@ -51,7 +51,7 @@ use incan::backend::selection::{
 use incan::backend::shadow::{
     LegacyExecutionAuthority, ShadowComparison, ShadowComparisonProfile, compare_source_observable,
 };
-use incan::frontend::body_ir::build_body_ir_module_v0;
+use incan::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
 use incan::frontend::typechecker::TypeChecker;
 use incan::frontend::{lexer, parser};
@@ -783,9 +783,16 @@ pub(crate) struct ReplacementExecutionPlan {
 }
 
 /// Typecheck and lower source into the Body IR that replacement selection validates before execution.
+///
+/// The corpus is a caller of [`build_body_ir_module_v0`] like any other, so it owes that boundary the same
+/// desugared, feature-projected program the CLI path owes it (#1166). Applying the contract here rather than
+/// duplicating its two steps is the point: a corpus that lowered raw parse output would be measuring a program the
+/// real pipeline never produces, and would go green on a divergence instead of surfacing it.
 fn lower_replacement_case(source: &str) -> Result<BodyIrModule, String> {
     let tokens = lexer::lex(source).map_err(|errors| format!("replacement corpus lex failure: {errors:?}"))?;
     let program = parser::parse(&tokens).map_err(|errors| format!("replacement corpus parse failure: {errors:?}"))?;
+    let program = apply_body_ir_input_contract(program, std::path::Path::new("parity_987_replacement.incn"))
+        .map_err(|errors| format!("replacement corpus input-contract failure: {errors:?}"))?;
     let module_path = vec!["parity_987_replacement".to_string()];
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(module_path.clone()));

@@ -983,3 +983,45 @@ mod tuple_destructure_interop_tests {
         );
     }
 }
+
+/// Prepare one parsed module so it satisfies [`build_body_ir_module_v0`]'s input contract.
+///
+/// This lives beside the boundary it governs rather than inside any one caller, because every caller owes Body IR
+/// the same debt. The CLI's replacement path and the parity corpus both route through here; a caller that skips it
+/// hands lowering a program the legacy path would never have produced, which is exactly the divergence #1166
+/// closes.
+///
+/// The legacy pipeline owes Body IR a desugared, feature-projected program, and it pays that debt at parse time:
+/// `CompilationSession::parse_source` (`src/cli/commands/common.rs`) parses, runs
+/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then projects the result through the session's active
+/// package features — all before the program is typechecked or lowered. This applies the same two steps in the
+/// same order for the replacement path, so a vocab-authored body means the same thing through either backend
+/// (#1166).
+///
+/// Ordering matters beyond the pair itself. The caller applies this immediately after parsing, ahead of
+/// [`replacement_module_profile_error`] and typechecking, because both of those must see the projected program: an
+/// import behind an inactive feature is not part of this compilation, and refusing it as an unsupported profile
+/// boundary would report a declaration the build does not contain.
+///
+/// Two deliberate differences from the legacy session, both consequences of this path reading no project manifest.
+/// No package feature is active, so every `when feature(...)` declaration projects away here — which is the
+/// correct answer for a compilation with no feature graph, not a shortcut. And feature *names* are not validated
+/// against a declared-feature set, because there is no manifest to declare one; that check stays a project-level
+/// concern rather than becoming a manifest-free approximation that could disagree with the legacy path.
+///
+/// # Errors
+///
+/// Returns the desugar pass's own diagnostics unchanged. A scoped-DSL surface whose owning library manifest is
+/// unavailable is refused there, at that boundary, and this deliberately adds no second diagnostic for it.
+pub fn apply_body_ir_input_contract(
+    mut program: crate::frontend::ast::Program,
+    entrypoint: &std::path::Path,
+) -> Result<crate::frontend::ast::Program, Vec<crate::frontend::diagnostics::CompileError>> {
+    let entrypoint_display = entrypoint.to_string_lossy();
+    crate::frontend::vocab_desugar_pass::desugar_program_vocab_blocks(
+        &mut program,
+        Some(entrypoint_display.as_ref()),
+        &crate::frontend::library_manifest_index::LibraryManifestIndex::default(),
+    )?;
+    Ok(program.projected_for_features(&std::collections::BTreeSet::new()))
+}

@@ -57,7 +57,7 @@ use crate::frontend::registry_metadata::{
     collect_checked_registry_metadata, materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::frontend::{diagnostics, lexer, parser, typechecker, vocab_desugar_pass};
+use crate::frontend::{body_ir, diagnostics, lexer, parser, typechecker};
 use crate::generated_cache::resolve_generated_cargo_target;
 #[cfg(feature = "rust_inspect")]
 use crate::library_manifest::LibraryRustAbi;
@@ -2560,43 +2560,6 @@ fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliR
     }
 }
 
-/// Prepare one parsed replacement-backend module for [`build_body_ir_module_v0`]'s input contract.
-///
-/// The legacy pipeline owes Body IR a desugared, feature-projected program, and it pays that debt at parse time:
-/// `CompilationSession::parse_source` (`src/cli/commands/common.rs`) parses, runs
-/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then projects the result through the session's active
-/// package features — all before the program is typechecked or lowered. This applies the same two steps in the
-/// same order for the replacement path, so a vocab-authored body means the same thing through either backend
-/// (#1166).
-///
-/// Ordering matters beyond the pair itself. The caller applies this immediately after parsing, ahead of
-/// [`replacement_module_profile_error`] and typechecking, because both of those must see the projected program: an
-/// import behind an inactive feature is not part of this compilation, and refusing it as an unsupported profile
-/// boundary would report a declaration the build does not contain.
-///
-/// Two deliberate differences from the legacy session, both consequences of this path reading no project manifest.
-/// No package feature is active, so every `when feature(...)` declaration projects away here — which is the
-/// correct answer for a compilation with no feature graph, not a shortcut. And feature *names* are not validated
-/// against a declared-feature set, because there is no manifest to declare one; that check stays a project-level
-/// concern rather than becoming a manifest-free approximation that could disagree with the legacy path.
-///
-/// # Errors
-///
-/// Returns the desugar pass's own diagnostics unchanged. A scoped-DSL surface whose owning library manifest is
-/// unavailable is refused there, at that boundary, and this deliberately adds no second diagnostic for it.
-fn apply_body_ir_input_contract(
-    mut program: crate::frontend::ast::Program,
-    entrypoint: &Path,
-) -> Result<crate::frontend::ast::Program, Vec<diagnostics::CompileError>> {
-    let entrypoint_display = entrypoint.to_string_lossy();
-    vocab_desugar_pass::desugar_program_vocab_blocks(
-        &mut program,
-        Some(entrypoint_display.as_ref()),
-        &LibraryManifestIndex::default(),
-    )?;
-    Ok(program.projected_for_features(&BTreeSet::new()))
-}
-
 /// Execute the first #988 replacement-backend profile directly from typed Body IR.
 ///
 /// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
@@ -2639,7 +2602,7 @@ fn build_replacement_file_report(
             entrypoint.display()
         ))
     })?;
-    let program = apply_body_ir_input_contract(program, &entrypoint).map_err(|errors| {
+    let program = body_ir::apply_body_ir_input_contract(program, &entrypoint).map_err(|errors| {
         CliError::failure(format!(
             "replacement backend could not desugar {}: {errors:?}",
             entrypoint.display()
@@ -18739,7 +18702,7 @@ pub model Nested:
             ..Default::default()
         };
 
-        let errors = apply_body_ir_input_contract(program, Path::new("/fixture/main.incn"))
+        let errors = body_ir::apply_body_ir_input_contract(program, Path::new("/fixture/main.incn"))
             .err()
             .ok_or("an undesugared vocab declaration must not pass the Body IR input contract")?;
         let messages = errors
@@ -18773,7 +18736,7 @@ pub model Nested:
             "the fixture must carry a gated declaration, or the assertion below proves nothing"
         );
 
-        let projected = apply_body_ir_input_contract(parsed, Path::new("/fixture/main.incn"))
+        let projected = body_ir::apply_body_ir_input_contract(parsed, Path::new("/fixture/main.incn"))
             .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
         let names = projected
             .declarations
@@ -18820,7 +18783,7 @@ pub model Nested:
         let tokens =
             lexer::lex(&fs::read_to_string(&entrypoint)?).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
         let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
-        let program = apply_body_ir_input_contract(parsed, &entrypoint)
+        let program = body_ir::apply_body_ir_input_contract(parsed, &entrypoint)
             .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
         let module_path = vec!["main".to_string()];
         let mut checker = typechecker::TypeChecker::new();
