@@ -24,8 +24,9 @@ use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
     OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
     OvenRustcArtifactManifest, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
-    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rustc_host_target, rustc_identity,
-    select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
+    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rerooted_artifact_staging_source,
+    rustc_host_target, rustc_identity, select_direct_rustc_plan_identity,
+    validate_project_extension_payload_against_base,
 };
 use super::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
@@ -43,7 +44,10 @@ pub const OVEN_LEGACY_CARGO_PROVENANCE_SCHEMA_VERSION: u32 = 2;
 /// Version 9 binds every direct registry dependency alias to its exact locked package, registry, and checksum. This
 /// preserves source authority when one project intentionally selects multiple compatible versions or renamed aliases
 /// of a package instead of asking a normal command to infer identity from a semver-compatible source catalog.
-pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 10;
+/// Version 10 records the generated root's registry packages so recomposition reproduces substitution regimes.
+/// Version 11 re-roots retained extension artifacts that collide with the base execution closure into
+/// `extension-deps`, so plans composed under the older digest-stamping rule must rebake.
+pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 11;
 /// Wire schema for one independently admitted compiler-suite target shard.
 ///
 /// Version 2 adds the direct-Rustc workspace library/proc-macro materialization DAG. Consumers of schema-10 suite
@@ -1598,6 +1602,30 @@ pub fn prepare_direct_rustc_plan(
                 "explicit project bake produced no non-stdlib artifacts; consume the selected standard-library Loaf directly"
                     .to_string(),
             ));
+        }
+        // ---- Stage re-rooted collision artifacts before atomic copying ----
+        // Cohort composition moves a retained extension artifact whose filename collides with the base's execution
+        // closure into its `extension-deps` sibling directory, but the built file still sits in the Cargo `deps`
+        // output. Materialization resolves every source as the staging root joined with the recorded relative path,
+        // so link each re-rooted artifact into its recorded home here.
+        for relative_path in &partition.extension_paths {
+            let Some(source) = rerooted_artifact_staging_source(relative_path) else {
+                continue;
+            };
+            let source_path = staging.join(&source);
+            let target_path = staging.join(relative_path);
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|source| OvenLegacyCargoError::Io {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+            if fs::hard_link(&source_path, &target_path).is_err() {
+                fs::copy(&source_path, &target_path).map_err(|source| OvenLegacyCargoError::Io {
+                    path: target_path.clone(),
+                    source,
+                })?;
+            }
         }
         let materialized_plan = complete_plan
             .artifact_fragment(&partition.extension_paths)
