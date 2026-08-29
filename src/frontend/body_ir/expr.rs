@@ -99,6 +99,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             ast::Expr::Partial(partial) => self.lower_partial(partial, expr.span, scope, out),
             ast::Expr::Match(subject, arms) => self.lower_match(subject, arms, expr.span, scope, out),
             ast::Expr::Surface(surface) => self.lower_surface_expr(surface, expr.span, scope, out),
+            ast::Expr::Range { start, end, inclusive } => {
+                self.lower_range_value(start, end, *inclusive, expr.span, scope, out)
+            }
             other => self.unsupported_operand(unsupported_expr_label(other), scope, span, out),
         }
     }

@@ -4314,7 +4314,7 @@ impl BodyExecutor {
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
         match operand {
-            Operand::Constant(constant) => Ok(constant_value(constant)),
+            Operand::Constant(constant) => constant_value(constant, span),
             Operand::Place(place_operand) => {
                 let local = place_operand.place.local;
                 self.ownership_reads.push(OwnershipRead {
@@ -4811,6 +4811,7 @@ fn aggregate_label(kind: &incan_semantics_core::body_ir::AggregateKind) -> &'sta
         incan_semantics_core::body_ir::AggregateKind::Tuple => "tuple",
         incan_semantics_core::body_ir::AggregateKind::List => "list",
         incan_semantics_core::body_ir::AggregateKind::Set => "set",
+        incan_semantics_core::body_ir::AggregateKind::Range => "range",
         incan_semantics_core::body_ir::AggregateKind::Constructor(_) => "constructor",
     }
 }
@@ -4968,13 +4969,18 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
 }
 
 /// Convert one Body-IR literal into a first-profile replacement value.
-fn constant_value(constant: &Constant) -> ReplacementValue {
+///
+/// This is fallible because not every constant the frontend can now represent has a direct runtime value. A
+/// byte-string literal is representable in Body IR (#1165) but carries no `bytes` value in this profile, so it
+/// refuses at the read rather than being coerced into the `str` it is not.
+fn constant_value(constant: &Constant, span: HirSourceSpan) -> Result<ReplacementValue, ReplacementExecutionError> {
     match constant {
-        Constant::Int(value) => ReplacementValue::Int(*value),
-        Constant::Bool(value) => ReplacementValue::Bool(*value),
-        Constant::Str(value) => ReplacementValue::Str(value.clone()),
-        Constant::Unit | Constant::None => ReplacementValue::Unit,
-        Constant::Float(value) => ReplacementValue::Float(value.clone()),
+        Constant::Int(value) => Ok(ReplacementValue::Int(*value)),
+        Constant::Bool(value) => Ok(ReplacementValue::Bool(*value)),
+        Constant::Str(value) => Ok(ReplacementValue::Str(value.clone())),
+        Constant::Unit | Constant::None => Ok(ReplacementValue::Unit),
+        Constant::Float(value) => Ok(ReplacementValue::Float(value.clone())),
+        Constant::Bytes(_) => Err(unsupported("byte-string literal", span)),
     }
 }
 
@@ -4985,9 +4991,10 @@ fn direct_pattern_constant(
 ) -> Result<ReplacementValue, ReplacementExecutionError> {
     match constant {
         Constant::Int(_) | Constant::Bool(_) | Constant::Str(_) | Constant::Unit | Constant::None => {
-            Ok(constant_value(constant))
+            constant_value(constant, span)
         }
         Constant::Float(_) => Err(unsupported("floating-point match literal", span)),
+        Constant::Bytes(_) => Err(unsupported("byte-string match literal", span)),
     }
 }
 

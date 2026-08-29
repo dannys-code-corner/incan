@@ -5971,6 +5971,238 @@ fn an_unresolved_raises_error_type_refuses_by_naming_the_assert_form() -> Result
     Ok(())
 }
 
+// ---- Bytes literals and range values (#1165) ----
+
+#[test]
+fn bytes_literals_lower_to_their_own_constant_rather_than_a_string() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def send(payload: bytes) -> int:\n",
+        "  return 1\n",
+        "\n",
+        "def keep() -> bytes:\n",
+        "  greeting = b\"hi\"\n",
+        "  return greeting\n",
+        "\n",
+        "def run() -> int:\n",
+        "  return send(b\"\\x00\\xff\")\n",
+    );
+    let module = build(source, &["m", "bytes_literal"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a byte-string literal must lower to a real constant: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("const(b\"\\x68\\x69\")"),
+        "a bound byte-string literal must render as its own bytes constant: {snapshot}"
+    );
+    assert!(
+        !snapshot.contains("const(\"hi\")"),
+        "a byte-string literal must never be represented as the string constant it is not: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("call fn:send(const(b\"\\x00\\xff\"))"),
+        "a byte-string literal must survive as a constant in argument position: {snapshot}"
+    );
+    assert!(
+        snapshot.contains(" greeting : bytes [binding]"),
+        "the bound local must keep its checked `bytes` type: {snapshot}"
+    );
+
+    // The owned-buffer representation is what makes this read a move rather than a copy: `bytes` reports
+    // `AbiV0Ownership::Owned`, so its last read transfers ownership exactly as a `str` local's would.
+    let greeting = local_for_binding(&snapshot, "greeting").ok_or("expected a local for `greeting`")?;
+    assert!(
+        snapshot.contains(&format!("return move({greeting}, last_use)")),
+        "the last read of an owned bytes local must be a move: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_range_bound_to_a_local_lowers_to_a_range_value() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def build_ranges() -> int:\n",
+        "  half_open = 0..10\n",
+        "  closed = 1..=5\n",
+        "  return 0\n",
+    );
+    let module = build(source, &["m", "range_value"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a range in value position must lower to a real operand: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("range[const(0), const(10), const(1), const(false)]"),
+        "an exclusive range must carry its bounds, unit step, and `false` inclusivity: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("range[const(1), const(5), const(1), const(true)]"),
+        "an inclusive range must differ from the exclusive one only in its inclusivity operand: {snapshot}"
+    );
+    assert!(
+        snapshot.contains(" half_open : Range[int] [binding]"),
+        "the bound local must keep the checked range type: {snapshot}"
+    );
+    Ok(())
+}
+
+/// The facts two range spellings must agree on, read out of a lowered body's single `Loop` statement.
+///
+/// Deliberately not a snapshot comparison: a bound range reads its bounds off a value while an inline header
+/// lowers them from the AST, so the two bodies cannot be textually identical. What must match is how iteration
+/// proceeds -- counting rather than polling, one conditional exit, an item bound from the index by copy, and one
+/// arithmetic advance per iteration.
+#[derive(Debug, PartialEq)]
+struct RangeIterationFacts {
+    /// Whether any iteration in the body is an iterator poll rather than a counting step.
+    polls_an_iterator: bool,
+    /// How many `if <cond>: break` exits guard the loop.
+    conditional_breaks: usize,
+    /// Declared type of the local the loop pattern binds.
+    item_binding_ty: String,
+    /// Ownership fact the per-iteration item write reads the index with.
+    item_read_fact: String,
+    /// Operator the index is advanced with at the end of each iteration.
+    advance_op: String,
+}
+
+/// Extract [`RangeIterationFacts`] from the named body's single loop, over the binding `item_name`.
+fn range_iteration_facts(
+    module: &bir::BodyIrModule,
+    body_name: &str,
+    item_name: &str,
+) -> Result<RangeIterationFacts, Box<dyn std::error::Error>> {
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == body_name)
+        .ok_or("expected the loop body")?;
+    let item_local = body
+        .locals
+        .iter()
+        .find(|local| local.name.as_deref() == Some(item_name))
+        .ok_or("expected a local for the loop binding")?;
+    let loop_stmts = body
+        .block
+        .stmts
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            bir::StatementKind::Loop { body } => Some(&body.stmts),
+            _ => None,
+        })
+        .ok_or("expected a normalized loop")?;
+
+    let polls_an_iterator = loop_stmts
+        .iter()
+        .any(|stmt| matches!(&stmt.kind, bir::StatementKind::IterNext { .. }));
+    let conditional_breaks = loop_stmts
+        .iter()
+        .filter(|stmt| match &stmt.kind {
+            bir::StatementKind::If { then_block, .. } => {
+                matches!(then_block.stmts.as_slice(), [only] if matches!(&only.kind, bir::StatementKind::Break { .. }))
+            }
+            _ => false,
+        })
+        .count();
+    let item_read_fact = loop_stmts
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            bir::StatementKind::Assign {
+                place,
+                rvalue: bir::Rvalue::Use(bir::Operand::Place(read)),
+            } if place.local == item_local.id && place.projection.is_empty() => Some(format!("{:?}", read.fact)),
+            _ => None,
+        })
+        .ok_or("expected the per-iteration item write")?;
+    let advance = loop_stmts
+        .get(loop_stmts.len().wrapping_sub(2))
+        .ok_or("expected an index advance before the loop ends")?;
+    let bir::StatementKind::Assign {
+        rvalue: bir::Rvalue::BinaryOp(advance_op, _, _),
+        ..
+    } = &advance.kind
+    else {
+        return Err("the statement before the index write must compute the advanced index".into());
+    };
+
+    Ok(RangeIterationFacts {
+        polls_an_iterator,
+        conditional_breaks,
+        item_binding_ty: item_local.ty.to_string(),
+        item_read_fact,
+        advance_op: format!("{advance_op:?}"),
+    })
+}
+
+#[test]
+fn a_bound_range_iterates_with_the_same_facts_as_the_inline_range() -> Result<(), Box<dyn std::error::Error>> {
+    let bound_source = concat!(
+        "def total() -> int:\n",
+        "  r = 0..10\n",
+        "  mut acc = 0\n",
+        "  for i in r:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let inline_source = concat!(
+        "def total() -> int:\n",
+        "  mut acc = 0\n",
+        "  for i in 0..10:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let bound = build(bound_source, &["m", "bound_range_for"])?;
+    let inline = build(inline_source, &["m", "inline_range_for"])?;
+
+    assert!(
+        !bound.render_snapshot().contains("unsupported("),
+        "iterating a bound range must not fall back to a placeholder: {}",
+        bound.render_snapshot()
+    );
+    let bound_facts = range_iteration_facts(&bound, "total", "i")?;
+    assert!(
+        !bound_facts.polls_an_iterator,
+        "a bound range must keep the counting-loop shape rather than degrading to an iterator poll: {bound_facts:?}"
+    );
+    assert_eq!(
+        bound_facts,
+        range_iteration_facts(&inline, "total", "i")?,
+        "a bound range must iterate with the same facts as the inline range it was bound from"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_bound_range_loop_drives_itself_from_the_range_value_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def total() -> int:\n",
+        "  r = 1..=5\n",
+        "  mut acc = 0\n",
+        "  for i in r:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let module = build(source, &["m", "bound_range_fields"])?;
+    let snapshot = module.render_snapshot();
+    let range = local_for_binding(&snapshot, "r").ok_or("expected a local for `r`")?;
+
+    for field in bir::AggregateKind::RANGE_FIELDS {
+        assert!(
+            snapshot.contains(&format!("copy({range}.{field})")),
+            "the loop must read the range's own `{field}` field rather than re-deriving it: {snapshot}"
+        );
+    }
+    assert!(
+        !snapshot.contains("iter_next("),
+        "a bound range must not be polled as a general iterable: {snapshot}"
+    );
+    Ok(())
+}
+
 /// Corrupt provider metadata whose authority is not a capability is rejected before lowering can mint a plan.
 #[test]
 fn corrupt_provider_metadata_with_a_non_capability_authority_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
