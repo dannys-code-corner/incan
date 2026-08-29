@@ -8132,11 +8132,15 @@ fn is_dynamic_rustc_artifact(name: &str) -> bool {
         .any(|extension| name.ends_with(extension))
 }
 
-/// Retain only direct Rustc linker inputs, never Cargo's object files, dep-info files, metadata sidecars, or a
-/// prior executable. An `.rlib` embeds the metadata required by a direct-Rustc consumer; retaining its `.rmeta`
-/// sibling duplicates the closure without supplying a link input.
+/// Retain direct Rustc crate inputs, never Cargo's object files, dep-info files, or a prior executable.
+///
+/// `.rmeta` sidecars are load-bearing, not redundant: since Rust 1.98 Cargo can emit an `.rlib` that carries only a
+/// metadata stub (an archive with a `lib.rmeta-link` member), with the crate's real metadata living solely in the
+/// sibling `.rmeta` file that rustc discovers next to the rlib. Dropping the sidecar makes every direct-rustc
+/// consumer of such a closure fail with E0463 "can't find crate", so the sealed closure must ship both files.
+/// Extern selection still names only `.rlib`/dynamic libraries; the sidecar rides along as a supporting artifact.
 fn is_direct_rustc_artifact(name: &str) -> bool {
-    [".rlib", ".dylib", ".so", ".dll", ".a", ".lib"]
+    [".rlib", ".rmeta", ".dylib", ".so", ".dll", ".a", ".lib"]
         .iter()
         .any(|extension| name.ends_with(extension))
 }

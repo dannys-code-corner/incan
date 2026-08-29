@@ -1116,7 +1116,6 @@ fn export_loaf(
         serde_json::from_slice::<OvenRustcArtifactManifest>(&payload).map_err(|error| OvenLoafError::Preparation {
             message: format!("temporary Loaf payload is not a direct-rustc plan: {error}"),
         })?;
-    discard_loaf_metadata_sidecars(&mut plan);
     record_generated_root_externs(&mut plan);
     promote_compiler_runtime_externs(&mut plan)?;
     plan.registry_leaves = registry_leaves.clone();
@@ -2321,17 +2320,6 @@ fn loaf_file_physical_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn loaf_file_physical_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
-}
-
-/// Remove Cargo's redundant Rust metadata sidecars from one compiler-shipped loaf.
-///
-/// The direct-rustc plan names its usable roots as `--extern` rlibs and retains all other required link inputs. A
-/// standalone `.rmeta` sidecar is Cargo metadata for a companion rlib, not a direct-rustc input. Removing it here is
-/// safe only because the reduced plan is immediately revalidated and copied from that plan; stored compiler-suite
-/// closures retain their original artifact inventories.
-fn discard_loaf_metadata_sidecars(plan: &mut OvenRustcArtifactManifest) {
-    plan.supporting_artifacts
-        .retain(|artifact| !artifact.relative_path.ends_with(".rmeta"));
 }
 
 /// Validate the committed envelope authority and return only its content-addressed Loaf manifests.
@@ -4517,7 +4505,10 @@ mod tests {
     }
 
     #[test]
-    fn a_native_loaf_drops_only_redundant_rmeta_sidecars() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_native_loaf_retains_rmeta_sidecars_for_split_metadata_rlibs() -> Result<(), Box<dyn std::error::Error>> {
+        // Since Rust 1.98, an `.rlib` may carry only a metadata stub with the real crate metadata in the sibling
+        // `.rmeta`. The loaf pipeline must never strip that sidecar: rustc discovers it next to the rlib, and
+        // without it a direct-rustc consumer fails with E0463 "can't find crate".
         let receipt = runtime_receipt_for_plan()?;
         let mut plan = empty_manifest(&receipt);
         plan.supporting_artifacts = vec![
@@ -4535,14 +4526,18 @@ mod tests {
             },
         ];
 
-        super::discard_loaf_metadata_sidecars(&mut plan);
+        super::record_generated_root_externs(&mut plan);
 
         assert_eq!(
             plan.supporting_artifacts
                 .iter()
                 .map(|artifact| artifact.relative_path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["deps/libruntime.rlib", "provenance/legacy-cargo.json"]
+            vec![
+                "deps/libruntime.rlib",
+                "deps/libruntime.rmeta",
+                "provenance/legacy-cargo.json"
+            ]
         );
         Ok(())
     }

@@ -2194,6 +2194,12 @@ fn compiler_runtime_artifacts_by_name(
         }));
     let mut indexed = BTreeMap::new();
     for artifact in artifacts {
+        // A `.rmeta` sidecar accompanies a split-metadata rlib (Rust 1.98+) inside the same directory. It is a
+        // required companion of the linkable artifact, never a second runtime candidate, so it must not trip the
+        // one-artifact-per-crate refusal below or ever be selected as an extern replacement.
+        if artifact.relative_path.ends_with(".rmeta") {
+            continue;
+        }
         let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path).map(str::to_string)
         else {
             continue;
@@ -2202,6 +2208,81 @@ fn compiler_runtime_artifacts_by_name(
             return Err(OvenRustcError::InvalidInput {
                 field: "project extension base",
                 message: format!("declares multiple compiler runtime artifacts for `{crate_name}`"),
+            });
+        }
+    }
+    Ok(indexed)
+}
+
+/// Drop `.rmeta` sidecars whose paired rlib is no longer declared by the composed manifest.
+///
+/// Cohort and registry-leaf replacement swap an extension's compiled rlibs for the selected release family's
+/// artifacts. A sidecar names its exact sibling (`libX-<hash>.rmeta` beside `libX-<hash>.rlib`), so once that
+/// sibling is replaced the sidecar describes a discarded compilation: materializing it creates a metadata-only
+/// crate candidate that rustc can select and then reject with "required to be available in rlib format". A sidecar
+/// therefore lives and dies with its declared sibling.
+fn discard_orphaned_metadata_sidecars(manifest: &mut OvenRustcArtifactManifest) {
+    let declared_linkable_stems = manifest
+        .externs
+        .iter()
+        .map(|artifact| artifact.relative_path.as_str())
+        .chain(
+            manifest
+                .supporting_artifacts
+                .iter()
+                .map(|artifact| artifact.relative_path.as_str()),
+        )
+        .chain(
+            manifest
+                .registry_leaves
+                .iter()
+                .map(|leaf| leaf.artifact.relative_path.as_str()),
+        )
+        .chain(
+            manifest
+                .vocab_auxiliary_targets
+                .iter()
+                .flat_map(|auxiliary| auxiliary.externs.iter().map(|artifact| artifact.relative_path.as_str())),
+        )
+        .filter_map(|path| path.strip_suffix(".rlib").map(str::to_string))
+        .collect::<BTreeSet<_>>();
+    manifest.supporting_artifacts.retain(|artifact| {
+        let Some(stem) = artifact.relative_path.strip_suffix(".rmeta") else {
+            return true;
+        };
+        declared_linkable_stems.contains(stem)
+    });
+}
+
+/// Index the unique `.rmeta` sidecar declared per compiler-runtime crate by an immutable standard-library Loaf.
+///
+/// Since Rust 1.98 a runtime rlib may carry only a metadata stub, with the crate's real metadata in the sibling
+/// `.rmeta` retained beside it. This index lets cohort replacement rewrite an extension's sidecar to the release
+/// family's sidecar; crates whose release rlib embeds metadata simply have no entry here.
+fn compiler_runtime_sidecars_by_name(
+    base: &OvenRustcArtifactManifest,
+) -> Result<BTreeMap<String, OvenRustcSupportingArtifact>, OvenRustcError> {
+    let main_search_paths = base
+        .dependency_search_paths
+        .iter()
+        .chain(&base.native_search_paths)
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut indexed = BTreeMap::new();
+    for artifact in base.supporting_artifacts.iter().filter(|artifact| {
+        artifact.relative_path.ends_with(".rmeta")
+            && main_search_paths
+                .iter()
+                .any(|search_path| artifact_is_below_search_path(&artifact.relative_path, search_path))
+    }) {
+        let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path).map(str::to_string)
+        else {
+            continue;
+        };
+        if indexed.insert(crate_name.clone(), artifact.clone()).is_some() {
+            return Err(OvenRustcError::InvalidInput {
+                field: "project extension base",
+                message: format!("declares multiple compiler runtime metadata sidecars for `{crate_name}`"),
             });
         }
     }
@@ -2224,19 +2305,31 @@ fn replace_compiler_runtime_extern(
 }
 
 /// Replace one compiler-owned supporting artifact with the exact selected release artifact.
+///
+/// A `.rmeta` sidecar follows its replaced rlib rather than the linkable index: when the selected release family
+/// carries its own sidecar for the crate, the extension's sidecar is rewritten to it; when the release rlib embeds
+/// its metadata, the extension's now-orphaned sidecar is dropped (`None`). Rewriting a sidecar to the rlib path
+/// would double-declare the rlib in the composed manifest.
 fn replace_compiler_runtime_supporting_artifact(
-    artifact: &mut OvenRustcSupportingArtifact,
+    artifact: OvenRustcSupportingArtifact,
     base_artifacts: &BTreeMap<String, OvenRustcSupportingArtifact>,
-) -> Result<(), OvenRustcError> {
+    base_sidecars: &BTreeMap<String, OvenRustcSupportingArtifact>,
+) -> Option<OvenRustcSupportingArtifact> {
     let Some(crate_name) = compiler_runtime_name_from_artifact_path(&artifact.relative_path) else {
-        return Ok(());
+        return Some(artifact);
     };
+    if artifact.relative_path.ends_with(".rmeta") {
+        if !base_artifacts.contains_key(crate_name) {
+            // Preserve a caller-owned `incan_*` sidecar that is absent from the selected release family.
+            return Some(artifact);
+        }
+        return base_sidecars.get(crate_name).cloned();
+    }
     let Some(base_artifact) = base_artifacts.get(crate_name) else {
         // Preserve a caller-owned `incan_*` artifact that is absent from the selected release family.
-        return Ok(());
+        return Some(artifact);
     };
-    *artifact = base_artifact.clone();
-    Ok(())
+    Some(base_artifact.clone())
 }
 
 /// Return the base artifacts required to execute its main and vocabulary closures.
@@ -2902,12 +2995,20 @@ impl OvenRustcArtifactManifest {
         let mut composed = self.clone();
         composed.externs[*project_runtime_index] = (*base_runtime).clone();
         let base_compiler_artifacts = compiler_runtime_artifacts_by_name(base)?;
+        let base_compiler_sidecars = compiler_runtime_sidecars_by_name(base)?;
         for artifact in &mut composed.externs {
             replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
         }
-        for artifact in &mut composed.supporting_artifacts {
-            replace_compiler_runtime_supporting_artifact(artifact, &base_compiler_artifacts)?;
-        }
+        composed.supporting_artifacts = std::mem::take(&mut composed.supporting_artifacts)
+            .into_iter()
+            .filter_map(|artifact| {
+                replace_compiler_runtime_supporting_artifact(
+                    artifact,
+                    &base_compiler_artifacts,
+                    &base_compiler_sidecars,
+                )
+            })
+            .collect();
         canonicalize_release_registry_sources(&mut composed, base)?;
         let mut leaf_replacements = Vec::new();
         for (index, project_leaf) in composed.registry_leaves.iter().enumerate() {
@@ -2999,6 +3100,7 @@ impl OvenRustcArtifactManifest {
             .extend(base.native_search_paths.iter().cloned());
         composed.native_search_paths.sort();
         composed.native_search_paths.dedup();
+        discard_orphaned_metadata_sidecars(&mut composed);
         composed.supporting_artifacts.sort_by(|left, right| {
             left.relative_path
                 .cmp(&right.relative_path)
@@ -5694,30 +5796,38 @@ fn rustc_dynamic_library_environment_with_caller_owned_paths(
 /// Collect every manifest-recorded artifact by safe relative path for directory completeness checks.
 fn expected_artifacts(manifest: &OvenRustcArtifactManifest) -> Result<BTreeMap<String, String>, OvenRustcError> {
     let mut expected = BTreeMap::new();
-    for artifact in manifest
+    let mut sources = BTreeMap::new();
+    for (source, artifact) in manifest
         .externs
         .iter()
-        .map(|artifact| (artifact.relative_path.as_str(), artifact.digest.as_str()))
-        .chain(
-            manifest
-                .supporting_artifacts
-                .iter()
-                .map(|artifact| (artifact.relative_path.as_str(), artifact.digest.as_str())),
-        )
+        .map(|artifact| ("externs", (artifact.relative_path.as_str(), artifact.digest.as_str())))
+        .chain(manifest.supporting_artifacts.iter().map(|artifact| {
+            (
+                "supporting",
+                (artifact.relative_path.as_str(), artifact.digest.as_str()),
+            )
+        }))
         .chain(manifest.vocab_auxiliary_targets.iter().flat_map(|auxiliary| {
-            auxiliary
-                .externs
-                .iter()
-                .map(|artifact| (artifact.relative_path.as_str(), artifact.digest.as_str()))
+            auxiliary.externs.iter().map(|artifact| {
+                (
+                    "vocab-auxiliary",
+                    (artifact.relative_path.as_str(), artifact.digest.as_str()),
+                )
+            })
         }))
     {
         let normalized = normalized_relative_path(artifact.0, "artifact")?;
-        if expected.insert(normalized, artifact.1.to_string()).is_some() {
+        if expected.insert(normalized.clone(), artifact.1.to_string()).is_some() {
+            let previous = sources.get(&normalized).copied().unwrap_or("unknown");
             return Err(OvenRustcError::InvalidInput {
                 field: "artifact manifest",
-                message: "declares one relative artifact path more than once".to_string(),
+                message: format!(
+                    "declares one relative artifact path more than once: `{}` ({previous} and {source})",
+                    artifact.0
+                ),
             });
         }
+        sources.insert(normalized, source);
     }
     Ok(expected)
 }
