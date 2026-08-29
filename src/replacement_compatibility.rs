@@ -765,7 +765,7 @@ impl RegistryValidationError {
 /// Decode the frozen v0.5 release pin and derive its complete capability baseline from checked metadata.
 ///
 /// The committed snapshot is deliberately separate from the present-tense workspace
-/// `crates/incan_stdlib/stdlib/capabilities.incn`. Future public-registry edits therefore cannot alter or invalidate
+/// `crates/incan_stdlib/stdlib/features.incn`. Future public-registry edits therefore cannot alter or invalidate
 /// this released compatibility target. Descriptor field extraction still goes through the shared checked metadata
 /// path rather than a hand-maintained Rust list.
 pub fn checked_v0_5_public_capability_baseline() -> Result<PublicCapabilityBaseline, RegistryValidationError> {

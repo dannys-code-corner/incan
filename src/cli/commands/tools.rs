@@ -236,7 +236,7 @@ pub fn inspect_registry(
 /// Incan comments, rereads descriptor source, or evaluates the runtime registry. The descriptor shape is owned by the
 /// standard library module and is validated here only at the documentation boundary that renders its public contract.
 pub fn write_feature_inventory_reference(path: &Path) -> CliResult<()> {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/capabilities.incn");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/features.incn");
     write_feature_inventory_reference_from_source(&source, path)
 }
 
@@ -251,7 +251,7 @@ pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path)
     output.push_str("# Incan feature inventory\n\n");
     output.push_str("!!! warning \"Generated file\"\n");
     output.push_str(
-        "    Do not edit this page by hand. If it looks wrong/outdated, update `crates/incan_stdlib/stdlib/capabilities.incn` and regenerate it.\n",
+        "    Do not edit this page by hand. If it looks wrong/outdated, update `crates/incan_stdlib/stdlib/features.incn` and regenerate it.\n",
     );
     output.push('\n');
     output.push_str("    Regenerate with: `cargo run --features cli --bin generate_feature_inventory`\n\n");
@@ -1720,8 +1720,8 @@ mod tests {
     }
 
     #[test]
-    fn std_capability_inventory_is_checked_and_generates_reference() -> Result<(), Box<dyn std::error::Error>> {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/capabilities.incn");
+    fn std_feature_inventory_is_checked_and_generates_reference() -> Result<(), Box<dyn std::error::Error>> {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/features.incn");
         let package = collect_registry_metadata_package(&source)?;
         let entries = stdlib_feature_inventory(&package)?;
         assert!(!entries.is_empty());
@@ -1754,7 +1754,7 @@ mod tests {
         assert!(rendered.contains("Workspace and multi-package projects"));
         assert!(rendered.contains("Compiled providers, SDK components, and package features"));
         assert!(rendered.contains("Fallible iteration and combinators"));
-        assert!(rendered.contains("crates/incan_stdlib/stdlib/capabilities.incn"));
+        assert!(rendered.contains("crates/incan_stdlib/stdlib/features.incn"));
         Ok(())
     }
 
