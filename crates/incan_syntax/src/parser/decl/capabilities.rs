@@ -21,7 +21,14 @@ impl<'a> Parser<'a> {
         decorators: Vec<Spanned<Decorator>>,
         visibility: Visibility,
     ) -> Result<CapabilityDecl, CompileError> {
-        self.expect_keyword(KeywordId::Capability, "Expected 'capability'")?;
+        if !self.is_capability_declaration_keyword() {
+            return Err(errors::expected_token_message(
+                "Expected 'capability'",
+                &format!("{:?}", self.peek().kind),
+                self.peek().span,
+            ));
+        }
+        self.advance();
         let name = self.identifier()?;
         self.expect_punct(PunctuationId::Colon, "Expected ':' after capability name")?;
         self.expect(&TokenKind::Newline, "Expected newline after ':'")?;
@@ -80,6 +87,22 @@ impl<'a> Parser<'a> {
             scope,
             requires,
         })
+    }
+
+    /// Return `true` when the current token opens a `capability` declaration.
+    ///
+    /// RFC 104's `capability` is contextual rather than reserved, so it lexes as an ordinary identifier and stays
+    /// usable as a variable, field, or method name. Only the declaration shape — the spelling followed by a name —
+    /// claims it as a keyword; `capability = x`, `capability(x)`, and `capability: T` all remain identifiers.
+    fn is_capability_declaration_keyword(&self) -> bool {
+        if !matches!(
+            &self.peek().kind,
+            TokenKind::Ident(name) if name == incan_core::lang::keywords::as_str(KeywordId::Capability)
+        ) {
+            return false;
+        }
+
+        matches!(self.peek_next().kind, TokenKind::Ident(_))
     }
 
     /// Parse the typed scope dimensions inside a capability's `scope:` block.

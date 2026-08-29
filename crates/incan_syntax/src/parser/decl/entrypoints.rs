@@ -137,7 +137,7 @@ impl<'a> Parser<'a> {
             Declaration::Static(self.static_decl_with_visibility(visibility)?)
         } else if self.check_keyword(KeywordId::Model) {
             Declaration::Model(self.model_decl(decorators, visibility)?)
-        } else if self.check_keyword(KeywordId::Capability) {
+        } else if self.is_capability_declaration_keyword() {
             Declaration::Capability(self.capability_decl(decorators, visibility)?)
         } else if self.check_keyword(KeywordId::Class) {
             Declaration::Class(self.class_decl(decorators, visibility)?)
