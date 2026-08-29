@@ -11,6 +11,9 @@
 //! generic `Surface` AST nodes tagged with [`SurfaceFeatureKey`] without knowing *which* stdlib features are enabled,
 //! while the stdlib pack crate implements the feature logic without importing the parser.
 //!
+//! RFC 104 authority decisions and operation receipts also live here, so compiler and runtime consumers exchange one
+//! validated canonical contract rather than reconstructing authority or receipt facts at their boundary.
+//!
 //! ## Extension model
 //!
 //! To support a new soft keyword or decorator family:

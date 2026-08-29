@@ -1520,6 +1520,8 @@ name = "incan_semantics_core"
 version = "0.6.0-dev.0"
 dependencies = [
  "incan_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
