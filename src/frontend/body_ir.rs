@@ -65,6 +65,7 @@ use crate::frontend::symbols::{CallableParam, ResolvedType};
 use crate::frontend::typechecker::{
     FixedUnpackPlan, IdentKind, ResolvedOperatorKind, TypeCheckInfo, semantic_type_from_resolved,
 };
+use crate::provider::ProviderPlan;
 
 /// Build Body IR v0 for every top-level function declaration and every non-abstract class/model/trait method in a
 /// typechecked module.
@@ -80,6 +81,39 @@ pub fn build_body_ir_module_v0(
     program: &ast::Program,
     module_path: &[String],
     type_info: &TypeCheckInfo,
+) -> bir::BodyIrModule {
+    build_body_ir_module_v0_with_provider_operations(program, module_path, type_info, &ProviderOperationCatalog::new())
+}
+
+/// Build Body IR using the checked provider-operation facts selected for this compilation.
+///
+/// The ordinary source-only replacement profile has no provider plan and continues to use
+/// [`build_body_ir_module_v0`]. Any provider-aware consumer must use this entry point so provider-operation admission
+/// is projected from an integrity-checked manifest rather than supplied as a handwritten lowering catalogue.
+pub fn build_body_ir_module_v0_with_provider_plan(
+    program: &ast::Program,
+    module_path: &[String],
+    type_info: &TypeCheckInfo,
+    provider_plan: &ProviderPlan,
+) -> Result<bir::BodyIrModule, String> {
+    let provider_operations = ProviderOperationCatalog::from_provider_plan(provider_plan)?;
+    Ok(build_body_ir_module_v0_with_provider_operations(
+        program,
+        module_path,
+        type_info,
+        &provider_operations,
+    ))
+}
+
+/// Build Body IR v0 for a typechecked module, admitting the internally projected provider operations.
+///
+/// The catalogue is deliberately private to this frontend bridge. Its entries must come from a selected checked
+/// [`ProviderPlan`], never from a backend-specific caller or a source-name convention.
+fn build_body_ir_module_v0_with_provider_operations(
+    program: &ast::Program,
+    module_path: &[String],
+    type_info: &TypeCheckInfo,
+    provider_operations: &ProviderOperationCatalog,
 ) -> bir::BodyIrModule {
     let module_identity = body_ir_module_identity(module_path);
     let module_id = CompilerNodeId::module(module_identity.clone());
@@ -109,6 +143,7 @@ pub fn build_body_ir_module_v0(
         local_value_enum_declarations: &local_value_enum_declarations,
         module_identity: &module_identity,
         module_path,
+        provider_operations,
     };
     let bodies = program
         .declarations
@@ -215,6 +250,8 @@ struct BodyIrLoweringFacts<'type_info, 'source> {
     local_value_enum_declarations: &'source LocalValueEnumDeclarations,
     module_identity: &'source str,
     module_path: &'source [String],
+    /// Provider operations this compilation admits, keyed by canonical identity rather than by any spelling.
+    provider_operations: &'source ProviderOperationCatalog,
 }
 
 /// Source facts a synthesized local partial needs for one target parameter.
@@ -311,6 +348,8 @@ struct BodyBuilder<'type_info, 'source> {
     module_identity: &'source str,
     /// Owning module path, used to build the RFC 120 origin of a declaration this module owns.
     module_path: &'source [String],
+    /// Provider operations this compilation admits, consulted only by canonical identity (see `provider_ops`).
+    provider_operations: &'source ProviderOperationCatalog,
     /// Checked return type of the function/method currently being lowered, used only to retain `?` error routing.
     owner_return_type: IncanType,
     locals: Vec<bir::LocalDecl>,
@@ -354,6 +393,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             local_value_enum_declarations: lowering_facts.local_value_enum_declarations,
             module_identity: lowering_facts.module_identity,
             module_path: lowering_facts.module_path,
+            provider_operations: lowering_facts.provider_operations,
             owner_return_type,
             locals: Vec::new(),
             scopes: Vec::new(),
@@ -826,6 +866,7 @@ mod control_flow;
 mod stmt;
 
 mod free_vars;
+mod provider_ops;
 mod refusals;
 
 mod reads;
@@ -840,6 +881,7 @@ mod args;
 
 use bodies::*;
 use collect::*;
+use provider_ops::{ProviderOperationCatalog, ProviderOperationRecord};
 use reads::*;
 
 #[cfg(test)]

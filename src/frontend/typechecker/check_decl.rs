@@ -15,7 +15,8 @@ use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty
 use super::collect::decorators::resolve_decorator_id;
 use super::collect::{capability_description_text, dotted_path_segments};
 use super::type_info::{
-    RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
+    ProviderOperationDeclarationInfo, RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry,
+    RegistryExplicitEntryInfo,
 };
 use super::{
     DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, TestingFixtureInfo, TypeChecker,
@@ -30,7 +31,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::testing;
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
-use incan_semantics_core::SemanticSourceTargetKind;
+use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
 use incan_semantics_core::{SemanticRegistrySubjectKind, SemanticRegistryValue, SurfaceModifierTypeCheck};
 use std::collections::{HashMap, HashSet};
 
@@ -5125,6 +5126,127 @@ impl TypeChecker {
         }
     }
 
+    /// Record the checked capability requirement for one provider operation.
+    ///
+    /// `@provider_operation(capability.path)` is deliberately a declaration attachment rather than a convention on a
+    /// callable or module name. The typechecker resolves the capability at the producer declaration site and carries
+    /// the resulting canonical identities into provider metadata; later consumers never need to reinterpret the
+    /// decorator or recover meaning from a backend projection.
+    fn check_provider_operation_decorators(&mut self, func: &FunctionDecl, decl_span: Span) {
+        let decorators = func
+            .decorators
+            .iter()
+            .filter(|decorator| {
+                self.decorator_id_with_import_aliases(&decorator.node) == Some(DecoratorId::ProviderOperation)
+            })
+            .collect::<Vec<_>>();
+        if decorators.is_empty() {
+            return;
+        }
+        if decorators.len() > 1 {
+            for decorator in decorators {
+                self.errors.push(CompileError::type_error(
+                    "a provider function may declare only one @provider_operation capability".to_string(),
+                    decorator.span,
+                ));
+            }
+            return;
+        }
+        let decorator = decorators[0];
+        let [DecoratorArg::Positional(capability)] = decorator.node.args.as_slice() else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation requires exactly one capability reference".to_string(),
+                decorator.span,
+            ));
+            return;
+        };
+        let Some(path) = dotted_path_segments(&capability.node) else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation capability must be a checked capability reference, not a value expression"
+                    .to_string(),
+                capability.span,
+            ));
+            return;
+        };
+        let Some(required_capability) = self.provider_operation_capability_identity(&path, capability.span) else {
+            return;
+        };
+        let Some(module_path) = self.current_module_path.clone() else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation requires a compiler-known module identity".to_string(),
+                decorator.span,
+            ));
+            return;
+        };
+        let operation = CanonicalSymbolId::module_declaration(
+            module_path,
+            func.name.clone(),
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(decl_span.start, decl_span.end),
+        );
+        self.type_info.declarations.provider_operations.insert(
+            operation.clone(),
+            ProviderOperationDeclarationInfo {
+                operation,
+                required_capability,
+                runtime_requirements: Vec::new(),
+            },
+        );
+    }
+
+    /// Resolve an operation decorator's capability reference to the declaration identity it actually names.
+    fn provider_operation_capability_identity(&mut self, path: &[String], span: Span) -> Option<CanonicalSymbolId> {
+        let rendered = path.join(".");
+        let (name, module) = path.split_last()?;
+        if module.is_empty() {
+            let Some(symbol) = self.lookup_symbol(name).cloned() else {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation capability `{rendered}` is unresolved"),
+                    span,
+                ));
+                return None;
+            };
+            if !matches!(symbol.kind, SymbolKind::Capability(_)) {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation reference `{rendered}` does not name a capability"),
+                    span,
+                ));
+                return None;
+            }
+            let Some(module_path) = self.current_module_path.clone() else {
+                self.errors.push(CompileError::type_error(
+                    "@provider_operation requires a compiler-known module identity".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            return Some(CanonicalSymbolId::module_declaration(
+                module_path,
+                name.clone(),
+                SemanticSourceTargetKind::Capability,
+                HirSourceSpan::new(symbol.span.start, symbol.span.end),
+            ));
+        }
+        let import = ImportPath::simple(module.to_vec());
+        match self.dependency_member_identity(&import, name) {
+            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => Some(identity),
+            Some(_) => {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation reference `{rendered}` does not name a capability"),
+                    span,
+                ));
+                None
+            }
+            None => {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation capability `{rendered}` is unresolved"),
+                    span,
+                ));
+                None
+            }
+        }
+    }
+
     /// Reject `@describe` where RFC 113 has no stable source subject yet.
     ///
     /// The decorator resolver deliberately recognises compiler-owned decorators on broad syntactic targets. Keeping
@@ -5323,6 +5445,7 @@ impl TypeChecker {
             decl_span,
             SemanticRegistrySubjectKind::Function,
         );
+        self.check_provider_operation_decorators(func, decl_span);
         self.validate_callable_rest_params(&func.params);
         let fixture_span = fixture_function_span(func);
         let fixture_args = self.testing_fixture_marker_args(&func.decorators, fixture_span);

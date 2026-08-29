@@ -1878,6 +1878,18 @@ pub enum Callee {
     /// A compiler-owned runtime/helper operation, represented explicitly instead of as a generated-Rust helper-call
     /// idiom (#653 criterion 3).
     Helper(HelperOp),
+    /// An admitted provider-service operation, carrying the checked plan its execution needs (#1213).
+    ///
+    /// Deliberately a sibling of [`Self::Function`] rather than a flavor of it. A named function target says which
+    /// declaration was selected and nothing more; a provider operation additionally carries the provider activation,
+    /// the RFC 104 capability its invocation must be authorized against, and the runtime requirements its execution
+    /// imposes. Folding those onto [`NamedCallableTarget`] would give every ordinary call fields that are only ever
+    /// absent, and would let a consumer treat a call with no plan as an unchecked provider operation.
+    ///
+    /// Boxed because the plan is by far the largest payload a callee can carry — two canonical identities, the
+    /// provider record, and one fact per input — while being the rarest. Inlining it would grow every
+    /// [`StatementKind::Call`] in every body by that much.
+    ProviderOperation(Box<ProviderOperationPlan>),
 }
 
 impl Callee {
@@ -1887,6 +1899,7 @@ impl Callee {
             Self::Function(target) => target.render_snapshot(),
             Self::Method(target) => target.render_snapshot(),
             Self::Helper(op) => format!("helper:{}", op.as_str()),
+            Self::ProviderOperation(plan) => plan.render_snapshot(),
         }
     }
 }
@@ -2001,6 +2014,189 @@ pub struct NamedCallableTarget {
     /// import, an alias, or a re-export, and is `None` whenever that answer is not proven. [`Self::name`] remains the
     /// call site's own spelling, so the pair records both what was written and what it means.
     pub canonical: Option<CanonicalSymbolId>,
+}
+
+/// Whether the provider owning an operation can be executed against in this compilation.
+///
+/// The three states are the ones the checked provider catalog already distinguishes, kept apart here for the same
+/// reason it keeps them apart: they have different remedies. A disabled provider is present but not selected by the
+/// project graph, while an unavailable one is selected but has no locally verified artifact. Collapsing them into a
+/// single "not usable" flag would leave a consumer unable to say which.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderActivationState {
+    /// Enabled and locally available, so an admitted operation may be planned for execution.
+    Active,
+    /// Known to the catalog but not enabled by the project or component selection.
+    Disabled,
+    /// Enabled, but no locally verified artifact backs it.
+    Unavailable,
+}
+
+impl ProviderActivationState {
+    /// Compact maintainer-facing spelling used in snapshots and refusal text.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Disabled => "disabled",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
+
+/// The checked provider an operation belongs to, and whether this compilation can execute against it.
+///
+/// [`Self::provider_key`] is carried as provenance, never as a dispatch key. Nothing in Body IR or in a consumer may
+/// branch on it: which operation was invoked is answered by [`ProviderOperationPlan::operation`], a canonical
+/// identity, and whether it may run is answered by [`Self::state`]. Recording the key anyway is what lets a receipt
+/// or a diagnostic say *which* provider without re-resolving the catalog.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderActivation {
+    /// Stable key of the catalog record this operation was admitted from.
+    pub provider_key: String,
+    /// Canonical module path the operation is declared under, as the catalog claims it.
+    pub module_path: Vec<String>,
+    /// Whether this compilation can execute against the provider.
+    pub state: ProviderActivationState,
+}
+
+impl ProviderActivation {
+    /// Render a deterministic maintainer-facing spelling.
+    fn render_snapshot(&self) -> String {
+        format!(
+            "{}@{}:{}",
+            self.provider_key,
+            self.module_path.join("."),
+            self.state.as_str()
+        )
+    }
+}
+
+/// One provider-operation input, described alongside its runtime call operand rather than re-carried.
+///
+/// The evaluated *values* stay in the surrounding [`StatementKind::Call::args`], exactly as they do for every other
+/// call shape, because an [`Operand`] carries an ownership decision and a last-use marker that must be recorded once
+/// and only once. Duplicating the operand into the plan would record both twice. What the plan adds is the facts a
+/// consumer cannot recover from the operand alone: which declared slot the value fills, where it was written (and so
+/// when it was evaluated relative to its siblings), its checked type, and its own source span — which is what lets an
+/// authority denial point at the argument that carried an out-of-scope value rather than at the whole call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderOperationInput {
+    /// Declared parameter slot this input supplies. Indexes the same slot space as [`BoundArgument::slot`].
+    pub slot: usize,
+    /// Zero-based position among the call site's written arguments, which is also its evaluation order.
+    pub written_position: usize,
+    /// Checked type of the evaluated argument expression.
+    pub ty: IncanType,
+    /// Span of the argument expression itself.
+    pub span: HirSourceSpan,
+}
+
+impl ProviderOperationInput {
+    /// Render a deterministic maintainer-facing spelling.
+    fn render_snapshot(&self) -> String {
+        format!("slot{}@{}:{}", self.slot, self.written_position, self.ty)
+    }
+}
+
+/// A checked execution plan for one resolved provider-operation invocation (#1213).
+///
+/// This is a compiler-owned internal plan, not a public provider API and not a second source-meaning model. Every
+/// fact on it is *consumed* from an upstream owner rather than decided here: the canonical operation identity comes
+/// from the RFC 120 callable-target contract, the provider and its activation come from the checked provider catalog,
+/// and [`Self::required_capability`] is an RFC 104 capability declaration's own canonical identity. The plan
+/// deliberately holds no grant set, no mode, no decision, and no receipt — obtaining an authority decision is the
+/// consumer's call through [`Self::authority_request`], and executing the operation belongs to whoever holds a
+/// runtime.
+///
+/// Lowering emits a plan only for an *admitted* operation. An operation whose provider is not active, whose required
+/// capability identity does not name a capability, or whose inputs cannot all be represented is refused at its
+/// source span instead, so it has no plan to execute and no receipt to emit. Consumers must still validate a plan:
+/// constructed or corrupt IR is never evidence that source admission occurred.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProviderOperationPlan {
+    /// RFC 120 canonical identity of the operation declaration this call selected.
+    ///
+    /// This is the only thing that answers "which operation is this". A consumer must not recover that answer from a
+    /// call-site spelling, a provider name, or an emitted Rust name.
+    pub operation: CanonicalSymbolId,
+    /// The checked provider that owns the operation, and its activation in this compilation.
+    pub provider: ProviderActivation,
+    /// Canonical identity of the RFC 104 capability this invocation's authority must be decided against.
+    ///
+    /// A capability identity, not a grant spelling: the spelling is a rendering of the identity (see
+    /// [`Self::authority_request`]), and only the identity survives an import, an alias, or a re-export.
+    pub required_capability: CanonicalSymbolId,
+    /// Runtime requirements executing this operation imposes, in the catalog's own order.
+    pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
+    /// Runtime call inputs, one per declared slot, in written source order.
+    pub inputs: Vec<ProviderOperationInput>,
+    /// Span of the invocation, which is where a refusal or a denial is reported.
+    pub call_span: HirSourceSpan,
+}
+
+impl ProviderOperationPlan {
+    /// Build the RFC 104 authority request this invocation must have decided before it may execute.
+    ///
+    /// This is the whole of the plan's relationship with authority: it phrases the question and hands it to whatever
+    /// implements [`crate::authority::AuthorityDecisionSource`]. It does not consult a grant set, interpret a mode, or
+    /// decide anything, so a governed host, a permissive local run, and a test double all answer the same request.
+    ///
+    /// `requested_scope` is empty. RFC 104 binds scope *values* at grant time and checks them against the operation's
+    /// actual attributes at the moment it happens, so a request assembled during lowering has no scope values to
+    /// carry; a consumer that has evaluated [`Self::inputs`] may add them to the returned request.
+    pub fn authority_request(&self) -> crate::authority::AuthorityRequest {
+        crate::authority::AuthorityRequest {
+            capability: self.required_capability.clone(),
+            operation: self.operation.clone(),
+            request_span: self.call_span,
+            requested_scope: Vec::new(),
+            suggested_grant: render_symbol_path(&self.required_capability),
+        }
+    }
+
+    /// Render a deterministic maintainer-facing spelling.
+    fn render_snapshot(&self) -> String {
+        let inputs: Vec<String> = self
+            .inputs
+            .iter()
+            .map(ProviderOperationInput::render_snapshot)
+            .collect();
+        let requirements: Vec<String> = self
+            .runtime_requirements
+            .iter()
+            .map(render_runtime_requirement)
+            .collect();
+        format!(
+            "provider_operation:{} provider={} capability={} inputs=[{}] requires=[{}]",
+            render_symbol_path(&self.operation),
+            self.provider.render_snapshot(),
+            render_symbol_path(&self.required_capability),
+            inputs.join(", "),
+            requirements.join(", ")
+        )
+    }
+}
+
+/// Render a canonical identity as its dotted declaration path.
+///
+/// This is a *projection of* the identity for humans and for RFC 104's suggested-grant spelling, never a substitute
+/// for it: two declarations can share a rendering while remaining distinct identities, so nothing may compare or
+/// dispatch on the result. The origin is included because a capability's grant spelling is its declaration location —
+/// `host.http.request` is the `request` capability declared in the `host.http` module, not a string an author chose.
+fn render_symbol_path(symbol: &CanonicalSymbolId) -> String {
+    let prefix: Vec<String> = match &symbol.origin {
+        crate::SymbolOrigin::Module(path) | crate::SymbolOrigin::RustCrate(path) => path.clone(),
+        crate::SymbolOrigin::Package { library, module_path } => std::iter::once(library.clone())
+            .chain(module_path.iter().cloned())
+            .collect(),
+        crate::SymbolOrigin::Builtin => Vec::new(),
+    };
+    prefix
+        .iter()
+        .map(String::as_str)
+        .chain(std::iter::once(symbol.declaration_name.as_str()))
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// A method call target and its resolved call-site identity.
@@ -2644,7 +2840,7 @@ impl PanicReason {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CompilerNodeKind, IncanPrimitiveType};
+    use crate::{CompilerNodeKind, IncanPrimitiveType, SemanticSourceTargetKind};
 
     fn sample_body() -> Body {
         let decl_id = CompilerNodeId::declaration("m", "add");
@@ -3457,6 +3653,108 @@ mod tests {
             snapshot.contains("const(1) | const(2) => const(())"),
             "alternation pattern: {snapshot}"
         );
+    }
+
+    /// Build an admitted plan for a `pub::billing.charge` operation requiring `host.http.request`.
+    fn sample_provider_operation_plan() -> ProviderOperationPlan {
+        ProviderOperationPlan {
+            operation: CanonicalSymbolId {
+                namespace: crate::SymbolNamespace::OrdinaryLexical,
+                origin: crate::SymbolOrigin::Package {
+                    library: "billing".to_string(),
+                    module_path: vec!["api".to_string()],
+                },
+                declaration_name: "charge".to_string(),
+                kind: SemanticSourceTargetKind::Function,
+                scope_discriminant: None,
+                declaration_span: HirSourceSpan::new(40, 60),
+            },
+            provider: ProviderActivation {
+                provider_key: "billing@1.2.3#abc[]".to_string(),
+                module_path: vec!["billing".to_string(), "api".to_string()],
+                state: ProviderActivationState::Active,
+            },
+            required_capability: CanonicalSymbolId::module_declaration(
+                vec!["host".to_string(), "http".to_string()],
+                "request",
+                SemanticSourceTargetKind::Capability,
+                HirSourceSpan::new(10, 20),
+            ),
+            runtime_requirements: vec![AbiV0RuntimeRequirement::HostedStd],
+            inputs: vec![ProviderOperationInput {
+                slot: 0,
+                written_position: 0,
+                ty: IncanType::Primitive(IncanPrimitiveType::Str),
+                span: HirSourceSpan::new(120, 128),
+            }],
+            call_span: HirSourceSpan::new(110, 130),
+        }
+    }
+
+    /// The plan phrases the RFC 104 question without answering any part of it itself.
+    #[test]
+    fn a_plan_builds_an_authority_request_naming_its_capability_and_operation() {
+        let plan = sample_provider_operation_plan();
+
+        let request = plan.authority_request();
+
+        assert_eq!(request.capability, plan.required_capability);
+        assert_eq!(request.operation, plan.operation);
+        assert_eq!(request.request_span, plan.call_span);
+        assert!(
+            request.requested_scope.is_empty(),
+            "scope values bind at grant time, not while lowering",
+        );
+    }
+
+    /// The suggested grant is a rendering of the capability's declaration location, never an author-chosen string.
+    #[test]
+    fn a_capabilitys_grant_spelling_comes_from_where_it_was_declared() {
+        let plan = sample_provider_operation_plan();
+
+        assert_eq!(plan.authority_request().suggested_grant, "host.http.request");
+    }
+
+    /// A package-owned operation renders under its library identity, so two libraries cannot collide.
+    #[test]
+    fn a_package_owned_operation_renders_under_its_library_identity() {
+        let plan = sample_provider_operation_plan();
+
+        assert_eq!(render_symbol_path(&plan.operation), "billing.api.charge");
+    }
+
+    /// A provider operation renders its checked facts, so a snapshot shows what would execute.
+    #[test]
+    fn a_provider_operation_call_renders_its_plan() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Call {
+                    destination: Some(Place::from_local(LocalId(2))),
+                    callee: Callee::ProviderOperation(Box::new(sample_provider_operation_plan())),
+                    args: vec![ArgumentElement::One(Operand::Constant(Constant::Str("x".to_string())))],
+                    may_panic: false,
+                },
+                span: HirSourceSpan::new(110, 130),
+            },
+        );
+
+        let snapshot = body.render_snapshot();
+
+        assert!(
+            snapshot.contains("provider_operation:billing.api.charge"),
+            "the canonical operation identity must be visible: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("capability=host.http.request"),
+            "the required capability must be visible: {snapshot}"
+        );
+        assert!(
+            snapshot.contains("provider=billing@1.2.3#abc[]@billing.api:active"),
+            "provider activation must be visible: {snapshot}"
+        );
+        assert_eq!(body.render_snapshot(), snapshot, "rendering must be deterministic");
     }
 
     #[test]

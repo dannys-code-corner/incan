@@ -262,6 +262,21 @@ Package-defined capabilities must not grant host authority by implication alone.
 
 Scope values are never written into a static declaration such as `@action(caps=[...])` -- a static declaration only names which capabilities, generically, an action needs. Scope values bind at grant time (`--allow example_lib.policy.refund:tenant=acct_a`) and are checked against the actual attributes of the operation being performed at the moment it happens, independent of whatever the calling code decided. This holds for both host and package capabilities: a scoped `host.http.request` grant is checked against the real outbound host at the point `std.http` makes the request, not against anything decided when the action was defined.
 
+### Provider-operation declarations
+
+A package provider attaches its checked capability requirement to an authority-bearing callable with exactly one `@provider_operation(...)` decorator argument:
+
+```incan
+capability refund:
+    description = "Issue a refund for a captured charge"
+
+@provider_operation(refund)
+pub def issue_refund(charge_id: str) -> None:
+    ...
+```
+
+The decorator argument is a capability reference, not a string. The compiler resolves it at the provider declaration and publishes the canonical callable-to-capability pair in the provider manifest. A missing reference, a non-capability reference, or multiple provider-operation decorators is a compiler diagnostic. Importing `issue_refund` remains ordinary source resolution and grants nothing. When a selected provider operation is invoked, its backend plan carries the checked pair to the authority and receipt contracts; it must not rederive either identity from the call spelling, provider name, or emitted Rust.
+
 ### Receipts
 
 A receipt is a structured runtime fact emitted by a capability-aware operation. A receipt must include:

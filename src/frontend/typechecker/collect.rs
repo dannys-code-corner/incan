@@ -250,6 +250,34 @@ impl TypeChecker {
             .record_function_overloads(local_name.to_string(), overloads.to_vec());
     }
 
+    /// Preserve the checked callable surface for an imported source binding.
+    ///
+    /// Local and imported functions both need a declaration-slot surface for later call lowering. The canonical
+    /// owner of an import is recorded separately, but its parameter facts must travel with the local binding too:
+    /// a caller cannot describe evaluated inputs against an identity alone. Overload bindings retain their existing
+    /// dedicated table because a bare source name cannot distinguish their declaration spans.
+    pub(in crate::frontend::typechecker) fn record_imported_function_binding(
+        &mut self,
+        local_name: &str,
+        kind: &SymbolKind,
+    ) {
+        match kind {
+            SymbolKind::Function(info) => {
+                self.type_info.declarations.function_bindings.insert(
+                    local_name.to_string(),
+                    FunctionBindingInfo {
+                        params: info.params.clone(),
+                        return_type: info.return_type.clone(),
+                    },
+                );
+            }
+            SymbolKind::FunctionOverloads(overloads) => {
+                self.record_function_overload_binding(local_name, overloads, true);
+            }
+            _ => {}
+        }
+    }
+
     /// Resolve an alias target path to the semantic symbol kind it projects.
     ///
     /// Single-segment targets use ordinary module-scope lookup. Qualified targets must begin with an imported module

@@ -618,6 +618,16 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 return self.unsupported_operand(description, scope, hir_span_value, out);
             }
         };
+
+        // A provider operation is selected by the canonical identity this call already resolved to, never by the
+        // spelling written here (#1213). The lookup therefore sits after resolution rather than in place of it, and
+        // a callee with no proven identity finds nothing rather than being guessed at by name.
+        if let Some(operation) = declaration.canonical.clone()
+            && let Some(record) = self.provider_operation_record(&operation)
+        {
+            return self.lower_provider_operation(&name, &operation, record, declaration, args, span, scope, out);
+        }
+
         let (operands, binding) =
             match self.bind_declared_args(&format!("function `{name}`"), declaration.slots, args, scope, out) {
                 Ok(bound) => bound,

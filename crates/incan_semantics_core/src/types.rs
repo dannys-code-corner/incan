@@ -5,6 +5,8 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// Read the arity of a Rust tuple type spelling, or `None` when the shape cannot be established.
 ///
 /// This is the single place the compiler decides whether an interop value is destructurable, shared by the
@@ -281,7 +283,7 @@ impl AbiV0Ownership {
 }
 
 /// Runtime service hooks that a type may require.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AbiV0RuntimeRequirement {
     RuntimeHelper(String),
     HostedStd,

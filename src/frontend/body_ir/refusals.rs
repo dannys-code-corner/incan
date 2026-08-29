@@ -18,6 +18,52 @@ pub(super) fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
         _ => "statement".to_string(),
     }
 }
+/// Why an admitted provider operation cannot become a checked execution plan, or `None` when it can (#1213).
+///
+/// Consulted once, before any argument of the call is lowered, so a refusal never leaves the operands of a call that
+/// never happens behind -- the same "check before partially lowering" precedent as [`match_pattern_is_supported`].
+/// Refusing here rather than emitting a plan is what makes the "no execution receipt for a lowering refusal"
+/// guarantee structural: with no [`bir::Callee::ProviderOperation`] statement there is nothing for an executor to
+/// run, and nothing for it to report having run.
+///
+/// Two independent things make an operation unexecutable, and both are checked.
+///
+/// **Activation.** Only an active provider may be planned against. A disabled or unavailable provider is a real
+/// entry in the catalog, so the call did resolve; what it did not do is reach something this compilation can
+/// execute, and the two states are named separately because they have different remedies.
+///
+/// **Capability identity.** The plan promises that [`bir::ProviderOperationPlan::required_capability`] names an RFC
+/// 104 `capability` declaration, which is what makes an authority request answerable. An identity of any other kind
+/// -- a function, a model, a module -- would produce a request no authority source could decide, so it is refused
+/// here rather than carried into a plan that quietly cannot be authorized.
+///
+/// The message names the *declaration* the identity selected, never the call site's spelling: which operation this
+/// is, is a question only the canonical identity answers.
+pub(super) fn unsupported_provider_operation(
+    operation: &CanonicalSymbolId,
+    record: &ProviderOperationRecord,
+) -> Option<String> {
+    let declared = &operation.declaration_name;
+    match record.provider.state {
+        bir::ProviderActivationState::Active => {}
+        bir::ProviderActivationState::Disabled => {
+            return Some(format!(
+                "provider operation `{declared}` whose provider is not enabled in this compilation"
+            ));
+        }
+        bir::ProviderActivationState::Unavailable => {
+            return Some(format!(
+                "provider operation `{declared}` whose provider has no locally available artifact"
+            ));
+        }
+    }
+    if record.required_capability.kind != SemanticSourceTargetKind::Capability {
+        return Some(format!(
+            "provider operation `{declared}` whose required authority does not name a capability declaration"
+        ));
+    }
+    None
+}
 /// Short diagnostic label for an expression kind v0 does not lower.
 ///
 /// Only reached from [`BodyBuilder::lower_expr_to_operand`]'s fallback arm, so every expression kind that arm

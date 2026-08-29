@@ -22452,6 +22452,75 @@ fn a_capability_symbol_carries_the_canonical_capability_identity_kind() {
     );
 }
 
+/// Provider-operation metadata is a checked declaration fact, not a naming convention reconstructed by Body IR.
+#[test]
+fn provider_operation_decorator_resolves_and_records_its_capability_identity() -> Result<(), String> {
+    let source = r#"
+capability charge_card:
+    description = "Charge one approved card"
+
+@provider_operation(charge_card)
+pub def charge(amount: int) -> int:
+    return amount
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["ledger".to_string(), "api".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("provider operation should typecheck: {errs:?}"))?;
+
+    let operations = &checker.type_info().declarations.provider_operations;
+    let collected = operations.values().collect::<Vec<_>>();
+    let [operation] = collected.as_slice() else {
+        return Err(format!("expected one checked provider operation, got {operations:?}"));
+    };
+    assert_eq!(operation.operation.kind, SemanticSourceTargetKind::Function);
+    assert_eq!(
+        operation.operation.module_path(),
+        Some(vec!["ledger".to_string(), "api".to_string()].as_slice())
+    );
+    assert_eq!(operation.operation.declaration_name, "charge");
+    assert_eq!(operation.required_capability.kind, SemanticSourceTargetKind::Capability);
+    assert_eq!(
+        operation.required_capability.module_path(),
+        Some(vec!["ledger".to_string(), "api".to_string()].as_slice())
+    );
+    assert_eq!(operation.required_capability.declaration_name, "charge_card");
+    assert!(operation.runtime_requirements.is_empty());
+    Ok(())
+}
+
+/// A provider operation may only name a resolved RFC 104 capability, never a callable or a stringly value.
+#[test]
+fn provider_operation_decorator_rejects_a_non_capability_reference() -> Result<(), String> {
+    let source = r#"
+def not_a_capability() -> int:
+    return 1
+
+@provider_operation(not_a_capability)
+def charge(amount: int) -> int:
+    return amount
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["ledger".to_string(), "api".to_string()]));
+    let errors = checker
+        .check_program(&program)
+        .err()
+        .ok_or("a non-capability provider-operation reference must fail")?;
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("does not name a capability")),
+        "unexpected diagnostics: {errors:?}"
+    );
+    assert!(checker.type_info().declarations.provider_operations.is_empty());
+    Ok(())
+}
+
 /// A capability names an authority, so a bare reference to one is never a value use.
 #[test]
 fn referencing_a_capability_as_a_value_is_rejected() {
