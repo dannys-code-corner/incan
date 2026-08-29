@@ -244,6 +244,254 @@ fn lowers_a_non_copy_binding_and_skips_the_drop_when_moved_via_return() -> Resul
     Ok(())
 }
 
+// ========================================================================
+// #1160 -- power, bitwise, shift, membership, and identity operators
+// ========================================================================
+
+/// Lower one `def f(...)` body over `source` and return its rendered snapshot.
+///
+/// The operator tests below all assert against a single function body, so folding "build, find `f`, render" into
+/// one call keeps each test's body about the operator rather than about the scaffolding.
+fn rendered_f(source: &str, module_leaf: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let module = build(source, &["m", module_leaf])?;
+    Ok(body_named(&module, "f")?.render_snapshot())
+}
+
+#[test]
+fn lowers_the_power_operator_as_a_primitive_keeping_the_checked_float_promotion()
+-> Result<(), Box<dyn std::error::Error>> {
+    // `int ** int` resolves `float`: the typechecker owns that promotion and lowering must carry its answer onto
+    // the assigned temporary rather than re-deriving a result type from the operator.
+    let rendered = rendered_f("def f(a: int, b: int) -> float:\n  return a ** b\n", "pow")?;
+
+    assert!(
+        rendered.contains("_2 = copy(_0) ** copy(_1)"),
+        "`**` must lower as a primitive binary op: {rendered}"
+    );
+    assert!(
+        rendered.contains("local 2 <tmp> : float"),
+        "the checked `float` result of `int ** int` must survive onto the temporary: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn lowers_the_bitwise_and_shift_operators_as_primitives_keeping_the_checked_int_result()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (spelling, module_leaf) in [
+        ("&", "bitand"),
+        ("|", "bitor"),
+        ("^", "bitxor"),
+        ("<<", "shl"),
+        (">>", "shr"),
+    ] {
+        let source = format!("def f(a: int, b: int) -> int:\n  return a {spelling} b\n");
+        let rendered = rendered_f(&source, module_leaf)?;
+
+        assert!(
+            rendered.contains(&format!("_2 = copy(_0) {spelling} copy(_1)")),
+            "`{spelling}` must lower as a primitive binary op over both operands: {rendered}"
+        );
+        assert!(
+            rendered.contains("local 2 <tmp> : int"),
+            "`int {spelling} int` must keep its checked `int` result: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn lowers_identity_operators_distinctly_from_equality() -> Result<(), Box<dyn std::error::Error>> {
+    // The Rust-emission backend currently emits `is`/`is not` exactly like `==`/`!=`. Body IR must still record
+    // which operator the source wrote -- it is the representation any later identity/equality split gets decided
+    // against, and a collapsed `is` leaves nothing to decide from.
+    let is_rendered = rendered_f("def f(a: int, b: int) -> bool:\n  return a is b\n", "is_op")?;
+    assert!(
+        is_rendered.contains("_2 = copy(_0) is copy(_1)"),
+        "`is` must lower as its own operator: {is_rendered}"
+    );
+    assert!(
+        !is_rendered.contains("=="),
+        "`is` must not be collapsed into equality: {is_rendered}"
+    );
+
+    let is_not_rendered = rendered_f("def f(a: int, b: int) -> bool:\n  return a is not b\n", "is_not_op")?;
+    assert!(
+        is_not_rendered.contains("_2 = copy(_0) is not copy(_1)"),
+        "`is not` must lower as its own operator: {is_not_rendered}"
+    );
+    assert!(
+        !is_not_rendered.contains("!="),
+        "`is not` must not be collapsed into inequality: {is_not_rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn lowers_string_membership_as_an_explicit_helper_call_with_its_runtime_requirement()
+-> Result<(), Box<dyn std::error::Error>> {
+    // This is the Body IR representation `parity-987-0003` was missing. That row records string `in` as
+    // `Preserved` -- the runtime helper's substring policy -- but evaluates through the stdlib-runtime evidence
+    // lane, so nothing proved the behavior was expressible here at all. An explicit `Callee::Helper` call with a
+    // recorded runtime requirement is what closes that gap: the substring choice is now a represented fact rather
+    // than something a reader has to infer from the operand types.
+    let rendered = rendered_f(
+        "def f(hay: str, needle: str) -> bool:\n  return needle in hay\n",
+        "str_in",
+    )?;
+
+    // Operands stay in source order, so the call reads `(needle, haystack)` -- the reverse of
+    // `incan_core::strings::str_contains`'s own parameter order, which `HelperOp::StrContains` documents.
+    assert!(
+        rendered.contains("_2 = call helper:str_contains(move(_1, last_use), move(_0, last_use))"),
+        "string `in` must lower to an explicit helper call carrying the needle then the haystack: {rendered}"
+    );
+    assert!(
+        rendered.contains("runtime_helper(str_contains)"),
+        "the helper call must record its runtime requirement: {rendered}"
+    );
+    assert!(
+        !rendered.contains("unsupported("),
+        "string membership must not fall back to a placeholder: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn lowers_negated_string_membership_as_its_own_helper_rather_than_a_wrapped_negation()
+-> Result<(), Box<dyn std::error::Error>> {
+    // One source operator stays one Body IR operation, following the `str_eq`/`str_ne` pair: a consumer reading
+    // this call knows the source wrote `not in` without having to recognize a negation wrapper around `in`.
+    let rendered = rendered_f(
+        "def f(hay: str, needle: str) -> bool:\n  return needle not in hay\n",
+        "str_not_in",
+    )?;
+
+    assert!(
+        rendered.contains("_2 = call helper:str_not_contains(move(_1, last_use), move(_0, last_use))"),
+        "string `not in` must lower to its own helper call: {rendered}"
+    );
+    assert!(
+        rendered.contains("runtime_helper(str_not_contains)"),
+        "the negated membership helper must record its own runtime requirement: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn collection_membership_is_refused_rather_than_lowered_as_a_primitive() -> Result<(), Box<dyn std::error::Error>> {
+    // Membership over a collection is `haystack.contains(needle)` -- a receiver-shaped call, not a two-operand
+    // helper -- so it needs the collection-operation path that also leaves `HelperOp::ListConcat` unproduced.
+    // Until that exists the honest answer is a placeholder: representing it with a primitive comparison, or
+    // reusing the string substring helper, would both silently answer a different question.
+    for (spelling, module_leaf, label) in [("in", "list_in", "In"), ("not in", "list_not_in", "NotIn")] {
+        let source = format!("def f(xs: List[int], v: int) -> bool:\n  return v {spelling} xs\n");
+        let rendered = rendered_f(&source, module_leaf)?;
+
+        assert!(
+            rendered.contains(&format!("unsupported(binary operator {label})")),
+            "collection `{spelling}` must refuse explicitly: {rendered}"
+        );
+        assert!(
+            !rendered.contains("str_contains"),
+            "collection `{spelling}` must not borrow the string substring policy: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn lowers_every_bitwise_and_shift_compound_assignment_as_a_read_modify_write() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Each `<op>=` form must produce exactly the operator its binary spelling produces, plus a write back to the
+    // same local -- the compound path shares `lower_binary_from_operands` precisely so the two cannot drift.
+    let source = "def f() -> int:\n  mut v = 8\n  v &= 3\n  v |= 4\n  v ^= 1\n  v <<= 2\n  v >>= 1\n  return v\n";
+    let rendered = rendered_f(source, "compound_bits")?;
+
+    for (index, (spelling, operand)) in [("&", 3), ("|", 4), ("^", 1), ("<<", 2), (">>", 1)].iter().enumerate() {
+        let temp = index + 1;
+        assert!(
+            rendered.contains(&format!("_{temp} = copy(_0) {spelling} const({operand})")),
+            "`{spelling}=` must combine the current value with the right operand: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("_0 = copy(_{temp}, last_use)")),
+            "`{spelling}=` must write the result back to the assigned local: {rendered}"
+        );
+    }
+    assert!(
+        !rendered.contains("unsupported("),
+        "no bitwise or shift compound form may fall back: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_compound_assignment_through_an_operator_hook_is_refused_by_name() -> Result<(), Box<dyn std::error::Error>> {
+    // `v &= w` on a type with `__and__` is a method call. Now that `&` has a primitive `BinOp`, combining the
+    // operands here would claim a machine operation the source never asked for -- the wrong-representation
+    // failure `lower_binary` already guards against for the binary spelling. Body IR has no place-targeted
+    // dispatch form yet, so the refusal names the hook it would have to call.
+    let source = "model Box:\n  value: int\n\n  def __and__(self, other: Box) -> Box:\n    return Box(value=self.value & other.value)\n\ndef f() -> int:\n  mut v = Box(value=1)\n  v &= Box(value=2)\n  return v.value\n";
+    let rendered = rendered_f(source, "hook_compound")?;
+
+    assert!(
+        rendered.contains("unsupported(compound assignment through operator hook `__and__`)"),
+        "a hooked compound assignment must refuse by naming the method it would dispatch to: {rendered}"
+    );
+    assert!(
+        !rendered.contains("copy(_1) & "),
+        "it must not fall through to the primitive bitwise operator: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn matmul_reaches_lowering_as_a_resolved_method_call_rather_than_an_operator() -> Result<(), Box<dyn std::error::Error>>
+{
+    // #1160's refusal-boundary question, answered: `@` and both pipes are protocol hooks with no primitive form.
+    // The typechecker resolves them through `__matmul__` / `__pipe_forward__` / `__pipe_backward__` and rejects
+    // the expression outright when no hook resolves, so a well-typed program always arrives here with a recorded
+    // dispatch. They need no operator-table entry and carry no refusal -- and so no `Disposition::Unsupported`
+    // corpus row, which would otherwise have needed an owner.
+    let source = "@derive(Debug)\nmodel Vec2:\n  x: int\n  y: int\n\n  def __matmul__(self, other: Vec2) -> Vec2:\n    return Vec2(x=self.x * other.x, y=self.y * other.y)\n\ndef f(a: Vec2, b: Vec2) -> Vec2:\n  return a @ b\n";
+    let rendered = rendered_f(source, "matmul")?;
+
+    assert!(
+        rendered.contains("call method:__matmul__ unbound(borrow(_0), move(_1, last_use))"),
+        "`@` must lower as the method the typechecker resolved, receiver borrowed: {rendered}"
+    );
+    assert!(
+        !rendered.contains("unsupported("),
+        "`@` must not reach the operator table at all: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn the_shift_and_power_operators_record_no_panic_fact() -> Result<(), Box<dyn std::error::Error>> {
+    // A stated decision, not an omission. `**` and the shifts can only trap by exceeding the result width, which
+    // is the same arithmetic-overflow class as `+`, `-`, and `*` -- none of which record a fact either. Recording
+    // one here would claim these three operators fail in a way ordinary arithmetic does not.
+    let rendered = rendered_f(
+        "def f(a: int, b: int) -> int:\n  return (a << b) + (a >> b)\n",
+        "shift_panics",
+    )?;
+    assert!(
+        !rendered.contains("panic_facts:"),
+        "shifts must not record a panic fact: {rendered}"
+    );
+
+    // The contrast that gives that decision meaning: floor division, whose divisor may be zero on every build
+    // profile, still records one.
+    let divide = rendered_f("def f(a: int, b: int) -> int:\n  return a // b\n", "div_panics")?;
+    assert!(
+        divide.contains("division_or_modulo"),
+        "division must still record its panic fact: {divide}"
+    );
+    Ok(())
+}
+
 #[test]
 fn lowers_a_clone_when_a_non_copy_binding_is_read_more_than_once() -> Result<(), Box<dyn std::error::Error>> {
     let source = "def dup(s: str) -> str:\n  first = s\n  return s\n";
