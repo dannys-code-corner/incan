@@ -31,7 +31,7 @@ fn workspace_root() -> Result<PathBuf, String> {
     if manifest_root.join("Cargo.toml").is_file() && manifest_root.join("crates/incan_stdlib/stdlib").is_dir() {
         return Ok(manifest_root);
     }
-    Err("could not locate an Incan workspace with checked std.capabilities source".to_string())
+    Err("could not locate an Incan workspace with checked std.features source".to_string())
 }
 
 /// Return the nearest Incan workspace above the process directory before considering an ambient source-root override.

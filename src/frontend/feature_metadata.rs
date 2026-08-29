@@ -9,13 +9,13 @@ use std::collections::BTreeMap;
 
 use crate::frontend::registry_metadata::{CheckedRegistryEntry, CheckedRegistryMetadataPackage, CheckedRegistryValue};
 
-/// One public `std.capabilities` descriptor decoded from checked registry metadata.
+/// One public `std.features` descriptor decoded from checked registry metadata.
 ///
-/// The fields mirror the Incan-authored `CapabilityDescriptor` contract. This Rust value is a read-only projection:
+/// The fields mirror the Incan-authored `FeatureDescriptor` contract. This Rust value is a read-only projection:
 /// it must not become a second authority for public capability descriptions or transient backend status.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct PublicCapabilityDescriptor {
-    /// Stable Incan-authored `CapabilityId` string.
+pub(crate) struct PublicFeatureDescriptor {
+    /// Stable Incan-authored `FeatureId` string.
     pub id: String,
     /// Human-readable public capability name.
     pub name: String,
@@ -39,43 +39,61 @@ pub(crate) struct PublicCapabilityDescriptor {
     pub references: Vec<(String, String)>,
 }
 
-/// Decode every descriptor in the checked `std.capabilities` registry.
+/// Return whether a registry identity names the standard-library feature catalogue, under either spelling.
+///
+/// The catalogue was renamed from `capabilities` to `features` so that "capability" means one thing (see #1228). A
+/// registry identity is `module::static`, so that rename is *observable in checked metadata* -- and the frozen v0.5.0
+/// migration baseline legitimately still carries the old spelling, because a baseline records what that release
+/// actually was. Both are accepted here rather than rewriting the baseline, which would falsify it.
+fn is_feature_registry_identity(identity: &str) -> bool {
+    identity == "features::features" || identity == "capabilities::capabilities"
+}
+
+/// Decode every descriptor in the checked `std.features` registry.
 ///
 /// The checked package may include other modules and registries. Only the canonical
-/// `capabilities::capabilities` registry is selected, preserving the checked entry order so existing public
+/// `features::features` registry is selected, preserving the checked entry order so existing public
 /// projections do not acquire an unrelated presentation order.
-pub(crate) fn public_capability_descriptors(
+pub(crate) fn public_feature_descriptors(
     package: &CheckedRegistryMetadataPackage,
-) -> Result<Vec<PublicCapabilityDescriptor>, String> {
+) -> Result<Vec<PublicFeatureDescriptor>, String> {
     let Some(module) = package.modules.iter().find(|module| {
         module
             .registries
             .iter()
-            .any(|registry| registry.identity == "capabilities::capabilities")
+            .any(|registry| is_feature_registry_identity(&registry.identity))
     }) else {
-        return Err("checked std.capabilities registry was not found".to_string());
+        return Err("checked std.features registry was not found".to_string());
     };
     let entries = module
         .entries
         .iter()
-        .filter(|entry| entry.registry_identity == "capabilities::capabilities")
+        .filter(|entry| is_feature_registry_identity(&entry.registry_identity))
         .map(public_capability_descriptor)
         .collect::<Result<Vec<_>, _>>()?;
     if entries.is_empty() {
-        return Err("checked std.capabilities inventory must contain at least one entry".to_string());
+        return Err("checked std.features inventory must contain at least one entry".to_string());
     }
     Ok(entries)
 }
 
-/// Decode one checked `CapabilityDescriptor` without accepting a runtime-shaped substitute.
-fn public_capability_descriptor(entry: &CheckedRegistryEntry) -> Result<PublicCapabilityDescriptor, String> {
-    let fields = checked_model_fields(&entry.descriptor, "CapabilityDescriptor")?;
-    let id = checked_newtype_string(checked_required_field(&fields, "id")?, "CapabilityId")?;
+/// Decode one checked `FeatureDescriptor` without accepting a runtime-shaped substitute.
+fn public_capability_descriptor(entry: &CheckedRegistryEntry) -> Result<PublicFeatureDescriptor, String> {
+    let fields = checked_model_fields_either(&entry.descriptor, "FeatureDescriptor", "CapabilityDescriptor")?;
+    let id = checked_newtype_string_either(checked_required_field(&fields, "id")?, "FeatureId", "CapabilityId")?;
     let name = checked_string(checked_required_field(&fields, "name")?)?;
-    let category = checked_enum_variant(checked_required_field(&fields, "category")?, "CapabilityCategory")?;
+    let category = checked_enum_variant_either(
+        checked_required_field(&fields, "category")?,
+        "FeatureCategory",
+        "CapabilityCategory",
+    )?;
     let since = checked_string(checked_required_field(&fields, "since")?)?;
     let rfc = checked_string(checked_required_field(&fields, "rfc")?)?;
-    let stability = checked_enum_variant(checked_required_field(&fields, "stability")?, "CapabilityStability")?;
+    let stability = checked_enum_variant_either(
+        checked_required_field(&fields, "stability")?,
+        "FeatureStability",
+        "CapabilityStability",
+    )?;
     let activation = checked_string(checked_required_field(&fields, "activation")?)?;
     let summary = checked_string(checked_required_field(&fields, "summary")?)?;
     let canonical_forms = checked_list(checked_required_field(&fields, "canonical_forms")?)?
@@ -93,7 +111,7 @@ fn public_capability_descriptor(entry: &CheckedRegistryEntry) -> Result<PublicCa
             ))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(PublicCapabilityDescriptor {
+    Ok(PublicFeatureDescriptor {
         id,
         name,
         category,
@@ -109,6 +127,35 @@ fn public_capability_descriptor(entry: &CheckedRegistryEntry) -> Result<PublicCa
 }
 
 /// Return the named fields of a checked model after verifying the descriptor type.
+/// Decode a checked model's fields, accepting either the current or the pre-#1228 model name.
+///
+/// See [`is_feature_registry_identity`]: the frozen v0.5.0 baseline carries the old spelling and must stay readable.
+fn checked_model_fields_either(
+    value: &CheckedRegistryValue,
+    expected_name: &str,
+    legacy_name: &str,
+) -> Result<BTreeMap<String, CheckedRegistryValue>, String> {
+    checked_model_fields(value, expected_name).or_else(|_| checked_model_fields(value, legacy_name))
+}
+
+/// Decode a checked enum variant, accepting either the current or the pre-#1228 enum name.
+fn checked_enum_variant_either(
+    value: &CheckedRegistryValue,
+    expected_name: &str,
+    legacy_name: &str,
+) -> Result<String, String> {
+    checked_enum_variant(value, expected_name).or_else(|_| checked_enum_variant(value, legacy_name))
+}
+
+/// Decode a checked newtype string, accepting either the current or the pre-#1228 newtype name.
+fn checked_newtype_string_either(
+    value: &CheckedRegistryValue,
+    expected_name: &str,
+    legacy_name: &str,
+) -> Result<String, String> {
+    checked_newtype_string(value, expected_name).or_else(|_| checked_newtype_string(value, legacy_name))
+}
+
 fn checked_model_fields(
     value: &CheckedRegistryValue,
     expected_name: &str,
@@ -132,7 +179,7 @@ fn checked_required_field<'a>(
 ) -> Result<&'a CheckedRegistryValue, String> {
     fields
         .get(name)
-        .ok_or_else(|| format!("CapabilityDescriptor is missing `{name}`"))
+        .ok_or_else(|| format!("FeatureDescriptor is missing `{name}`"))
 }
 
 /// Extract an exact checked string value.

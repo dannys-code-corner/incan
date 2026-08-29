@@ -148,7 +148,7 @@ pub(crate) fn is_interop_native_library_name(name: &str) -> bool {
 /// A compiler or SDK capability accepted by one package target.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
-pub struct CapabilityRequirement {
+pub struct ToolchainRequirement {
     /// Stable capability identity resolved by Oven.
     pub capability: String,
     /// Optional compatible version requirement, not a claim about the locally selected version.
@@ -156,7 +156,7 @@ pub struct CapabilityRequirement {
     pub version: Option<String>,
 }
 
-impl CapabilityRequirement {
+impl ToolchainRequirement {
     /// Reject an empty capability or a version expression outside the supported semantic-version requirement grammar.
     fn validate(&self, label: &str) -> Result<(), String> {
         if self.capability.trim().is_empty() {
@@ -195,10 +195,10 @@ pub struct OvenInteropTarget {
     pub target: String,
     /// Optional compatible Clang-family capability; Oven records the selected executable separately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolchain: Option<CapabilityRequirement>,
+    pub toolchain: Option<ToolchainRequirement>,
     /// Optional compatible SDK capability; Oven records the selected SDK and sysroot separately.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sdk: Option<CapabilityRequirement>,
+    pub sdk: Option<ToolchainRequirement>,
     /// Platform facts that complete a mobile target's ABI and deployment requirements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<InteropTargetPlatform>,
@@ -313,7 +313,7 @@ fn validate_target_platform(platform: &InteropTargetPlatform, target: &OvenInter
 
 /// Require a mobile profile to name the SDK capability whose concrete installation Oven will later select.
 fn validate_sdk_capability(
-    sdk: Option<&CapabilityRequirement>,
+    sdk: Option<&ToolchainRequirement>,
     expected: &str,
     platform: &str,
     target: &str,
@@ -496,10 +496,10 @@ pub struct LockedInteropTarget {
     pub target: String,
     /// Compatible toolchain capability requested by the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub toolchain: Option<CapabilityRequirement>,
+    pub toolchain: Option<ToolchainRequirement>,
     /// Compatible SDK capability requested by the package.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub sdk: Option<CapabilityRequirement>,
+    pub sdk: Option<ToolchainRequirement>,
     /// Target-platform facts retained for target-specific verification and deployment planning.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform: Option<InteropTargetPlatform>,
@@ -601,10 +601,10 @@ pub(crate) struct InteropDeploymentPlan {
     pub(crate) target: String,
     /// Compatible toolchain requirement retained from the canonical lock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) toolchain: Option<CapabilityRequirement>,
+    pub(crate) toolchain: Option<ToolchainRequirement>,
     /// Compatible SDK requirement retained from the canonical lock.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) sdk: Option<CapabilityRequirement>,
+    pub(crate) sdk: Option<ToolchainRequirement>,
     /// Platform version facts needed by a later Gradle or Xcode adapter.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) platform: Option<InteropDeploymentPlatform>,
@@ -1253,9 +1253,9 @@ fn lock_interop_target(root: &Path, target: &OvenInteropTarget) -> Result<Locked
         toolchain: target
             .toolchain
             .as_ref()
-            .map(CapabilityRequirement::normalized)
+            .map(ToolchainRequirement::normalized)
             .transpose()?,
-        sdk: target.sdk.as_ref().map(CapabilityRequirement::normalized).transpose()?,
+        sdk: target.sdk.as_ref().map(ToolchainRequirement::normalized).transpose()?,
         platform: target.platform.clone(),
         definitions,
         headers,
@@ -1489,11 +1489,11 @@ output = "fixture_bridge"
     fn interop_deployment_plan_carries_bundled_runtime_placement() -> Result<(), Box<dyn std::error::Error>> {
         let plan = interop_deployment_plan(&LockedInteropTarget {
             target: "aarch64-linux-android".to_string(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "android-ndk".to_string(),
                 version: Some(">=29, <30".to_string()),
             }),
-            sdk: Some(CapabilityRequirement {
+            sdk: Some(ToolchainRequirement {
                 capability: "android".to_string(),
                 version: Some(">=36, <37".to_string()),
             }),
@@ -1537,11 +1537,11 @@ output = "fixture_bridge"
     fn interop_artifact_dependency_cycles_are_rejected() {
         let target = OvenInteropTarget {
             target: "aarch64-linux-android".to_string(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "android-ndk".to_string(),
                 version: Some(">=29, <30".to_string()),
             }),
-            sdk: Some(CapabilityRequirement {
+            sdk: Some(ToolchainRequirement {
                 capability: "android".to_string(),
                 version: Some(">=36, <37".to_string()),
             }),
@@ -1604,7 +1604,7 @@ output = "fixture_bridge"
             schema: OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![OvenInteropTarget {
                 target: "x86_64-unknown-linux-gnu".to_string(),
-                toolchain: Some(CapabilityRequirement {
+                toolchain: Some(ToolchainRequirement {
                     capability: "clang".to_string(),
                     version: Some("eighteen-ish".to_string()),
                 }),
@@ -1623,7 +1623,7 @@ output = "fixture_bridge"
             schema: OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![OvenInteropTarget {
                 target: "x86_64-unknown-linux-gnu".to_string(),
-                toolchain: Some(CapabilityRequirement {
+                toolchain: Some(ToolchainRequirement {
                     capability: "clang".to_string(),
                     version: Some(">=18, <19".to_string()),
                 }),
@@ -1643,7 +1643,7 @@ output = "fixture_bridge"
             targets: vec![OvenInteropTarget {
                 target: "x86_64-apple-darwin".to_string(),
                 toolchain: None,
-                sdk: Some(CapabilityRequirement {
+                sdk: Some(ToolchainRequirement {
                     capability: "macosx".to_string(),
                     version: Some(">=15, <16".to_string()),
                 }),
@@ -1760,11 +1760,11 @@ output = "fixture_bridge"
             schema: OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![OvenInteropTarget {
                 target: "aarch64-linux-android".to_string(),
-                toolchain: Some(CapabilityRequirement {
+                toolchain: Some(ToolchainRequirement {
                     capability: "android-ndk".to_string(),
                     version: Some(">=29, <30".to_string()),
                 }),
-                sdk: Some(CapabilityRequirement {
+                sdk: Some(ToolchainRequirement {
                     capability: "android".to_string(),
                     version: Some(">=36, <37".to_string()),
                 }),
@@ -1782,11 +1782,11 @@ output = "fixture_bridge"
             schema: OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![OvenInteropTarget {
                 target: "aarch64-apple-ios".to_string(),
-                toolchain: Some(CapabilityRequirement {
+                toolchain: Some(ToolchainRequirement {
                     capability: "apple-clang".to_string(),
                     version: Some(">=17, <18".to_string()),
                 }),
-                sdk: Some(CapabilityRequirement {
+                sdk: Some(ToolchainRequirement {
                     capability: "iphoneos".to_string(),
                     version: Some(">=18, <19".to_string()),
                 }),
@@ -1804,7 +1804,7 @@ output = "fixture_bridge"
 
         let mut apple_simulator = apple.clone();
         apple_simulator.targets[0].target = "aarch64-apple-ios-sim".to_string();
-        apple_simulator.targets[0].sdk = Some(CapabilityRequirement {
+        apple_simulator.targets[0].sdk = Some(ToolchainRequirement {
             capability: "iphonesimulator".to_string(),
             version: Some(">=18, <19".to_string()),
         });
@@ -1819,7 +1819,7 @@ output = "fixture_bridge"
         );
 
         let mut wrong_android_sdk = android;
-        wrong_android_sdk.targets[0].sdk = Some(CapabilityRequirement {
+        wrong_android_sdk.targets[0].sdk = Some(ToolchainRequirement {
             capability: "iphoneos".to_string(),
             version: Some(">=18, <19".to_string()),
         });
@@ -1838,7 +1838,7 @@ output = "fixture_bridge"
         );
 
         let mut wrong_simulator_sdk = apple_simulator;
-        wrong_simulator_sdk.targets[0].sdk = Some(CapabilityRequirement {
+        wrong_simulator_sdk.targets[0].sdk = Some(ToolchainRequirement {
             capability: "iphoneos".to_string(),
             version: Some(">=18, <19".to_string()),
         });

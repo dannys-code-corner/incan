@@ -1,6 +1,6 @@
 //! Replacement compatibility control-plane collector.
 //!
-//! The public `std.capabilities` registry remains the authority for user-facing capability descriptions. This module
+//! The public `std.features` registry remains the authority for user-facing capability descriptions. This module
 //! collects feature and implementation-requirement registrations from the compiler boundaries that own them. During
 //! the 0.5-to-replacement migration, it also carries a deliberately temporary bootstrap crosswalk for work that has
 //! not yet reached an owning implementation boundary. The collector makes that debt and its retirement conditions
@@ -18,20 +18,27 @@ use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use thiserror::Error;
 
-use crate::frontend::capability_metadata::{PublicCapabilityDescriptor, public_capability_descriptors};
+use crate::frontend::feature_metadata::{PublicFeatureDescriptor, public_feature_descriptors};
 
 const BASELINE_MANIFEST: &str = include_str!("replacement_compatibility/migration_baselines/v0.5.0/manifest.json");
 const FROZEN_V0_5_CAPABILITIES_SOURCE: &[u8] =
     include_bytes!("replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn");
 const FROZEN_V0_5_CAPABILITIES_PATH: &str =
     "src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn";
-const LIVE_CAPABILITIES_SOURCE: &str = "crates/incan_stdlib/stdlib/capabilities.incn";
+const LIVE_FEATURES_SOURCE: &str = "crates/incan_stdlib/stdlib/features.incn";
+
+/// The same catalogue's path *at the v0.5.0 tag*, before the #1228 rename.
+///
+/// The release pin is verified by reading the blob out of that tag, so it has to name the file as that tag spells it.
+/// Using the live path here would silently find nothing and pin against an empty result.
+#[cfg(test)]
+const FEATURES_SOURCE_AT_V0_5: &str = "crates/incan_stdlib/stdlib/capabilities.incn";
 const COMPLETED_COMPARISON_INFRASTRUCTURE_ISSUE: u32 = 1146;
 
 /// Version of the machine-readable replacement compatibility inventory document.
 ///
 /// Bump this whenever the serialized document's field shape or a serialized enum contract changes. The public
-/// `std.capabilities` registry remains independently versioned and is not governed by this projection version.
+/// `std.features` registry remains independently versioned and is not governed by this projection version.
 pub const REPLACEMENT_COMPATIBILITY_INVENTORY_SCHEMA_VERSION: u32 = 4;
 
 /// Lifecycle of one input to the replacement compatibility collector.
@@ -90,14 +97,14 @@ pub(crate) struct ReplacementCompatibilityContribution {
     pub(crate) source: CompatibilityRegistrationSource,
     pub(crate) features: Vec<CompatibilityFeature>,
     pub(crate) requirements: Vec<ImplementationRequirement>,
-    pub(crate) capability_links: Vec<PublicCapabilityFeatureLink>,
+    pub(crate) feature_links: Vec<PublicFeatureLink>,
     pub(crate) requirement_links: Vec<FeatureRequirementLink>,
 }
 
 /// Purpose of a frozen release source in the compatibility collector.
 ///
 /// This is intentionally not a general historical-registry taxonomy. A new release snapshot needs an explicit
-/// migration use case; the normal source of truth remains the present-tense checked `std.capabilities` registry.
+/// migration use case; the normal source of truth remains the present-tense checked `std.features` registry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReleaseBaselineRole {
     /// A temporary coverage ruler for the 0.5-to-replacement migration.
@@ -124,7 +131,7 @@ pub struct ReleasePin {
     pub role: ReleaseBaselineRole,
     /// Semantic version tag that owns this immutable compatibility target.
     pub tag: String,
-    /// Commit that carries the released `std.capabilities` source.
+    /// Commit that carries the released `std.features` source.
     pub revision: String,
     /// Git blob ID for the exact authored capability-registry source bytes.
     pub source_blob: String,
@@ -136,12 +143,12 @@ pub struct ReleasePin {
     pub retirement_condition: String,
 }
 
-/// A public capability record produced from checked `std.capabilities` metadata.
+/// A public capability record produced from checked `std.features` metadata.
 ///
 /// This is a snapshot projection, not a writable replacement for the Incan-authored public registry.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PublicCapabilityRecord {
-    /// Stable `CapabilityId` selected by the Incan-authored registry.
+pub struct PublicFeatureRecord {
+    /// Stable `FeatureId` selected by the Incan-authored registry.
     pub id: String,
     /// User-facing capability name.
     pub name: String,
@@ -173,7 +180,7 @@ pub struct PublicCapabilityBaseline {
     /// Immutable release/source identity used to reject silent target drift.
     pub release: ReleasePin,
     /// Every public descriptor decoded from the pinned checked metadata source.
-    pub capabilities: Vec<PublicCapabilityRecord>,
+    pub capabilities: Vec<PublicFeatureRecord>,
 }
 
 /// Historical landing-evidence state for one frozen public capability.
@@ -646,10 +653,10 @@ pub struct ImplementationRequirement {
     pub internal_only_rationale: &'static str,
 }
 
-/// One many-to-many relation from a public `CapabilityId` to a replacement compatibility feature.
+/// One many-to-many relation from a public `FeatureId` to a replacement compatibility feature.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PublicCapabilityFeatureLink {
-    /// Checked public `CapabilityId` from the release baseline.
+pub struct PublicFeatureLink {
+    /// Checked public `FeatureId` from the release baseline.
     pub capability_id: &'static str,
     /// Compiler-owned source-observable feature identity.
     pub feature_id: &'static str,
@@ -671,7 +678,7 @@ pub struct FeatureRequirementLink {
 /// Closed explanation for a baseline capability that intentionally has no direct feature relation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BaselineOutOfEnvelopeRationale {
-    /// Checked public `CapabilityId` that is intentionally outside the direct profile.
+    /// Checked public `FeatureId` that is intentionally outside the direct profile.
     pub capability_id: &'static str,
     /// Closed taxonomy category; unfinished execution is not an allowed category.
     pub category: OutOfEnvelopeCategory,
@@ -718,7 +725,7 @@ pub struct ReplacementCompatibilityRegistry {
     /// Private mechanisms shared by the contracts.
     pub requirements: Vec<ImplementationRequirement>,
     /// Public-capability to compatibility-feature relations.
-    pub capability_links: Vec<PublicCapabilityFeatureLink>,
+    pub feature_links: Vec<PublicFeatureLink>,
     /// Compatibility-feature to implementation-requirement relations.
     pub requirement_links: Vec<FeatureRequirementLink>,
     /// Closed taxonomy explanations for any baseline capability without a feature relation.
@@ -758,7 +765,7 @@ impl RegistryValidationError {
 /// Decode the frozen v0.5 release pin and derive its complete capability baseline from checked metadata.
 ///
 /// The committed snapshot is deliberately separate from the present-tense workspace
-/// `crates/incan_stdlib/stdlib/capabilities.incn`. Future public-registry edits therefore cannot alter or invalidate
+/// `crates/incan_stdlib/stdlib/features.incn`. Future public-registry edits therefore cannot alter or invalidate
 /// this released compatibility target. Descriptor field extraction still goes through the shared checked metadata
 /// path rather than a hand-maintained Rust list.
 pub fn checked_v0_5_public_capability_baseline() -> Result<PublicCapabilityBaseline, RegistryValidationError> {
@@ -798,10 +805,10 @@ pub fn checked_v0_5_public_capability_baseline_from_source(
         )]));
     }
     let package = collect_checked_registry_package(source)?;
-    let capabilities = public_capability_descriptors(&package)
+    let capabilities = public_feature_descriptors(&package)
         .map_err(|error| RegistryValidationError::from_messages(vec![error]))?
         .into_iter()
-        .map(public_capability_record)
+        .map(public_feature_record)
         .collect::<Vec<_>>();
     if capabilities.len() != manifest.release.expected_descriptor_count {
         return Err(RegistryValidationError::from_messages(vec![format!(
@@ -816,7 +823,7 @@ pub fn checked_v0_5_public_capability_baseline_from_source(
         .collect::<BTreeSet<_>>();
     if ids.len() != capabilities.len() {
         return Err(RegistryValidationError::from_messages(vec![
-            "checked v0.5 capability metadata contains duplicate CapabilityId values".to_string(),
+            "checked v0.5 capability metadata contains duplicate FeatureId values".to_string(),
         ]));
     }
     Ok(PublicCapabilityBaseline {
@@ -854,21 +861,21 @@ pub(crate) fn collect_replacement_compatibility_contributions(
     let mut registration_sources = Vec::with_capacity(contributions.len());
     let mut features = Vec::new();
     let mut requirements = Vec::new();
-    let mut capability_links = Vec::new();
+    let mut feature_links = Vec::new();
     let mut requirement_links = Vec::new();
     for contribution in contributions {
         registration_sources.push(contribution.source);
         features.extend(contribution.features);
         requirements.extend(contribution.requirements);
-        capability_links.extend(contribution.capability_links);
+        feature_links.extend(contribution.feature_links);
         requirement_links.extend(contribution.requirement_links);
     }
-    attach_frozen_source_anchors(&mut features, &capability_links);
+    attach_frozen_source_anchors(&mut features, &feature_links);
     ReplacementCompatibilityRegistry {
         registration_sources,
         features,
         requirements,
-        capability_links,
+        feature_links,
         requirement_links,
         out_of_envelope: Vec::new(),
     }
@@ -881,7 +888,7 @@ pub(crate) fn local_implementation_contribution(
     selector: &'static str,
     features: Vec<CompatibilityFeature>,
     requirements: Vec<ImplementationRequirement>,
-    capability_links: Vec<PublicCapabilityFeatureLink>,
+    feature_links: Vec<PublicFeatureLink>,
     requirement_links: Vec<FeatureRequirementLink>,
 ) -> ReplacementCompatibilityContribution {
     contribution(
@@ -892,7 +899,7 @@ pub(crate) fn local_implementation_contribution(
         None,
         features,
         requirements,
-        capability_links,
+        feature_links,
         requirement_links,
     )
 }
@@ -909,7 +916,7 @@ fn migration_bootstrap_contribution(
     retirement_condition: &'static str,
     features: Vec<CompatibilityFeature>,
     requirements: Vec<ImplementationRequirement>,
-    capability_links: Vec<PublicCapabilityFeatureLink>,
+    feature_links: Vec<PublicFeatureLink>,
     requirement_links: Vec<FeatureRequirementLink>,
 ) -> ReplacementCompatibilityContribution {
     contribution(
@@ -920,7 +927,7 @@ fn migration_bootstrap_contribution(
         Some(retirement_condition),
         features,
         requirements,
-        capability_links,
+        feature_links,
         requirement_links,
     )
 }
@@ -938,7 +945,7 @@ fn contribution(
     retirement_condition: Option<&'static str>,
     features: Vec<CompatibilityFeature>,
     requirements: Vec<ImplementationRequirement>,
-    capability_links: Vec<PublicCapabilityFeatureLink>,
+    feature_links: Vec<PublicFeatureLink>,
     requirement_links: Vec<FeatureRequirementLink>,
 ) -> ReplacementCompatibilityContribution {
     ReplacementCompatibilityContribution {
@@ -956,7 +963,7 @@ fn contribution(
         },
         features,
         requirements,
-        capability_links,
+        feature_links,
         requirement_links,
     }
 }
@@ -984,7 +991,7 @@ pub fn validate_replacement_compatibility_registry(
         .map(|capability| capability.id.as_str())
         .collect::<BTreeSet<_>>();
     if baseline_ids.len() != baseline.capabilities.len() {
-        errors.push("baseline has duplicate CapabilityId values".to_string());
+        errors.push("baseline has duplicate FeatureId values".to_string());
     }
     if baseline.capabilities.len() != baseline.release.expected_descriptor_count {
         errors.push(format!(
@@ -1022,7 +1029,7 @@ pub fn validate_replacement_compatibility_registry(
     );
 
     let mapped_capabilities = registry
-        .capability_links
+        .feature_links
         .iter()
         .filter(|link| baseline_ids.contains(link.capability_id))
         .map(|link| link.capability_id)
@@ -1040,7 +1047,7 @@ pub fn validate_replacement_compatibility_registry(
             ));
         }
     }
-    for link in &registry.capability_links {
+    for link in &registry.feature_links {
         if !baseline_ids.contains(link.capability_id) {
             errors.push(format!(
                 "capability link names unknown baseline ID `{}`",
@@ -1098,11 +1105,7 @@ pub fn validate_replacement_compatibility_registry(
         for probe in &feature.probes {
             validate_source_probe(feature, probe, workspace_root.as_deref(), &mut errors);
         }
-        if !registry
-            .capability_links
-            .iter()
-            .any(|link| link.feature_id == feature.id)
-        {
+        if !registry.feature_links.iter().any(|link| link.feature_id == feature.id) {
             errors.push(format!(
                 "compatibility feature `{}` lacks an incoming public-capability relation",
                 feature.id
@@ -1362,7 +1365,7 @@ fn validate_registration_sources(
 
 /// Validate typed historical landing state for one frozen public capability record.
 fn validate_landing_provenance(
-    capability: &PublicCapabilityRecord,
+    capability: &PublicFeatureRecord,
     workspace_root: Option<&Path>,
     errors: &mut Vec<String>,
 ) {
@@ -1869,7 +1872,7 @@ pub fn render_developer_projection(
     output.push_str(
         "| Capability | Since | RFC | Landing provenance | Compatibility features |\n|---|---:|---|---|---|\n",
     );
-    let links_by_capability = links_by_capability(&registry.capability_links);
+    let links_by_capability = links_by_capability(&registry.feature_links);
     for capability in &baseline.capabilities {
         let features = links_by_capability
             .get(capability.id.as_str())
@@ -2053,16 +2056,16 @@ fn registry_workspace_root() -> Result<PathBuf, RegistryValidationError> {
     if let Some(root) = std::env::var_os("INCAN_SOURCE_ROOT")
         .filter(|path| !path.is_empty())
         .map(PathBuf::from)
-        .filter(|root| root.join("Cargo.toml").is_file() && root.join(LIVE_CAPABILITIES_SOURCE).is_file())
+        .filter(|root| root.join("Cargo.toml").is_file() && root.join(LIVE_FEATURES_SOURCE).is_file())
     {
         return Ok(root);
     }
     let manifest_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    if manifest_root.join("Cargo.toml").is_file() && manifest_root.join(LIVE_CAPABILITIES_SOURCE).is_file() {
+    if manifest_root.join("Cargo.toml").is_file() && manifest_root.join(LIVE_FEATURES_SOURCE).is_file() {
         return Ok(manifest_root);
     }
     Err(RegistryValidationError::from_messages(vec![format!(
-        "could not locate a checkout containing {LIVE_CAPABILITIES_SOURCE} from {}",
+        "could not locate a checkout containing {LIVE_FEATURES_SOURCE} from {}",
         current_dir.display()
     )]))
 }
@@ -2070,7 +2073,7 @@ fn registry_workspace_root() -> Result<PathBuf, RegistryValidationError> {
 /// Return the nearest workspace root above a process path when it owns the public capability source.
 fn workspace_ancestor(path: &Path) -> Option<PathBuf> {
     path.ancestors()
-        .find(|candidate| candidate.join("Cargo.toml").is_file() && candidate.join(LIVE_CAPABILITIES_SOURCE).is_file())
+        .find(|candidate| candidate.join("Cargo.toml").is_file() && candidate.join(LIVE_FEATURES_SOURCE).is_file())
         .map(Path::to_path_buf)
 }
 
@@ -2083,9 +2086,9 @@ fn git_blob_id(source: &[u8]) -> String {
 }
 
 /// Convert the shared checked-metadata decoder's private projection to the public baseline record.
-fn public_capability_record(descriptor: PublicCapabilityDescriptor) -> PublicCapabilityRecord {
+fn public_feature_record(descriptor: PublicFeatureDescriptor) -> PublicFeatureRecord {
     let id = descriptor.id;
-    PublicCapabilityRecord {
+    PublicFeatureRecord {
         landing_provenance: landing_provenance_for(&id),
         id,
         name: descriptor.name,
@@ -2155,7 +2158,7 @@ fn landing_provenance_for(capability_id: &str) -> LandingProvenance {
 }
 
 /// Attach a concrete frozen public-source anchor to each compatibility feature through its first checked relation.
-fn attach_frozen_source_anchors(features: &mut [CompatibilityFeature], links: &[PublicCapabilityFeatureLink]) {
+fn attach_frozen_source_anchors(features: &mut [CompatibilityFeature], links: &[PublicFeatureLink]) {
     for feature in features {
         let Some(link) = links.iter().find(|link| link.feature_id == feature.id) else {
             continue;
@@ -2305,7 +2308,7 @@ fn landing_provenance_label(provenance: &LandingProvenance) -> String {
 }
 
 /// Group public-capability links by their checked baseline identity.
-fn links_by_capability(links: &[PublicCapabilityFeatureLink]) -> BTreeMap<&str, Vec<&PublicCapabilityFeatureLink>> {
+fn links_by_capability(links: &[PublicFeatureLink]) -> BTreeMap<&str, Vec<&PublicFeatureLink>> {
     let mut grouped = BTreeMap::new();
     for link in links {
         grouped.entry(link.capability_id).or_insert_with(Vec::new).push(link);
@@ -2687,7 +2690,7 @@ pub(crate) fn planned_feature_at_boundary(
     let source_ast = observed_anchor(
         EvidenceSurface::SourceAst,
         FROZEN_V0_5_CAPABILITIES_PATH,
-        "CapabilityId",
+        "FeatureId",
         "The frozen public registry is the initial source-contract crosswalk; construction replaces this with a linked descriptor ID.",
     );
     let typechecker = observed_anchor(
@@ -2784,7 +2787,7 @@ pub(crate) fn preserved_feature_at_boundary(
     let source_ast = observed_anchor(
         EvidenceSurface::SourceAst,
         FROZEN_V0_5_CAPABILITIES_PATH,
-        "CapabilityId",
+        "FeatureId",
         "The frozen public registry is the initial source-contract crosswalk; construction replaces this with a linked descriptor ID.",
     );
     let typechecker = observed_anchor(
@@ -3074,7 +3077,7 @@ fn requirement(
 }
 
 /// Construct the complete v0.5 public-capability to compatibility-feature relation.
-fn public_capability_links() -> Vec<PublicCapabilityFeatureLink> {
+fn public_capability_links() -> Vec<PublicFeatureLink> {
     vec![
         link("AbstractTraits", "types.traits-generics-reflection"),
         link("AsyncAwait", "async.tasks"),
@@ -3156,8 +3159,8 @@ fn public_capability_links() -> Vec<PublicCapabilityFeatureLink> {
 }
 
 /// Build one public-to-feature relation using the shared crosswalk rationale.
-fn link(capability_id: &'static str, feature_id: &'static str) -> PublicCapabilityFeatureLink {
-    PublicCapabilityFeatureLink {
+fn link(capability_id: &'static str, feature_id: &'static str) -> PublicFeatureLink {
+    PublicFeatureLink {
         capability_id,
         feature_id,
         rationale: "The public capability contributes source-observable behavior to this independently probeable contract.",
@@ -3245,7 +3248,7 @@ mod tests {
                 root.to_string_lossy().as_ref(),
                 "ls-tree",
                 "v0.5.0",
-                LIVE_CAPABILITIES_SOURCE,
+                FEATURES_SOURCE_AT_V0_5,
             ])
             .output()?;
         assert!(blob.status.success());
@@ -3273,7 +3276,7 @@ mod tests {
     fn frozen_baseline_ignores_simulated_live_capability_registry_edits() -> Result<(), Box<dyn std::error::Error>> {
         let before = checked_v0_5_public_capability_baseline()?;
         let root = registry_workspace_root()?;
-        let mut simulated_live = fs::read(root.join(LIVE_CAPABILITIES_SOURCE))?;
+        let mut simulated_live = fs::read(root.join(LIVE_FEATURES_SOURCE))?;
         simulated_live.extend_from_slice(b"\n# simulated post-v0.5 capability registry edit\n");
 
         assert_ne!(git_blob_id(&simulated_live), before.release.source_blob);
@@ -3286,7 +3289,7 @@ mod tests {
     fn validator_rejects_an_unmapped_baseline_capability() -> Result<(), Box<dyn std::error::Error>> {
         let baseline = checked_v0_5_public_capability_baseline()?;
         let mut registry = replacement_compatibility_registry();
-        registry.capability_links.retain(|link| link.capability_id != "StdWeb");
+        registry.feature_links.retain(|link| link.capability_id != "StdWeb");
 
         let error = validate_replacement_compatibility_registry(&baseline, &registry)
             .err()
@@ -3331,7 +3334,7 @@ mod tests {
     fn closed_out_of_envelope_taxonomy_can_explain_an_unmapped_capability() -> Result<(), Box<dyn std::error::Error>> {
         let baseline = checked_v0_5_public_capability_baseline()?;
         let mut registry = replacement_compatibility_registry();
-        registry.capability_links.retain(|link| link.capability_id != "StdWeb");
+        registry.feature_links.retain(|link| link.capability_id != "StdWeb");
         registry.out_of_envelope.push(BaselineOutOfEnvelopeRationale {
             capability_id: "StdWeb",
             category: OutOfEnvelopeCategory::HostedProviderBoundary,
@@ -3405,7 +3408,7 @@ mod tests {
         let baseline = checked_v0_5_public_capability_baseline()?;
         let mut registry = replacement_compatibility_registry();
         registry
-            .capability_links
+            .feature_links
             .retain(|link| link.feature_id != "call.stored-callables");
         let feature = registry
             .features

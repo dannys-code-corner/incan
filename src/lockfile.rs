@@ -2081,11 +2081,11 @@ mod tests {
             schema: crate::oven_interop::OVEN_INTEROP_SCHEMA_VERSION,
             targets: vec![crate::oven_interop::OvenInteropTarget {
                 target: "aarch64-apple-ios".to_string(),
-                toolchain: Some(crate::oven_interop::CapabilityRequirement {
+                toolchain: Some(crate::oven_interop::ToolchainRequirement {
                     capability: "apple-clang".to_string(),
                     version: Some(">=17, <18".to_string()),
                 }),
-                sdk: Some(crate::oven_interop::CapabilityRequirement {
+                sdk: Some(crate::oven_interop::ToolchainRequirement {
                     capability: "iphoneos".to_string(),
                     version: Some(">=18, <19".to_string()),
                 }),

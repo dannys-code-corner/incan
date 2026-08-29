@@ -20940,24 +20940,24 @@ fn type_info_semantic_fact_store_exports_explicit_registry_subject_entries() -> 
         r#"
 from std.registry import Registry, RegistryEntry, RegistrySubject, SubjectKind
 
-type CapabilityId = newtype str
+type FeatureId = newtype str
 
 @derive(Descriptor)
 model CapabilitySpec:
   title: str
 
-pub static capabilities: Registry[CapabilityId, CapabilitySpec] = Registry.define(
+pub static capabilities: Registry[FeatureId, CapabilitySpec] = Registry.define(
   subjects=[SubjectKind.CompilationUnit, SubjectKind.Package],
 )
 
-pub static unit_capability: RegistryEntry[CapabilityId, CapabilitySpec] = capabilities.entry(
-  key=CapabilityId("unit"),
+pub static unit_capability: RegistryEntry[FeatureId, CapabilitySpec] = capabilities.entry(
+  key=FeatureId("unit"),
   subject=RegistrySubject.current_unit(),
   descriptor=CapabilitySpec(title="Current unit"),
 )
 
-pub static package_capability: RegistryEntry[CapabilityId, CapabilitySpec] = capabilities.entry(
-  key=CapabilityId("package"),
+pub static package_capability: RegistryEntry[FeatureId, CapabilitySpec] = capabilities.entry(
+  key=FeatureId("package"),
   subject=RegistrySubject.package(),
   descriptor=CapabilitySpec(title="Current package"),
 )
@@ -21021,19 +21021,19 @@ fn registry_entry_rejects_runtime_and_compiler_reserved_mutation_surfaces() {
 from std.registry import Registry, RegistryEntry, RegistrySubject, SubjectKind
 
 @derive(Clone, Eq)
-type CapabilityId = newtype str
+type FeatureId = newtype str
 
 @derive(Descriptor)
 model CapabilitySpec:
     title: str
 
-static capabilities: Registry[CapabilityId, CapabilitySpec] = Registry.define(
+static capabilities: Registry[FeatureId, CapabilitySpec] = Registry.define(
     subjects=[SubjectKind.CompilationUnit],
 )
 
-static parenthesized_entry: RegistryEntry[CapabilityId, CapabilitySpec] = (
+static parenthesized_entry: RegistryEntry[FeatureId, CapabilitySpec] = (
     capabilities.entry(
-        key=CapabilityId("parenthesized"),
+        key=FeatureId("parenthesized"),
         subject=RegistrySubject.current_unit(),
         descriptor=CapabilitySpec(title="parenthesized"),
     )
@@ -21042,18 +21042,18 @@ static parenthesized_entry: RegistryEntry[CapabilityId, CapabilitySpec] = (
 def register_at_runtime() -> None:
     capabilities.entries.append(
         RegistryEntry(
-            key=CapabilityId("forged-field"),
+            key=FeatureId("forged-field"),
             descriptor=CapabilitySpec(title="forged field"),
             subject=RegistrySubject.current_unit(),
         ),
     )
     capabilities.entry(
-        key=CapabilityId("runtime"),
+        key=FeatureId("runtime"),
         subject=RegistrySubject.current_unit(),
         descriptor=CapabilitySpec(title="runtime"),
     )
     capabilities._describe(
-        CapabilityId("forged"),
+        FeatureId("forged"),
         CapabilitySpec(title="forged"),
         RegistrySubject.current_unit(),
     )
