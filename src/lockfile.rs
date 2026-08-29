@@ -674,9 +674,7 @@ fn portable_project_path(project_root: &Path, path: &Path) -> String {
     // Traversal is meaningful only when both coordinates resolved in the same real namespace. A half-canonicalized
     // pair (one side missing on disk, or split across a symlink alias such as macOS's `/var` vs `/private/var`)
     // would walk across the alias boundary and render a traversal that resolves to the wrong place.
-    if both_canonical
-        && let Some(traversal) = relative_traversal_path(&normalized_root, &normalized_path)
-    {
+    if both_canonical && let Some(traversal) = relative_traversal_path(&normalized_root, &normalized_path) {
         return traversal;
     }
     normalized_path.to_string_lossy().replace('\\', "/")

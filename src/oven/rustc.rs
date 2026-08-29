@@ -2431,17 +2431,24 @@ fn same_registry_leaf_semantics(left: &OvenRustcRegistryLeaf, right: &OvenRustcR
 /// identity — the `-<hash>` extra-filename suffix — also folds in resolved transitive features, profile details,
 /// and the identities of the unit's own dependencies, so the same declared coordinates can legitimately compile to
 /// a different crate identity inside a different closure (Bevy's `rand_core` vs the release closure's, #1227).
-/// Retained extension crates record their dependencies by that exact identity hash; substituting an artifact with a
-/// different hash removes the only file that can satisfy those records and the sealed closure stops loading.
-/// Substitution is therefore admitted only when both artifacts carry the same filename, which encodes the same
-/// compilation identity and makes the swap a pure byte-canonicalization onto the release's published copy.
 ///
-/// A build-script artifact is excluded even then: `build.rs` can probe the ambient build environment and diverge
-/// despite identical recorded inputs. It is staged under `build/<package>/<identity>/out/`, unlike an ordinary
-/// crate's `deps/` output, so restrict substitution to leaves on both sides that are not build-script-shaped.
+/// Two substitution regimes follow from who consumes the leaf, and the caller passes that judgement as
+/// `allow_cross_identity`. A leaf consumed only by recompiled surfaces — the generated root's direct dependencies,
+/// or any leaf in a plan with no prebuilt project crates — may swap onto the release copy even when identities
+/// differ: that swap is exactly what unifies the root's trait identities (`serde::Serialize`) with the sealed
+/// standard library. A leaf that prebuilt extension crates recorded by exact identity hash must not: substituting a
+/// different identity removes the only artifact those records can resolve and the sealed closure stops loading, so
+/// such a leaf substitutes only onto the same filename — a pure byte-canonicalization onto the release's published
+/// copy.
+///
+/// A build-script artifact is excluded in both regimes: `build.rs` can probe the ambient build environment and
+/// diverge despite identical recorded inputs. It is staged under `build/<package>/<identity>/out/`, unlike an
+/// ordinary crate's `deps/` output, so restrict substitution to leaves on both sides that are not
+/// build-script-shaped.
 fn registry_leaf_substitution_is_safe(
     project_leaf: &OvenRustcRegistryLeaf,
     release_leaf: &OvenRustcRegistryLeaf,
+    allow_cross_identity: bool,
 ) -> bool {
     let is_build_script_shaped = |relative_path: &str| {
         Path::new(relative_path)
@@ -2449,12 +2456,17 @@ fn registry_leaf_substitution_is_safe(
             .and_then(Path::file_name)
             .is_some_and(|name| name == "out")
     };
+    if is_build_script_shaped(&project_leaf.artifact.relative_path)
+        || is_build_script_shaped(&release_leaf.artifact.relative_path)
+    {
+        return false;
+    }
+    if allow_cross_identity {
+        return true;
+    }
     let project_file_name = Path::new(&project_leaf.artifact.relative_path).file_name();
     let release_file_name = Path::new(&release_leaf.artifact.relative_path).file_name();
-    !is_build_script_shaped(&project_leaf.artifact.relative_path)
-        && !is_build_script_shaped(&release_leaf.artifact.relative_path)
-        && project_file_name.is_some()
-        && project_file_name == release_file_name
+    project_file_name.is_some() && project_file_name == release_file_name
 }
 
 /// Replace project source-catalog facts with the exact selected release record for each shared coordinate.
@@ -2534,7 +2546,17 @@ pub(crate) fn validate_project_extension_payload_against_base(
             message: "does not name the exact installed release Loaf and build unit".to_string(),
         });
     }
-    let recomposed = payload.publisher_plan.with_release_cohort_from_base(base)?;
+    // Recomposition must reproduce the sealed complete plan exactly, so it consumes the payload's own record of
+    // which registry packages the generated root declares; see `with_release_cohort_from_base`.
+    let root_registry_packages = payload
+        .registry_source_dependencies
+        .iter()
+        .chain(&payload.dev_registry_source_dependencies)
+        .map(|dependency| dependency.package.clone())
+        .collect::<BTreeSet<_>>();
+    let recomposed = payload
+        .publisher_plan
+        .with_release_cohort_from_base(base, &root_registry_packages)?;
     if recomposed != payload.complete_plan {
         return Err(OvenRustcError::InvalidInput {
             field: "project extension release cohort",
@@ -2972,7 +2994,18 @@ impl OvenRustcArtifactManifest {
     /// owns one ABI cohort: exact `incan_*` artifacts plus every registry unit whose package, version, features,
     /// source, target, profile, and toolchain match the sealed release catalog. Project-only registry and path
     /// dependencies remain byte-exact extension inputs. Vocabulary auxiliaries retain their isolated roles.
-    pub(crate) fn with_release_cohort_from_base(&self, base: &Self) -> Result<Self, OvenRustcError> {
+    ///
+    /// `root_registry_packages` names the registry packages the generated root consumes directly (the declared
+    /// `[rust-dependencies]`, resolved to Cargo package names). Those leaves may substitute across compilation
+    /// identities because the root is recompiled against whatever the composed plan names — that swap is what
+    /// unifies the root's trait identities with the sealed standard library. Every other leaf substitutes only onto
+    /// an identical compilation identity; see [`registry_leaf_substitution_is_safe`]. Because this parameter shapes
+    /// the composed plan, stored extension payloads record it and recomposition passes the recorded set.
+    pub(crate) fn with_release_cohort_from_base(
+        &self,
+        base: &Self,
+        root_registry_packages: &BTreeSet<String>,
+    ) -> Result<Self, OvenRustcError> {
         self.validate_shape(&self.intent)?;
         base.validate_shape(&self.intent)?;
         validate_release_registry_cohort(self, base)?;
@@ -3017,6 +3050,32 @@ impl OvenRustcArtifactManifest {
             })
             .collect();
         canonicalize_release_registry_sources(&mut composed, base)?;
+        let root_registry_packages = root_registry_packages
+            .iter()
+            .map(|package| normalized_package_name(package))
+            .collect::<BTreeSet<_>>();
+        let root_extern_crates = composed
+            .externs
+            .iter()
+            .map(|artifact| artifact.crate_name.clone())
+            .collect::<BTreeSet<_>>();
+        // A prebuilt project crate — a supporting rlib that is neither a registry leaf's own artifact nor a
+        // compiler-runtime crate (Bevy's `bevy_*` family, a workspace path dependency) — records its dependencies by
+        // exact compilation identity. When none exist, every leaf is consumed only by the generated root and the
+        // sealed release family, so cross-identity substitution is unconditionally safe and unifies the root's
+        // trait identities with the standard library. When any exist, cross-identity substitution stays limited to
+        // leaves the root consumes directly; everything else must keep the identity those prebuilt crates recorded
+        // (#1227).
+        let leaf_artifact_paths = composed
+            .registry_leaves
+            .iter()
+            .map(|leaf| leaf.artifact.relative_path.clone())
+            .collect::<BTreeSet<_>>();
+        let has_project_prebuilt_supporting = composed.supporting_artifacts.iter().any(|artifact| {
+            artifact.relative_path.ends_with(".rlib")
+                && !leaf_artifact_paths.contains(&artifact.relative_path)
+                && compiler_runtime_name_from_artifact_path(&artifact.relative_path).is_none()
+        });
         let mut leaf_replacements = Vec::new();
         for (index, project_leaf) in composed.registry_leaves.iter().enumerate() {
             let candidates = base
@@ -3030,9 +3089,12 @@ impl OvenRustcArtifactManifest {
             if candidates.is_empty() {
                 continue;
             }
+            let allow_cross_identity = !has_project_prebuilt_supporting
+                || root_extern_crates.contains(&project_leaf.crate_name)
+                || root_registry_packages.contains(&normalized_package_name(&project_leaf.package));
             let Some(release_leaf) = candidates.into_iter().find(|candidate| {
                 same_registry_leaf_semantics(candidate, project_leaf)
-                    && registry_leaf_substitution_is_safe(project_leaf, candidate)
+                    && registry_leaf_substitution_is_safe(project_leaf, candidate, allow_cross_identity)
                     && composed.registry_sources.iter().any(|project_source| {
                         base.registry_sources.iter().any(|release_source| {
                             project_source == release_source
@@ -3118,8 +3180,12 @@ impl OvenRustcArtifactManifest {
     }
 
     /// Verify that this project plan already uses the exact release cohort selected from its base.
+    ///
+    /// An already-composed plan recomposes to itself regardless of the root-package set: leaves that were
+    /// substituted are identity-equal to the base copy, and leaves that were kept decline substitution again, so
+    /// this check passes an empty root set.
     pub(crate) fn validate_release_cohort_from_base(&self, base: &Self) -> Result<(), OvenRustcError> {
-        if self.with_release_cohort_from_base(base)? != *self {
+        if self.with_release_cohort_from_base(base, &BTreeSet::new())? != *self {
             return Err(OvenRustcError::InvalidInput {
                 field: "project extension release cohort",
                 message:
@@ -3960,6 +4026,11 @@ impl OvenRustcArtifactManifest {
             )
         })
     }
+}
+
+/// Normalize a Cargo package name for root-registry comparison; Cargo exposes `-` and `_` interchangeably.
+fn normalized_package_name(name: &str) -> String {
+    name.replace('-', "_")
 }
 
 /// Return whether one declared artifact is directly below a declared search directory.
@@ -7850,12 +7921,16 @@ mod tests {
         let divergent_release = leaf("base/deps/librand_core-50f0d7ca30c6ae15.rlib");
         assert!(super::same_registry_leaf_semantics(&project, &divergent_release));
         assert!(
-            super::registry_leaf_substitution_is_safe(&project, &matching_release),
+            super::registry_leaf_substitution_is_safe(&project, &matching_release, false),
             "an identical compilation identity in a different directory is a pure byte-canonicalization"
         );
         assert!(
-            !super::registry_leaf_substitution_is_safe(&project, &divergent_release),
-            "matching declared coordinates must not substitute across different compilation identities"
+            !super::registry_leaf_substitution_is_safe(&project, &divergent_release, false),
+            "a transitive leaf must not substitute across compilation identities: prebuilt dependents recorded its hash"
+        );
+        assert!(
+            super::registry_leaf_substitution_is_safe(&project, &divergent_release, true),
+            "a root-extern leaf may cross identities because the generated root recompiles against the release copy"
         );
     }
 
@@ -7974,7 +8049,7 @@ mod tests {
                 "incan_stdlib_system".to_string(),
             ])
         );
-        let composed = project.with_release_cohort_from_base(&base)?;
+        let composed = project.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert_eq!(composed.externs[0].relative_path, "deps/libincan_stdlib-release.rlib");
         assert_eq!(composed.externs[1], project.externs[1]);
         assert_eq!(composed.externs[2], project.externs[2]);
@@ -8044,7 +8119,7 @@ mod tests {
 
         let mut incomplete_base = base.clone();
         incomplete_base.externs.clear();
-        let incomplete = project.with_release_cohort_from_base(&incomplete_base);
+        let incomplete = project.with_release_cohort_from_base(&incomplete_base, &BTreeSet::new());
         assert!(matches!(incomplete, Err(OvenRustcError::InvalidInput { .. })));
         Ok(())
     }
@@ -8150,7 +8225,7 @@ mod tests {
             ],
         };
 
-        let composed = project.with_release_cohort_from_base(&base)?;
+        let composed = project.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert_eq!(composed.registry_leaves[0].artifact, release_serde);
         assert_eq!(composed.registry_leaves[0].features, ["derive"]);
         assert_eq!(composed.registry_sources[0], release_registry_source);
@@ -8181,7 +8256,8 @@ mod tests {
         project_with_distinct_leaf_features.registry_sources[0]
             .features
             .push("rc".to_string());
-        let feature_distinct = project_with_distinct_leaf_features.with_release_cohort_from_base(&base)?;
+        let feature_distinct =
+            project_with_distinct_leaf_features.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert_eq!(feature_distinct.registry_leaves[0].artifact, feature_artifact);
         assert!(
             feature_distinct
@@ -8210,7 +8286,7 @@ mod tests {
                 relative_path: "registry-sources/serde-v2/Cargo.toml".to_string(),
                 digest: "sha256:project-serde-v2-manifest".to_string(),
             });
-        let composed_with_alternate = project_with_alternate.with_release_cohort_from_base(&base)?;
+        let composed_with_alternate = project_with_alternate.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert!(composed_with_alternate.registry_sources.iter().any(|package| {
             package.package == "serde"
                 && package.version == "2.0.0"
@@ -8224,10 +8300,10 @@ mod tests {
         );
 
         project.registry_sources[0].features.push("rc".to_string());
-        let feature_extended = project.with_release_cohort_from_base(&base)?;
+        let feature_extended = project.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert_eq!(feature_extended.registry_sources[0].features, ["derive", "rc"]);
         project.registry_sources[0].source.checksum = "mismatched-checksum".to_string();
-        let mismatch = project.with_release_cohort_from_base(&base);
+        let mismatch = project.with_release_cohort_from_base(&base, &BTreeSet::new());
         assert!(matches!(mismatch, Err(OvenRustcError::InvalidInput { .. })));
         Ok(())
     }
@@ -8320,7 +8396,7 @@ mod tests {
             }],
         };
 
-        let composed = project.with_release_cohort_from_base(&base)?;
+        let composed = project.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         assert_eq!(
             composed.registry_leaves[0].artifact, project_libc,
             "a build-script leaf must keep the project's own compiled artifact, not the base's independently built one"
@@ -8365,7 +8441,7 @@ mod tests {
             relative_path: "deps/libincan_stdlib-release.rlib".to_string(),
             digest: "sha256:release-stdlib".to_string(),
         }];
-        let complete = publisher.with_release_cohort_from_base(&base)?;
+        let complete = publisher.with_release_cohort_from_base(&base, &BTreeSet::new())?;
         let partition = complete.partition_against_base(&base)?;
         let payload = OvenProjectExtensionPayload {
             schema_version: OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION,

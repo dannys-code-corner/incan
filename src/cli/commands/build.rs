@@ -17900,7 +17900,7 @@ pub model Nested:
             divergent.is_err(),
             "a provider that did not inherit its exact release runtime must fail closed"
         );
-        let provider = provider.with_release_cohort_from_base(&base)?;
+        let provider = provider.with_release_cohort_from_base(&base, &BTreeSet::new())?;
 
         let composed =
             merge_packaged_provider_artifact_manifests_with_release_base(&[("analytics", &provider)], &base, &intent)?;

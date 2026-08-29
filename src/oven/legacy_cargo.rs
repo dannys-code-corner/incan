@@ -43,7 +43,7 @@ pub const OVEN_LEGACY_CARGO_PROVENANCE_SCHEMA_VERSION: u32 = 2;
 /// Version 9 binds every direct registry dependency alias to its exact locked package, registry, and checksum. This
 /// preserves source authority when one project intentionally selects multiple compatible versions or renamed aliases
 /// of a package instead of asking a normal command to infer identity from a semver-compatible source catalog.
-pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 9;
+pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 10;
 /// Wire schema for one independently admitted compiler-suite target shard.
 ///
 /// Version 2 adds the direct-Rustc workspace library/proc-macro materialization DAG. Consumers of schema-10 suite
@@ -1557,8 +1557,12 @@ pub fn prepare_direct_rustc_plan(
                 message: "selected project-extension base Loaf has an incompatible direct-Rustc intent".to_string(),
             });
         }
+        let root_registry_packages = declared_direct_dependencies
+            .values()
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
         let complete_plan = plan
-            .with_release_cohort_from_base(base.artifacts)
+            .with_release_cohort_from_base(base.artifacts, &root_registry_packages)
             .map_err(|error| OvenLegacyCargoError::Plan(error.to_string()))?;
         let partition = complete_plan
             .partition_against_base(base.artifacts)
@@ -11699,7 +11703,8 @@ version = "1.0.0"
                 digest: digest_bytes(b"project dependency"),
             },
         ];
-        let complete_plan = publisher_plan.with_release_cohort_from_base(&base_plan)?;
+        let complete_plan =
+            publisher_plan.with_release_cohort_from_base(&base_plan, &std::collections::BTreeSet::new())?;
         let partition = complete_plan.partition_against_base(&base_plan)?;
         assert!(!partition.base_paths.is_empty());
         assert!(!partition.extension_paths.is_empty());
