@@ -217,6 +217,20 @@ fn case_stdlib_runtime_string_membership() -> ComparisonOutcome {
     )
 }
 
+/// The Body IR half of case 3, added by #1160.
+///
+/// The row above evaluates through the stdlib-runtime lane, which proves the substring policy is preserved but
+/// says nothing about whether the cutover's own representation can express it. Until #1160, it could not: `in`
+/// lowered to an `unsupported(...)` placeholder, so a `Preserved` disposition stood with no Body IR path behind
+/// it — precisely the silent parity hole #987 exists to surface. This row is what keeps the two honest together:
+/// it fails the moment string membership stops being representable, whatever the runtime helper still does.
+fn case_supported_string_membership_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_3_SRC,
+        "string membership to lower to an explicit compiler-owned helper call rather than a placeholder",
+    )
+}
+
 // ============================================================================
 // Case 4 — Generated-artifact behavior: codegen stays inspectable, not semantically authoritative
 // ============================================================================
@@ -1114,6 +1128,17 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_13_SRC,
             evaluate: Some(case_supported_call_spreads_reach_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0014",
+            title: "String membership (`in`) is representable in Body IR, not only in the runtime helper",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1160; src/frontend/body_ir/tests.rs::lowers_string_membership_as_an_explicit_helper_call_with_its_runtime_requirement",
+            disposition: Disposition::Preserved,
+            source: CASE_3_SRC,
+            evaluate: Some(case_supported_string_membership_reaches_body_ir),
             replacement_execution: None,
         },
         ParityCase {

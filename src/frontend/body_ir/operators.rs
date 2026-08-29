@@ -52,10 +52,6 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         )
     }
 
-    /// Whether `op` between operands of `lhs_ty`/`rhs_ty` has any Body IR v0 handling (either the string-helper
-    /// path or a direct [`bir::BinOp`] mapping). Checked *before* evaluating operand sub-expressions in both
-    /// [`Self::lower_binary`] and [`Self::lower_compound_assignment`], so an operator v0 does not model never
-    /// causes its operands' side effects (calls, reads) to be lowered on the way to an unsupported placeholder.
     /// Lower a user-defined operator to the dunder method call the typechecker resolved for it.
     ///
     /// RFC 028 lets a type define `__add__`, `__and__`, `__contains__` and friends, and the typechecker records
@@ -94,9 +90,16 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         )
     }
 
+    /// Whether `op` between operands of `lhs_ty`/`rhs_ty` has any Body IR v0 handling (either the string-helper
+    /// path or a direct [`bir::BinOp`] mapping). Both operand facts must be resolved: a primitive Body IR operation
+    /// may carry a typechecker's decision forward, but it may not guess one around `Unknown` or `Infer`. Checked
+    /// *before* evaluating operand sub-expressions in both [`Self::lower_binary`] and
+    /// [`Self::lower_compound_assignment`], so an operator that v0 does not model never causes its operands' side
+    /// effects (calls, reads) to be lowered on the way to an unsupported placeholder.
     pub(super) fn binary_op_is_supported(op: ast::BinaryOp, lhs_ty: &IncanType, rhs_ty: &IncanType) -> bool {
-        (is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some())
-            || lower_binary_op(op).is_some()
+        binary_operand_types_are_resolved(lhs_ty, rhs_ty)
+            && ((is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some())
+                || lower_binary_op(op).is_some())
     }
 
     /// Emit the result of a binary operator given already-lowered operands: an explicit [`bir::Callee::Helper`]
@@ -125,9 +128,17 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         {
             self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper(helper.as_str().to_string()));
             self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+            // Membership is the one string operator whose surface order is the reverse of its helper's signature:
+            // `needle in haystack` reads needle-first, but `str_contains` takes the haystack first, as every
+            // `contains` in Rust does. Emit the helper's own order here rather than documenting a reversal, because a
+            // backend binding these positionally has no way to know one helper disagrees with the other eight.
+            let arguments = match helper {
+                bir::HelperOp::StrContains | bir::HelperOp::StrNotContains => vec![rhs_operand, lhs_operand],
+                _ => vec![lhs_operand, rhs_operand],
+            };
             return self.push_call_temp(
                 bir::Callee::Helper(helper),
-                fixed_elements(vec![lhs_operand, rhs_operand]),
+                fixed_elements(arguments),
                 result_ty,
                 scope,
                 span,
@@ -154,4 +165,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             out,
         )
     }
+}
+
+/// Whether both inputs carry a typechecker fact sufficiently resolved to select a concrete Body IR operation.
+///
+/// `Unknown` and `Infer` are recovery/inference states, not operand categories a backend may reinterpret as a
+/// primitive. Other semantic types remain facts the typechecker did resolve; whether a source spelling is primitive
+/// or a protocol hook is still decided by the recorded operator dispatch checked before this admission gate.
+fn binary_operand_types_are_resolved(lhs_ty: &IncanType, rhs_ty: &IncanType) -> bool {
+    !matches!(lhs_ty, IncanType::Unknown | IncanType::Infer) && !matches!(rhs_ty, IncanType::Unknown | IncanType::Infer)
 }

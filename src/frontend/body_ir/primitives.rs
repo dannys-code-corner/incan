@@ -42,6 +42,13 @@ pub(super) fn is_string_like(ty: &IncanType) -> bool {
 /// Map a string-typed binary operator to its compiler-owned helper operation, or `None` for operators that have no
 /// string-specific helper (arithmetic-only operators never reach here because `lower_binary` only checks this for
 /// string-like operand types).
+///
+/// Membership lives here rather than in [`lower_binary_op`] because `in` is not one operation: between two strings
+/// it asks for substring containment, over a collection it asks for element lookup. A single [`bir::BinOp`] variant
+/// would have to pick one of those meanings and then apply it silently to the other. Routing string membership
+/// through [`bir::HelperOp::StrContains`] instead makes the substring policy — the behavior `parity-987-0003`
+/// records as `Preserved` — an explicit `Callee::Helper` call carrying its own runtime requirement, exactly as `+`
+/// on two strings already is.
 pub(super) fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp> {
     match op {
         ast::BinaryOp::Add => Some(bir::HelperOp::StrConcat),
@@ -51,17 +58,32 @@ pub(super) fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp
         ast::BinaryOp::LtEq => Some(bir::HelperOp::StrLe),
         ast::BinaryOp::Gt => Some(bir::HelperOp::StrGt),
         ast::BinaryOp::GtEq => Some(bir::HelperOp::StrGe),
+        ast::BinaryOp::In => Some(bir::HelperOp::StrContains),
+        ast::BinaryOp::NotIn => Some(bir::HelperOp::StrNotContains),
         _ => None,
     }
 }
-/// Map a surface binary operator to Body IR's canonical arithmetic/comparison/boolean operator set, or `None` for
-/// operators v0 does not model.
+/// Map a surface binary operator to Body IR's primitive operator set — one machine-level combination of two
+/// already-evaluated operands — or `None` for operators whose meaning is not a primitive.
 ///
-/// The unmapped set is `Pow`, `MatMul`, both pipes, the bitwise `BitAnd`/`BitOr`/`BitXor`, the `Shl`/`Shr` shifts,
-/// `In`/`NotIn`, and `Is`/`IsNot`. Membership is the notable one: `parity-987-0003` records string `in` as a
-/// `Preserved` behavior, so refusing it here is a tracked #1101 gap rather than a settled boundary. Adding any of
-/// these needs a matching [`bir::BinOp`] variant, or a compiler-owned [`bir::HelperOp`] where the operation is a
-/// runtime call rather than a primitive -- the same split [`string_helper_for_binop`] already makes.
+/// The result type of a mapped operator is *not* this function's business: the typechecker already decided it (an
+/// `int ** int` with a dynamic exponent resolves `float`, while a non-negative integer-literal exponent stays
+/// `int`; `int & int` stays `int`), and lowering carries that decision through on the assigned temporary rather than
+/// re-deriving it from the operator.
+///
+/// The match is exhaustive so that a new surface operator is a compile error here rather than a silent refusal.
+/// Two groups deliberately return `None`, each for a different reason:
+///
+/// - **Membership** (`in` / `not in`) has no single primitive meaning — substring between strings, element lookup over
+///   a collection — so it is a runtime call, mapped by [`string_helper_for_binop`] for the string operand types Body IR
+///   represents today. Collection membership is still refused; it needs a receiver-shaped `contains` call rather than a
+///   two-operand helper, which is the same missing collection-helper path that leaves [`bir::HelperOp::ListConcat`]
+///   unproduced. Owner: #1101's collection-operation lowering, not this table.
+/// - **`MatMul` and both pipes** are protocol hooks, never primitives. The typechecker resolves `@`, `|>`, and `<|`
+///   through `__matmul__` / `__pipe_forward__` / `__pipe_backward__` and rejects the expression outright when no hook
+///   resolves, so a well-typed program always reaches `lower_binary` with a recorded operator dispatch and is lowered
+///   as the method call it is. They therefore need no entry here and carry no refusal: reaching this table with one of
+///   them would mean the typechecker admitted an unresolved hook.
 pub(super) fn lower_binary_op(op: ast::BinaryOp) -> Option<bir::BinOp> {
     match op {
         ast::BinaryOp::Add => Some(bir::BinOp::Add),
@@ -70,15 +92,30 @@ pub(super) fn lower_binary_op(op: ast::BinaryOp) -> Option<bir::BinOp> {
         ast::BinaryOp::Div => Some(bir::BinOp::Div),
         ast::BinaryOp::FloorDiv => Some(bir::BinOp::FloorDiv),
         ast::BinaryOp::Mod => Some(bir::BinOp::Mod),
+        ast::BinaryOp::Pow => Some(bir::BinOp::Pow),
+        ast::BinaryOp::BitAnd => Some(bir::BinOp::BitAnd),
+        ast::BinaryOp::BitOr => Some(bir::BinOp::BitOr),
+        ast::BinaryOp::BitXor => Some(bir::BinOp::BitXor),
+        ast::BinaryOp::Shl => Some(bir::BinOp::Shl),
+        ast::BinaryOp::Shr => Some(bir::BinOp::Shr),
         ast::BinaryOp::Eq => Some(bir::BinOp::Eq),
         ast::BinaryOp::NotEq => Some(bir::BinOp::Ne),
         ast::BinaryOp::Lt => Some(bir::BinOp::Lt),
         ast::BinaryOp::LtEq => Some(bir::BinOp::Le),
         ast::BinaryOp::Gt => Some(bir::BinOp::Gt),
         ast::BinaryOp::GtEq => Some(bir::BinOp::Ge),
+        // `is` / `is not` stay distinct from `==` / `!=` even though the Rust-emission backend currently emits both
+        // pairs identically. Body IR records which operator the source wrote; collapsing them would discard the
+        // only place a later identity-versus-equality split could be decided against.
+        ast::BinaryOp::Is => Some(bir::BinOp::Is),
+        ast::BinaryOp::IsNot => Some(bir::BinOp::IsNot),
         ast::BinaryOp::And => Some(bir::BinOp::And),
         ast::BinaryOp::Or => Some(bir::BinOp::Or),
-        _ => None,
+        ast::BinaryOp::In
+        | ast::BinaryOp::NotIn
+        | ast::BinaryOp::MatMul
+        | ast::BinaryOp::PipeForward
+        | ast::BinaryOp::PipeBackward => None,
     }
 }
 /// Lower a literal to a Body IR constant, or `None` for literal kinds v0 does not model distinctly (`bytes`).

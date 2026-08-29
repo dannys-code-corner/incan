@@ -39,7 +39,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 self.lower_index_assignment(index_assignment, scope, span, out)
             }
             ast::Statement::CompoundAssignment(compound_assignment) => {
-                self.lower_compound_assignment(compound_assignment, scope, span, out)
+                // Passed the raw AST span, not `span`: the typechecker keys a resolved operator hook by source
+                // span, and only the untranslated span can look one up.
+                self.lower_compound_assignment(compound_assignment, scope, stmt.span, out)
             }
             ast::Statement::TupleUnpack(tuple_unpack) => {
                 self.lower_tuple_unpack(tuple_unpack, remaining, scope, span, out)
@@ -175,20 +177,34 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         });
     }
 
-    /// Lower `name <op>= value` (`x += y`, `x &= y`, ...). Unlike field/index compound assignment, the parser
-    /// leaves `ca.value` as the plain right-hand operand rather than pre-desugaring it, so this explicitly reads
-    /// `name`'s current value, combines it with `value` via [`Self::lower_binary_from_operands`] (shared with
-    /// [`Self::lower_binary`], so string-concat compound assignment routes through the same helper-call machinery
-    /// as `+`), and writes the result back. An operator with no Body IR equivalent (see [`lower_binary_op`]) or a
-    /// name that is not currently bound (should not happen after a successful typecheck) falls back to an explicit
-    /// unsupported placeholder instead of panicking.
+    /// Lower `name <op>= value` (`x += y`, `x &= y`, `x <<= y`, ...). Unlike field/index compound assignment, the
+    /// parser leaves `ca.value` as the plain right-hand operand rather than pre-desugaring it, so this explicitly
+    /// reads `name`'s current value, combines it with `value` via [`Self::lower_binary_from_operands`] (shared with
+    /// [`Self::lower_binary`], so every compound form gets exactly the operator representation its binary spelling
+    /// gets — a primitive [`bir::BinOp`] for the arithmetic, bitwise, and shift operators, a `Callee::Helper` call
+    /// for string concatenation), and writes the result back.
+    ///
+    /// Three cases refuse instead, each with an explicit unsupported placeholder rather than a panic or a guess:
+    /// an operator with no Body IR equivalent (see [`lower_binary_op`]), a name that is not currently bound (should
+    /// not happen after a successful typecheck), and a compound assignment the typechecker resolved to a
+    /// user-defined operator hook.
+    ///
+    /// That last case is the one worth stating. `v &= w` on a type defining `__iand__` is a *method call*, and the
+    /// typechecker records the resolved dispatch against this statement's span. Combining the operands with
+    /// [`bir::BinOp::BitAnd`] here would claim a machine operation the source never asked for — the same wrong
+    /// representation [`Self::lower_binary`] avoids by consulting the recorded dispatch first. Body IR has no
+    /// place-targeted operator-dispatch form yet (`lower_operator_dispatch` needs two expression operands, and a
+    /// compound assignment's left side is a bound name, not an expression), so the honest answer is a named
+    /// refusal. Owner: #1101's operator-dispatch lowering. `@=` is permanently in this group — `__imatmul__` is a
+    /// protocol hook with no primitive form at all.
     pub(super) fn lower_compound_assignment(
         &mut self,
         compound_assignment: &ast::CompoundAssignmentStmt,
         scope: bir::ScopeId,
-        span: HirSourceSpan,
+        source_span: ast::Span,
         out: &mut Vec<bir::Statement>,
     ) {
+        let span = hir_span(source_span);
         let Some(&local) = self.bindings.get(&compound_assignment.name) else {
             self.push_unsupported_stmt(
                 format!("compound assignment to unbound name `{}`", compound_assignment.name),
@@ -197,6 +213,21 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             );
             return;
         };
+
+        // A resolved operator hook makes this a method call, not a primitive combination. Checked before the
+        // operand is lowered, matching the "never partially lower an operator we will refuse" rule the binary
+        // path holds to.
+        if let Some(dispatch) = self.type_info.resolved_operator_call(source_span)
+            && dispatch.kind == ResolvedOperatorKind::Binary
+        {
+            self.push_unsupported_stmt(
+                format!("compound assignment through operator hook `{}`", dispatch.method),
+                span,
+                out,
+            );
+            return;
+        }
+
         let lhs_ty = self.locals[local.index()].ty.clone();
         let op = compound_assignment.op.binary_op();
         let rhs_ty = self.resolve_ty(compound_assignment.value.span);

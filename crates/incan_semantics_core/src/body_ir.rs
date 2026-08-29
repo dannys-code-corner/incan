@@ -1504,7 +1504,18 @@ impl UnOp {
     }
 }
 
-/// Binary operator kind supported by v0 lowering (arithmetic, comparison, boolean).
+/// Binary operator kind supported by v0 lowering (arithmetic, bitwise, shift, comparison, identity, boolean).
+///
+/// Every variant here is a *primitive* operation: one machine-level combination of two already-evaluated operands.
+/// An operator whose meaning is a runtime call belongs in [`HelperOp`] instead, and an operator whose meaning is a
+/// user-defined method belongs in a [`Callee::Method`] call. Keeping those three apart is what lets a consumer read
+/// a Body IR body and know whether a source operator costs a machine instruction, a compiler-owned runtime helper,
+/// or a user-visible dispatch.
+///
+/// [`Is`](Self::Is) and [`IsNot`](Self::IsNot) stay distinct from [`Eq`](Self::Eq)/[`Ne`](Self::Ne) even though the
+/// existing Rust-emission backend currently emits both pairs the same way. Collapsing them here would discard which
+/// operator the source actually wrote, and Body IR is the representation a later identity/equality split would have
+/// to be decided against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinOp {
     Add,
@@ -1513,12 +1524,20 @@ pub enum BinOp {
     Div,
     FloorDiv,
     Mod,
+    Pow,
+    BitAnd,
+    BitOr,
+    BitXor,
+    Shl,
+    Shr,
     Eq,
     Ne,
     Lt,
     Le,
     Gt,
     Ge,
+    Is,
+    IsNot,
     And,
     Or,
 }
@@ -1533,18 +1552,38 @@ impl BinOp {
             Self::Div => "/",
             Self::FloorDiv => "//",
             Self::Mod => "%",
+            Self::Pow => "**",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
             Self::Eq => "==",
             Self::Ne => "!=",
             Self::Lt => "<",
             Self::Le => "<=",
             Self::Gt => ">",
             Self::Ge => ">=",
+            Self::Is => "is",
+            Self::IsNot => "is not",
             Self::And => "and",
             Self::Or => "or",
         }
     }
 
-    /// Whether this operator can panic at runtime (division/modulo by a possibly-zero divisor).
+    /// Whether this operator can panic at runtime, in the sense Body IR records as a [`PanicFact`].
+    ///
+    /// The recorded class is *unconditional* failure on a value the operator itself rejects: division and modulo by
+    /// a possibly-zero divisor fail on every build profile, so the fact is a property of the operation rather than
+    /// of how it is compiled.
+    ///
+    /// `**`, `<<`, and `>>` are deliberately **not** in that class, and this is a stated decision rather than an
+    /// omission (#1160). Each of them can trap only by exceeding the result width — integer `**` overflowing, a
+    /// shift distance at or beyond the operand's bit width — which is the same arithmetic-overflow class as `+`,
+    /// `-`, and `*`, none of which record a panic fact either. Recording overflow for the shifts and `**` alone
+    /// would claim a distinction between them and ordinary arithmetic that does not exist. The bitwise `&`, `|`,
+    /// and `^` are total on every input and cannot trap at all. Should Body IR ever model arithmetic overflow, it
+    /// belongs to the whole numeric operator set at once, under its own [`PanicReason`].
     pub const fn may_panic(self) -> bool {
         matches!(self, Self::Div | Self::FloorDiv | Self::Mod)
     }
@@ -2082,9 +2121,16 @@ impl std::fmt::Display for CallableTarget {
     }
 }
 
-/// Compiler-owned runtime/helper operation. These correspond to the stdlib helper calls the existing Rust-emission
-/// backend generates for string/list operators (see `src/backend/ir/conversions.rs::determine_binop_plan`), but are
-/// represented here as an explicit Body IR operation rather than inferred later from generated Rust call shapes.
+/// Compiler-owned runtime/helper operation: a source operator whose meaning is a call into the runtime rather than
+/// a machine instruction. Represented here as an explicit Body IR operation rather than inferred later from
+/// generated Rust call shapes.
+///
+/// Most of these mirror a helper the existing Rust-emission backend already generates for string and list operators
+/// (see `src/backend/ir/conversions.rs::determine_binop_plan`). The membership pair does not: that backend reaches
+/// containment through a `contains` method call rather than a binary-operator plan, so `str_contains` /
+/// `str_not_contains` state a runtime requirement Body IR needs and the runtime must satisfy, not a call shape read
+/// back out of emitted Rust. Each variant's [`Self::as_str`] name *is* that requirement's name; it is not a promise
+/// that a Rust function of exactly that signature already exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperOp {
     StrConcat,
@@ -2094,6 +2140,26 @@ pub enum HelperOp {
     StrLe,
     StrGt,
     StrGe,
+    /// `needle in haystack` on two strings: substring containment, not element membership.
+    ///
+    /// Membership is the one operator whose meaning genuinely changes with its operand types — substring for `str`,
+    /// element lookup for a collection — so it cannot be a [`BinOp`] without picking one of those meanings and
+    /// silently applying it to the other. Naming the string policy as its own helper is what makes the substring
+    /// choice a represented fact.
+    ///
+    /// **Argument order is the helper's own: `(haystack, needle)`.** Membership is the one string operator whose
+    /// surface order is the reverse of its signature — `needle in haystack` reads needle-first, while `str_contains`
+    /// takes the haystack first, as every `contains` in Rust does. Lowering swaps the operands so the call matches
+    /// the function it names. Preserving source order instead would leave one helper out of nine disagreeing with
+    /// its own signature, and a backend binding these positionally has no way to know which one.
+    StrContains,
+    /// `needle not in haystack` on two strings, with the same `(haystack, needle)` argument order as
+    /// [`Self::StrContains`].
+    ///
+    /// A separate helper rather than a negated [`Self::StrContains`], following the [`Self::StrEq`]/[`Self::StrNe`]
+    /// pair: one source operator stays one Body IR operation, so a consumer never has to recognize a negation
+    /// wrapper to know which operator was written.
+    StrNotContains,
     ListConcat,
 }
 
@@ -2109,6 +2175,8 @@ impl HelperOp {
             Self::StrLe => "str_le",
             Self::StrGt => "str_gt",
             Self::StrGe => "str_ge",
+            Self::StrContains => "str_contains",
+            Self::StrNotContains => "str_not_contains",
             Self::ListConcat => "list_concat",
         }
     }
