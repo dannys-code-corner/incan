@@ -68,9 +68,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         span: HirSourceSpan,
         out: &mut Vec<bir::Statement>,
     ) {
-        let ast::Condition::Expr(cond_expr) = &if_stmt.condition else {
-            self.push_unsupported_stmt("if-let pattern condition".to_string(), span, out);
-            return;
+        let cond_expr = match &if_stmt.condition {
+            ast::Condition::Expr(cond_expr) => cond_expr,
+            ast::Condition::Let { pattern, value } => {
+                self.lower_if_let(pattern, value, &if_stmt.then_body, scope, span, out);
+                return;
+            }
         };
         let cond = self.lower_expr_to_operand(cond_expr, scope, out);
 
@@ -221,6 +224,114 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         });
     }
 
+    /// Lower `if let P = subject:` as a two-arm [`bir::Rvalue::Match`].
+    ///
+    /// Desugaring to a match rather than an `If` plus a synthesized pattern test is deliberate, and follows
+    /// [`bir::Rvalue::Match`]'s own rule: match stays one structured node so a target backend's native `match`
+    /// performs the destructuring and dispatch, instead of this stage re-deriving them as a chain of tests.
+    ///
+    /// The parser accepts no `else` or `elif` on an `if let` (see its `test_parse_if_let_rejects_else_branch`), so
+    /// the fallback arm is always empty. That also settles the binding scope for free: the pattern's names exist in
+    /// the matched arm only, and there is no sibling branch that could observe them.
+    ///
+    /// A failed match is ordinary control flow, so no [`bir::PanicFact`] is recorded -- unlike `assert value is P`,
+    /// which panics on the same shape.
+    fn lower_if_let(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        value: &ast::Spanned<ast::Expr>,
+        then_body: &[ast::Spanned<ast::Statement>],
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        if !match_pattern_is_supported(&pattern.node) {
+            self.push_unsupported_stmt("`if let` with a byte-string literal pattern".to_string(), span, out);
+            return;
+        }
+        let scrutinee_ty = self.resolve_ty(value.span);
+        let scrutinee_place = self.lower_expr_to_place(value, scope, out);
+        let scrutinee = bir::Operand::place(scrutinee_place.clone(), bir::OwnershipFact::Borrow, false);
+
+        let layouts_before = self.materialized_range_locals.clone();
+        let matched_arm =
+            self.lower_statement_pattern_arm(pattern, &scrutinee_ty, &scrutinee_place, scope, then_body, span);
+        let layouts_after_match = self.materialized_range_locals.clone();
+
+        // The unmatched path runs none of the body, so it leaves the entry facts untouched.
+        self.materialized_range_locals = intersect_range_layouts(vec![layouts_before, layouts_after_match]);
+
+        let unmatched_arm = bir::MatchArm {
+            pattern: bir::Pattern::Wildcard,
+            guard_stmts: Vec::new(),
+            guard: None,
+            body_stmts: Vec::new(),
+            result: bir::Operand::Constant(bir::Constant::Unit),
+        };
+        self.push_assign_temp(
+            bir::Rvalue::Match {
+                scrutinee,
+                arms: vec![matched_arm, unmatched_arm],
+            },
+            IncanType::Primitive(IncanPrimitiveType::Unit),
+            scope,
+            span,
+            out,
+        );
+    }
+
+    /// Lower `while let P = subject:` as a [`bir::StatementKind::Loop`] whose body matches, then breaks.
+    ///
+    /// The subject is lowered *inside* the loop body so it is re-evaluated each iteration, which is what makes the
+    /// loop terminate: `while let Some(item) = iterator.next():` depends on the call running again every time.
+    /// Hoisting it would turn a draining loop into an infinite one.
+    ///
+    /// The unmatched arm breaks rather than recording a panic fact, because exhausting the pattern is how this loop
+    /// is meant to end.
+    fn lower_while_let(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        value: &ast::Spanned<ast::Expr>,
+        body: &[ast::Spanned<ast::Statement>],
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        if !match_pattern_is_supported(&pattern.node) {
+            self.push_unsupported_stmt("`while let` with a byte-string literal pattern".to_string(), span, out);
+            return;
+        }
+        let loop_scope = self.new_scope(Some(scope), span);
+        self.push_loop(loop_scope, None, span, out, |builder, loop_scope, body_stmts| {
+            let scrutinee_ty = builder.resolve_ty(value.span);
+            let scrutinee_place = builder.lower_expr_to_place(value, loop_scope, body_stmts);
+            let scrutinee = bir::Operand::place(scrutinee_place.clone(), bir::OwnershipFact::Borrow, false);
+
+            let matched_arm =
+                builder.lower_statement_pattern_arm(pattern, &scrutinee_ty, &scrutinee_place, loop_scope, body, span);
+            let exhausted_arm = bir::MatchArm {
+                pattern: bir::Pattern::Wildcard,
+                guard_stmts: Vec::new(),
+                guard: None,
+                body_stmts: vec![bir::Statement {
+                    kind: bir::StatementKind::Break { value: None },
+                    span,
+                }],
+                result: bir::Operand::Constant(bir::Constant::Unit),
+            };
+            builder.push_assign_temp(
+                bir::Rvalue::Match {
+                    scrutinee,
+                    arms: vec![matched_arm, exhausted_arm],
+                },
+                IncanType::Primitive(IncanPrimitiveType::Unit),
+                loop_scope,
+                span,
+                body_stmts,
+            );
+        });
+    }
+
     /// Lower a value-producing `loop:` expression (`ast::Expr::Loop`) into a [`bir::StatementKind::Loop`] plus a
     /// dedicated result local that every `break value` inside the loop's *own* body (not a nested loop's --
     /// enforced by [`Self::loop_break_targets`]) assigns into before exiting. The typechecker resolves this
@@ -291,9 +402,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         span: HirSourceSpan,
         out: &mut Vec<bir::Statement>,
     ) {
-        let ast::Condition::Expr(cond_expr) = &while_stmt.condition else {
-            self.push_unsupported_stmt("while-let pattern condition".to_string(), span, out);
-            return;
+        let cond_expr = match &while_stmt.condition {
+            ast::Condition::Expr(cond_expr) => cond_expr,
+            ast::Condition::Let { pattern, value } => {
+                self.lower_while_let(pattern, value, &while_stmt.body, scope, span, out);
+                return;
+            }
         };
 
         let loop_scope = self.new_scope(Some(scope), span);

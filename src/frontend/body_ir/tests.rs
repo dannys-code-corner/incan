@@ -7024,3 +7024,91 @@ fn projection_through_an_active_feature_lowers_exactly_as_an_ungated_program_doe
     );
     Ok(())
 }
+
+// ---- Pattern conditions (#1161) ----
+
+/// `if let` lowers to the single-arm match RFC 049 describes, with an implicit non-matching fallthrough.
+#[test]
+fn if_let_lowers_to_a_single_arm_match_with_an_empty_fallback() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def run(o: Option[int]) -> int:\n",
+        "  mut total = 0\n",
+        "  if let Some(v) = o:\n",
+        "    total = v\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "if_let"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "`if let` must lower without a placeholder: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("Some(bind("),
+        "the pattern must bind its payload: {snapshot}"
+    );
+    // RFC 049's own reading: a single-arm `match` plus an implicit `_ => pass`.
+    assert!(
+        snapshot.contains("_ => const(())"),
+        "the non-matching path must be an explicit wildcard arm: {snapshot}"
+    );
+    Ok(())
+}
+
+/// A failed pattern condition is control flow, not a panic.
+#[test]
+fn if_let_records_no_panic_fact_for_a_non_matching_pattern() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def run(o: Option[int]) -> int:\n",
+        "  mut total = 0\n",
+        "  if let Some(v) = o:\n",
+        "    total = v\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "if_let_panic"])?;
+    let body = body_named(&module, "run")?;
+
+    // `assert value is P` panics on the same shape; a pattern *condition* must not.
+    assert!(
+        body.panic_facts.is_empty(),
+        "a non-matching `if let` is ordinary control flow, not a panic: {:?}",
+        body.panic_facts
+    );
+    Ok(())
+}
+
+/// `while let` re-evaluates its subject each iteration and exits by breaking when the pattern stops matching.
+#[test]
+fn while_let_re_evaluates_its_subject_and_breaks_when_exhausted() -> Result<(), Box<dyn std::error::Error>> {
+    // The subject is a call precisely so re-evaluation is observable: a hoisted subject would call `pop` once and
+    // loop forever on the same value.
+    let source = concat!(
+        "def pop() -> Option[int]:\n",
+        "  return None\n",
+        "\n",
+        "def run() -> int:\n",
+        "  mut total = 0\n",
+        "  while let Some(item) = pop():\n",
+        "    total = total + item\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "while_let"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "`while let` must lower without a placeholder: {snapshot}"
+    );
+    let loop_at = snapshot.find("loop").ok_or("expected a loop statement")?;
+    let call_at = snapshot.find("call fn:pop").ok_or("expected the subject call")?;
+    assert!(
+        call_at > loop_at,
+        "the subject must be re-evaluated inside the loop, not hoisted above it: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("break"),
+        "an exhausted pattern must break rather than panic: {snapshot}"
+    );
+    Ok(())
+}

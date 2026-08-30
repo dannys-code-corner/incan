@@ -186,6 +186,62 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// `src/backend/ir/lower/expr/patterns.rs`), which this bucket deliberately does not mirror -- see
     /// [`bir::Pattern`]'s own docs.
     #[allow(clippy::too_many_arguments)]
+    /// Lower one pattern arm whose body is a statement block, restoring the enclosing bindings afterwards.
+    ///
+    /// Shared by the `if let` and `while let` desugarings (#1161), which both need the same three steps: test a
+    /// pattern, run a block with its bindings in scope, then put the enclosing bindings back so they cannot leak
+    /// past the construct. A `match` arm deliberately does not use this -- its body may be a single expression and
+    /// it may carry a guard, both of which change what the arm produces.
+    ///
+    /// Restoring is what makes `if let`'s scoping honest: the pattern's names belong to the `then` branch only, and
+    /// an `else` branch lowered afterwards must not see them.
+    pub(super) fn lower_statement_pattern_arm(
+        &mut self,
+        pattern: &ast::Spanned<ast::Pattern>,
+        scrutinee_ty: &IncanType,
+        scrutinee_place: &bir::Place,
+        scope: bir::ScopeId,
+        body: &[ast::Spanned<ast::Statement>],
+        span: HirSourceSpan,
+    ) -> bir::MatchArm {
+        let arm_scope = self.new_scope(Some(scope), span);
+        let mut seen: HashMap<String, bir::LocalId> = HashMap::new();
+        let mut saved_bindings: Vec<(String, Option<bir::LocalId>)> = Vec::new();
+        let lowered_pattern = self.lower_match_pattern(
+            pattern,
+            scrutinee_ty,
+            scrutinee_place,
+            arm_scope,
+            &PatternReadScope::FollowingStatements(body),
+            &mut seen,
+            &mut saved_bindings,
+        );
+
+        let mut body_stmts = Vec::new();
+        self.lower_block_into(body, arm_scope, &mut body_stmts);
+        self.insert_scope_drops(&mut body_stmts, arm_scope);
+
+        for (name, previous) in saved_bindings {
+            match previous {
+                Some(local) => {
+                    self.bindings.insert(name, local);
+                }
+                None => {
+                    self.bindings.remove(&name);
+                }
+            }
+        }
+
+        bir::MatchArm {
+            pattern: lowered_pattern,
+            guard_stmts: Vec::new(),
+            guard: None,
+            body_stmts,
+            // A statement-block arm produces no value, exactly as a `match` arm with a block body does.
+            result: bir::Operand::Constant(bir::Constant::Unit),
+        }
+    }
+
     pub(super) fn lower_match_pattern(
         &mut self,
         pattern: &ast::Spanned<ast::Pattern>,
