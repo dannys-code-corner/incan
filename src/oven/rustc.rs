@@ -3208,6 +3208,15 @@ impl OvenRustcArtifactManifest {
                     base_adopted_paths.insert(relative_path.clone());
                     continue;
                 }
+                // A dynamic library's bytes include linker wrapping rustc's remapping cannot reach — Mach-O N_OSO
+                // stab entries record object-file paths and modification times, and the image UUID hashes them — so
+                // proc-macro dylibs never reproduce byte-for-byte even on one machine. The embedded crate metadata
+                // is rustc-emitted and path-remapped, so the same locked unit carries the same strict version hash
+                // in both copies and dependents load either; adopt the base's.
+                if relative_path.ends_with(".dylib") || relative_path.ends_with(".so") {
+                    base_adopted_paths.insert(relative_path.clone());
+                    continue;
+                }
                 return Err(OvenRustcError::InvalidInput {
                     field: "project extension base",
                     message: format!(
