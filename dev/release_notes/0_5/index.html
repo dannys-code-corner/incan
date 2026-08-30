@@ -78,7 +78,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#why-05-exists" class="md-skip">
+        <a href="#v051-rust-interop-and-installed-toolchain-repairs" class="md-skip">
           Skip to content
         </a>
       
@@ -8292,6 +8292,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#v051-rust-interop-and-installed-toolchain-repairs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.1: Rust-interop and installed-toolchain repairs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-05-exists" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -9104,6 +9115,17 @@
     <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
       
         <li class="md-nav__item">
+  <a href="#v051-rust-interop-and-installed-toolchain-repairs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        v0.5.1: Rust-interop and installed-toolchain repairs
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#why-05-exists" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -9424,6 +9446,28 @@
   </div>
 </section>
 <!-- markdownlint-enable MD033 -->
+<h2 id="v051-rust-interop-and-installed-toolchain-repairs">v0.5.1: Rust-interop and installed-toolchain repairs<a class="headerlink" href="#v051-rust-interop-and-installed-toolchain-repairs" title="Permanent link">&para;</a></h2>
+<p>Incan's first patch release does not add a new language or product surface; it carries the focused repairs tracked under <a href="https://github.com/encero-systems/incan/issues/1191">#1191</a>, validated end to end on the published toolchain artifacts: a fresh install, the starter project, a bare Bevy application built against the shipped standard-library closure, and the downstream IncQL consumer.</p>
+<p>Repairs in this release:</p>
+<ul>
+<li>Release archives retain the Incan standard-library sources needed for installed toolchains to resolve <code>std.*</code> imports during metadata inspection.</li>
+<li>A compiler built from source can seal its vocabulary-helper closure at the explicit <code>incan oven bake</code> boundary. When a compatible compiler Loaf already seals that helper, normal and compiler-suite selection use it only after verifying the capability; generated provider Oven outputs are not re-hashed as user Cargo source, while project-output authority remains receipt-exact and no normal path gains Cargo authority.</li>
+<li>Repeating an explicit Oven bake remains source-current across an otherwise equivalent format-1 to format-2 <code>incan.lock</code> migration; the lock's decoded semantic fields, rather than its structural format number, define project authority.</li>
+<li>Oven source-authority selection recognises the same sealed registry source archive across compatible feature selections, an initial explicit project bake may establish its first Cargo lock, and aggregate-only storage limits no longer fail because of an inherited per-domain default. The bounded aggregate store policy also leaves room for a measured IncQL/DataFusion provider-to-consumer compatibility-bake hand-off.</li>
+<li>Consumers of a sealed <code>pub::</code> package use the provider's canonical flattened union ordering when emitting external union variants.</li>
+<li>Crate-root union wrappers in <code>pub::</code> consumers retain each provider type's exported module path instead of assuming an undeclared crate-root re-export.</li>
+<li>Project inspection authorities preserve compatible reused direct-rustc plan receipts, so a rebake cannot publish an authority that normal <code>incan test</code> must reject.</li>
+<li>Compound bases of <code>**</code> now remain grouped before Rust power-method emission; previously, some valid programs compiled and returned a silently incorrect numeric result.</li>
+<li>Rust interop now normalizes inspector-qualified relative paths and elides lifetime-only generic arguments when comparing imported values with inspected method parameters, allowing DataFusion read-option values to reach their Rust call boundary without weakening comparisons of real type arguments.</li>
+<li><strong>Compiler:</strong> Rust generic ownership is now derived from inspected metadata rather than names or configuration: owned Rust parameters can bind mutably (<a href="https://github.com/encero-systems/incan/issues/1216">#1216</a>), publicly re-exported Rust types keep one nominal identity (<a href="https://github.com/encero-systems/incan/issues/1217">#1217</a>), public Rust tuple structs carry constructor-shape metadata (<a href="https://github.com/encero-systems/incan/issues/1218">#1218</a>), <code>f32</code> arithmetic preserves its width (<a href="https://github.com/encero-systems/incan/issues/1219">#1219</a>), and mutable query-style generic payloads lower to mutable component references (<a href="https://github.com/encero-systems/incan/issues/1223">#1223</a>). The compiler proves each projection from inspected Rust implementations and observed derive-macro expansions; native Rust compilation remains the final authority, and unprovable cases fail closed.</li>
+<li><strong>Compiler:</strong> an imported Rust named-field constructor may omit fields when inspected metadata proves the type implements <code>Default</code>; the omitted fields are filled with <code>..Default::default()</code> in generated Rust.</li>
+<li><strong>Tooling:</strong> the transient <code>[tool.incan.interop]</code> manifest section that earlier v0.5.1 release candidates introduced is removed. Ownership projections are inferred from inspected metadata instead, and a manifest still carrying the section is loaded with the section ignored.</li>
+<li><strong>Tooling:</strong> installed toolchains retain the Rust 1.98 split-metadata <code>.rmeta</code> sidecars their sealed library closures depend on, so a fresh machine can bake and link projects such as a bare Bevy application against the shipped standard-library closure.</li>
+<li><strong>Tooling:</strong> committed <code>incan.lock</code> files render sibling project coordinates portably (for example <code>../producer</code>), so locks enriched on one machine no longer churn or break on another (<a href="https://github.com/encero-systems/incan/issues/1226">#1226</a>).</li>
+<li><strong>Tooling:</strong> a project bake against the shipped standard-library closure now keeps every dependency the project's own compiled crates were built against. Shared third-party crates a project declares directly still resolve to the toolchain's sealed copies, so types that cross the standard-library boundary keep one identity, while a project's other dependencies coexist with the toolchain's as distinct compiled crates (<a href="https://github.com/encero-systems/incan/issues/1227">#1227</a>). Builds are additionally path-remapped for machine-independent output.</li>
+<li><strong>Tooling:</strong> local <code>make lint</code> and pre-commit lanes run clippy with the same flags as hosted CI, so feature-gated violations surface before a push.</li>
+</ul>
+<p>The repeat-<code>incan oven bake</code> authority failure in <a href="https://github.com/encero-systems/incan/issues/1194">#1194</a> is repaired: the format-1-to-format-2 migration and an unchanged rebake pass under the released control, which every release candidate repeated before this cut.</p>
 <h2 id="why-05-exists">Why 0.5 exists<a class="headerlink" href="#why-05-exists" title="Permanent link">&para;</a></h2>
 <p>By the end of 0.4, an evaluator could install Incan, create a project, run it, inspect generated Rust, and export compiler facts. But several critical answers still depended on the path that happened to produce an artifact: analysis could be reconstructed by individual commands, SDK source could be prepared repeatedly, generated Cargo state could become an accidental authority, and native integration facts were not yet one checked contract.</p>
 <p>0.5 tightens that system around a single idea: <strong>the compiler should know what was checked, what was selected, what was built, and what may be reused</strong>.</p>
