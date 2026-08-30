@@ -1000,7 +1000,7 @@ use provider_ops::{ProviderOperationCatalog, ProviderOperationRecord};
 use reads::*;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 #[cfg(test)]
 mod tuple_destructure_interop_tests {
