@@ -474,12 +474,15 @@ elif [ "$sdk_provider_seed" != "$sdk_seed_root" ]; then
 fi
 release_provider_store=""
 rm -f "$package_dir/share/incan/.incan.lock"
-# Provider source is a packaging input, not an installed SDK component. Remove it only after every checked provider
-# artifact has been published; consumers receive the Rust support crate plus the relocatable provider payloads.
-rm -rf "$package_dir/crates/incan_stdlib/stdlib"
+# The staged source tree is the installed toolchain's authoritative Incan-language stdlib surface. SDK providers and
+# Oven Loafs contain generated Rust/runtime artifacts, but source imports, test discovery, and metadata inspection
+# still require these checked `.incn` declarations. Keep the versioned bundle beside its support crate rather than
+# restoring the obsolete top-level `stdlib/` layout.
+[ -f "$package_dir/crates/incan_stdlib/stdlib/prelude.incn" ] \
+  || fail "release package is missing the built-in stdlib prelude source"
+[ -f "$package_dir/crates/incan_stdlib/stdlib/testing.incn" ] \
+  || fail "release package is missing the built-in stdlib testing source"
 [ ! -d "$package_dir/stdlib" ] || fail "legacy top-level stdlib source unexpectedly entered the package"
-[ ! -d "$package_dir/crates/incan_stdlib/stdlib" ] \
-  || fail "provider-owned stdlib source unexpectedly entered the package"
 
 # Ship the typed release envelope through the same explicit baker used by local and CI preparation. The baker owns
 # fixture source, identity, admission, accounting, and atomic publication; this packaging script only stages its output.

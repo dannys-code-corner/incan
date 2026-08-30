@@ -44,10 +44,21 @@ def pep440(version: str) -> str:
     return re.sub(r"-(a|b|rc)(\d+)$", r"\1\2", normalized)
 
 
+def release_line_requirement(version: str) -> str:
+    """Return the source SDK requirement for this release line, including its development cohort."""
+    core = version.split("-", maxsplit=1)[0]
+    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", core)
+    if not match:
+        raise SystemExit(f"check_release_version_consistency: workspace version {version!r} is not complete semver")
+    major, minor, _patch = (int(part) for part in match.groups())
+    return f">={version},<{major}.{minor + 1}.0"
+
+
 def mirrors(version: str) -> list[tuple[Path, re.Pattern[str], str]]:
     """Files carrying a literal that must equal the workspace version, with the spelling each one expects."""
     cargo_form = version
     pip_form = pep440(version)
+    sdk_requirement = release_line_requirement(version)
     return [
         (Path("workspaces/release/npm/package.json"), re.compile(r'^\s*"version":\s*"([^"]+)"', re.MULTILINE), cargo_form),
         (Path("workspaces/release/pip/pyproject.toml"), re.compile(r'^version = "([^"]+)"', re.MULTILINE), pip_form),
@@ -55,6 +66,16 @@ def mirrors(version: str) -> list[tuple[Path, re.Pattern[str], str]]:
             Path("workspaces/release/pip/src/incan_toolchain/__init__.py"),
             re.compile(r'^__version__ = "([^"]+)"', re.MULTILINE),
             pip_form,
+        ),
+        (
+            Path("crates/incan_stdlib/stdlib/sdk-components.toml"),
+            re.compile(r'^version = "([^"]+)"', re.MULTILINE),
+            cargo_form,
+        ),
+        (
+            Path("crates/incan_stdlib/stdlib/sdk-components.toml"),
+            re.compile(r'^compiler-requirement = "([^"]+)"', re.MULTILINE),
+            sdk_requirement,
         ),
     ]
 

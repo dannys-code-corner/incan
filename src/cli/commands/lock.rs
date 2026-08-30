@@ -47,7 +47,7 @@ use crate::oven::legacy_cargo::OvenLegacyCargoInspectionPackage;
 use crate::oven::legacy_cargo::{OVEN_LEGACY_CARGO_INSPECTION_AUTHORITY_ENV, explicit_project_bake_inspection_sources};
 #[cfg(feature = "rust_inspect")]
 use crate::oven::loaf::{
-    OvenLoafSelection, OvenToolchainLoaf, resolve_toolchain_loaf, resolve_toolchain_loaf_by_identity,
+    OvenToolchainLoaf, resolve_compiler_owned_loaf_by_identity, resolve_compiler_owned_loaf_for_registry_dependencies,
     resolve_toolchain_loaf_for_registry_sources,
 };
 #[cfg(feature = "rust_inspect")]
@@ -73,7 +73,8 @@ use super::common::{
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
-    collect_rust_inspect_query_paths, ensure_rust_inspect_workspace_with_cargo_package_name,
+    collect_rust_inspect_derive_probe_paths, collect_rust_inspect_query_paths,
+    ensure_rust_inspect_workspace_with_cargo_package_name, mark_oven_cargo_bootstrap_rust_inspection,
     mark_oven_direct_rust_inspection, prewarm_rust_inspect_workspace,
 };
 
@@ -423,6 +424,8 @@ pub(crate) struct RustInspectWorkspaceRequest<'a> {
     pub cargo_policy_flags: Vec<String>,
     pub cargo_target_dir: &'a Path,
     pub rust_inspect_query_paths: &'a [String],
+    /// Exact external Rust derive macros used by concrete Incan declarations.
+    pub rust_derive_probe_paths: &'a [String],
     pub prepare_when_empty: bool,
     /// Select rust-analyzer's direct source graph before any inspection action can run Cargo.
     pub direct_oven_inspection: bool,
@@ -496,6 +499,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         cargo_policy_flags,
         cargo_target_dir,
         rust_inspect_query_paths,
+        rust_derive_probe_paths,
         prepare_when_empty,
         direct_oven_inspection,
         force_direct_prewarm,
@@ -503,7 +507,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         prepared_project_source_authorities,
         explicit_oven_bake,
     } = request;
-    if rust_inspect_query_paths.is_empty() && !prepare_when_empty {
+    if rust_inspect_query_paths.is_empty() && rust_derive_probe_paths.is_empty() && !prepare_when_empty {
         return Ok(None);
     }
 
@@ -519,6 +523,7 @@ pub(crate) fn prepare_rust_inspect_workspace(
         clear_cargo_lock,
         cargo_target_dir,
         &cargo_policy_flags,
+        rust_derive_probe_paths,
     )?;
     let mut source_loaf = None;
     let mut project_source_authorities = None;
@@ -602,9 +607,8 @@ pub(crate) fn prepare_rust_inspect_workspace(
                     )?;
                     source_loaf = Some(selected);
                 } else {
-                    let release_loaf =
-                        resolve_toolchain_loaf(&receipt, OvenLoafSelection::CompilerOwnedProviderSuperset)
-                            .map_err(|error| CliError::failure(error.to_string()))?;
+                    let release_loaf = resolve_compiler_owned_loaf_for_registry_dependencies(&receipt, &[])
+                        .map_err(|error| CliError::failure(error.to_string()))?;
                     let release_registry_lock = release_loaf
                         .as_ref()
                         .map(|loaf| loaf.artifact_root.join(OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH));
@@ -639,7 +643,11 @@ pub(crate) fn prepare_rust_inspect_workspace(
                 ));
             }
         }
-        mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
+        if explicit_oven_bake {
+            mark_oven_cargo_bootstrap_rust_inspection(&rust_inspect_manifest_dir)?;
+        } else {
+            mark_oven_direct_rust_inspection(&rust_inspect_manifest_dir)?;
+        }
     }
     prewarm_rust_inspect_workspace(
         &rust_inspect_manifest_dir,
@@ -745,6 +753,20 @@ fn oven_inspection_sources(
         .collect()
 }
 
+/// Return whether a sealed source catalog owns the requested immutable Cargo source archive.
+///
+/// This check guards source-root hand-off only; it does not authorize reuse of compiled Rust artifacts, whose
+/// feature-sensitive receipts are validated by the direct-rustc plan.
+#[cfg(feature = "rust_inspect")]
+fn registry_source_is_owned_by_catalog(
+    source: &crate::oven::rustc::OvenRustcRegistrySourcePackage,
+    catalog: &[crate::oven::rustc::OvenRustcRegistrySourcePackage],
+) -> bool {
+    catalog.iter().any(|candidate| {
+        candidate.package == source.package && candidate.version == source.version && candidate.source == source.source
+    })
+}
+
 /// Resolve one exact project authority and all named constituents once for the complete test command.
 #[cfg(feature = "rust_inspect")]
 pub(crate) fn prepare_project_registry_source_authorities(
@@ -767,7 +789,7 @@ pub(crate) fn prepare_project_registry_source_authorities(
                 build_unit_identity,
                 receipt,
             } => {
-                let loaf = resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
+                let loaf = resolve_compiler_owned_loaf_by_identity(receipt, loaf_identity)
                     .map_err(|error| CliError::failure(error.to_string()))?
                     .ok_or_else(|| {
                         CliError::failure(format!(
@@ -876,18 +898,9 @@ pub(crate) fn prepare_project_registry_source_authorities(
                 (owner.root.as_path(), owner.catalog.as_slice())
             }
         };
-        let matches = catalog
-            .iter()
-            .filter(|candidate| {
-                candidate.package == source.package.package
-                    && candidate.version == source.package.version
-                    && candidate.features == source.package.features
-                    && candidate.source == source.package.source
-            })
-            .count();
-        if matches != 1 {
+        if !registry_source_is_owned_by_catalog(&source.package, catalog) {
             return Err(CliError::failure(format!(
-                "project inspection source `{}` {} has {matches} exact records in its named owner",
+                "project inspection source `{}` {} has no exact record in its named owner",
                 source.package.package, source.package.version
             )));
         }
@@ -983,9 +996,21 @@ impl PreparedOvenProjectRegistrySourceAuthorities {
         if !project_inspection_test_dependency_envelope_supports_dependencies(&self.authority.payload, &promoted)
             .map_err(|error| CliError::failure(error.to_string()))?
         {
-            return Err(CliError::failure(
-                "Oven Alpha project inspection authority has a missing, stale, or incompatible test dependency root; rerun `incan oven bake --project .`",
-            ));
+            let expected = self
+                .authority
+                .payload
+                .test_dependency_envelope
+                .as_ref()
+                .map(|envelope| envelope.dependency_roots.keys().cloned().collect::<Vec<_>>().join(", "))
+                .unwrap_or_default();
+            let actual = promoted
+                .iter()
+                .map(|dependency| dependency.crate_name.replace('-', "_"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(CliError::failure(format!(
+                "Oven Alpha project inspection authority has a missing, stale, or incompatible test dependency root (sealed aliases: [{expected}]; requested aliases: [{actual}]); rerun `incan oven bake --project .`"
+            )));
         }
         self.test_dependency_plan.as_ref().map(Some).ok_or_else(|| {
             CliError::failure(
@@ -1182,7 +1207,10 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         provider_plan,
     } = request;
     let metadata_query_paths = collect_rust_inspect_query_paths(modules);
-    if metadata_query_paths.is_empty() {
+    let rust_derive_probe_paths = collect_rust_inspect_derive_probe_paths(modules);
+    // A quoted `@rust.derive("crate::path::Macro")` needs a prepared workspace for its expansion evidence even when
+    // the module imports no other `rust::` items, so probe paths keep this preparation alive on their own.
+    if metadata_query_paths.is_empty() && rust_derive_probe_paths.is_empty() {
         return Ok(None);
     }
 
@@ -1255,6 +1283,7 @@ pub(crate) fn prepare_rust_inspect_typecheck_workspace(
         cargo_policy_flags: rust_inspect_cargo_flags,
         cargo_target_dir: &cargo_target_dir,
         rust_inspect_query_paths: &metadata_query_paths,
+        rust_derive_probe_paths: &rust_derive_probe_paths,
         prepare_when_empty: false,
         // This workspace supports ordinary `incan check` metadata queries. It is an inspectable projection only:
         // Rust-analyzer must load its receipt-derived `rust-project.json`, not rediscover a Cargo workspace from a
@@ -2720,6 +2749,37 @@ mod tests {
             optional: false,
             package: None,
         }
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn registry_source_ownership_unifies_feature_variants_with_the_same_source_archive() {
+        let source = crate::oven::rustc::OvenRustcRegistrySource {
+            registry: "registry+https://example.invalid/index".to_string(),
+            checksum: "fixture-checksum".to_string(),
+            relative_root: "registry-sources/syn".to_string(),
+            digest: "sha256:fixture-source".to_string(),
+        };
+        let requested = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            package: "syn".to_string(),
+            version: "2.0.117".to_string(),
+            features: vec!["derive".to_string()],
+            source: source.clone(),
+        };
+        let owner = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            features: vec!["clone-impls".to_string(), "full".to_string()],
+            ..requested.clone()
+        };
+
+        assert!(registry_source_is_owned_by_catalog(&requested, &[owner]));
+        let different_archive = crate::oven::rustc::OvenRustcRegistrySourcePackage {
+            source: crate::oven::rustc::OvenRustcRegistrySource {
+                checksum: "other-fixture-checksum".to_string(),
+                ..source
+            },
+            ..requested.clone()
+        };
+        assert!(!registry_source_is_owned_by_catalog(&different_archive, &[requested]));
     }
 
     #[test]

@@ -5,6 +5,7 @@
 
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
+use std::collections::HashSet;
 
 use super::super::decl::Visibility;
 use super::super::expr::{IrExprKind, MatchArm, Pattern};
@@ -345,11 +346,27 @@ impl<'a> IrEmitter<'a> {
 
     /// Emit a pattern for match expressions.
     pub(super) fn emit_pattern(&self, pattern: &Pattern) -> TokenStream {
+        self.emit_pattern_with_mutable_bindings(pattern, &HashSet::new())
+    }
+
+    /// Emit a pattern, marking source-mutation bindings mutable for Rust `for` emission.
+    ///
+    /// Match patterns retain their source spelling. The `for` emitter alone supplies a non-empty binding set after
+    /// proving that the loop body writes through each name.
+    pub(in crate::backend::ir::emit) fn emit_pattern_with_mutable_bindings(
+        &self,
+        pattern: &Pattern,
+        mutable_bindings: &HashSet<String>,
+    ) -> TokenStream {
         match pattern {
             Pattern::Wildcard => quote! { _ },
             Pattern::Var(name) => {
                 let n = Self::rust_ident(name);
-                quote! { #n }
+                if mutable_bindings.contains(name) {
+                    quote! { mut #n }
+                } else {
+                    quote! { #n }
+                }
             }
             Pattern::Literal(lit) => {
                 // Pattern literals must be emitted without .to_string() or other conversions
@@ -383,7 +400,10 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             Pattern::Tuple(pats) => {
-                let ps: Vec<_> = pats.iter().map(|p| self.emit_pattern(p)).collect();
+                let ps: Vec<_> = pats
+                    .iter()
+                    .map(|p| self.emit_pattern_with_mutable_bindings(p, mutable_bindings))
+                    .collect();
                 quote! { (#(#ps),*) }
             }
             Pattern::Struct { name, fields } => {
@@ -392,7 +412,7 @@ impl<'a> IrEmitter<'a> {
                     .iter()
                     .map(|(fname, fpat)| {
                         let fn_ident = format_ident!("{}", fname);
-                        let fp = self.emit_pattern(fpat);
+                        let fp = self.emit_pattern_with_mutable_bindings(fpat, mutable_bindings);
                         quote! { #fn_ident: #fp }
                     })
                     .collect();
@@ -427,12 +447,18 @@ impl<'a> IrEmitter<'a> {
                 if fields.is_empty() {
                     quote! { #v }
                 } else {
-                    let fs: Vec<_> = fields.iter().map(|p| self.emit_pattern(p)).collect();
+                    let fs: Vec<_> = fields
+                        .iter()
+                        .map(|p| self.emit_pattern_with_mutable_bindings(p, mutable_bindings))
+                        .collect();
                     quote! { #v(#(#fs),*) }
                 }
             }
             Pattern::Or(pats) => {
-                let ps: Vec<_> = pats.iter().map(|p| self.emit_pattern(p)).collect();
+                let ps: Vec<_> = pats
+                    .iter()
+                    .map(|p| self.emit_pattern_with_mutable_bindings(p, mutable_bindings))
+                    .collect();
                 quote! { #(#ps)|* }
             }
         }

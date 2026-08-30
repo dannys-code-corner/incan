@@ -33,7 +33,7 @@ use super::rustc::{
     validate_sealed_registry_leaf,
 };
 use super::store::{OvenArtifactKind, OvenStore, OvenStoreError};
-use super::{OvenReceipt, digest_bytes};
+use super::{OvenReceipt, digest_bytes, receipt_without_build_unit_input};
 use crate::manifest::{DependencySource, DependencySpec, ProjectManifest};
 use crate::version::{INCAN_VERSION, SDK_PROVIDER_CODEGEN_REVISION};
 
@@ -60,6 +60,11 @@ pub const OVEN_NESTED_DEPENDENCY_MISS_SUMMARY: &str = "This nested build's depen
 ///
 /// A miss message without it describes some other failure, so the probe must not treat it as the expected one.
 pub const OVEN_NO_IMPLICIT_DEPENDENCY_BUILD: &str = "will not compile them for you";
+/// Build-unit input that records a source compiler's sealed vocabulary-helper capability.
+///
+/// This is project-private publication evidence rather than a runtime-cohort input. A compiler-owned Loaf may omit
+/// it only after proving that it seals the vocabulary helper itself.
+pub const OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT: &str = "source-compiler-vocab-support";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
@@ -1015,6 +1020,7 @@ pub fn prepare_loaf_from_generated_project(
             OvenLegacyCargoDirectDependencyClosure::GeneratedSource
         },
         compact_debug_info: true,
+        source_compiler_vocab_support: false,
         base_loaf: None,
     })?;
     let identity = receipt
@@ -1110,7 +1116,6 @@ fn export_loaf(
         serde_json::from_slice::<OvenRustcArtifactManifest>(&payload).map_err(|error| OvenLoafError::Preparation {
             message: format!("temporary Loaf payload is not a direct-rustc plan: {error}"),
         })?;
-    discard_loaf_metadata_sidecars(&mut plan);
     record_generated_root_externs(&mut plan);
     promote_compiler_runtime_externs(&mut plan)?;
     plan.registry_leaves = registry_leaves.clone();
@@ -1520,12 +1525,57 @@ fn bake_compiler_vocab_support(
     loaf_staging: &Path,
     context: &OvenLoafBakerContext<'_>,
 ) -> Result<u64, OvenLoafError> {
-    let compiler_root = context.compiler_root;
-    let cargo = context.cargo;
-    let rustc = context.rustc;
-    let cargo_target = context.compiler_support_target;
-    let capacity_roots: &[&Path] = &context.capacity_roots;
-    let transient_limit = context.transient_limit;
+    bake_source_compiler_vocab_support(OvenSourceCompilerVocabSupportRequest {
+        plan,
+        loaf_staging,
+        compiler_root: context.compiler_root,
+        cargo: context.cargo,
+        rustc: context.rustc,
+        cargo_target: context.compiler_support_target,
+        capacity_roots: &context.capacity_roots,
+        transient_limit: context.transient_limit,
+    })
+}
+
+/// Inputs owned by the explicit publisher that seals a source compiler's vocabulary helper closure.
+pub(crate) struct OvenSourceCompilerVocabSupportRequest<'a> {
+    /// Plan that receives the digest-verified helper artifacts.
+    pub plan: &'a mut OvenRustcArtifactManifest,
+    /// Private publisher staging root that owns copied helper artifacts.
+    pub loaf_staging: &'a Path,
+    /// Checked compiler workspace that owns `incan_vocab` and its lockfile.
+    pub compiler_root: &'a Path,
+    /// Cargo executable admitted only for this explicit publisher operation.
+    pub cargo: &'a Path,
+    /// Rust compiler whose target/profile must match the sealed plan.
+    pub rustc: &'a Path,
+    /// Private Cargo target root for the helper's native and Wasm builds.
+    pub cargo_target: &'a Path,
+    /// Publisher-private directories included in transient-capacity enforcement.
+    pub capacity_roots: &'a [&'a Path],
+    /// Maximum physical allocation allowed while compiling the helper.
+    pub transient_limit: u64,
+}
+
+/// Seal the compiler-source vocabulary helper closure into an explicit publisher's immutable plan.
+///
+/// The caller supplies the compiler root that owns the checked `incan_vocab` manifest and workspace lock, plus only
+/// publisher-private output and capacity roots. This is deliberately unavailable to normal build, run, and test
+/// paths: after this function returns, those paths receive only the digest-verified direct-Rustc artifacts recorded
+/// in `plan`.
+pub(crate) fn bake_source_compiler_vocab_support(
+    request: OvenSourceCompilerVocabSupportRequest<'_>,
+) -> Result<u64, OvenLoafError> {
+    let OvenSourceCompilerVocabSupportRequest {
+        plan,
+        loaf_staging,
+        compiler_root,
+        cargo,
+        rustc,
+        cargo_target,
+        capacity_roots,
+        transient_limit,
+    } = request;
     const INCAN_VOCAB: &str = "incan_vocab";
     const VOCAB_DESUGARER_TARGET: &str = "wasm32-wasip1";
     if plan.externs.iter().any(|artifact| artifact.crate_name == INCAN_VOCAB) {
@@ -1558,6 +1608,11 @@ fn bake_compiler_vocab_support(
     }
 
     let support_root = loaf_staging.join("compiler-support");
+    // Cargo treats an explicitly requested host target differently from its default target directory. Keep the
+    // native and Wasm publisher outputs disjoint so a second target invocation cannot rewrite the first closure
+    // before its compiler-artifact records are sealed.
+    let native_cargo_target = cargo_target.join("native");
+    let wasm_cargo_target = cargo_target.join("wasm");
     let mut command = Command::new(cargo);
     command
         .current_dir(&crate_root)
@@ -1568,7 +1623,7 @@ fn bake_compiler_vocab_support(
         .arg("--target")
         .arg(&plan.intent.target)
         .arg("--target-dir")
-        .arg(cargo_target)
+        .arg(&native_cargo_target)
         .arg("--locked")
         .arg("--offline");
     if plan.intent.profile == "release" {
@@ -1583,7 +1638,7 @@ fn bake_compiler_vocab_support(
         &mut command,
         capacity_roots,
         transient_limit,
-        cargo_target,
+        &native_cargo_target,
         "native vocabulary support",
     )?;
 
@@ -1601,7 +1656,7 @@ fn bake_compiler_vocab_support(
         .arg("--target")
         .arg(VOCAB_DESUGARER_TARGET)
         .arg("--target-dir")
-        .arg(cargo_target)
+        .arg(&wasm_cargo_target)
         .arg("--locked")
         .arg("--offline");
     if plan.intent.profile == "release" {
@@ -1616,7 +1671,7 @@ fn bake_compiler_vocab_support(
         &mut wasm_command,
         capacity_roots,
         transient_limit,
-        cargo_target,
+        &wasm_cargo_target,
         "native vocabulary Wasm support",
     )?;
 
@@ -1625,53 +1680,45 @@ fn bake_compiler_vocab_support(
     } else {
         "debug"
     };
-    let artifact_directory = cargo_target.join(&plan.intent.target).join(profile).join("deps");
-    // Cargo places procedural macros for the host compiler under the profile-only directory even when the native
-    // build target equals the host. The target closure alone therefore cannot link a crate whose metadata names a
-    // derive macro such as `serde_derive`.
-    let host_artifact_directory = cargo_target.join(profile).join("deps");
+    // Cargo versions place compiler-artifact files either in `deps/` or under target-specific build output. Admit
+    // only the two target-profile roots; the structured compiler-artifact records below still name every retained
+    // file, so this never turns an ambient target-tree scan into authority.
+    let primary_artifact_directory = native_cargo_target.join(&plan.intent.target).join(profile);
+    let host_artifact_directory = native_cargo_target.join(profile);
     let loaf_directory = support_root.join("deps");
     let host_artifacts = compiler_artifact_paths_from_cargo_output(
         &compile_stdout,
-        cargo_target,
-        &[&artifact_directory, &host_artifact_directory],
+        &native_cargo_target,
+        &[&primary_artifact_directory, &host_artifact_directory],
         INCAN_VOCAB,
-        &cargo_target.join(&plan.intent.target).join(profile),
+        &primary_artifact_directory,
         "native vocabulary support",
     )?;
     copy_compiler_vocab_support_artifacts(
         &host_artifacts,
-        &artifact_directory,
-        &cargo_target.join(&plan.intent.target).join(profile),
+        &primary_artifact_directory,
+        &primary_artifact_directory,
         &host_artifact_directory,
         &loaf_directory,
         plan,
     )?;
-    let wasm_artifact_directory = cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile).join("deps");
-    let wasm_artifact_directory_canonical =
-        fs::canonicalize(&wasm_artifact_directory).map_err(|source| OvenLoafError::Io {
-            path: wasm_artifact_directory.clone(),
-            source,
-        })?;
-    let wasm_primary_artifact_directory = cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile);
+    let wasm_primary_artifact_directory = wasm_cargo_target.join(VOCAB_DESUGARER_TARGET).join(profile);
     let wasm_primary_artifact_directory_canonical =
         fs::canonicalize(&wasm_primary_artifact_directory).map_err(|source| OvenLoafError::Io {
             path: wasm_primary_artifact_directory.clone(),
             source,
         })?;
+    let wasm_host_artifact_directory = wasm_cargo_target.join(profile);
     let wasm_artifacts = compiler_artifact_paths_from_cargo_output(
         &wasm_stdout,
-        cargo_target,
-        &[&wasm_artifact_directory, &host_artifact_directory],
+        &wasm_cargo_target,
+        &[&wasm_primary_artifact_directory, &wasm_host_artifact_directory],
         INCAN_VOCAB,
         &wasm_primary_artifact_directory,
         "native vocabulary Wasm support",
     )?
     .into_iter()
-    .filter(|artifact| {
-        artifact.starts_with(&wasm_artifact_directory_canonical)
-            || artifact.parent() == Some(wasm_primary_artifact_directory_canonical.as_path())
-    })
+    .filter(|artifact| artifact.starts_with(&wasm_primary_artifact_directory_canonical))
     .collect::<Vec<_>>();
     copy_compiler_vocab_auxiliary_target_artifacts(
         &wasm_artifacts,
@@ -1707,7 +1754,7 @@ fn copy_compiler_vocab_support_artifacts(
     if !target_artifact_directory.is_dir() {
         return Err(OvenLoafError::Preparation {
             message: format!(
-                "native vocabulary publisher produced no target dependency directory: {}",
+                "native vocabulary publisher produced no target artifact root: {}",
                 target_artifact_directory.display()
             ),
         });
@@ -1723,7 +1770,7 @@ fn copy_compiler_vocab_support_artifacts(
     if !host_artifact_directory.is_dir() {
         return Err(OvenLoafError::Preparation {
             message: format!(
-                "native vocabulary publisher produced no host dependency directory: {}",
+                "native vocabulary publisher produced no host artifact root: {}",
                 host_artifact_directory.display()
             ),
         });
@@ -1754,7 +1801,7 @@ fn copy_compiler_vocab_support_artifacts(
         if !target_artifacts && !source.starts_with(&host_artifact_directory) {
             return Err(OvenLoafError::Preparation {
                 message: format!(
-                    "native vocabulary compiler-artifact escaped its declared target or host dependency directory: {}",
+                    "native vocabulary compiler-artifact escaped its declared target or host artifact root: {}",
                     source.display()
                 ),
             });
@@ -1853,13 +1900,13 @@ fn copy_compiler_vocab_support_artifacts(
 
 /// Return only Rust-library files explicitly emitted by one named publisher Cargo invocation.
 ///
-/// Cargo's dependency directory is staging state, not an Oven input contract. The publisher requests structured
-/// `compiler-artifact` output and this helper admits only listed regular files beneath the exact target/host
-/// dependency directories supplied by the caller. Cargo reports the primary package's rlib only at the profile root
-/// (with a dependency-directory rmeta): that one exact, named rlib is admitted as an explicit Rustc extern. Every
-/// other Rust-library file outside the dependency directories is refused. A path outside the one publisher target
-/// root is likewise refused. This keeps an unrelated retained `deps` artifact from becoming a silent immutable loaf
-/// dependency while still retaining the publisher's real primary artifact.
+/// Cargo's target tree is staging state, not an Oven input contract. The publisher requests structured
+/// `compiler-artifact` output and this helper admits only listed regular files beneath the exact target/host artifact
+/// roots supplied by the caller. Cargo may report the primary package's rlib at the profile root while its metadata
+/// remains under `deps`; that one exact, named rlib is admitted as an explicit Rustc extern. Every other Rust-library
+/// file outside the declared artifact roots is refused. A path outside the one publisher target root is likewise
+/// refused. This keeps an unrelated retained artifact from becoming a silent immutable Loaf dependency while still
+/// retaining the publisher's real primary artifact.
 fn compiler_artifact_paths_from_cargo_output(
     cargo_stdout: &[u8],
     publisher_target_root: &Path,
@@ -1883,7 +1930,7 @@ fn compiler_artifact_paths_from_cargo_output(
         .collect::<Result<Vec<_>, _>>()?;
     if allowed_directories.is_empty() {
         return Err(OvenLoafError::Preparation {
-            message: format!("{publisher} publisher declared no Cargo artifact directories"),
+            message: format!("{publisher} publisher declared no Cargo artifact roots"),
         });
     }
     let primary_artifact_directory =
@@ -1970,7 +2017,7 @@ fn compiler_artifact_paths_from_cargo_output(
             } else {
                 return Err(OvenLoafError::Preparation {
                     message: format!(
-                        "{publisher} publisher compiler-artifact escaped its declared dependency directories: {}",
+                        "{publisher} publisher compiler-artifact escaped its declared artifact roots: {}",
                         source.display()
                     ),
                 });
@@ -2273,17 +2320,6 @@ fn loaf_file_physical_bytes(metadata: &fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn loaf_file_physical_bytes(metadata: &fs::Metadata) -> u64 {
     metadata.len()
-}
-
-/// Remove Cargo's redundant Rust metadata sidecars from one compiler-shipped loaf.
-///
-/// The direct-rustc plan names its usable roots as `--extern` rlibs and retains all other required link inputs. A
-/// standalone `.rmeta` sidecar is Cargo metadata for a companion rlib, not a direct-rustc input. Removing it here is
-/// safe only because the reduced plan is immediately revalidated and copied from that plan; stored compiler-suite
-/// closures retain their original artifact inventories.
-fn discard_loaf_metadata_sidecars(plan: &mut OvenRustcArtifactManifest) {
-    plan.supporting_artifacts
-        .retain(|artifact| !artifact.relative_path.ends_with(".rmeta"));
 }
 
 /// Validate the committed envelope authority and return only its content-addressed Loaf manifests.
@@ -2596,6 +2632,28 @@ pub fn resolve_toolchain_loaf(
     select_toolchain_loaf(receipt, selection, &[], OvenLoafRegistryRequirement::LinkableLeaf)
 }
 
+/// Return whether a project receipt requests the source compiler's vocabulary helper.
+fn receipt_requests_source_compiler_vocab_support(receipt: &OvenReceipt) -> bool {
+    receipt
+        .sources
+        .build_unit_inputs
+        .get(OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+        .is_some_and(|value| value == "v1")
+}
+
+/// Return whether this compiler-owned Loaf seals the vocabulary helper required by a source-built project.
+fn compiler_loaf_supplies_source_compiler_vocab_support(
+    loaf: &OvenToolchainLoaf,
+    intent: &super::OvenBuildIntent,
+) -> bool {
+    loaf.artifacts.vocab_auxiliary_targets.iter().any(|target| {
+        target.target == intent.target
+            && ["incan_vocab", "serde_json"]
+                .into_iter()
+                .all(|crate_name| target.externs.iter().any(|artifact| artifact.crate_name == crate_name))
+    })
+}
+
 /// Resolve a compiler-owned full-stdlib Loaf whose linkable catalog satisfies every caller registry root.
 pub fn resolve_toolchain_loaf_for_registry_dependencies(
     receipt: &OvenReceipt,
@@ -2607,6 +2665,36 @@ pub fn resolve_toolchain_loaf_for_registry_dependencies(
         selection,
         dependencies,
         OvenLoafRegistryRequirement::LinkableLeaf,
+    )
+}
+
+/// Resolve a compiler-owned Loaf while treating the source-only vocabulary marker as a capability requirement,
+/// rather than a release-cohort change.
+///
+/// A source-built compiler marks a project only when it may need to publish its own vocabulary helper. That marker
+/// is removed before compiler-owned selection, then the selected Loaf must prove that it seals both helper crates
+/// for the receipt target. Keeping this rule beside Loaf selection prevents Rust-inspection and direct-Rustc
+/// preparation from disagreeing about the same immutable compiler closure.
+pub fn resolve_compiler_owned_loaf_for_registry_dependencies(
+    receipt: &OvenReceipt,
+    dependencies: &[DependencySpec],
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    if receipt_requests_source_compiler_vocab_support(receipt) {
+        let base_receipt = receipt_without_build_unit_input(receipt, OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+            .map_err(|error| OvenLoafError::Preparation {
+                message: format!("failed to derive source-vocabulary Loaf receipt: {error}"),
+            })?;
+        let selected = resolve_toolchain_loaf_for_registry_dependencies(
+            &base_receipt,
+            OvenLoafSelection::CompilerOwnedProviderSuperset,
+            dependencies,
+        )?;
+        return Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)));
+    }
+    resolve_toolchain_loaf_for_registry_dependencies(
+        receipt,
+        OvenLoafSelection::CompilerOwnedProviderSuperset,
+        dependencies,
     )
 }
 
@@ -2638,6 +2726,25 @@ pub fn resolve_toolchain_loaf_by_identity(
         .map(Some);
     }
     Ok(None)
+}
+
+/// Resolve the compiler-owned base recorded by a project extension under the source-vocabulary capability rule.
+///
+/// The extension still pins `loaf_identity`; removing the marker only compares the release-cohort inputs shared by
+/// the project and its compiler-owned base.
+pub fn resolve_compiler_owned_loaf_by_identity(
+    receipt: &OvenReceipt,
+    loaf_identity: &str,
+) -> Result<Option<OvenToolchainLoaf>, OvenLoafError> {
+    if receipt_requests_source_compiler_vocab_support(receipt) {
+        let base_receipt = receipt_without_build_unit_input(receipt, OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
+            .map_err(|error| OvenLoafError::Preparation {
+                message: format!("failed to derive source-vocabulary Loaf receipt: {error}"),
+            })?;
+        let selected = resolve_toolchain_loaf_by_identity(&base_receipt, loaf_identity)?;
+        return Ok(selected.filter(|loaf| compiler_loaf_supplies_source_compiler_vocab_support(loaf, &receipt.intent)));
+    }
+    resolve_toolchain_loaf_by_identity(receipt, loaf_identity)
 }
 
 /// Resolve a scheduler-held source-authority Loaf whose immutable source catalog satisfies every registry root.
@@ -4398,7 +4505,10 @@ mod tests {
     }
 
     #[test]
-    fn a_native_loaf_drops_only_redundant_rmeta_sidecars() -> Result<(), Box<dyn std::error::Error>> {
+    fn a_native_loaf_retains_rmeta_sidecars_for_split_metadata_rlibs() -> Result<(), Box<dyn std::error::Error>> {
+        // Since Rust 1.98, an `.rlib` may carry only a metadata stub with the real crate metadata in the sibling
+        // `.rmeta`. The loaf pipeline must never strip that sidecar: rustc discovers it next to the rlib, and
+        // without it a direct-rustc consumer fails with E0463 "can't find crate".
         let receipt = runtime_receipt_for_plan()?;
         let mut plan = empty_manifest(&receipt);
         plan.supporting_artifacts = vec![
@@ -4416,14 +4526,18 @@ mod tests {
             },
         ];
 
-        super::discard_loaf_metadata_sidecars(&mut plan);
+        super::record_generated_root_externs(&mut plan);
 
         assert_eq!(
             plan.supporting_artifacts
                 .iter()
                 .map(|artifact| artifact.relative_path.as_str())
                 .collect::<Vec<_>>(),
-            vec!["deps/libruntime.rlib", "provenance/legacy-cargo.json"]
+            vec![
+                "deps/libruntime.rlib",
+                "deps/libruntime.rmeta",
+                "provenance/legacy-cargo.json"
+            ]
         );
         Ok(())
     }
@@ -4692,11 +4806,7 @@ mod tests {
             Err(error) => error,
         };
 
-        assert!(
-            error
-                .to_string()
-                .contains("escaped its declared dependency directories")
-        );
+        assert!(error.to_string().contains("escaped its declared artifact roots"));
         Ok(())
     }
 

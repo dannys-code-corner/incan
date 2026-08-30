@@ -19,10 +19,10 @@ use tower_lsp::{Client, LanguageServer};
 
 #[cfg(feature = "rust_inspect")]
 use crate::cli::commands::common::{
-    CargoPolicy, build_source_map, cargo_command_flags, collect_inline_rust_imports, collect_rust_inspect_query_paths,
-    configure_rust_inspect_cargo_target, ensure_rust_inspect_workspace_with_cargo_package_name,
-    extend_requirements_with_provider_plan, format_dependency_error, merge_project_requirement_dependencies,
-    prewarm_rust_inspect_workspace,
+    CargoPolicy, build_source_map, cargo_command_flags, collect_inline_rust_imports,
+    collect_rust_inspect_derive_probe_paths, collect_rust_inspect_query_paths, configure_rust_inspect_cargo_target,
+    ensure_rust_inspect_workspace_with_cargo_package_name, extend_requirements_with_provider_plan,
+    format_dependency_error, merge_project_requirement_dependencies, prewarm_rust_inspect_workspace,
 };
 use crate::cli::commands::common::{
     CompilationSession, collect_project_requirements, discover_effective_project_manifest,
@@ -1159,6 +1159,7 @@ where
         cargo_lock_inputs.clear_existing,
         &target_dir,
         &cargo_flags,
+        &collect_rust_inspect_derive_probe_paths(modules),
     )
     .map_err(|err| err.to_string())?;
     configure_rust_inspect_cargo_target(&rust_inspect_manifest_dir, &target_dir).map_err(|error| error.to_string())?;
@@ -5615,6 +5616,7 @@ fn compile_error_to_diagnostic_with_rust_context(
     compile_error_to_diagnostic_with_phase(&enriched, source, uri, phase)
 }
 
+/// Return the user-facing LSP label for one inspected Rust item category.
 fn rust_item_kind_label(kind: &RustItemKind) -> &'static str {
     match kind {
         RustItemKind::Module(_) => "module",
@@ -5622,6 +5624,7 @@ fn rust_item_kind_label(kind: &RustItemKind) -> &'static str {
         RustItemKind::Function(_) => "function",
         RustItemKind::Constant { .. } => "constant",
         RustItemKind::Trait(_) => "trait",
+        RustItemKind::Macro(_) => "macro",
         RustItemKind::Unsupported { .. } => "unsupported item",
     }
 }
@@ -6913,6 +6916,7 @@ impl LanguageServer for IncanLanguageServer {
                         RustItemKind::Function(_) => CompletionItemKind::FUNCTION,
                         RustItemKind::Constant { .. } => CompletionItemKind::CONSTANT,
                         RustItemKind::Trait(_) => CompletionItemKind::INTERFACE,
+                        RustItemKind::Macro(_) => CompletionItemKind::FUNCTION,
                         RustItemKind::Unsupported { .. } => CompletionItemKind::REFERENCE,
                     },
                     format!("rust::{} ({item_kind})", rust_symbol.info.path),

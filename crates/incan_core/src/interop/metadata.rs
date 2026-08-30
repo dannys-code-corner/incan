@@ -37,14 +37,16 @@ pub enum RustItemKind {
     Type(RustTypeInfo),
     /// A free function, associated function, or method item viewed as callable.
     Function(RustFunctionSig),
-    /// A `const` item.
+    /// A `const` or `static` item.
     Constant {
         /// Pretty-printed Rust type string from the analyzer.
         type_display: String,
     },
     /// A `trait` definition and its associated items.
     Trait(RustTraitInfo),
-    /// Placeholder for statics, macros, type aliases, etc. until RFC 041 narrows support.
+    /// A procedural derive macro and the exact trait implementations observed on its compiler-owned probe.
+    Macro(RustMacroInfo),
+    /// Placeholder for Rust items not yet represented by a narrower metadata variant.
     Unsupported { description: String },
 }
 
@@ -497,6 +499,51 @@ pub struct RustMethodSig {
 pub struct RustImplementedTrait {
     /// Canonical Rust trait path, for example `std::fmt::Display`.
     pub path: String,
+    /// Whether the implementation is proven for `&mut Self` instead of `Self`.
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub mutable_reference: bool,
+}
+
+/// One concrete associated-type value attached to an inspected trait implementation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RustAssociatedTypeBinding {
+    /// Associated type name declared by the trait.
+    pub name: String,
+    /// Canonical Rust path of the concrete assigned type.
+    pub value_path: String,
+}
+
+/// Trait implementation observed while expanding one derive macro on a compiler-owned probe.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RustExpandedDeriveTrait {
+    /// Canonical Rust trait path implemented by the expansion.
+    pub path: String,
+    /// Concrete associated-type values declared by the generated implementation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub associated_type_bindings: Vec<RustAssociatedTypeBinding>,
+}
+
+/// Semantic output observed by expanding one procedural derive macro on a compiler-owned empty probe type.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RustMacroInfo {
+    /// Trait implementations observed from the macro expansion on the compiler-owned probe.
+    ///
+    /// A derive macro may emit more than one implementation, so this remains a collection rather than assuming the
+    /// macro shares a name or canonical path with a single trait. The generated-Rust build remains authoritative for
+    /// any input-sensitive behavior or predicates attached to those implementations on the real Incan-authored type.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_traits: Vec<RustExpandedDeriveTrait>,
+}
+
+/// One associated-type equality required by a structural mutable-reference implementation.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RustAssociatedTypeRequirement {
+    /// Canonical path of the trait carrying the associated type.
+    pub trait_path: String,
+    /// Associated type name constrained by the implementation.
+    pub name: String,
+    /// Canonical Rust path required for the associated type value.
+    pub value_path: String,
 }
 
 /// Canonical Rust display spelling for the uninhabited never type.
@@ -1247,6 +1294,46 @@ pub struct RustVariantInfo {
     pub fields: Vec<RustTypeShape>,
 }
 
+/// One foreign-generic parameter that can be satisfied through a mutable Rust reference.
+///
+/// Rules are emitted only for unparameterized owner bounds. The Rust compiler remains the authority for the complete
+/// foreign obligation; consumers use these rules to preserve the source-level ownership shape before the normal Rust
+/// build validates the instantiated generic contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RustMutableReferenceTypeParam {
+    /// Name of the owner generic parameter, for example `T` in `Foreign<T: ForeignData>`.
+    pub type_param: String,
+    /// Unparameterized trait paths the supplied argument can satisfy without adding a reference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub direct_trait_bounds: Vec<String>,
+    /// Mutable-reference implementations admitted by the owner's direct trait bounds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutable_reference_candidates: Vec<RustMutableReferenceCandidate>,
+    /// Tuple arities for which the direct owner trait composes element-by-element.
+    ///
+    /// Consumers may recurse into tuple leaves only when the foreign trait itself declares the corresponding
+    /// structural implementation. An empty list keeps composite arguments fail-closed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tuple_composition_arities: Vec<usize>,
+}
+
+/// One structural `&mut T` implementation that may satisfy a foreign generic bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RustMutableReferenceCandidate {
+    /// Trait paths the inner `T` must satisfy for this `&mut T` implementation to apply.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_traits: Vec<String>,
+    /// Canonical associated-type equalities represented by this metadata record.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_associated_type_bindings: Vec<RustAssociatedTypeRequirement>,
+    /// Whether the complete source predicate set is represented by `required_traits` and associated-type bindings.
+    ///
+    /// False is deliberately fail-closed: a direct consumer must defer to the Rust trait solver instead of reducing
+    /// an unsupported generic, const, lifetime, or higher-ranked predicate to a trait-name match.
+    #[serde(default, skip_serializing_if = "bool_is_false")]
+    pub fallback_is_complete: bool,
+}
+
 /// Method, field, and variant surface for a Rust ADT or builtin type.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct RustTypeInfo {
@@ -1257,6 +1344,27 @@ pub struct RustTypeInfo {
     /// [`RustFunctionSig`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub type_params: Vec<String>,
+    /// Declared default type argument for each source type parameter, aligned with [`Self::type_params`].
+    ///
+    /// The vector is empty when no type parameter has a default. Otherwise `None` preserves a required parameter that
+    /// precedes a later default, while `Some` carries the canonical Rust type display used when source omits that
+    /// argument.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_param_defaults: Vec<Option<String>>,
+    /// Source-owned rules for generic parameters that admit a mutable-reference implementation.
+    ///
+    /// They let the frontend distinguish an owned foreign argument from a mutable-reference alternative without
+    /// provider-specific matching. Complete foreign obligation checking remains with rustc.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mutable_reference_type_params: Vec<RustMutableReferenceTypeParam>,
+    /// Exact unconditional trait implementations emitted by successfully expanded Rust derive macros.
+    ///
+    /// rust-analyzer's ordinary trait index can omit proc-macro-generated implementations. Inspection therefore
+    /// resolves the generated `impl` syntax through HIR and records its actual trait identity plus concrete
+    /// associated-type values here. Derive macro names and unexpanded source attributes supply no implementation
+    /// evidence; conditional generated implementations remain solver-only.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub expanded_derive_traits: Vec<RustExpandedDeriveTrait>,
     /// Whether the declaration contains const parameters that occupy Rust turbofish positions.
     ///
     /// Incan v0.5 can specialize type-only receivers. Retaining this fact makes const-bearing owners fail closed
@@ -1351,6 +1459,12 @@ pub enum RustTraitAssoc {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RustTraitInfo {
     pub items: Vec<RustTraitAssoc>,
+    /// Co-located derive-macro namespace metadata for this same Rust path, when invoked by the project.
+    ///
+    /// Rust permits a trait and derive macro to share a spelling. Keeping the macro expansion separate prevents an
+    /// ordinary trait-namespace lookup from hiding a macro that implements a differently named trait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub derive_macro: Option<RustMacroInfo>,
 }
 
 #[cfg(test)]
@@ -1364,6 +1478,9 @@ mod tests {
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),

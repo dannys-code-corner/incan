@@ -61,6 +61,14 @@ fn const_int(value: &ConstValue) -> Option<i64> {
     }
 }
 
+/// Return the binary floating-point value represented by a const-evaluation result.
+fn const_float(value: &ConstValue) -> Option<f64> {
+    match value {
+        ConstValue::Float(value) => Some(*value),
+        _ => None,
+    }
+}
+
 /// Return the inclusive integer range accepted by an exact-width numeric const annotation.
 fn const_integer_value_bounds(id: NumericTypeId) -> Option<(i128, i128)> {
     match id {
@@ -139,7 +147,7 @@ impl TypeChecker {
             if self.types_compatible(&result.ty, &expected) {
                 result.ty = expected;
             } else {
-                match self.const_int_value_checked_against_numeric_expected(&result, &expected, konst.value.span) {
+                match self.const_numeric_value_checked_against_numeric_expected(&result, &expected, konst.value.span) {
                     Some(true) => result.ty = expected,
                     Some(false) => {}
                     None => {
@@ -166,24 +174,44 @@ impl TypeChecker {
         }
     }
 
-    /// Validate a const integer value against an exact-width numeric annotation without widening runtime integers.
-    fn const_int_value_checked_against_numeric_expected(
+    /// Validate a numeric const literal against an exact-width annotation without widening its declared type.
+    fn const_numeric_value_checked_against_numeric_expected(
         &mut self,
         result: &ConstEvalResult,
         expected: &ResolvedType,
         span: Span,
     ) -> Option<bool> {
         let target = super::numeric_type_id_for_compat(expected)?;
-        let value = result.value.as_ref().and_then(const_int)?;
-        let (min, max) = const_integer_value_bounds(target)?;
-        if i128::from(value) < min || i128::from(value) > max {
-            self.errors.push(CompileError::type_error(
-                format!("Integer literal {value} does not fit in {expected}; valid range is {min}..={max}"),
-                span,
-            ));
-            return Some(false);
+        if let Some(value) = result.value.as_ref().and_then(const_int) {
+            if matches!(target, NumericTypeId::F32 | NumericTypeId::F64) {
+                return Some(true);
+            }
+            let (min, max) = const_integer_value_bounds(target)?;
+            if i128::from(value) < min || i128::from(value) > max {
+                self.errors.push(CompileError::type_error(
+                    format!("Integer literal {value} does not fit in {expected}; valid range is {min}..={max}"),
+                    span,
+                ));
+                return Some(false);
+            }
+            return Some(true);
         }
-        Some(true)
+
+        let value = result.value.as_ref().and_then(const_float)?;
+        match target {
+            NumericTypeId::F32 => {
+                if value.is_finite() && value.abs() > f64::from(f32::MAX) {
+                    self.errors.push(CompileError::type_error(
+                        format!("Float literal {value} does not fit in {expected}"),
+                        span,
+                    ));
+                    return Some(false);
+                }
+                Some(true)
+            }
+            NumericTypeId::F64 => Some(true),
+            _ => None,
+        }
     }
 
     fn eval_const_by_name(&mut self, name: &str, stack: &mut Vec<String>) -> Option<ConstEvalResult> {
@@ -987,7 +1015,11 @@ impl TypeChecker {
             }
 
             if field_result.ty != field_info.ty {
-                match self.const_int_value_checked_against_numeric_expected(&field_result, &field_info.ty, value.span) {
+                match self.const_numeric_value_checked_against_numeric_expected(
+                    &field_result,
+                    &field_info.ty,
+                    value.span,
+                ) {
                     Some(true) => {}
                     Some(false) => had_error = true,
                     None => {

@@ -2216,6 +2216,34 @@ fn test_models_codegen() {
     insta::assert_snapshot!("models", rust_code);
 }
 
+/// Power lowers as a Rust method call, so its receiver must retain the source expression's grouping.
+#[test]
+fn test_power_receiver_parenthesisation_codegen() {
+    let source = r#"
+def compound(left: float, right: float) -> float:
+    return (left + right) ** 0.5
+
+
+def coerced(base: int, exponent: int) -> float:
+    return base ** exponent
+
+
+def main() -> None:
+    println(compound(3.0, 4.0))
+    println(coerced(2, 8))
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    assert!(
+        compact.contains("return(left+right).powf(0.5);"),
+        "compound power receiver must remain grouped; generated:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("return((base)asf64).powf((exponent)asf64);"),
+        "coerced power receiver must be parenthesized before the method call; generated:\n{rust_code}"
+    );
+}
+
 #[test]
 fn test_rfc046_computed_properties_codegen() {
     let source = load_test_file("rfc046_computed_properties");
