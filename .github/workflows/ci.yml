@@ -345,7 +345,9 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 25
+    # No per-job budget, deliberately: the CI contract test forbids one, because a version bump
+    # cold-starts every completion-gated cache and any budget below a cold build means the job can
+    # never re-warm. The runner-level six-hour ceiling is the only bound, like every other Oven job.
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
