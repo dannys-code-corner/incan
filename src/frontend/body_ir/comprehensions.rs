@@ -115,26 +115,6 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 out,
             );
         };
-        let ast::Pattern::Binding(first_name) = &first_pattern.node else {
-            return self.unsupported_operand(
-                "generator for-clause pattern is not a simple binding".to_string(),
-                scope,
-                hir_span_value,
-                out,
-            );
-        };
-        if generator.clauses.iter().any(|clause| {
-            matches!(clause, ast::ComprehensionClause::For { pattern, .. }
-                if !matches!(pattern.node, ast::Pattern::Binding(_)))
-        }) {
-            return self.unsupported_operand(
-                "generator for-clause pattern is not a simple binding".to_string(),
-                scope,
-                hir_span_value,
-                out,
-            );
-        }
-
         // The first source is the legacy adapter chain's eager boundary. Lowering it before creating the rvalue
         // preserves source-visible construction timing; all remaining expression lowering below writes only into
         // `generator_stmts` and therefore happens at poll time.
@@ -185,14 +165,19 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
 
         let first_loop_scope = self.new_scope(Some(generator_scope), hir_span_value);
-        let first_total_reads = count_reads_in_expr(first_name, &generator.expr.node)
-            + count_reads_in_comprehension_clauses(first_name, remaining_clauses);
-        let first_local = self.declare_new_local_with_reads(
-            first_name.clone(),
-            self.resolve_ty(first_pattern.span),
+        // The first clause binds through the same helpers a statement `for` uses, so a destructuring generator
+        // clause produces the same facts as the equivalent loop (#1161). The item type comes from the pattern's own
+        // span, which the typechecker records for comprehension clauses as it does for a statement `for`.
+        let first_item_ty = self.resolve_ty(first_pattern.span);
+        let first_local = self.declare_for_item_local(
+            first_pattern,
+            &first_item_ty,
             first_loop_scope,
             hir_span(first_pattern.span),
-            first_total_reads,
+            &|name| {
+                count_reads_in_expr(name, &generator.expr.node)
+                    + count_reads_in_comprehension_clauses(name, remaining_clauses)
+            },
         );
 
         let mut generator_stmts = Vec::new();
@@ -247,6 +232,19 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             },
             span: hir_span_value,
         }];
+        // Project the pattern's fields straight after `IterNext` has written the item, the same ordering
+        // `lower_for` uses, so every nested binding reads through a projection of a value that already exists.
+        self.bind_for_pattern(
+            first_pattern,
+            &first_item_ty,
+            first_local,
+            first_loop_scope,
+            &|name| {
+                count_reads_in_expr(name, &generator.expr.node)
+                    + count_reads_in_comprehension_clauses(name, remaining_clauses)
+            },
+            &mut first_loop_stmts,
+        );
         let terminal = ComprehensionTerminal::GeneratorYield {
             element: &generator.expr,
         };
@@ -353,27 +351,29 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 });
             }
             ast::ComprehensionClause::For { pattern, iter } => {
-                let ast::Pattern::Binding(var_name) = &pattern.node else {
-                    self.push_unsupported_stmt(
-                        "comprehension for-clause pattern is not a simple binding".to_string(),
-                        span,
-                        out,
-                    );
-                    return;
-                };
-                let var_ty = self.resolve_ty(pattern.span);
+                // A destructuring clause binds exactly as the equivalent statement `for` does, through the same two
+                // helpers (#1125): one declares the item local, the other projects the pattern's fields out of it.
+                // Two spellings of the same iteration producing different bindings is the drift #1161 closes.
+                //
+                // The item type comes from the pattern's own span, which the typechecker now records for
+                // comprehension clauses exactly as it does for a statement `for`.
+                let item_ty = self.resolve_ty(pattern.span);
                 let loop_scope = self.new_scope(Some(scope), span);
-                let total_reads = terminal.count_reads(var_name) + count_reads_in_comprehension_clauses(var_name, tail);
-                let pattern_local =
-                    self.declare_new_local_with_reads(var_name.clone(), var_ty, loop_scope, span, total_reads);
+                // One counter, used by both helpers: a clause name is read by the remaining clauses and by the
+                // terminal, and the two helpers must agree on that or a binding's last-use lands in the wrong place.
+                let reads =
+                    move |name: &str| terminal.count_reads(name) + count_reads_in_comprehension_clauses(name, tail);
+                let item_local = self.declare_for_item_local(pattern, &item_ty, loop_scope, span, &reads);
+                let bind_ty = item_ty.clone();
                 self.lower_general_iteration(
                     iter,
-                    pattern_local,
+                    item_local,
                     scope,
                     loop_scope,
                     span,
                     out,
                     move |builder, loop_scope, body_stmts| {
+                        builder.bind_for_pattern(pattern, &bind_ty, item_local, loop_scope, &reads, body_stmts);
                         builder.lower_comprehension_clauses(tail, terminal, loop_scope, span, body_stmts);
                         builder.insert_scope_drops(body_stmts, loop_scope);
                     },

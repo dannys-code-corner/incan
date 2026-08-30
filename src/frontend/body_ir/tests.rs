@@ -586,17 +586,24 @@ fn lowers_division_and_assert_as_explicit_panic_facts() -> Result<(), Box<dyn st
 #[test]
 fn unsupported_constructs_lower_to_an_explicit_placeholder_instead_of_panicking()
 -> Result<(), Box<dyn std::error::Error>> {
-    // #1123 supports lazy generator expressions with simple binding clauses. A destructuring clause still needs
-    // a generator-specific binding/poll representation, so it must refuse the complete expression rather than
-    // partly lowering it as an eager list or silently dropping the pattern.
+    // This case was the refusal's own pin until #1161: a destructuring generator clause used to refuse the whole
+    // expression rather than bind its pattern. It now lowers, so the test asserts the positive behaviour instead of
+    // freezing a hole -- the clause's names become real bindings projected out of the polled item, exactly as the
+    // equivalent statement `for` produces them.
     let source = "def pick(x: int) -> int:\n  gen = (left + right for left, right in [(1, 2)])\n  return x\n";
     let module = build(source, &["m", "unsupported"])?;
     let snapshot = module.render_snapshot();
 
     assert!(
-        snapshot.contains("unsupported(generator for-clause pattern is not a simple binding)"),
-        "should record an explicit placeholder rather than panicking: {snapshot}"
+        !snapshot.contains("unsupported("),
+        "a destructuring generator clause must lower rather than refuse: {snapshot}"
     );
+    for binding in ["left", "right"] {
+        assert!(
+            snapshot.contains(&format!(" {binding} : int [binding]")),
+            "the clause must bind `{binding}` with the tuple element's resolved type: {snapshot}"
+        );
+    }
     Ok(())
 }
 
@@ -2861,10 +2868,17 @@ fn a_closure_does_not_capture_names_a_nested_destructuring_pattern_binds() -> Re
     let module = build(source, &["m", "closure_pattern_capture"])?;
     let snapshot = module.render_snapshot();
 
-    assert!(
-        !snapshot.contains(" a : ") && !snapshot.contains(" b : "),
-        "clause-bound names must not become captured locals of the enclosing closure: {snapshot}"
-    );
+    // Asserting the names are absent entirely only held while a destructuring clause was *refused*; #1161 lowers
+    // one, so `a` and `b` now exist as the clause's own bindings. The property this test is actually for is
+    // narrower and unchanged: neither may be captured from an enclosing scope where it does not exist.
+    for binding in [" a : ", " b : "] {
+        for line in snapshot.lines().filter(|line| line.contains(binding)) {
+            assert!(
+                !line.contains("[captured]"),
+                "a clause-bound name must not be captured from the enclosing closure: {line}"
+            );
+        }
+    }
     assert!(
         snapshot.contains("[captured]"),
         "the closure should still capture the one name it really reads from the enclosing scope: {snapshot}"
@@ -7022,5 +7036,180 @@ fn projection_through_an_active_feature_lowers_exactly_as_an_ungated_program_doe
         unprojected.render_snapshot(),
         "an active feature must make projection a no-op"
     );
+    Ok(())
+}
+
+// ---- Pattern conditions (#1161) ----
+
+/// `if let` lowers to the single-arm match RFC 049 describes, with an implicit non-matching fallthrough.
+#[test]
+fn if_let_lowers_to_a_single_arm_match_with_an_empty_fallback() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def run(o: Option[int]) -> int:\n",
+        "  mut total = 0\n",
+        "  if let Some(v) = o:\n",
+        "    total = v\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "if_let"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "`if let` must lower without a placeholder: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("Some(bind("),
+        "the pattern must bind its payload: {snapshot}"
+    );
+    // RFC 049's own reading: a single-arm `match` plus an implicit `_ => pass`.
+    assert!(
+        snapshot.contains("_ => const(())"),
+        "the non-matching path must be an explicit wildcard arm: {snapshot}"
+    );
+    Ok(())
+}
+
+/// A failed pattern condition is control flow, not a panic.
+#[test]
+fn if_let_records_no_panic_fact_for_a_non_matching_pattern() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def run(o: Option[int]) -> int:\n",
+        "  mut total = 0\n",
+        "  if let Some(v) = o:\n",
+        "    total = v\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "if_let_panic"])?;
+    let body = body_named(&module, "run")?;
+
+    // `assert value is P` panics on the same shape; a pattern *condition* must not.
+    assert!(
+        body.panic_facts.is_empty(),
+        "a non-matching `if let` is ordinary control flow, not a panic: {:?}",
+        body.panic_facts
+    );
+    Ok(())
+}
+
+/// `while let` re-evaluates its subject each iteration and exits by breaking when the pattern stops matching.
+#[test]
+fn while_let_re_evaluates_its_subject_and_breaks_when_exhausted() -> Result<(), Box<dyn std::error::Error>> {
+    // The subject is a call precisely so re-evaluation is observable: a hoisted subject would call `pop` once and
+    // loop forever on the same value.
+    let source = concat!(
+        "def pop() -> Option[int]:\n",
+        "  return None\n",
+        "\n",
+        "def run() -> int:\n",
+        "  mut total = 0\n",
+        "  while let Some(item) = pop():\n",
+        "    total = total + item\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "while_let"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "`while let` must lower without a placeholder: {snapshot}"
+    );
+    let loop_at = snapshot.find("loop").ok_or("expected a loop statement")?;
+    let call_at = snapshot.find("call fn:pop").ok_or("expected the subject call")?;
+    assert!(
+        call_at > loop_at,
+        "the subject must be re-evaluated inside the loop, not hoisted above it: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("break"),
+        "an exhausted pattern must break rather than panic: {snapshot}"
+    );
+    Ok(())
+}
+
+/// A destructuring comprehension binds the same facts the equivalent statement `for` does.
+///
+/// This is the parity the issue turns on: two spellings of one iteration must not differ in representability, and
+/// the earlier gap was not the binding but its *type* -- the comprehension bound `a` as `?` where the statement
+/// form bound it as `int`.
+#[test]
+fn a_destructuring_comprehension_binds_like_the_equivalent_statement_for() -> Result<(), Box<dyn std::error::Error>> {
+    let comprehension = build(
+        concat!(
+            "def run(pairs: List[Tuple[int, int]]) -> List[int]:\n",
+            "  return [a + b for a, b in pairs]\n",
+        ),
+        &["m", "comp"],
+    )?;
+    let statement_form = build(
+        concat!(
+            "def run(pairs: List[Tuple[int, int]]) -> int:\n",
+            "  mut total = 0\n",
+            "  for a, b in pairs:\n",
+            "    total = total + a + b\n",
+            "  return total\n",
+        ),
+        &["m", "stmt"],
+    )?;
+
+    let comp_snapshot = comprehension.render_snapshot();
+    assert!(
+        !comp_snapshot.contains("unsupported("),
+        "a destructuring comprehension must lower without a placeholder: {comp_snapshot}"
+    );
+
+    for (name, module) in [("comprehension", &comprehension), ("statement for", &statement_form)] {
+        let body = body_named(module, "run")?;
+        for binding in ["a", "b"] {
+            let local = sole_local_named(body, binding)?;
+            let declared = body
+                .locals
+                .get(local.index())
+                .ok_or_else(|| format!("{name}: `{binding}` is missing from the body's locals"))?;
+            assert_eq!(
+                declared.ty,
+                IncanType::Primitive(IncanPrimitiveType::Int),
+                "{name}: `{binding}` must carry the tuple element's resolved type, not `?`",
+            );
+        }
+    }
+    Ok(())
+}
+
+/// `if let` accepts pattern alternation (RFC 071), and lowering must not narrow that.
+#[test]
+fn if_let_lowers_an_alternated_pattern() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "enum Shape:\n",
+        "  Circle(int)\n",
+        "  Square(int)\n",
+        "  Blank\n",
+        "\n",
+        "def run(s: Shape) -> int:\n",
+        "  mut n = 0\n",
+        "  if let Shape.Circle(v) | Shape.Square(v) = s:\n",
+        "    n = v\n",
+        "  return n\n",
+    );
+    let module = build(source, &["m", "if_let_alt"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "an alternated `if let` pattern must lower: {snapshot}"
+    );
+    // Both alternatives bind the same name, so it must be one declared local rather than two.
+    let bindings: Vec<&str> = snapshot.lines().filter(|line| line.contains(" v : ")).collect();
+    assert_eq!(bindings.len(), 1, "`v` must be a single declared local: {bindings:?}");
+    assert!(
+        bindings[0].contains("[binding]"),
+        "`v` must be a source binding, not a temp or external: {}",
+        bindings[0]
+    );
+    // Its type is `?` here, and that is deliberately *not* asserted as a defect of this change: an equivalent
+    // statement `match` over the same alternated constructor pattern produces exactly the same `?`. This lowering
+    // reuses `lower_match_pattern` rather than reimplementing it, so it inherits that gap rather than widening it.
+    // Narrowing the generic constructor path's field types belongs with the same #1101 work that leaves
+    // `assert o is Some(v)` typed `?`.
     Ok(())
 }
