@@ -307,8 +307,15 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             let scrutinee_place = builder.lower_expr_to_place(value, loop_scope, body_stmts);
             let scrutinee = bir::Operand::place(scrutinee_place.clone(), bir::OwnershipFact::Borrow, false);
 
+            // Exactly one arm runs per iteration, so a fact the matched arm established must not survive into code
+            // that could instead have reached the exhausted arm. `push_loop` intersects at the loop boundary, which
+            // covers today's shape because the match is the body's only statement -- but relying on that would make
+            // this correct by accident, and wrong the moment a statement is appended after it.
+            let layouts_before_arms = builder.materialized_range_locals.clone();
             let matched_arm =
                 builder.lower_statement_pattern_arm(pattern, &scrutinee_ty, &scrutinee_place, loop_scope, body, span);
+            builder.materialized_range_locals =
+                intersect_range_layouts(vec![layouts_before_arms, builder.materialized_range_locals.clone()]);
             let exhausted_arm = bir::MatchArm {
                 pattern: bir::Pattern::Wildcard,
                 guard_stmts: Vec::new(),

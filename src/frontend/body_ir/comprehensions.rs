@@ -359,9 +359,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 // comprehension clauses exactly as it does for a statement `for`.
                 let item_ty = self.resolve_ty(pattern.span);
                 let loop_scope = self.new_scope(Some(scope), span);
-                let item_local = self.declare_for_item_local(pattern, &item_ty, loop_scope, span, &|name| {
-                    terminal.count_reads(name) + count_reads_in_comprehension_clauses(name, tail)
-                });
+                // One counter, used by both helpers: a clause name is read by the remaining clauses and by the
+                // terminal, and the two helpers must agree on that or a binding's last-use lands in the wrong place.
+                let reads =
+                    move |name: &str| terminal.count_reads(name) + count_reads_in_comprehension_clauses(name, tail);
+                let item_local = self.declare_for_item_local(pattern, &item_ty, loop_scope, span, &reads);
                 let bind_ty = item_ty.clone();
                 self.lower_general_iteration(
                     iter,
@@ -371,14 +373,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     span,
                     out,
                     move |builder, loop_scope, body_stmts| {
-                        builder.bind_for_pattern(
-                            pattern,
-                            &bind_ty,
-                            item_local,
-                            loop_scope,
-                            &|name| terminal.count_reads(name) + count_reads_in_comprehension_clauses(name, tail),
-                            body_stmts,
-                        );
+                        builder.bind_for_pattern(pattern, &bind_ty, item_local, loop_scope, &reads, body_stmts);
                         builder.lower_comprehension_clauses(tail, terminal, loop_scope, span, body_stmts);
                         builder.insert_scope_drops(body_stmts, loop_scope);
                     },

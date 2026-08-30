@@ -7175,3 +7175,41 @@ fn a_destructuring_comprehension_binds_like_the_equivalent_statement_for() -> Re
     }
     Ok(())
 }
+
+/// `if let` accepts pattern alternation (RFC 071), and lowering must not narrow that.
+#[test]
+fn if_let_lowers_an_alternated_pattern() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "enum Shape:\n",
+        "  Circle(int)\n",
+        "  Square(int)\n",
+        "  Blank\n",
+        "\n",
+        "def run(s: Shape) -> int:\n",
+        "  mut n = 0\n",
+        "  if let Shape.Circle(v) | Shape.Square(v) = s:\n",
+        "    n = v\n",
+        "  return n\n",
+    );
+    let module = build(source, &["m", "if_let_alt"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "an alternated `if let` pattern must lower: {snapshot}"
+    );
+    // Both alternatives bind the same name, so it must be one declared local rather than two.
+    let bindings: Vec<&str> = snapshot.lines().filter(|line| line.contains(" v : ")).collect();
+    assert_eq!(bindings.len(), 1, "`v` must be a single declared local: {bindings:?}");
+    assert!(
+        bindings[0].contains("[binding]"),
+        "`v` must be a source binding, not a temp or external: {}",
+        bindings[0]
+    );
+    // Its type is `?` here, and that is deliberately *not* asserted as a defect of this change: an equivalent
+    // statement `match` over the same alternated constructor pattern produces exactly the same `?`. This lowering
+    // reuses `lower_match_pattern` rather than reimplementing it, so it inherits that gap rather than widening it.
+    // Narrowing the generic constructor path's field types belongs with the same #1101 work that leaves
+    // `assert o is Some(v)` typed `?`.
+    Ok(())
+}
