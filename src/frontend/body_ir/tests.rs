@@ -693,7 +693,7 @@ fn lowers_a_clone_when_a_non_copy_binding_is_read_more_than_once() -> Result<(),
 
 #[test]
 fn lowers_if_while_and_for_into_normalized_control_flow() -> Result<(), Box<dyn std::error::Error>> {
-    let source = "def run(n: int) -> int:\n  total = 0\n  for i in 0..n:\n    if i > 2:\n      total = total + i\n  while total > 100:\n    total = total - 1\n  return total\n";
+    let source = "def run(n: int) -> int:\n  mut total = 0\n  for i in 0..n:\n    if i > 2:\n      total = total + i\n  while total > 100:\n    total = total - 1\n  return total\n";
     let module = build(source, &["m", "control"])?;
     let snapshot = module.render_snapshot();
 
@@ -3882,7 +3882,7 @@ fn sequential_awaits_keep_their_effect_ordering_across_suspension() -> Result<()
 #[test]
 fn await_inside_a_branch_stays_inside_that_branch() -> Result<(), Box<dyn std::error::Error>> {
     let source = format!(
-        "{ASYNC_PRELUDE}async def f(flag: bool) -> int:\n  total = 0\n  if flag:\n    total = await fast()\n  else:\n    total = 7\n  return total\n"
+        "{ASYNC_PRELUDE}async def f(flag: bool) -> int:\n  mut total = 0\n  if flag:\n    total = await fast()\n  else:\n    total = 7\n  return total\n"
     );
     let module = build(&source, &["m", "await_branch"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();
@@ -3905,7 +3905,7 @@ fn await_inside_a_branch_stays_inside_that_branch() -> Result<(), Box<dyn std::e
 #[test]
 fn await_inside_a_loop_stays_inside_the_loop_body() -> Result<(), Box<dyn std::error::Error>> {
     let source = format!(
-        "{ASYNC_PRELUDE}async def f() -> int:\n  total = 0\n  i = 0\n  while i < 3:\n    total = total + await fast()\n    i = i + 1\n  return total\n"
+        "{ASYNC_PRELUDE}async def f() -> int:\n  mut total = 0\n  mut i = 0\n  while i < 3:\n    total = total + await fast()\n    i = i + 1\n  return total\n"
     );
     let module = build(&source, &["m", "await_loop"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();

@@ -660,17 +660,38 @@ impl TypeChecker {
     /// trait-typed locals must not proceed to codegen because Rust has no valid bare trait type for `let` annotations.
     fn check_assignment(&mut self, assign: &AssignmentStmt, span: Span) {
         let annotated_ty = assign.ty.as_ref().map(|ty_ann| self.resolve_type_checked(ty_ann));
-        let reassignment_ty = self
-            .lookup_local_variable_info(&assign.name)
-            .map(|var_info| var_info.ty.clone());
+        // `let` and `mut` are declaration forms: they introduce a binding that may deliberately shadow an active
+        // outer one, so they never resolve against the scope chain. Only a bare `x = value` asks "does this name
+        // already exist somewhere out there", and the two halves have to move together — walking outward without
+        // this branch would turn every in-block `let` into a reassignment of the outer binding (#1072).
+        let introduces_binding = matches!(assign.binding, BindingKind::Let | BindingKind::Mutable);
+        let reassignment_ty = (!introduces_binding)
+            .then(|| {
+                self.lookup_variable_info_in_scope_chain(&assign.name)
+                    .map(|var_info| var_info.ty.clone())
+            })
+            .flatten();
         let value_ty = if let Some(var_ty) = reassignment_ty.as_ref() {
             self.check_expr_with_expected(&assign.value, Some(var_ty))
         } else {
             self.check_expr_with_expected(&assign.value, annotated_ty.as_ref())
         };
 
+        // A `const` is registered as a module-scope variable, so the scope-chain walk below finds it. Answer the
+        // more specific question first: reassigning a const is not a mutability mistake to be fixed with `mut`, it
+        // is a request for a `static`, and the generic "variable is immutable" error would send the reader the
+        // wrong way. A `let`/`mut` declaration that shadows a const is a new binding and never reaches here.
+        if !introduces_binding && self.const_decls.contains_key(&assign.name) {
+            self.errors
+                .push(errors::const_reassignment_suggests_static(&assign.name, span));
+            return;
+        }
+
         // Check if it's a re-assignment
-        if let Some(var_info) = self.lookup_local_variable_info(&assign.name) {
+        if let Some(var_info) = (!introduces_binding)
+            .then(|| self.lookup_variable_info_in_scope_chain(&assign.name))
+            .flatten()
+        {
             let is_mutable = var_info.is_mutable;
             let var_ty = var_info.ty.clone();
 
@@ -705,12 +726,6 @@ impl TypeChecker {
                     assign.value.span,
                 ));
             }
-            return;
-        }
-
-        if self.const_decls.contains_key(&assign.name) {
-            self.errors
-                .push(errors::const_reassignment_suggests_static(&assign.name, span));
             return;
         }
 
