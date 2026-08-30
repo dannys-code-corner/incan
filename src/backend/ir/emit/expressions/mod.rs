@@ -1350,7 +1350,7 @@ impl<'a> IrEmitter<'a> {
             IrExprKind::Closure {
                 params,
                 body,
-                captures: _,
+                captures,
                 annotate_param_types,
             } => {
                 let param_tokens: Vec<TokenStream> = params
@@ -1373,7 +1373,8 @@ impl<'a> IrEmitter<'a> {
                     }
                     _ => self.emit_expr(body)?,
                 };
-                Ok(quote! { |#(#param_tokens),*| #b })
+                let capture_mode = (!captures.is_empty()).then(|| quote! { move });
+                Ok(quote! { #capture_mode |#(#param_tokens),*| #b })
             }
 
             IrExprKind::Block { stmts, value } => {

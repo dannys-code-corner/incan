@@ -38,6 +38,7 @@ const CONST_KEYWORDS: &[KeywordId] = &[KeywordId::Const, KeywordId::Static];
 const ASYNC_KEYWORDS: &[KeywordId] = &[KeywordId::Async, KeywordId::Await];
 const DECLARATION_KEYWORDS: &[KeywordId] = &[
     KeywordId::Def,
+    KeywordId::Capability,
     KeywordId::Class,
     KeywordId::Model,
     KeywordId::Trait,

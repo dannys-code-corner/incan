@@ -23,6 +23,7 @@ use crate::frontend::library_exports::{
 use crate::frontend::registry_metadata::CheckedRegistryMetadataPackage;
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ValueEnumBacking, ValueEnumValue};
 use incan_core::interop::RustItemMetadata;
+use incan_semantics_core::{AbiV0RuntimeRequirement, CanonicalSymbolId, SemanticSourceTargetKind};
 
 /// Errors surfaced while reading, writing, parsing, serializing, or validating `.incnlib` manifests.
 #[derive(Debug, thiserror::Error)]
@@ -216,6 +217,12 @@ pub struct CompiledProviderMetadata {
     /// Private backend mappings selected from semantic module and feature use.
     #[serde(default)]
     pub implementation_facets: Vec<ProviderImplementationFacet>,
+    /// Checked provider-call declarations that a consumer may lower into provider-operation plans.
+    ///
+    /// Each record was resolved at the provider declaration site. This payload is metadata, not a source convention:
+    /// consumers project it through their checked provider plan rather than matching a provider or operation spelling.
+    #[serde(default)]
+    pub operation_descriptors: Vec<ProviderOperationMetadata>,
 }
 
 impl Default for CompiledProviderMetadata {
@@ -230,6 +237,7 @@ impl Default for CompiledProviderMetadata {
             fact_requirements: Vec::new(),
             required_sdk_components: BTreeSet::new(),
             implementation_facets: Vec::new(),
+            operation_descriptors: Vec::new(),
         }
     }
 }
@@ -245,6 +253,32 @@ impl CompiledProviderMetadata {
             && self.fact_requirements.is_empty()
             && self.required_sdk_components.is_empty()
             && self.implementation_facets.is_empty()
+            && self.operation_descriptors.is_empty()
+    }
+}
+
+/// One provider function that has a checked RFC 104 operation requirement.
+///
+/// `CanonicalSymbolId` deliberately preserves the declaration anchors produced by the provider's compilation. A
+/// consumer obtains these facts only from the selected, integrity-checked provider manifest and uses them solely as
+/// an input to its current compilation's provider plan; it does not reconstruct either identity from a source or
+/// generated-name spelling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderOperationMetadata {
+    /// Canonical provider-function declaration that identifies the operation.
+    pub operation: CanonicalSymbolId,
+    /// Canonical RFC 104 capability declaration required for an invocation.
+    pub required_capability: CanonicalSymbolId,
+    /// Backend-neutral requirements the checked operation declares.
+    #[serde(default)]
+    pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
+}
+
+impl ProviderOperationMetadata {
+    /// Return whether this descriptor carries the two declaration kinds an authority consumer can interpret.
+    pub fn has_expected_kinds(&self) -> bool {
+        self.operation.kind == SemanticSourceTargetKind::Function
+            && self.required_capability.kind == SemanticSourceTargetKind::Capability
     }
 }
 

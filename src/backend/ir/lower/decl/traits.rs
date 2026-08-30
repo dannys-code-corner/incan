@@ -9,7 +9,7 @@ use incan_core::lang::traits::TraitId;
 use incan_core::lang::{callables, stdlib, trait_bounds};
 
 use super::super::super::Mutability;
-use super::super::super::decl::{FunctionParam, IrFunction, IrTrait, Visibility};
+use super::super::super::decl::{FunctionParam, FunctionParamDefault, IrFunction, IrTrait, Visibility};
 use super::super::super::types::IrType;
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
@@ -142,7 +142,9 @@ impl AstLowering {
                             mutability: self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node),
                             is_self: false,
                             kind: p.node.kind,
-                            default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                            default: self
+                                .lower_param_default_expr(p.node.default.as_ref())?
+                                .map(FunctionParamDefault::source),
                         })
                     })
                     .collect::<Result<_, LoweringError>>()?;

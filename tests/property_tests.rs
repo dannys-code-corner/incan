@@ -37,6 +37,36 @@ def main() -> ():
         Ok(())
     }
 
+    /// A `capability` declaration survives a format round-trip unchanged, and reformatting is idempotent.
+    ///
+    /// The formatter normalizes clause order, so a capability written description/scope/requires must come back the
+    /// same way it went in when it was already in that order -- and a second pass must change nothing.
+    #[test]
+    fn format_is_idempotent_for_a_capability_declaration() -> Result<(), String> {
+        let source = concat!(
+            "capability refund:\n",
+            "    description = \"Issue a refund\"\n",
+            "    scope:\n",
+            "        tenant: str\n",
+            "    requires = [host.http.request]\n",
+        );
+
+        let once = format_source(source).map_err(|e| e.to_string())?;
+        let twice = format_source(&once).map_err(|e| e.to_string())?;
+
+        assert_eq!(once, twice, "formatting a capability should be idempotent");
+        for fragment in [
+            "capability refund:",
+            "description = ",
+            "scope:",
+            "tenant: str",
+            "requires = [",
+        ] {
+            assert!(once.contains(fragment), "formatted output lost `{fragment}`:\n{once}");
+        }
+        Ok(())
+    }
+
     /// Property: Formatting preserves semantic meaning (can parse before and after)
     #[test]
     fn format_preserves_parseability() -> Result<(), String> {

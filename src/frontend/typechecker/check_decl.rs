@@ -13,10 +13,15 @@ use crate::frontend::testing_markers::{
 use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty};
 
 use super::collect::decorators::resolve_decorator_id;
+use super::collect::{capability_description_text, dotted_path_segments};
 use super::type_info::{
-    RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
+    ProviderOperationDeclarationInfo, RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry,
+    RegistryExplicitEntryInfo,
 };
-use super::{DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, TestingFixtureInfo, TypeChecker, YieldContext};
+use super::{
+    DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, TestingFixtureInfo, TypeChecker,
+    YieldContext,
+};
 use incan_core::interop::{RustItemKind, RustItemMetadata, RustTraitAssoc};
 use incan_core::lang::decorators::{self, DecoratorId};
 use incan_core::lang::derives::{self, DeriveId};
@@ -26,6 +31,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::testing;
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
+use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
 use incan_semantics_core::{SemanticRegistrySubjectKind, SemanticRegistryValue, SurfaceModifierTypeCheck};
 use std::collections::{HashMap, HashSet};
 
@@ -395,6 +401,7 @@ impl TypeChecker {
                         ty: Self::concretize_self_type_in_annotation(&param.ty, self_ty),
                         kind: param.kind,
                         has_default: param.has_default,
+                        is_partial_preset: param.is_partial_preset,
                     })
                     .collect(),
                 Box::new(Self::concretize_self_type_in_annotation(ret, self_ty)),
@@ -456,6 +463,7 @@ impl TypeChecker {
                 ty: Self::concretize_self_type_in_annotation(&param.ty, self_ty),
                 kind: param.kind,
                 has_default: param.has_default,
+                is_partial_preset: param.is_partial_preset,
             })
             .collect();
         concrete.return_type = Self::concretize_self_type_in_annotation(&method.return_type, self_ty);
@@ -2193,7 +2201,102 @@ impl TypeChecker {
                 "raw vocabulary declarations must be desugared before type checking".to_string(),
                 decl.span,
             )),
+            Declaration::Capability(cap) => self.check_capability_decl(cap, decl.span),
             Declaration::Docstring(_) => {} // Docstrings don't need checking
+        }
+    }
+
+    /// Check one RFC 104 `capability` declaration.
+    ///
+    /// Collection records what the declaration wrote; this decides whether what it wrote means anything. The two are
+    /// separate passes because capabilities may reference each other in any order within a module, so resolution
+    /// cannot happen while the symbols are still being collected.
+    ///
+    /// Every `requires` entry is validated from the AST rather than from the collected symbol, because collection
+    /// keeps only the entries that parsed as a reference. Re-walking the source list is what lets an entry that is
+    /// not a reference at all be reported instead of silently disappearing.
+    fn check_capability_decl(&mut self, cap: &CapabilityDecl, span: Span) {
+        self.validate_decorators_rejecting_user_defined(&cap.decorators, "capability");
+        self.reject_registry_description_decorators(&cap.decorators, "capability");
+
+        match cap.description.as_ref() {
+            None => self
+                .errors
+                .push(errors::capability_description_required(&cap.name, span)),
+            // Presence is not enough. Collection stores only compile-time text, so a clause it cannot read leaves
+            // the declaration carrying no description while appearing to have one -- the same silent drop the
+            // `requires` list had.
+            Some(expr) if capability_description_text(&expr.node).is_none() => self
+                .errors
+                .push(errors::capability_description_must_be_text(&cap.name, expr.span)),
+            Some(_) => {}
+        }
+
+        for entry in &cap.requires {
+            let Some(path) = dotted_path_segments(&entry.node) else {
+                self.errors
+                    .push(errors::capability_requirement_not_a_reference(entry.span));
+                continue;
+            };
+            self.check_capability_requirement(&path, entry.span);
+        }
+    }
+
+    /// Resolve one `requires` entry and confirm it names a capability.
+    ///
+    /// A bare name resolves against the current module's own symbols; a dotted path resolves as a member of the
+    /// module its leading segments name, the same way an import resolves against a definition. RFC 104 asks for
+    /// exactly that equivalence, so that a misspelled capability is an unresolved-symbol error at the reference
+    /// rather than a runtime denial reported somewhere else entirely.
+    fn check_capability_requirement(&mut self, path: &[String], span: Span) {
+        let rendered = path.join(".");
+        let Some((item_name, module_segments)) = path.split_last() else {
+            return;
+        };
+
+        if module_segments.is_empty() {
+            match self.lookup_symbol(item_name).map(|symbol| &symbol.kind) {
+                Some(SymbolKind::Capability(_)) => {}
+                Some(other) => {
+                    let found = Self::symbol_kind_noun(other);
+                    self.errors
+                        .push(errors::capability_requirement_not_a_capability(&rendered, found, span));
+                }
+                None => self
+                    .errors
+                    .push(errors::capability_requirement_unresolved(&rendered, span)),
+            }
+            return;
+        }
+
+        let module = ImportPath::simple(module_segments.to_vec());
+        match self.dependency_member_identity(&module, item_name) {
+            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => {}
+            Some(identity) => {
+                let found = identity.kind.as_str();
+                self.errors
+                    .push(errors::capability_requirement_not_a_capability(&rendered, found, span));
+            }
+            None => self
+                .errors
+                .push(errors::capability_requirement_unresolved(&rendered, span)),
+        }
+    }
+
+    /// Name a symbol kind for a diagnostic that reports the wrong kind was referenced.
+    fn symbol_kind_noun(kind: &SymbolKind) -> &'static str {
+        match kind {
+            SymbolKind::Variable(_) => "variable",
+            SymbolKind::Static(_) => "static",
+            SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_) => "function",
+            SymbolKind::Type(_) => "type",
+            SymbolKind::Trait(_) => "trait",
+            SymbolKind::Module(_) => "module",
+            SymbolKind::Variant(_) => "enum variant",
+            SymbolKind::Field(_) => "field",
+            SymbolKind::Property(_) => "property",
+            SymbolKind::RustItem(_) => "rust import",
+            SymbolKind::Capability(_) => "capability",
         }
     }
 
@@ -3210,7 +3313,7 @@ impl TypeChecker {
 
         // Check methods
         for method in &model.methods {
-            self.check_method_with_owner_type_params(&method.node, &model.name, &model.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &model.name, &model.type_params);
         }
         self.check_method_partials(&model.name, &model.method_partials);
         for property in &model.properties {
@@ -3625,7 +3728,7 @@ impl TypeChecker {
 
         // Check methods
         for method in &class.methods {
-            self.check_method_with_owner_type_params(&method.node, &class.name, &class.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &class.name, &class.type_params);
         }
         self.check_method_partials(&class.name, &class.method_partials);
         for property in &class.properties {
@@ -3788,6 +3891,7 @@ impl TypeChecker {
             // their parameter, return, target, and generic-bound annotations still form part of the public trait API.
             self.check_method_with_self_ty(
                 &method.node,
+                method.span,
                 ResolvedType::SelfType,
                 &trait_type_params,
                 &tr.type_params,
@@ -4145,7 +4249,7 @@ impl TypeChecker {
         // Check methods (reuse the standard method-checking logic so parameters are in scope).
         for method in &nt.methods {
             if method.node.body.is_some() {
-                self.check_method_with_owner_type_params(&method.node, &nt.name, &nt.type_params);
+                self.check_method_with_owner_type_params(&method.node, method.span, &nt.name, &nt.type_params);
             }
         }
         self.check_method_partials(&nt.name, &nt.method_partials);
@@ -4374,7 +4478,7 @@ impl TypeChecker {
         }
 
         for method in &en.methods {
-            self.check_method_with_owner_type_params(&method.node, &en.name, &en.type_params);
+            self.check_method_with_owner_type_params(&method.node, method.span, &en.name, &en.type_params);
         }
         if let Some(TypeInfo::Enum(info)) = self.lookup_type_info(&en.name).cloned() {
             let method_spans = Self::method_decl_spans_by_name(&en.methods);
@@ -5022,6 +5126,127 @@ impl TypeChecker {
         }
     }
 
+    /// Record the checked capability requirement for one provider operation.
+    ///
+    /// `@provider_operation(capability.path)` is deliberately a declaration attachment rather than a convention on a
+    /// callable or module name. The typechecker resolves the capability at the producer declaration site and carries
+    /// the resulting canonical identities into provider metadata; later consumers never need to reinterpret the
+    /// decorator or recover meaning from a backend projection.
+    fn check_provider_operation_decorators(&mut self, func: &FunctionDecl, decl_span: Span) {
+        let decorators = func
+            .decorators
+            .iter()
+            .filter(|decorator| {
+                self.decorator_id_with_import_aliases(&decorator.node) == Some(DecoratorId::ProviderOperation)
+            })
+            .collect::<Vec<_>>();
+        if decorators.is_empty() {
+            return;
+        }
+        if decorators.len() > 1 {
+            for decorator in decorators {
+                self.errors.push(CompileError::type_error(
+                    "a provider function may declare only one @provider_operation capability".to_string(),
+                    decorator.span,
+                ));
+            }
+            return;
+        }
+        let decorator = decorators[0];
+        let [DecoratorArg::Positional(capability)] = decorator.node.args.as_slice() else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation requires exactly one capability reference".to_string(),
+                decorator.span,
+            ));
+            return;
+        };
+        let Some(path) = dotted_path_segments(&capability.node) else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation capability must be a checked capability reference, not a value expression"
+                    .to_string(),
+                capability.span,
+            ));
+            return;
+        };
+        let Some(required_capability) = self.provider_operation_capability_identity(&path, capability.span) else {
+            return;
+        };
+        let Some(module_path) = self.current_module_path.clone() else {
+            self.errors.push(CompileError::type_error(
+                "@provider_operation requires a compiler-known module identity".to_string(),
+                decorator.span,
+            ));
+            return;
+        };
+        let operation = CanonicalSymbolId::module_declaration(
+            module_path,
+            func.name.clone(),
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(decl_span.start, decl_span.end),
+        );
+        self.type_info.declarations.provider_operations.insert(
+            operation.clone(),
+            ProviderOperationDeclarationInfo {
+                operation,
+                required_capability,
+                runtime_requirements: Vec::new(),
+            },
+        );
+    }
+
+    /// Resolve an operation decorator's capability reference to the declaration identity it actually names.
+    fn provider_operation_capability_identity(&mut self, path: &[String], span: Span) -> Option<CanonicalSymbolId> {
+        let rendered = path.join(".");
+        let (name, module) = path.split_last()?;
+        if module.is_empty() {
+            let Some(symbol) = self.lookup_symbol(name).cloned() else {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation capability `{rendered}` is unresolved"),
+                    span,
+                ));
+                return None;
+            };
+            if !matches!(symbol.kind, SymbolKind::Capability(_)) {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation reference `{rendered}` does not name a capability"),
+                    span,
+                ));
+                return None;
+            }
+            let Some(module_path) = self.current_module_path.clone() else {
+                self.errors.push(CompileError::type_error(
+                    "@provider_operation requires a compiler-known module identity".to_string(),
+                    span,
+                ));
+                return None;
+            };
+            return Some(CanonicalSymbolId::module_declaration(
+                module_path,
+                name.clone(),
+                SemanticSourceTargetKind::Capability,
+                HirSourceSpan::new(symbol.span.start, symbol.span.end),
+            ));
+        }
+        let import = ImportPath::simple(module.to_vec());
+        match self.dependency_member_identity(&import, name) {
+            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => Some(identity),
+            Some(_) => {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation reference `{rendered}` does not name a capability"),
+                    span,
+                ));
+                None
+            }
+            None => {
+                self.errors.push(CompileError::type_error(
+                    format!("@provider_operation capability `{rendered}` is unresolved"),
+                    span,
+                ));
+                None
+            }
+        }
+    }
+
     /// Reject `@describe` where RFC 113 has no stable source subject yet.
     ///
     /// The decorator resolver deliberately recognises compiler-owned decorators on broad syntactic targets. Keeping
@@ -5220,6 +5445,7 @@ impl TypeChecker {
             decl_span,
             SemanticRegistrySubjectKind::Function,
         );
+        self.check_provider_operation_decorators(func, decl_span);
         self.validate_callable_rest_params(&func.params);
         let fixture_span = fixture_function_span(func);
         let fixture_args = self.testing_fixture_marker_args(&func.decorators, fixture_span);
@@ -5283,9 +5509,12 @@ impl TypeChecker {
         let active_bounds = self.type_param_bound_details_from_type_params(&func.type_params);
         self.current_type_param_bound_details.push(active_bounds);
 
-        // Define parameters
-        for param in &func.params {
-            let ty = local_type_for_param(param.node.kind, self.resolve_type_checked(&param.node.ty));
+        let resolved_param_types = self.resolve_callable_parameter_types_and_check_defaults(&func.params);
+
+        // Define parameters after checking defaults so a declaration-owned default cannot resolve a callable-frame
+        // binding. The function body still receives its ordinary parameter locals below.
+        for (param, resolved_ty) in func.params.iter().zip(resolved_param_types) {
+            let ty = local_type_for_param(param.node.kind, resolved_ty);
             self.symbols.define(Symbol {
                 name: param.node.name.clone(),
                 kind: SymbolKind::Variable(VariableInfo {
@@ -5338,9 +5567,7 @@ impl TypeChecker {
                 });
 
         // Check body
-        for stmt in &func.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&func.body);
 
         self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
         self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
@@ -5354,6 +5581,41 @@ impl TypeChecker {
         self.current_type_param_bound_details.pop();
         self.symbols.exit_scope();
         self.apply_user_defined_function_decorators(func, decl_span);
+    }
+
+    /// Resolve callable parameter annotations and validate source defaults before their execution-frame bindings exist.
+    ///
+    /// A default may use module-visible declarations and the current function or method's active generic bounds, but
+    /// it may not read `self` or another callable parameter. Keeping this check before the frame bindings makes the
+    /// source typechecker agree with call-time default materialization and records canonical expression facts for
+    /// compiler-owned consumers without requiring them to reconstruct source typing.
+    fn resolve_callable_parameter_types_and_check_defaults(&mut self, params: &[Spanned<Param>]) -> Vec<ResolvedType> {
+        params
+            .iter()
+            .map(|param| {
+                let param_ty = self.resolve_type_checked(&param.node.ty);
+                if param.node.kind != ParamKind::Normal {
+                    return param_ty;
+                }
+                let Some(default) = &param.node.default else {
+                    return param_ty;
+                };
+
+                let previous_callable_default_context = std::mem::replace(&mut self.checking_callable_default, true);
+                let default_ty = self.check_expr_with_expected(default, Some(&param_ty));
+                self.checking_callable_default = previous_callable_default_context;
+                if !self.types_compatible(&default_ty, &param_ty)
+                    && !self.record_validated_newtype_coercion_if_possible(&default_ty, &param_ty, default.span)
+                {
+                    self.errors.push(errors::type_mismatch(
+                        &param_ty.to_string(),
+                        &default_ty.to_string(),
+                        default.span,
+                    ));
+                }
+                param_ty
+            })
+            .collect()
     }
 
     /// Resolve generic type-parameter bounds while preserving trait type arguments for call-site checks.
@@ -5399,7 +5661,16 @@ impl TypeChecker {
     }
 
     /// Validate a model, class, enum, or newtype method body using the concrete nominal owner as `self`.
-    fn check_method_with_owner_type_params(&mut self, method: &MethodDecl, owner: &str, owner_params: &[TypeParam]) {
+    ///
+    /// `method_span` is forwarded to [`Self::check_method_with_self_ty`] unchanged; see that method's docs for why
+    /// it is required (#1121 declaration-identity keying).
+    fn check_method_with_owner_type_params(
+        &mut self,
+        method: &MethodDecl,
+        method_span: Span,
+        owner: &str,
+        owner_params: &[TypeParam],
+    ) {
         self.validate_decorators_allowing_user_defined(&method.decorators);
         let declaration_name = format!("{owner}.{}", method.name);
         self.check_registry_description_decorators(
@@ -5438,7 +5709,7 @@ impl TypeChecker {
                     .collect(),
             )
         };
-        self.check_method_with_self_ty(method, owner_self_ty, &owner_type_params, owner_params);
+        self.check_method_with_self_ty(method, method_span, owner_self_ty, &owner_type_params, owner_params);
         self.current_method_owner = previous_owner;
         self.apply_user_defined_method_decorators(method, owner);
     }
@@ -5508,9 +5779,7 @@ impl TypeChecker {
         if let Some(body) = &property.body {
             let prev_in_async_body = self.in_async_body;
             self.in_async_body = false;
-            for stmt in body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(body);
             self.in_async_body = prev_in_async_body;
         }
 
@@ -5523,9 +5792,17 @@ impl TypeChecker {
     /// Generic owners pass `Owner[T, ...]` here so return checking and `cls(...)` constructor calls see the same
     /// generic surface that call sites use. Trait default methods may still pass bare `Self` because their eventual
     /// adopter is resolved later during trait conformance and method-call substitution.
+    ///
+    /// `method_span` is the declaration span of `method` itself (the `Spanned<MethodDecl>` this `&MethodDecl` was
+    /// unwrapped from). It keys [`DeclarationArtifacts::method_bindings_by_span`](
+    /// super::type_info::DeclarationArtifacts::method_bindings_by_span), recorded below once ordinary parameters are
+    /// resolved, so Body IR lowering (#1121) can retrieve the checked callable signature for this exact declaration
+    /// instead of re-resolving raw AST annotations. Span is the only key that stays collision-safe across same-name
+    /// methods on different owners and same-owner overloads, mirroring `function_bindings_by_span`.
     fn check_method_with_self_ty(
         &mut self,
         method: &MethodDecl,
+        method_span: Span,
         self_ty: ResolvedType,
         owner_type_params: &[String],
         owner_params: &[TypeParam],
@@ -5567,6 +5844,8 @@ impl TypeChecker {
         active_bounds.extend(self.type_param_bound_details_from_type_params(&method.type_params));
         self.current_type_param_bound_details.push(active_bounds);
 
+        let resolved_param_types = self.resolve_callable_parameter_types_and_check_defaults(&method.params);
+
         // Define self if present
         if let Some(receiver) = method.receiver {
             let is_mutable = matches!(receiver, Receiver::Mutable);
@@ -5590,9 +5869,17 @@ impl TypeChecker {
             self.current_classmethod_self_ty = Some(self_ty.clone());
         }
 
-        // Define parameters
-        for param in &method.params {
-            let ty = local_type_for_param(param.node.kind, self.resolve_type_checked(&param.node.ty));
+        // Define parameters, capturing each checked callable-parameter fact once so it can be recorded for Body IR
+        // lowering below without re-resolving the annotation (and re-emitting any of its diagnostics) a second time.
+        let mut checked_params = Vec::with_capacity(method.params.len());
+        for (param, resolved_ty) in method.params.iter().zip(resolved_param_types) {
+            checked_params.push(CallableParam::named_with_default(
+                param.node.name.clone(),
+                resolved_ty.clone(),
+                param.node.kind,
+                param.node.default.is_some(),
+            ));
+            let ty = local_type_for_param(param.node.kind, resolved_ty);
             self.symbols.define(Symbol {
                 name: param.node.name.clone(),
                 kind: SymbolKind::Variable(VariableInfo {
@@ -5606,6 +5893,13 @@ impl TypeChecker {
         }
 
         let return_type = self.resolve_type_checked(&method.return_type);
+        self.type_info.declarations.method_bindings_by_span.insert(
+            (method_span.start, method_span.end),
+            FunctionBindingInfo {
+                params: checked_params,
+                return_type: return_type.clone(),
+            },
+        );
         let effective_return_type = Self::concretize_self_type_in_annotation(&return_type, &self_ty);
         let body_has_yield = method
             .body
@@ -5643,9 +5937,7 @@ impl TypeChecker {
             let previous_unbound_c_abi_span_constructors = std::mem::take(&mut self.unbound_c_abi_span_constructors);
             let previous_c_abi_span_bindings = std::mem::take(&mut self.c_abi_span_bindings);
             let previous_consumed_c_abi_span_bindings = std::mem::take(&mut self.consumed_c_abi_span_bindings);
-            for stmt in body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(body);
             self.consumed_iterator_bindings = previous_consumed_iterator_bindings;
             self.transferred_c_resource_bindings = previous_transferred_c_resource_bindings;
             self.unbound_c_abi_span_constructors = previous_unbound_c_abi_span_constructors;

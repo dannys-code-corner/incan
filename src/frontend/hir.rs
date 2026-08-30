@@ -65,6 +65,7 @@ fn hir_decl_kind_and_name(decl: &Declaration) -> (HirDeclarationKind, Option<Str
         Declaration::Const(decl) => (HirDeclarationKind::Const, Some(decl.name.clone())),
         Declaration::Static(decl) => (HirDeclarationKind::Static, Some(decl.name.clone())),
         Declaration::Model(decl) => (HirDeclarationKind::Model, Some(decl.name.clone())),
+        Declaration::Capability(decl) => (HirDeclarationKind::Capability, Some(decl.name.clone())),
         Declaration::Class(decl) => (HirDeclarationKind::Class, Some(decl.name.clone())),
         Declaration::Trait(decl) => (HirDeclarationKind::Trait, Some(decl.name.clone())),
         Declaration::Alias(decl) => (HirDeclarationKind::Alias, Some(decl.name.clone())),
@@ -88,11 +89,7 @@ fn hir_decl_kind_and_name(decl: &Declaration) -> (HirDeclarationKind, Option<Str
 
 /// Render a module path into the semantic module identity used by HIR v0.
 fn hir_module_identity(module_path: &[String]) -> String {
-    if module_path.is_empty() {
-        "<module>".to_string()
-    } else {
-        module_path.join("::")
-    }
+    incan_semantics_core::module_identity_for_path(module_path)
 }
 
 /// Build the HIR declaration identity for a named declaration.

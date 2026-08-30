@@ -57,6 +57,10 @@ impl TypeChecker {
             self.errors.push(errors::unknown_symbol(name, span));
             return ResolvedType::Unknown;
         };
+        if self.checking_callable_default && matches!(&sym.kind, SymbolKind::Field(_) | SymbolKind::Property(_)) {
+            self.errors.push(errors::unknown_symbol(name, span));
+            return ResolvedType::Unknown;
+        }
         if let Some(span_carrier) = self.c_abi_span_bindings.get(name).copied() {
             if let Some(consumed_at) = self
                 .consumed_c_abi_span_bindings
@@ -147,6 +151,17 @@ impl TypeChecker {
                 } else {
                     (IdentKind::Module, ResolvedType::Named(name.to_string()))
                 }
+            }
+            SymbolKind::Capability(_) => {
+                // RFC 104 capabilities name an authority to perform an operation. Nothing in the language holds one as
+                // a value, so a bare reference is always a mistake rather than a use this stage should type.
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "Capability '{name}' names a runtime authority, not a value; grant it or list it under `requires` instead of referencing it directly"
+                    ),
+                    span,
+                ));
+                return ResolvedType::Unknown;
             }
             SymbolKind::Trait(_) => {
                 if !self.is_type_receiver_span(span) {

@@ -106,6 +106,13 @@ pub(crate) struct CliDiagnostic {
 #[derive(Debug, Clone)]
 pub(crate) struct CliDiagnosticFailure {
     pub diagnostics: Vec<CliDiagnostic>,
+    /// Non-fatal diagnostics gathered before the failure, reported but never re-rendered.
+    ///
+    /// Kept apart from `diagnostics` because these have already been printed to stderr as they were produced.
+    /// Folding them in would print them twice for a human, while dropping them would make the machine-readable
+    /// report inconsistent: a file with both a warning and an error would report only the error, even though the
+    /// same file reports the warning fine when it compiles.
+    pub warnings: Vec<CliDiagnostic>,
 }
 
 impl CliDiagnosticFailure {
@@ -123,6 +130,7 @@ impl CliDiagnosticFailure {
                 error,
                 phase,
             }],
+            warnings: Vec::new(),
         }
     }
 
@@ -145,10 +153,13 @@ impl CliDiagnosticFailure {
                     phase,
                 })
                 .collect(),
+            warnings: Vec::new(),
         }
     }
 
-    /// Render the structured diagnostics through the existing source-highlighted human diagnostic formatter.
+    /// Render the failing diagnostics through the existing source-highlighted human diagnostic formatter.
+    ///
+    /// Warnings are deliberately excluded: they were already shown when they were produced.
     pub(crate) fn render_human(&self) -> String {
         let mut rendered = String::new();
         for diagnostic in &self.diagnostics {
@@ -3581,6 +3592,7 @@ pub(crate) fn collect_rust_inspect_derive_probe_paths(modules: &[ParsedModule]) 
             | Declaration::Function(_)
             | Declaration::TestModule(_)
             | Declaration::VocabBlock(_)
+            | Declaration::Capability(_)
             | Declaration::Docstring(_) => None,
         }
     }
@@ -4165,10 +4177,9 @@ fn collect_modules_detailed_from_seeds(
         let ast = match session.parse_source(file_path_obj, &source, !is_incan_source_stdlib_module) {
             Ok(a) => {
                 // Surface any non-fatal parser warnings (e.g. RFC 005 dot-notation nudges) immediately,
-                // so they reach the user regardless of which build/run/debug command was invoked.
-                for warn in &a.warnings {
-                    eprint!("{}", diagnostics::format_error(&file_path, &source, warn));
-                }
+                // so they reach the user regardless of which build/run/debug command was invoked. They are
+                // collected for machine-readable reports later, off the retained AST, by the typecheck pass.
+                render_module_warnings(&file_path, &source, &a.warnings);
                 a
             }
             Err(errs) => {
@@ -4776,6 +4787,18 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
         .collect()
 }
 
+/// Register every collected module's real path segments with a checker before typechecking.
+///
+/// The dependency cache is keyed by the flattened, underscore-joined module name, which also names the emitted Rust
+/// module and is therefore not injective: `pkg.helpers` and a module literally named `pkg_helpers` flatten to one
+/// string. Supplying the true segments lets a canonical identity name the module that answered rather than the
+/// spelling that asked. Mirrors the pair `IrCodegen::add_module_with_path_segments` already carries for emission.
+pub(crate) fn register_module_path_segments(checker: &mut typechecker::TypeChecker, modules: &[ParsedModule]) {
+    for module in modules {
+        checker.register_dependency_module_path_segments(&module.name, module.path_segments.clone());
+    }
+}
+
 /// Typecheck all collected modules in dependency-safe order using shared CLI diagnostics formatting.
 ///
 /// This helper centralizes the per-module checker setup used by `build` and `check` paths so warning/error rendering
@@ -4795,18 +4818,22 @@ pub(crate) fn typecheck_modules_with_import_graph(
         #[cfg(feature = "rust_inspect")]
         rust_inspect_manifest_dir,
     )
+    .map(|_warnings| ())
     .map_err(|failure| CliError::failure(failure.render_human()))
 }
 
 /// Typecheck modules while selecting one already-validated C ABI target for this invocation.
+///
+/// Returns the non-fatal parser and typechecker diagnostics collected along the way, so callers that emit a
+/// machine-readable report can include them; callers that only care about acceptance can discard them.
 pub(crate) fn typecheck_modules_with_import_graph_detailed_for_c_abi_target(
     modules: &[ParsedModule],
     manifest: Option<&ProjectManifest>,
     provider_plan: &Arc<ProviderPlan>,
     c_abi_plan: Option<&CAbiVerificationPlan>,
     #[cfg(feature = "rust_inspect")] rust_inspect_manifest_dir: Option<&Path>,
-) -> Result<(), CliDiagnosticFailure> {
-    typecheck_modules_with_import_graph_info(
+) -> Result<Vec<CliDiagnostic>, CliDiagnosticFailure> {
+    typecheck_modules_with_import_graph_artifacts(
         modules,
         manifest,
         provider_plan,
@@ -4814,36 +4841,18 @@ pub(crate) fn typecheck_modules_with_import_graph_detailed_for_c_abi_target(
         #[cfg(feature = "rust_inspect")]
         rust_inspect_manifest_dir,
     )
-    .map(|_| ())
-}
-
-/// Typecheck all collected modules and return reusable typechecker artifacts for successfully checked modules.
-pub(crate) fn typecheck_modules_with_import_graph_info(
-    modules: &[ParsedModule],
-    manifest: Option<&ProjectManifest>,
-    provider_plan: &Arc<ProviderPlan>,
-    c_abi_plan: Option<&CAbiVerificationPlan>,
-    #[cfg(feature = "rust_inspect")] rust_inspect_manifest_dir: Option<&Path>,
-) -> Result<BTreeMap<PathBuf, TypeCheckInfo>, CliDiagnosticFailure> {
-    let typecheck_artifacts = typecheck_modules_with_import_graph_artifacts(
-        modules,
-        manifest,
-        provider_plan,
-        c_abi_plan,
-        #[cfg(feature = "rust_inspect")]
-        rust_inspect_manifest_dir,
-    )?;
-    Ok(modules
-        .iter()
-        .zip(typecheck_artifacts.type_infos)
-        .map(|(module, type_info)| (module.file_path.clone(), type_info))
-        .collect())
+    .map(|artifacts| artifacts.warnings)
 }
 
 /// Products retained from one dependency-safe typechecking pass.
 struct TypecheckModuleArtifacts {
     type_infos: Vec<TypeCheckInfo>,
     stdlib_cache: StdlibAstCache,
+    /// Non-fatal parser and typechecker diagnostics, for reports that expose them.
+    ///
+    /// Ordered by module, then by parser-before-typechecker within each module, so a machine-readable report is
+    /// byte-stable across runs of the same source.
+    warnings: Vec<CliDiagnostic>,
 }
 
 /// Typecheck a collected graph in dependency-safe order and retain one result for every input module plus the
@@ -4861,11 +4870,16 @@ fn typecheck_modules_with_import_graph_artifacts(
     let declared = manifest.map(|m| m.declared_rust_crate_names());
     let module_idx_by_key = module_key_index(modules);
     let mut diagnostics_out = Vec::new();
+    let mut warnings_out = Vec::new();
     let mut type_infos = Vec::with_capacity(modules.len());
     let mut stdlib_cache = StdlibAstCache::new();
 
     for (idx, module) in modules.iter().enumerate() {
         let deps_for_module = imported_module_deps_for_with_index(modules, idx, &module_idx_by_key);
+
+        // Parser warnings were already rendered at parse time; collect them here so both warning classes reach
+        // machine-readable reports from one deterministic sweep.
+        warnings_out.extend(parser_warning_diagnostics(module));
 
         let mut checker = typechecker::TypeChecker::new();
         checker.stdlib_cache = stdlib_cache.clone();
@@ -4873,6 +4887,7 @@ fn typecheck_modules_with_import_graph_artifacts(
             checker.set_declared_crate_names(names);
         }
         checker.set_current_module_path(Some(module.path_segments.clone()));
+        register_module_path_segments(&mut checker, modules);
         checker.set_provider_plan(Arc::clone(provider_plan));
         #[cfg(feature = "rust_inspect")]
         if let Some(rust_inspect_manifest_dir) = rust_inspect_manifest_dir {
@@ -4885,14 +4900,17 @@ fn typecheck_modules_with_import_graph_artifacts(
         } else {
             checker.check_with_imports(&module.ast, &deps_for_module)
         };
+        // Warnings accumulate on the checker whether or not checking succeeded, so surface them from both arms:
+        // a module that also has an error should not hide its warnings from the user or from the report.
+        render_module_warnings(
+            module.file_path.to_string_lossy().as_ref(),
+            &module.source,
+            checker.warnings(),
+        );
+        warnings_out.extend(typecheck_warning_diagnostics(module, checker.warnings()));
+
         match check_result {
             Ok(()) => {
-                for warn in checker.warnings() {
-                    eprint!(
-                        "{}",
-                        diagnostics::format_error(module.file_path.to_string_lossy().as_ref(), &module.source, warn)
-                    );
-                }
                 type_infos.push(checker.type_info().clone());
                 stdlib_cache = checker.stdlib_cache.clone();
             }
@@ -4916,10 +4934,12 @@ fn typecheck_modules_with_import_graph_artifacts(
         Ok(TypecheckModuleArtifacts {
             type_infos,
             stdlib_cache,
+            warnings: warnings_out,
         })
     } else {
         Err(CliDiagnosticFailure {
             diagnostics: diagnostics_out,
+            warnings: warnings_out,
         })
     }
 }
@@ -5041,6 +5061,53 @@ fn resolve_package_owned_c_binding_header(
 /// Classify diagnostics that are still emitted by the typechecker but originate from an import declaration span.
 fn typecheck_diagnostic_phase(module: &ParsedModule, span: Span) -> diagnostics::DiagnosticPhase {
     diagnostics::phase_for_typecheck_span(&module.ast, span)
+}
+
+/// Render one module's non-fatal diagnostics to stderr in the shared CLI format.
+///
+/// Warnings never fail a command, so they are shown the moment they are produced rather than held until a
+/// machine-readable report is assembled: `run`, `build`, and `fmt` invocations that never emit JSON must still
+/// surface them.
+pub(crate) fn render_module_warnings(file_path: &str, source: &str, warnings: &[diagnostics::CompileError]) {
+    for warning in warnings {
+        eprint!("{}", diagnostics::format_error(file_path, source, warning));
+    }
+}
+
+/// Project one module's non-fatal parser diagnostics into the structured shape machine-readable reports consume.
+///
+/// Parser warnings are read back off [`ParsedModule::ast`] rather than captured at parse time because the parse
+/// pass is shared by commands that never typecheck; keeping collection here lets the report gather both warning
+/// classes in one deterministic sweep without changing when the user first sees them.
+fn parser_warning_diagnostics(module: &ParsedModule) -> Vec<CliDiagnostic> {
+    module
+        .ast
+        .warnings
+        .iter()
+        .map(|warning| CliDiagnostic {
+            file_path: module.file_path.to_string_lossy().to_string(),
+            source: module.source.clone(),
+            phase: diagnostics::DiagnosticPhase::Parse,
+            error: warning.clone(),
+        })
+        .collect()
+}
+
+/// Project one module's non-fatal typechecker diagnostics into the same structured shape.
+///
+/// Warnings and errors share [`CliDiagnostic`] deliberately: severity already travels on
+/// `CompileError::kind` and survives into `StableDiagnostic::severity`, so which collection a diagnostic arrived
+/// in carries no information the payload does not already hold.
+fn typecheck_warning_diagnostics(module: &ParsedModule, warnings: &[diagnostics::CompileError]) -> Vec<CliDiagnostic> {
+    warnings
+        .iter()
+        .map(|warning| CliDiagnostic {
+            file_path: module.file_path.to_string_lossy().to_string(),
+            source: module.source.clone(),
+            phase: typecheck_diagnostic_phase(module, warning.span),
+            error: warning.clone(),
+        })
+        .collect()
 }
 
 // ============================================================================

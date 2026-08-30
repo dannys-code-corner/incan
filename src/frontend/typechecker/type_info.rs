@@ -3,7 +3,7 @@
 //! This module contains the reusable semantic metadata that later compiler stages consume after typechecking. It keeps
 //! the cross-phase snapshot surface separate from the main [`TypeChecker`](super::TypeChecker) orchestration state.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use sha2::{Digest, Sha256};
 
@@ -17,9 +17,9 @@ use incan_core::interop::{CoercionPolicy, RustFunctionSig};
 use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId, link_capability_as_str, scalar_type_as_str};
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
 use incan_semantics_core::{
-    CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, SemanticFact,
-    SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind,
-    SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind,
+    CanonicalSymbolId, CompilerNodeId, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType,
+    SemanticFact, SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry,
+    SemanticRegistrySubjectKind, SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind,
 };
 
 use super::{ConstValue, const_eval};
@@ -808,8 +808,34 @@ pub struct DeclarationArtifacts {
     /// Lowering consumes this instead of re-lowering raw AST annotations so aliases such as
     /// `type Expr = Union[...]` do not produce a different callable surface from typechecked call sites.
     pub function_bindings: HashMap<String, FunctionBindingInfo>,
+    /// Canonical identity proven for each imported binding, keyed by the local name the import introduced.
+    ///
+    /// [`SourceTargetInfo::module_path`] records the import path *as written*, which is not necessarily the module
+    /// resolution selected: sibling-relative candidates are tried before bare ones, so a written path can name a
+    /// different module that merely declares the same leaf name. A declaration identity must never be built from the
+    /// written path, so the proven identity is recorded here and is simply absent when resolution did not prove one.
+    /// A re-export resolves to the identity of the module that *declares* the member, never to the facade.
+    pub resolved_import_identities: HashMap<String, CanonicalSymbolId>,
+    /// Checked provider-operation declarations, keyed by their provider function's canonical identity.
+    ///
+    /// This is the producer-side fact that package publication persists. Body-IR lowering consumes the resulting
+    /// provider-plan projection rather than re-reading a decorator or inferring an operation from a module name.
+    pub provider_operations: BTreeMap<CanonicalSymbolId, ProviderOperationDeclarationInfo>,
     /// Module-local function declarations keyed by declaration span, preserving same-name overloads.
     pub function_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
+    /// Concrete class/model/trait method declarations keyed by declaration span (#1121).
+    ///
+    /// Method names are not unique the way top-level function names are: two owners can declare a method with the
+    /// same name, and one owner can declare same-name overloads. Declaration span is therefore the only key that
+    /// stays collision-safe without inventing a separate declaration-identity scheme, mirroring
+    /// `function_bindings_by_span`. Body IR lowering (`src/frontend/body_ir.rs`) consumes this instead of
+    /// re-resolving raw AST parameter annotations, so aliased and generic method parameter types match the checked
+    /// callable signature exactly rather than a local re-parse. Populated for every method checked through
+    /// `TypeChecker::check_method_with_self_ty` (trait defaults included, keyed by the trait method's own span), so
+    /// static methods (no receiver) are covered the same as instance methods. Newtype and enum methods are checked
+    /// through the same function and so also populate this table, even though Body IR does not lower their bodies
+    /// (#1102's own deliberate scope) — the fact simply goes unread for those owners.
+    pub method_bindings_by_span: HashMap<(usize, usize), FunctionBindingInfo>,
     /// Function declaration emitted names keyed by source declaration span.
     ///
     /// Present when top-level overloads need Rust-level name disambiguation while preserving one source name.
@@ -843,6 +869,23 @@ pub struct DeclarationArtifacts {
     pub decorated_function_bindings_by_span: HashMap<(usize, usize), DecoratedFunctionBindingInfo>,
     /// RFC 036: Method names whose declaration was rebound through a user-defined decorator chain.
     pub decorated_method_bindings: HashMap<(String, String), DecoratedMethodBindingInfo>,
+}
+
+/// One provider function's checked authority requirement.
+///
+/// The callable and capability are both resolved identities. The source decorator never contributes a stringly
+/// authority name to a backend; it only tells the typechecker which two already-resolved declarations are related.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderOperationDeclarationInfo {
+    /// Canonical identity of the provider function this declaration annotates.
+    pub operation: CanonicalSymbolId,
+    /// Canonical identity of the RFC 104 capability required to invoke that operation.
+    pub required_capability: CanonicalSymbolId,
+    /// Compiler-owned requirements the operation's runtime implementation imposes.
+    ///
+    /// The first vertical currently records none. A future declaration contract may add requirements only when it
+    /// has a checked source form; lowering must not infer them from a provider name or generated implementation.
+    pub runtime_requirements: Vec<incan_semantics_core::AbiV0RuntimeRequirement>,
 }
 
 /// Checked RFC 113 registry data that later stages consume without re-parsing decorator expressions.
@@ -1079,6 +1122,21 @@ pub struct CallArtifacts {
     /// Function-value calls can recover this from the callee expression type, but method calls need a snapshot because
     /// lowering does not retain the frontend method table.
     pub call_site_callable_params: HashMap<(usize, usize), Vec<CallableParam>>,
+    /// Resolved winner-binding type for one `race for` arm, keyed by that arm's awaitable expression span (#1164).
+    ///
+    /// A race arm binds the shared `race for value:` name to the *awaited output* type, not to the awaitable's own
+    /// type: `Awaitable[T]` binds `T`, and `JoinHandle[T]` binds `Result[T, TaskJoinError]`. Only the typechecker
+    /// performs that unwrapping (`await_output_type`), and the arm binding has no `await X` expression span of its
+    /// own for lowering to look up, so the decision is recorded here instead of being re-derived.
+    pub race_arm_binding_types: HashMap<(usize, usize), ResolvedType>,
+    /// Resolved `model`/`class` construction field binding, keyed by full call expression span (#1158).
+    ///
+    /// Source-level construction is named-only, so the constructor check is the stage that decides which declared
+    /// field each written argument fills — including resolving a field alias to its canonical name. Recording that
+    /// decision here is what lets Body IR lowering represent construction faithfully: declared field order lives in
+    /// the symbol table (`ModelInfo::field_order`/`ClassInfo::field_order`), which lowering deliberately cannot
+    /// reach, and re-deriving the binding from AST spelling would duplicate alias resolution in a second place.
+    pub constructor_field_bindings: HashMap<(usize, usize), ConstructorFieldBinding>,
     /// RFC 028: User-defined operator dispatch resolved by the typechecker.
     ///
     /// Lowering consumes this map so `a + b`, `-a`, and `a[b]` can become direct dunder method calls without
@@ -1251,7 +1309,11 @@ pub enum IdentKind {
 /// Compiler-proven source declaration target for codegraph call/reference records.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceTargetInfo {
-    /// Canonical source module path segments that own the target declaration.
+    /// Import path segments **as written** at the reference site.
+    ///
+    /// Not necessarily the module that owns the declaration: resolution tries sibling-relative candidates before bare
+    /// ones, so this can name a different module that merely declares the same leaf name. The proven owner lives in
+    /// [`DeclarationArtifacts::resolved_import_identities`].
     pub module_path: Vec<String>,
     /// Source declaration name in the owning module.
     pub name: String,
@@ -1336,13 +1398,32 @@ pub struct StaticBindingInfo {
     pub is_imported: bool,
 }
 
-/// Lowering metadata for one source function declaration.
+/// Lowering metadata for one source function or method declaration.
+///
+/// Shared by [`DeclarationArtifacts::function_bindings`]/[`DeclarationArtifacts::function_bindings_by_span`] (top-
+/// level `def`) and [`DeclarationArtifacts::method_bindings_by_span`] (class/model/trait methods, #1121) rather than
+/// duplicating an equivalent struct per callable kind.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FunctionBindingInfo {
     /// Typechecker-resolved source parameters, including default-presence markers.
     pub params: Vec<CallableParam>,
     /// Typechecker-resolved source return type.
     pub return_type: ResolvedType,
+}
+
+/// Typechecker-resolved binding of one `model`/`class` construction's arguments to the declared field layout.
+///
+/// Slots index the type's declared field order. `argument_slots` is in **written source order**, so a consumer sees
+/// both which field each argument fills and the order the argument expressions were written — the two facts that
+/// differ whenever a caller writes fields out of declaration order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConstructorFieldBinding {
+    /// Declared field slot filled by each written argument, in written source order.
+    pub argument_slots: Vec<usize>,
+    /// Declared field slots the call site omitted, ascending. Each takes its declared field default.
+    pub defaulted_slots: Vec<usize>,
+    /// Total declared field count, i.e. the construction's declaration-order arity.
+    pub field_count: usize,
 }
 
 /// Lowering metadata for one RFC 036 decorated function binding.
@@ -1532,6 +1613,14 @@ impl TypeCheckInfo {
         self.expressions.ident_kinds.get(&(span.start, span.end)).copied()
     }
 
+    /// Return the canonical identity proven for an imported binding, if import resolution proved one.
+    ///
+    /// Absent means unproven, never "assume the written import path": see
+    /// [`DeclarationArtifacts::resolved_import_identities`].
+    pub fn resolved_import_identity(&self, local_name: &str) -> Option<&CanonicalSymbolId> {
+        self.declarations.resolved_import_identities.get(local_name)
+    }
+
     /// Return a compiler-proven source target for the expression at `span`, if one was recorded.
     pub fn source_target(&self, span: Span) -> Option<&SourceTargetInfo> {
         self.expressions.source_targets.get(&(span.start, span.end))
@@ -1706,6 +1795,28 @@ impl TypeCheckInfo {
             .call_site_callable_params
             .get(&(span.start, span.end))
             .map(Vec::as_slice)
+    }
+
+    /// Return the resolved winner-binding type for the `race for` arm whose awaitable is at `span` (#1164).
+    pub fn race_arm_binding_type(&self, span: Span) -> Option<&ResolvedType> {
+        self.calls.race_arm_binding_types.get(&(span.start, span.end))
+    }
+
+    /// Record the resolved winner-binding type for one `race for` arm (#1164).
+    pub(crate) fn record_race_arm_binding_type(&mut self, span: Span, ty: ResolvedType) {
+        self.calls.race_arm_binding_types.insert((span.start, span.end), ty);
+    }
+
+    /// Return the resolved `model`/`class` construction field binding recorded for `span`, if any (#1158).
+    pub fn constructor_field_binding(&self, span: Span) -> Option<&ConstructorFieldBinding> {
+        self.calls.constructor_field_bindings.get(&(span.start, span.end))
+    }
+
+    /// Record the resolved field binding for one `model`/`class` construction call site (#1158).
+    pub(crate) fn record_constructor_field_binding(&mut self, span: Span, binding: ConstructorFieldBinding) {
+        self.calls
+            .constructor_field_bindings
+            .insert((span.start, span.end), binding);
     }
 
     /// Return whether a canonical source `CallableN` bound supplied this closure's contextual parameter types.
@@ -1904,11 +2015,7 @@ fn callable_param_needs_boundary_snapshot(ty: &ResolvedType) -> bool {
 
 /// Render the compiler-owned module identity used by semantic fact subjects.
 fn semantic_module_identity(module_path: &[String]) -> String {
-    if module_path.is_empty() {
-        "<module>".to_string()
-    } else {
-        module_path.join("::")
-    }
+    incan_semantics_core::module_identity_for_path(module_path)
 }
 
 /// Convert a typechecker source-target artifact into the backend-neutral fact payload.
@@ -1929,7 +2036,11 @@ fn semantic_type_from_function_binding(binding: &FunctionBindingInfo) -> IncanTy
 }
 
 /// Convert the current typechecker type universe into the backend-neutral Incan semantic type model.
-fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
+///
+/// `pub(crate)` rather than private: `src/frontend/body_ir.rs` (Body IR v0's HIR/AST-to-Body-IR lowering) reuses this
+/// mapping for local/operand types instead of duplicating it, so both HIR's type facts and Body IR's locals stay on
+/// the same `ResolvedType -> IncanType` conversion as the typechecker's type universe evolves.
+pub(crate) fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
     match ty {
         ResolvedType::Never => IncanType::Never,
         ResolvedType::Int => IncanType::Primitive(IncanPrimitiveType::Int),
@@ -1985,5 +2096,6 @@ fn semantic_callable_param_from_resolved(param: &CallableParam) -> IncanCallable
             ParamKind::RestKeyword => IncanCallableParamKind::RestKeyword,
         },
         has_default: param.has_default,
+        is_partial_preset: param.is_partial_preset,
     }
 }

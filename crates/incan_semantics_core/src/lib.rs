@@ -11,6 +11,9 @@
 //! generic `Surface` AST nodes tagged with [`SurfaceFeatureKey`] without knowing *which* stdlib features are enabled,
 //! while the stdlib pack crate implements the feature logic without importing the parser.
 //!
+//! RFC 104 authority decisions and operation receipts also live here, so compiler and runtime consumers exchange one
+//! validated canonical contract rather than reconstructing authority or receipt facts at their boundary.
+//!
 //! ## Extension model
 //!
 //! To support a new soft keyword or decorator family:
@@ -22,19 +25,24 @@
 use incan_core::lang::decorators::DecoratorId;
 use incan_core::lang::keywords::KeywordId;
 
+pub mod authority;
+pub mod body_ir;
 mod facts;
 mod hir;
+pub mod receipts;
 mod types;
 
 pub use facts::{
-    CompilerNodeId, CompilerNodeKind, SemanticFact, SemanticFactKind, SemanticFactStore, SemanticFactValue,
-    SemanticRegistryEntry, SemanticRegistrySubjectKind, SemanticRegistryValue, SemanticSourceTarget,
-    SemanticSourceTargetKind,
+    AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode, AuthorityOutcome,
+    AuthorityProvenance, CanonicalSymbolId, CompilerNodeId, CompilerNodeKind, ScopeDiscriminant, SemanticFact,
+    SemanticFactKind, SemanticFactStore, SemanticFactValue, SemanticRegistryEntry, SemanticRegistrySubjectKind,
+    SemanticRegistryValue, SemanticSourceTarget, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
+    module_identity_for_path,
 };
 pub use hir::{HirDeclaration, HirDeclarationKind, HirModule, HirSourceSpan, SemanticModuleSnapshot};
 pub use types::{
     AbiV0Ownership, AbiV0Representation, AbiV0ReservedFacts, AbiV0RuntimeRequirement, AbiV0TypeFacts,
-    AbiV0TypeIdentity, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType,
+    AbiV0TypeIdentity, IncanCallableParam, IncanCallableParamKind, IncanPrimitiveType, IncanType, rust_tuple_arity,
 };
 
 /// Stable feature key used by parser handoff and semantics dispatch.
@@ -64,6 +72,7 @@ pub enum DecoratorFeature {
     NoImplicitCoercion,
     Requires,
     Describe,
+    ProviderOperation,
     StdlibDecoratorFunction,
 }
 
@@ -367,5 +376,6 @@ pub fn decorator_feature_from_id(id: DecoratorId) -> DecoratorFeature {
         DecoratorId::NoImplicitCoercion => DecoratorFeature::NoImplicitCoercion,
         DecoratorId::Requires => DecoratorFeature::Requires,
         DecoratorId::Describe => DecoratorFeature::Describe,
+        DecoratorId::ProviderOperation => DecoratorFeature::ProviderOperation,
     }
 }

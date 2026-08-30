@@ -166,6 +166,7 @@ impl TypeChecker {
                 ty: substitute_resolved_type(&param.ty, bindings),
                 kind: param.kind,
                 has_default: param.has_default,
+                is_partial_preset: param.is_partial_preset,
             })
             .collect()
     }
@@ -322,6 +323,7 @@ impl TypeChecker {
                     ty,
                     kind: param.kind,
                     has_default: param.has_default,
+                    is_partial_preset: param.is_partial_preset,
                 }
             })
             .collect()

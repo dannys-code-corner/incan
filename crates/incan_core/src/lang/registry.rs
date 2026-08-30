@@ -214,6 +214,9 @@ pub const RFC_113: RfcId = "RFC 113";
 /// RFC 102 — semantic layer inspection surface.
 pub const RFC_102: RfcId = "RFC 102";
 
+/// RFC 104 — ambient runtime capabilities and receipts.
+pub const RFC_104: RfcId = "RFC 104";
+
 /// RFC 106 — compiler-backed agent context graph.
 pub const RFC_106: RfcId = "RFC 106";
 
@@ -362,6 +365,8 @@ impl RFC {
     pub const _113: RfcId = RFC_113;
     /// RFC 102 — semantic layer inspection surface.
     pub const _102: RfcId = RFC_102;
+    /// RFC 104 — ambient runtime capabilities and receipts.
+    pub const _104: RfcId = RFC_104;
     /// RFC 106 — compiler-backed agent context graph.
     pub const _106: RfcId = RFC_106;
     /// RFC 107 — type-directed library APIs and compile-time type tokens.

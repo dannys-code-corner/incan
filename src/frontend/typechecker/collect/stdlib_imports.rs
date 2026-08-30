@@ -767,9 +767,7 @@ impl TypeChecker {
 
         let local_name = Self::import_item_local_name(item);
         self.record_testing_marker_import(context, item, &local_name, testing_semantics);
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if matches!(kind, SymbolKind::Static(_)) {
             self.type_info.declarations.static_bindings.insert(
                 local_name.clone(),
@@ -852,9 +850,7 @@ impl TypeChecker {
             let local_name = Self::import_item_local_name(item);
             let surface_function = surface_functions::from_str(&item.name);
             self.record_testing_marker_import(context, item, &local_name, testing_semantics);
-            if let SymbolKind::FunctionOverloads(overloads) = &kind {
-                self.record_function_overload_binding(&local_name, overloads, true);
-            }
+            self.record_imported_function_binding(&local_name, &kind);
             let symbol_id = self.define_named_import_symbol(local_name.clone(), kind, span);
             if let Some(surface_function) = surface_function {
                 self.surface_function_import_bindings
@@ -958,7 +954,25 @@ impl TypeChecker {
         false
     }
 
-    /// Record source origin metadata for an imported binding whose symbol was already materialized earlier.
+    /// Retain the canonical identity proven for an imported binding, keyed by the local name the import introduced.
+    ///
+    /// Recorded only when import resolution proves the declaration, so a consumer gets a correct identity or none at
+    /// all. It is deliberately separate from [`crate::frontend::typechecker::SourceTargetInfo::module_path`], which
+    /// keeps its existing meaning of the path as written at the import.
+    fn record_resolved_import_owner(&mut self, module: &ImportPath, item: &ImportItem, local_name: &str) {
+        if let Some(identity) = self.dependency_member_identity(module, &item.name) {
+            self.type_info
+                .declarations
+                .resolved_import_identities
+                .insert(local_name.to_string(), identity);
+        }
+    }
+
+    /// Record the codegraph source target an import makes visible under `local_name`.
+    ///
+    /// The recorded `module_path` is the import path as *written*, which is the codegraph's existing contract. The
+    /// module that resolution actually selected is recorded separately by [`Self::record_resolved_import_owner`],
+    /// because the two are not always the same and only the latter may back a declaration identity.
     fn record_source_import_target(
         &mut self,
         module: &ImportPath,
@@ -975,6 +989,7 @@ impl TypeChecker {
                     kind: target_kind.to_string(),
                 },
             );
+            self.record_resolved_import_owner(module, item, local_name);
         }
     }
 
@@ -1031,10 +1046,9 @@ impl TypeChecker {
                     kind: target_kind.to_string(),
                 },
             );
+            self.record_resolved_import_owner(module, item, &local_name);
         }
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let SymbolKind::Static(info) = &mut kind {
             info.is_imported = true;
             self.type_info.declarations.static_bindings.insert(
@@ -1429,9 +1443,7 @@ impl TypeChecker {
 
             if let Some(mut kind) = flat_function {
                 self.remap_symbol_kind_with_import_aliases(&mut kind, &imported_type_aliases);
-                if let SymbolKind::FunctionOverloads(overloads) = &kind {
-                    self.record_function_overload_binding(&local_name, overloads, true);
-                }
+                self.record_imported_function_binding(&local_name, &kind);
                 self.symbols.define(Symbol {
                     name: local_name,
                     kind,
@@ -1484,9 +1496,7 @@ impl TypeChecker {
         }
 
         let mut kind = member.kind;
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let Some(mut projection) = member.partial_projection {
             projection.name.clone_from(&local_name);
             self.type_info.record_partial_projection(projection);
@@ -1494,6 +1504,7 @@ impl TypeChecker {
         if let Some(target_kind) = Self::source_target_kind(&kind) {
             let mut target_path = vec!["pub".to_string(), library.to_string()];
             target_path.extend(member.source_module_path.clone());
+
             self.source_import_targets.insert(
                 local_name.clone(),
                 crate::frontend::typechecker::SourceTargetInfo {
@@ -2358,6 +2369,7 @@ impl TypeChecker {
             SymbolKind::Field(_) => "field",
             SymbolKind::Property(_) => "property",
             SymbolKind::RustItem(_) => "rust import",
+            SymbolKind::Capability(_) => "capability",
         };
         Some(kind)
     }
@@ -2436,9 +2448,7 @@ impl TypeChecker {
             self.define_rust_import_binding(local_name, info, span);
             return;
         }
-        if let SymbolKind::FunctionOverloads(overloads) = &kind {
-            self.record_function_overload_binding(&local_name, overloads, true);
-        }
+        self.record_imported_function_binding(&local_name, &kind);
         if let Some(projection) = partial_projection {
             self.type_info.record_partial_projection(projection);
         }
@@ -2479,6 +2489,11 @@ impl TypeChecker {
         }
 
         match kind {
+            SymbolKind::Capability(info) => {
+                for (_, ty) in &mut info.scope {
+                    Self::remap_resolved_type_with_import_aliases(ty, imported_type_aliases);
+                }
+            }
             SymbolKind::Variable(info) => {
                 Self::remap_resolved_type_with_import_aliases(&mut info.ty, imported_type_aliases);
             }
@@ -3192,6 +3207,9 @@ impl TypeChecker {
     /// Apply a consumer namespace grant to provider-local trait provenance carried by checked artifact facts.
     fn qualify_provider_symbol_bounds(kind: &mut SymbolKind, namespace_prefix: &[String]) {
         match kind {
+            // A capability declares an authority rather than a callable or a nominal type, so it carries no trait
+            // bounds for a consumer namespace grant to qualify.
+            SymbolKind::Capability(_) => {}
             SymbolKind::Function(info) => Self::qualify_provider_function_bounds(info, namespace_prefix),
             SymbolKind::FunctionOverloads(overloads) => {
                 for overload in overloads {
@@ -3616,6 +3634,7 @@ impl TypeChecker {
                 | ExportedSymbol::Type(name)
                 | ExportedSymbol::Trait(name)
                 | ExportedSymbol::Function(name)
+                | ExportedSymbol::Capability(name)
                 | ExportedSymbol::Reexported(name) => {
                     exported_names.insert(name.clone());
                 }

@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::super::super::decl::{FunctionParam, IrAssociatedType, IrDecl, IrDeclKind, IrFunction, IrImpl, Visibility};
+use super::super::super::decl::{
+    FunctionParam, FunctionParamDefault, IrAssociatedType, IrDecl, IrDeclKind, IrFunction, IrImpl, Visibility,
+};
 use super::super::super::expr::{IrCallArg, IrCallArgKind, IrExprKind, VarAccess, VarRefKind};
 use super::super::super::stmt::{IrStmt, IrStmtKind};
 use super::super::super::types::IrType;
@@ -1400,7 +1402,9 @@ impl AstLowering {
                     mutability,
                     is_self: false,
                     kind: p.node.kind,
-                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                    default: self
+                        .lower_param_default_expr(p.node.default.as_ref())?
+                        .map(FunctionParamDefault::source),
                 })
             })
             .collect::<Result<_, LoweringError>>()?;
@@ -1657,7 +1661,9 @@ impl AstLowering {
                     mutability,
                     is_self: p.node.name == keywords::as_str(KeywordId::SelfKw),
                     kind: p.node.kind,
-                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                    default: self
+                        .lower_param_default_expr(p.node.default.as_ref())?
+                        .map(FunctionParamDefault::source),
                 })
             })
             .collect::<Result<_, LoweringError>>()?;

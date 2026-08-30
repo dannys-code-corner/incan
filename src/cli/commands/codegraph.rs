@@ -1289,6 +1289,7 @@ impl CodegraphBuilder {
             | Declaration::Partial(_)
             | Declaration::TypeAlias(_)
             | Declaration::VocabBlock(_)
+            | Declaration::Capability(_)
             | Declaration::Docstring(_) => {}
         }
     }
@@ -1982,11 +1983,7 @@ impl CodegraphBuilder {
 
     /// Return a declaration record id for a compiler-proven source target at `span`.
     fn source_target_id(&self, module: &ParsedModule, span: Span) -> Option<String> {
-        let module_identity = if module.path_segments.is_empty() {
-            "<module>".to_string()
-        } else {
-            module.path_segments.join("::")
-        };
+        let module_identity = incan_semantics_core::module_identity_for_path(&module.path_segments);
         let subject = CompilerNodeId::expression_span(&module_identity, span.start, span.end);
         let target = self
             .semantic_snapshots_by_path
@@ -2469,6 +2466,13 @@ fn declaration_summary(declaration: &Declaration) -> Option<DeclarationSummary> 
             visibility: decl.visibility,
             type_params: Vec::new(),
             signature: decl.ty.as_ref().map(|ty| format!("const {}: {}", decl.name, ty.node)),
+        }),
+        Declaration::Capability(decl) => Some(DeclarationSummary {
+            kind: "capability".to_string(),
+            name: decl.name.clone(),
+            visibility: decl.visibility,
+            type_params: Vec::new(),
+            signature: Some(format!("capability {}", decl.name)),
         }),
         Declaration::Static(decl) => Some(DeclarationSummary {
             kind: "static".to_string(),

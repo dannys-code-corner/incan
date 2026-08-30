@@ -1961,9 +1961,125 @@ pub fn tuple_field_assignment(span: Span) -> CompileError {
         .with_hint("Create a new tuple instead of modifying an existing one")
 }
 
+/// Report a `for` loop whose tuple pattern destructures an iteration item that is not a tuple at all.
+///
+/// Distinct from [`tuple_unpack_count_mismatch`], which reports a tuple of the wrong arity: here there is no
+/// tuple to take elements from, so naming the actual item type is the useful part of the message.
+pub fn for_pattern_expects_tuple_item(names: usize, item_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot destructure {names} values from iteration item of type '{item_ty}'"),
+        span,
+    )
+    .with_hint("Iterate a sequence of tuples, or bind each item to a single name")
+}
+
+/// Build the error emitted when a statement destructures a value whose type is not a tuple at all.
+///
+/// The statement-level sibling of [`for_pattern_expects_tuple_item`]: same question, asked where `a, b = value`
+/// binds names rather than where a loop binds an item. Naming the resolved type is the point of the diagnostic —
+/// without it the failure only surfaced as a `rustc` field-projection error against a compiler-internal binding.
+pub fn tuple_unpack_expects_tuple_value(names: usize, value_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot destructure {names} values from value of type '{value_ty}'"),
+        span,
+    )
+    .with_hint("Assign a tuple of matching length, or bind the value to a single name")
+}
+
+/// Build the error emitted when a loop pattern destructures a Rust interop item whose shape is unverifiable.
+///
+/// The loop-shaped sibling of [`tuple_unpack_rust_shape_unverified`], paired the same way
+/// [`for_pattern_expects_tuple_item`] pairs with [`tuple_unpack_expects_tuple_value`]. Separate because the
+/// remedy differs: a loop's reader changes what the sequence yields, not what a single assignment produces.
+pub fn for_pattern_rust_shape_unverified(names: usize, item_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!(
+            "Cannot verify Rust iteration item of type '{item_ty}' is tuple-shaped for destructuring {names} values"
+        ),
+        span,
+    )
+    .with_hint("Iterate a sequence of tuples the compiler can read, or bind each item to a single name")
+}
+
+/// Build the error emitted when destructuring a Rust interop value whose shape the compiler cannot establish.
+///
+/// Distinct from [`tuple_unpack_expects_tuple_value`], which reports a type known *not* to be a tuple. Here the
+/// compiler simply cannot tell, and "not proven tuple-shaped" must refuse for the same reason a bare type variable
+/// does: assuming otherwise re-emits a tuple-field projection into a value that may have no such fields.
+pub fn tuple_unpack_rust_shape_unverified(names: usize, value_ty: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Cannot verify Rust value of type '{value_ty}' is tuple-shaped for destructuring {names} values"),
+        span,
+    )
+    .with_hint("Bind the value to a single name, or return it from Rust as a tuple the compiler can read")
+}
+
 pub fn tuple_unpack_count_mismatch(expected: usize, found: usize, span: Span) -> CompileError {
     CompileError::type_error(
         format!("Cannot unpack {} values from tuple with {} elements", expected, found),
         span,
     )
+}
+
+// -- RFC 104 capabilities -----------------------------------------------------
+
+/// Build the error emitted when a `capability` declaration omits its `description` clause.
+///
+/// The grammar accepts the omission so that a missing description is reported here, against the declaration's own
+/// span, rather than as a parse failure that cannot say which clause is missing. RFC 104 treats the description as
+/// part of the authority's public contract: a policy author deciding whether to grant a capability reads it, so a
+/// capability without one cannot be reviewed.
+pub fn capability_description_required(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(format!("Capability '{name}' has no `description`"), span)
+        .with_hint("Add `description = \"...\"` saying what granting this capability authorizes")
+}
+
+/// Build the error emitted when a `requires` entry is not a symbol reference.
+///
+/// RFC 104 requires these to be checked references to other capabilities rather than strings, so that a misspelling
+/// is a compile error instead of a runtime denial discovered later. An entry that is a call, a literal, or any other
+/// expression cannot name a declaration at all.
+pub fn capability_requirement_not_a_reference(span: Span) -> CompileError {
+    CompileError::type_error(
+        "A capability `requires` entry must be a capability reference".to_string(),
+        span,
+    )
+    .with_hint("Write the capability's name or dotted path, such as `host.http.request`, not an expression")
+}
+
+/// Build the error emitted when a `requires` entry names nothing the compiler can find.
+///
+/// This is deliberately an unresolved-symbol error at compile time. RFC 104 is explicit that a misspelled or
+/// nonexistent capability reference must fail here rather than surviving to become a runtime capability denial,
+/// which would surface far from the declaration that caused it.
+pub fn capability_requirement_unresolved(path: &str, span: Span) -> CompileError {
+    CompileError::type_error(format!("Unknown capability '{path}' in `requires`"), span)
+        .with_hint("Declare the capability, or import the module that declares it")
+}
+
+/// Build the error emitted when a `requires` entry resolves to something that is not a capability.
+///
+/// Holding a capability never grants what it requires, so the entries are a documentation and policy surface rather
+/// than a dispatch mechanism. A `requires` list naming a function or a type would describe an authority relationship
+/// that cannot exist, and a policy reading it would draw a false conclusion.
+pub fn capability_requirement_not_a_capability(path: &str, found: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("`requires` entry '{path}' is a {found}, not a capability"),
+        span,
+    )
+    .with_hint("Reference a `capability` declaration, or remove the entry")
+}
+
+/// Build the error emitted when a `description` clause is present but is not compile-time text.
+///
+/// The description's audience is a person deciding whether to grant the capability, and there is no later moment at
+/// which that review happens — so an expression to be evaluated at runtime cannot serve as one. Accepting a
+/// non-string would also record no description at all, leaving a declaration that looks documented while carrying
+/// nothing, which is worse than an obviously missing clause.
+pub fn capability_description_must_be_text(name: &str, span: Span) -> CompileError {
+    CompileError::type_error(
+        format!("Capability '{name}' has a `description` that is not a text literal"),
+        span,
+    )
+    .with_hint("Write the description as a quoted string, such as `description = \"Issue a refund\"`")
 }

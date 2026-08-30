@@ -238,6 +238,9 @@ impl TypeChecker {
                 arm_body_types.push(ResolvedType::Unknown);
                 continue;
             };
+            // Body IR lowering consumes this instead of re-deriving the unwrap from the awaitable's own type.
+            self.type_info
+                .record_race_arm_binding_type(arm.awaitable.span, binding_ty.clone());
             arm_body_types.push(self.check_race_arm_body(&race.binding, binding_ty, &arm.body));
         }
 
@@ -281,6 +284,7 @@ impl TypeChecker {
             return ResolvedType::Unit;
         };
 
+        self.report_unreachable_after_return(stmts);
         for stmt in prefix {
             self.check_statement(stmt);
         }
@@ -359,16 +363,12 @@ impl TypeChecker {
         self.validate_truthiness_condition(&cond_ty, if_expr.condition.span);
 
         self.symbols.enter_scope(ScopeKind::Block);
-        for stmt in &if_expr.then_body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&if_expr.then_body);
         self.symbols.exit_scope();
 
         if let Some(else_body) = &if_expr.else_body {
             self.symbols.enter_scope(ScopeKind::Block);
-            for stmt in else_body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(else_body);
             self.symbols.exit_scope();
         }
 
@@ -388,9 +388,7 @@ impl TypeChecker {
     ) -> ResolvedType {
         self.symbols.enter_scope(ScopeKind::Block);
         self.push_loop_context(LoopContextKind::Expression, expected.cloned());
-        for stmt in &loop_expr.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&loop_expr.body);
         let loop_ctx = self.pop_loop_context();
         self.symbols.exit_scope();
         let Some(loop_ctx) = loop_ctx else {
@@ -418,6 +416,6 @@ impl TypeChecker {
                 .push(errors::type_mismatch("int", &end_ty.to_string(), end.span));
         }
 
-        ResolvedType::Generic("Range".to_string(), vec![ResolvedType::Int])
+        ResolvedType::Generic(surface_types::RANGE_TYPE_NAME.to_string(), vec![ResolvedType::Int])
     }
 }

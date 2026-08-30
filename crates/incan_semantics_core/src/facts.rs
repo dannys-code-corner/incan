@@ -7,6 +7,8 @@
 use std::collections::BTreeMap;
 use std::fmt::{self, Write};
 
+use serde::{Deserialize, Serialize};
+
 use crate::IncanType;
 
 /// Kind of compiler-owned node that can receive semantic facts.
@@ -132,6 +134,7 @@ pub enum SemanticFactKind {
     RuntimeRequirement,
     Diagnostic,
     BackendObligation,
+    AuthorityDecision,
 }
 
 impl SemanticFactKind {
@@ -144,6 +147,7 @@ impl SemanticFactKind {
             Self::RuntimeRequirement => "runtime_requirement",
             Self::Diagnostic => "diagnostic",
             Self::BackendObligation => "backend_obligation",
+            Self::AuthorityDecision => "authority_decision",
         }
     }
 }
@@ -159,6 +163,7 @@ pub enum SemanticFactValue {
     Type(IncanType),
     SourceTarget(SemanticSourceTarget),
     RegistryEntry(SemanticRegistryEntry),
+    AuthorityDecision(AuthorityDecision),
     Flag(bool),
 }
 
@@ -183,6 +188,11 @@ impl SemanticFactValue {
         Self::RegistryEntry(value)
     }
 
+    /// Build one RFC 104 authority-decision fact value.
+    pub fn authority_decision(value: AuthorityDecision) -> Self {
+        Self::AuthorityDecision(value)
+    }
+
     /// Render a deterministic maintainer-facing fact payload snapshot.
     pub fn render_snapshot(&self) -> String {
         match self {
@@ -190,6 +200,7 @@ impl SemanticFactValue {
             Self::Type(value) => value.to_string(),
             Self::SourceTarget(value) => value.to_string(),
             Self::RegistryEntry(value) => value.to_string(),
+            Self::AuthorityDecision(value) => value.to_string(),
             Self::Flag(value) => value.to_string(),
         }
     }
@@ -350,15 +361,63 @@ impl fmt::Display for SemanticSourceTarget {
     }
 }
 
-/// Semantic target declaration category.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+/// Declaration category a canonical identity or semantic target names.
+///
+/// This is RFC 120's `kind` field. It deliberately covers every binding form the identity model reaches, not only the
+/// declaration kinds today's codegraph targets happen to record, so a member and a local never have to be told apart
+/// by a string. [`Self::Other`] remains for a frontend spelling this vocabulary has not adopted yet; it is a gap
+/// marker, never a category.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum SemanticSourceTargetKind {
+    /// A `def` declaration, free or associated.
     Function,
+    /// A `model` declaration.
     Model,
+    /// A `class` declaration.
     Class,
+    /// A `newtype` declaration.
     Newtype,
+    /// A `rusttype` declaration binding a Rust type.
     Rusttype,
+    /// An `enum` declaration.
     Enum,
+    /// A `type X = ...` alias.
+    TypeAlias,
+    /// A `partial` projection declaration.
+    Partial,
+    /// One variant of an enum.
+    Variant,
+    /// A `trait` declaration.
+    Trait,
+    /// A `capability` declaration naming an RFC 104 ambient runtime authority.
+    Capability,
+    /// A field on a nominal type.
+    Field,
+    /// A method on a nominal type or trait.
+    Method,
+    /// A computed property on a nominal type.
+    Property,
+    /// A `const` declaration.
+    Const,
+    /// A `static` storage cell.
+    Static,
+    /// A binding introduced inside a body by `let`, `mut`, assignment, `for`, `with ... as`, or `except ... as`.
+    Local,
+    /// A declared callable parameter.
+    Parameter,
+    /// A receiver binding (`self` or `cls`).
+    Receiver,
+    /// A generic type parameter, scoped to the declaration that introduces it.
+    GenericBinder,
+    /// A module.
+    Module,
+    /// An item reached through `rust::`.
+    RustItem,
+    /// A compiler-owned builtin beneath the ordinary lexical scope chain.
+    Builtin,
+    /// A frontend declaration spelling this vocabulary has not adopted. A gap marker, not a category: a consumer that
+    /// branches on it is branching on a string.
     Other(String),
 }
 
@@ -372,6 +431,23 @@ impl SemanticSourceTargetKind {
             "newtype" => Self::Newtype,
             "rusttype" => Self::Rusttype,
             "enum" => Self::Enum,
+            "type_alias" => Self::TypeAlias,
+            "partial" => Self::Partial,
+            "variant" => Self::Variant,
+            "trait" => Self::Trait,
+            "capability" => Self::Capability,
+            "field" => Self::Field,
+            "method" => Self::Method,
+            "property" => Self::Property,
+            "const" => Self::Const,
+            "static" => Self::Static,
+            "local" => Self::Local,
+            "parameter" => Self::Parameter,
+            "receiver" => Self::Receiver,
+            "generic_binder" => Self::GenericBinder,
+            "module" => Self::Module,
+            "rust_item" => Self::RustItem,
+            "builtin" => Self::Builtin,
             other => Self::Other(other.to_string()),
         }
     }
@@ -385,7 +461,326 @@ impl SemanticSourceTargetKind {
             Self::Newtype => "newtype",
             Self::Rusttype => "rusttype",
             Self::Enum => "enum",
+            Self::TypeAlias => "type_alias",
+            Self::Partial => "partial",
+            Self::Variant => "variant",
+            Self::Trait => "trait",
+            Self::Capability => "capability",
+            Self::Field => "field",
+            Self::Method => "method",
+            Self::Property => "property",
+            Self::Const => "const",
+            Self::Static => "static",
+            Self::Local => "local",
+            Self::Parameter => "parameter",
+            Self::Receiver => "receiver",
+            Self::GenericBinder => "generic_binder",
+            Self::Module => "module",
+            Self::RustItem => "rust_item",
+            Self::Builtin => "builtin",
             Self::Other(kind) => kind,
+        }
+    }
+}
+
+/// RFC 104 run mode.
+///
+/// The mode is part of the decision rather than ambient context: the same request produces a different outcome under
+/// `Governed` than under `Permissive`, and a consumer reading a stored decision must be able to tell which rule
+/// produced it without re-deriving the run's configuration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorityMode {
+    /// Operations run normally and receipts may be disabled.
+    Permissive,
+    /// Operations run normally and receipts are emitted.
+    Observe,
+    /// Operations require granted capabilities and receipts are emitted.
+    Governed,
+}
+
+impl AuthorityMode {
+    /// Return the compact snapshot spelling for this mode.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Permissive => "permissive",
+            Self::Observe => "observe",
+            Self::Governed => "governed",
+        }
+    }
+}
+
+/// Why a governed authority request was denied.
+///
+/// This is the machine-usable denial reason RFC 104 requires. A consumer branches on the variant; the prose belongs to
+/// the diagnostic that renders it, never to this fact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorityDenialReason {
+    /// The invocation never requested this capability.
+    NotGranted,
+    /// The invocation requested the capability, but a host ceiling did not permit it.
+    OutsideCeiling,
+    /// The capability was granted, but not for the scope this operation requested.
+    OutOfScope,
+    /// A budget for this capability was exhausted before the operation ran.
+    BudgetExhausted,
+    /// Replay required a recorded fixture that was not available.
+    FixtureRequired,
+}
+
+impl AuthorityDenialReason {
+    /// Return the compact snapshot spelling for this denial reason.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotGranted => "not_granted",
+            Self::OutsideCeiling => "outside_ceiling",
+            Self::OutOfScope => "out_of_scope",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::FixtureRequired => "fixture_required",
+        }
+    }
+}
+
+/// The effect of an authority decision on one operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthorityOutcome {
+    /// The operation may perform its authority-bearing behavior.
+    Allowed,
+    /// The operation must fail before performing its authority-bearing behavior.
+    Denied(AuthorityDenialReason),
+}
+
+/// The grant context a decision was reached against.
+///
+/// RFC 104 makes the ceiling a distinct grant source from the per-invocation request, and requires the effective grant
+/// to be their **intersection, never their union**: an invocation can only ever receive less than its ceiling allows,
+/// regardless of what it asks for. Recording whether a ceiling applied is therefore part of the decision, because
+/// `Allowed` under a ceiling and `Allowed` with no ceiling are different facts about the run.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorityGrantContext {
+    /// Scope dimensions the operation requested, as `(dimension, value)` in the capability's declaration order.
+    pub requested_scope: Vec<(String, String)>,
+    /// Whether a host ceiling bounded this invocation.
+    pub ceiling_applied: bool,
+}
+
+/// Enough provenance to raise a source-owned governed denial diagnostic.
+///
+/// RFC 104 requires a denial to identify the required capability and to be reportable against the source that asked
+/// for it. The requesting operation's canonical identity and the use-site span are what make that possible without a
+/// consumer re-reading source text.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorityProvenance {
+    /// Canonical identity of the operation that requested the authority.
+    pub operation: CanonicalSymbolId,
+    /// The use site the request came from, which is where a denial is reported.
+    pub request_span: crate::HirSourceSpan,
+    /// Grant spelling to suggest in a denial diagnostic, such as `host.http.request`.
+    pub suggested_grant: String,
+}
+
+/// One RFC 104 authority decision about one operation.
+///
+/// This is deliberately generic over capability publishers and provider operations: both the capability and the
+/// requesting operation are named by [`CanonicalSymbolId`], so the stdlib, a library-defined domain capability, and a
+/// provider operation all produce the same fact. A consumer can act on an allowed or denied decision without
+/// consulting source text or emitted Rust, which is what lets a provider backend avoid inventing its own grant model.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AuthorityDecision {
+    /// The capability whose authority was requested.
+    pub capability: CanonicalSymbolId,
+    /// The mode this decision was reached under.
+    pub mode: AuthorityMode,
+    /// Whether the operation may proceed.
+    pub outcome: AuthorityOutcome,
+    /// The grant context the decision was reached against.
+    pub grant: AuthorityGrantContext,
+    /// Where the decision can be reported in source.
+    pub provenance: AuthorityProvenance,
+}
+
+impl AuthorityDecision {
+    /// Build an allowed decision.
+    pub fn allowed(
+        capability: CanonicalSymbolId,
+        mode: AuthorityMode,
+        grant: AuthorityGrantContext,
+        provenance: AuthorityProvenance,
+    ) -> Self {
+        Self {
+            capability,
+            mode,
+            outcome: AuthorityOutcome::Allowed,
+            grant,
+            provenance,
+        }
+    }
+
+    /// Build a denied decision carrying its machine-usable reason.
+    pub fn denied(
+        capability: CanonicalSymbolId,
+        mode: AuthorityMode,
+        reason: AuthorityDenialReason,
+        grant: AuthorityGrantContext,
+        provenance: AuthorityProvenance,
+    ) -> Self {
+        Self {
+            capability,
+            mode,
+            outcome: AuthorityOutcome::Denied(reason),
+            grant,
+            provenance,
+        }
+    }
+
+    /// Whether the operation may perform its authority-bearing behavior.
+    pub const fn is_allowed(&self) -> bool {
+        matches!(self.outcome, AuthorityOutcome::Allowed)
+    }
+
+    /// The denial reason, when this decision denied the operation.
+    pub const fn denial_reason(&self) -> Option<AuthorityDenialReason> {
+        match self.outcome {
+            AuthorityOutcome::Allowed => None,
+            AuthorityOutcome::Denied(reason) => Some(reason),
+        }
+    }
+}
+
+impl std::fmt::Display for AuthorityDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let outcome = match self.outcome {
+            AuthorityOutcome::Allowed => "allowed".to_string(),
+            AuthorityOutcome::Denied(reason) => format!("denied:{}", reason.as_str()),
+        };
+        let ceiling = if self.grant.ceiling_applied { " ceiling" } else { "" };
+        write!(
+            f,
+            "{} {} {}{} <- {}",
+            self.capability.declaration_name,
+            self.mode.as_str(),
+            outcome,
+            ceiling,
+            self.provenance.operation.declaration_name
+        )
+    }
+}
+
+/// Render a module path into the identity string used by HIR, Body IR, and declaration identities.
+///
+/// One spelling, in one place: an empty path is a real case (a module checked without a path), and the frontend and
+/// the data model silently disagreeing about whether that is `"<module>"` or `""` would produce two identities for
+/// one declaration.
+pub fn module_identity_for_path(module_path: &[String]) -> String {
+    if module_path.is_empty() {
+        "<module>".to_string()
+    } else {
+        module_path.join("::")
+    }
+}
+
+/// Which of RFC 120's three namespaces a binding lives in.
+///
+/// Namespaces are distinguished by *how* a name is looked up, not by what kind of thing it names: a model name and a
+/// function name share one namespace, exactly as ordinary Python-like lexical lookup expects. Carrying this in an
+/// identity is what keeps a field named `items` and a local named `items` from ever comparing equal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolNamespace {
+    /// Module-level declarations, imports, aliases and re-exports, bare enum variant names, generic binders,
+    /// parameters and receivers, and locals. Looked up innermost scope outward, then the builtin fallback tier.
+    OrdinaryLexical,
+    /// Fields, methods, computed properties, method aliases, and qualified enum variants. Reached `.`-directed from a
+    /// resolved owner type, never through the scope chain.
+    Member,
+    /// Project module paths, the `std` root, `rust::` crate roots, and `pub::` library roots. Path-directed from a
+    /// namespace root.
+    ModulePath,
+}
+
+/// What owns a declaration, independent of who references it.
+///
+/// An import, alias, or re-export carries its *target's* origin, never the referencing module's. That is the property
+/// that makes three different spellings of one declaration compare equal.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolOrigin {
+    /// A project source module, by canonical module path.
+    Module(Vec<String>),
+    /// A `pub::` library, and the module path owning the declaration inside it.
+    Package {
+        /// Library root name.
+        library: String,
+        /// Module path within the library.
+        module_path: Vec<String>,
+    },
+    /// A `rust::` crate root and item path.
+    RustCrate(Vec<String>),
+    /// The compiler-owned builtin registry beneath the ordinary lexical scope chain.
+    Builtin,
+}
+
+/// Distinguishes bindings that are not unique within their origin.
+///
+/// Module-level declarations are already unique within their origin and carry no discriminant. Locals, parameters,
+/// receivers, and generic binders are not: two `x` bindings in sibling blocks of one module must not collapse to one
+/// identity, so those carry the scope that introduced them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct ScopeDiscriminant(pub usize);
+
+/// RFC 120 canonical symbol identity: what a resolved reference *means*.
+///
+/// Assigned once at a declaration site and unchanged by how the declaration is later referenced. A local declaration,
+/// an import, an alias, and a re-export of one declaration all carry this same value; none of them creates a second
+/// identity for the thing they name.
+///
+/// Two properties are load-bearing. Equality is decidable structurally, without comparing source spellings or emitted
+/// names — no phase may recover what a reference means by parsing generated Rust. And identity is stable across the
+/// stages of *one* compilation, not across edits: [`Self::declaration_span`] moves when the file does, so a consumer
+/// needing cross-edit continuity must re-resolve rather than cache.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct CanonicalSymbolId {
+    /// Which namespace the binding lives in.
+    pub namespace: SymbolNamespace,
+    /// The module, package, crate, or registry owning the declaration.
+    pub origin: SymbolOrigin,
+    /// The spelling at the *declaration* site, never at a reference site.
+    pub declaration_name: String,
+    /// Declaration category.
+    pub kind: SemanticSourceTargetKind,
+    /// Present only for bindings that are not unique within their origin.
+    pub scope_discriminant: Option<ScopeDiscriminant>,
+    /// Provenance anchor: the one declaration site.
+    pub declaration_span: crate::HirSourceSpan,
+}
+
+impl CanonicalSymbolId {
+    /// Build the identity of a module-level declaration in a project source module.
+    ///
+    /// Module-level declarations are unique within their origin, so this deliberately takes no scope discriminant.
+    pub fn module_declaration(
+        module_path: Vec<String>,
+        declaration_name: impl Into<String>,
+        kind: SemanticSourceTargetKind,
+        declaration_span: crate::HirSourceSpan,
+    ) -> Self {
+        Self {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Module(module_path),
+            declaration_name: declaration_name.into(),
+            kind,
+            scope_discriminant: None,
+            declaration_span,
+        }
+    }
+
+    /// Return the owning module path when this identity is owned by a project source module.
+    pub fn module_path(&self) -> Option<&[String]> {
+        match &self.origin {
+            SymbolOrigin::Module(path) => Some(path),
+            _ => None,
         }
     }
 }
@@ -504,6 +899,180 @@ impl SemanticFactStore {
 
 #[cfg(test)]
 mod tests {
+    /// Every declaration category round-trips through its own spelling.
+    ///
+    /// The two arms are hand-written and 22 variants long; a typo in either would silently reclassify a declaration
+    /// as `Other`, which compares unequal to the variant it came from and would split one declaration's identity.
+    /// Build a capability identity and a requesting-operation identity for authority-decision tests.
+    fn authority_fixture() -> (super::CanonicalSymbolId, super::AuthorityProvenance) {
+        use super::{AuthorityProvenance, CanonicalSymbolId, SemanticSourceTargetKind};
+
+        let capability = CanonicalSymbolId::module_declaration(
+            vec!["host".to_string(), "http".to_string()],
+            "request",
+            SemanticSourceTargetKind::Capability,
+            crate::HirSourceSpan::new(10, 20),
+        );
+        let operation = CanonicalSymbolId::module_declaration(
+            vec!["app".to_string(), "billing".to_string()],
+            "charge",
+            SemanticSourceTargetKind::Function,
+            crate::HirSourceSpan::new(80, 96),
+        );
+        let provenance = AuthorityProvenance {
+            operation,
+            request_span: crate::HirSourceSpan::new(120, 140),
+            suggested_grant: "host.http.request".to_string(),
+        };
+        (capability, provenance)
+    }
+
+    /// An allowed decision must be actionable without a consumer re-reading source or emitted Rust.
+    #[test]
+    fn an_allowed_authority_decision_carries_its_mode_and_grant_context() {
+        use super::{AuthorityDecision, AuthorityGrantContext, AuthorityMode};
+
+        let (capability, provenance) = authority_fixture();
+        let decision = AuthorityDecision::allowed(
+            capability,
+            AuthorityMode::Governed,
+            AuthorityGrantContext {
+                requested_scope: vec![("host".to_string(), "api.example.com".to_string())],
+                ceiling_applied: true,
+            },
+            provenance,
+        );
+
+        assert!(decision.is_allowed());
+        assert_eq!(decision.denial_reason(), None);
+        assert_eq!(decision.mode, AuthorityMode::Governed);
+        assert!(
+            decision.grant.ceiling_applied,
+            "a ceiling bounds the effective grant by intersection, so whether one applied is part of the decision",
+        );
+        assert_eq!(decision.provenance.suggested_grant, "host.http.request");
+    }
+
+    /// A denied decision must carry a machine-usable reason and enough provenance to raise a source-owned diagnostic.
+    #[test]
+    fn a_denied_authority_decision_carries_a_machine_usable_reason_and_its_use_site() {
+        use super::{AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode};
+
+        let (capability, provenance) = authority_fixture();
+        let decision = AuthorityDecision::denied(
+            capability,
+            AuthorityMode::Governed,
+            AuthorityDenialReason::OutsideCeiling,
+            AuthorityGrantContext {
+                requested_scope: Vec::new(),
+                ceiling_applied: true,
+            },
+            provenance,
+        );
+
+        assert!(!decision.is_allowed());
+        assert_eq!(decision.denial_reason(), Some(AuthorityDenialReason::OutsideCeiling));
+        assert_eq!(
+            decision.provenance.request_span,
+            crate::HirSourceSpan::new(120, 140),
+            "a denial is reported at the use site, not at the capability declaration",
+        );
+        assert_eq!(
+            decision.provenance.operation.declaration_name, "charge",
+            "the requesting operation stays identified so the diagnostic can name it",
+        );
+    }
+
+    /// The fact must be generic over capability publishers rather than assuming a stdlib host capability.
+    #[test]
+    fn authority_decisions_work_for_a_library_defined_capability() {
+        use super::{
+            AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode, CanonicalSymbolId,
+            SemanticSourceTargetKind,
+        };
+
+        let (_, provenance) = authority_fixture();
+        let package_capability = CanonicalSymbolId::module_declaration(
+            vec!["acme".to_string(), "ledger".to_string()],
+            "post_entry",
+            SemanticSourceTargetKind::Capability,
+            crate::HirSourceSpan::new(4, 14),
+        );
+        let decision = AuthorityDecision::denied(
+            package_capability,
+            AuthorityMode::Governed,
+            AuthorityDenialReason::NotGranted,
+            AuthorityGrantContext {
+                requested_scope: Vec::new(),
+                ceiling_applied: false,
+            },
+            provenance,
+        );
+
+        assert_eq!(decision.capability.kind, SemanticSourceTargetKind::Capability);
+        assert_eq!(decision.capability.declaration_name, "post_entry");
+        assert_eq!(decision.denial_reason(), Some(AuthorityDenialReason::NotGranted));
+    }
+
+    /// Every mode and denial reason needs a distinct snapshot spelling.
+    #[test]
+    fn authority_modes_and_denial_reasons_have_distinct_spellings() {
+        use super::{AuthorityDenialReason as R, AuthorityMode as M};
+
+        let modes = [M::Permissive, M::Observe, M::Governed];
+        let mode_spellings: std::collections::HashSet<&str> = modes.iter().map(|m| m.as_str()).collect();
+        assert_eq!(mode_spellings.len(), modes.len(), "two modes share one spelling");
+
+        let reasons = [
+            R::NotGranted,
+            R::OutsideCeiling,
+            R::OutOfScope,
+            R::BudgetExhausted,
+            R::FixtureRequired,
+        ];
+        let reason_spellings: std::collections::HashSet<&str> = reasons.iter().map(|r| r.as_str()).collect();
+        assert_eq!(
+            reason_spellings.len(),
+            reasons.len(),
+            "two denial reasons share one spelling",
+        );
+    }
+
+    #[test]
+    fn every_source_target_kind_round_trips_through_its_spelling() {
+        use super::SemanticSourceTargetKind as K;
+        let all = [
+            K::Function,
+            K::Model,
+            K::Class,
+            K::Newtype,
+            K::Rusttype,
+            K::Enum,
+            K::TypeAlias,
+            K::Partial,
+            K::Variant,
+            K::Trait,
+            K::Capability,
+            K::Field,
+            K::Method,
+            K::Property,
+            K::Const,
+            K::Static,
+            K::Local,
+            K::Parameter,
+            K::Receiver,
+            K::GenericBinder,
+            K::Module,
+            K::RustItem,
+            K::Builtin,
+        ];
+        for kind in &all {
+            assert_eq!(K::from_kind_str(kind.as_str()), *kind, "round trip failed for {kind}");
+        }
+        let spellings: std::collections::HashSet<&str> = all.iter().map(|kind| kind.as_str()).collect();
+        assert_eq!(spellings.len(), all.len(), "two categories share one spelling");
+    }
+
     use super::*;
 
     #[test]

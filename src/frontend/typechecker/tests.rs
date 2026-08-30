@@ -129,6 +129,17 @@ fn check_str(source: &str) -> Result<(), Vec<CompileError>> {
     check(&ast)
 }
 
+fn callable_default_errors(source: &str) -> Result<Vec<CompileError>, Box<dyn std::error::Error>> {
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .err()
+        .ok_or_else(|| std::io::Error::other("expected callable default typechecking to fail"))
+        .map_err(Into::into)
+}
+
 #[test]
 fn metadata_free_path_new_records_a_borrowed_argument_boundary() -> Result<(), String> {
     let source = r#"
@@ -499,6 +510,91 @@ def use() -> str:
     assert!(method.has_default, "{info:?}");
     assert!(!path.has_default, "{info:?}");
     assert!(content_type.has_default, "{info:?}");
+}
+
+#[test]
+fn test_local_partial_expression_preserves_overrideable_preset_defaults() -> Result<(), String> {
+    let source = r#"
+def add3(a: int, b: int, c: int = 3) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  positional = p(9, 2)
+  named = p(b=9, c=2)
+  override = p(a=7, b=9, c=2)
+  defaulted = p(9)
+  return positional + named + override + defaulted
+"#;
+
+    check_str(source).map_err(|errors| format!("local partial preset defaults should typecheck: {errors:?}"))
+}
+
+#[test]
+fn test_local_partial_expression_rejects_invalid_residual_arity() {
+    let too_few = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  return p(9)
+"#,
+        "a local partial call missing residual c must be rejected",
+    );
+    assert!(
+        too_few
+            .iter()
+            .any(|error| error.message.contains("Missing required argument 'c'")),
+        "missing residual c should be diagnosed: {too_few:?}"
+    );
+    assert!(
+        !too_few
+            .iter()
+            .any(|error| error.message.contains("Missing required argument 'b'")),
+        "the preset a must not leave a phantom positional slot: {too_few:?}"
+    );
+
+    let too_many = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  return p(9, 2, 3)
+"#,
+        "a local partial call with a third residual argument must be rejected",
+    );
+    assert!(
+        too_many
+            .iter()
+            .any(|error| error.message.contains("expects 2 argument(s), got 3")),
+        "residual arity should be two after presetting a: {too_many:?}"
+    );
+}
+
+#[test]
+fn test_local_partial_expression_refuses_partial_of_stored_callable() {
+    let errors = check_str_err(
+        r#"
+def add3(a: int, b: int, c: int) -> int:
+  return a + b + c
+
+def use() -> int:
+  p = partial add3(a=1)
+  q = partial p(b=2)
+  return q(c=3)
+"#,
+        "partial application of a stored callable must fail before lowering",
+    );
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Partial application of a locally stored callable is not supported")),
+        "unsupported local partial composition should have an intentional source diagnostic: {errors:?}"
+    );
 }
 
 #[test]
@@ -3561,6 +3657,225 @@ def add(a: int, b: int) -> int:
   return a + b
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn callable_default_function_records_contextual_literal_and_call_facts() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def fallback() -> int:
+  return 2
+
+def choose(limit: u8 = 7, value: int = fallback()) -> int:
+  return value
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let literal_start = source.find("7,").ok_or("missing contextual literal default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(literal_start, literal_start + 1)),
+        Some(&ResolvedType::Numeric(NumericTypeId::U8)),
+        "a numeric default must retain the declared parameter type as its canonical expression fact"
+    );
+    let call_start = source.rfind("fallback()").ok_or("missing callable default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(call_start, call_start + "fallback()".len())),
+        Some(&ResolvedType::Int),
+        "a declaration-visible default call must retain its exact root expression fact"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_generic_method_records_literal_and_call_facts() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def fallback() -> str:
+  return "label"
+
+model Shelf[T]:
+  def label[U](self, owner_items: list[T] = [], method_items: list[U] = [], suffix: str = "", fallback_label: str = fallback()) -> str:
+    return suffix
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let literal_start = source.find("\"\"").ok_or("missing method literal default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(literal_start, literal_start + "\"\"".len())),
+        Some(&ResolvedType::Str),
+        "method literal defaults must retain type facts after generic owner and method contexts are installed"
+    );
+    let owner_list_start = source.find("[]").ok_or("missing generic owner list default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(owner_list_start, owner_list_start + "[]".len())),
+        Some(&ResolvedType::Generic(
+            "List".to_string(),
+            vec![ResolvedType::Named("T".to_string())],
+        )),
+        "a generic owner default must retain the owner type parameter in its root fact"
+    );
+    let method_list_start = source.rfind("[]").ok_or("missing generic method list default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(method_list_start, method_list_start + "[]".len())),
+        Some(&ResolvedType::Generic(
+            "List".to_string(),
+            vec![ResolvedType::Named("U".to_string())],
+        )),
+        "a generic method default must retain the method type parameter in its root fact"
+    );
+    let call_start = source.rfind("fallback()").ok_or("missing method call default")?;
+    assert_eq!(
+        checker
+            .type_info()
+            .expr_type(Span::new(call_start, call_start + "fallback()".len())),
+        Some(&ResolvedType::Str),
+        "method call defaults must retain exact root type facts after generic owner and method contexts are installed"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_function_type_mismatch_uses_the_default_expression_span() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = "def choose(value: int = \"wrong\") -> int:\n  return value\n";
+    let errors = callable_default_errors(source)?;
+    let default_start = source.find("\"wrong\"").ok_or("missing function mismatch default")?;
+    let default_span = Span::new(default_start, default_start + "\"wrong\"".len());
+    assert!(
+        errors.iter().any(|error| {
+            error.span == default_span && error.message.contains("Type mismatch: expected 'int', found 'str'")
+        }),
+        "expected an exact default-expression mismatch diagnostic, got: {errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_method_type_mismatch_uses_the_default_expression_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "model Label:\n  def choose(self, value: str = 1) -> str:\n    return value\n";
+    let errors = callable_default_errors(source)?;
+    let default_start = source.find("1)").ok_or("missing method mismatch default")?;
+    let default_span = Span::new(default_start, default_start + 1);
+    assert!(
+        errors.iter().any(|error| {
+            error.span == default_span && error.message.contains("Type mismatch: expected 'str', found 'int'")
+        }),
+        "expected an exact method-default mismatch diagnostic, got: {errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_defaults_cannot_read_callable_frame_bindings() -> Result<(), Box<dyn std::error::Error>> {
+    let function_source = "def choose(first: str, value: str = first) -> str:\n  return value\n";
+    let function_errors = callable_default_errors(function_source)?;
+    let first_start = function_source.rfind("first").ok_or("missing parameter default read")?;
+    let first_span = Span::new(first_start, first_start + "first".len());
+    assert!(
+        function_errors
+            .iter()
+            .any(|error| error.span == first_span && error.message.contains("Unknown symbol 'first'")),
+        "the function default must be checked before callable parameters are bound: {function_errors:?}"
+    );
+
+    let method_source =
+        "model Label:\n  text: str\n\n  def choose(self, value: str = self.text) -> str:\n    return value\n";
+    let method_errors = callable_default_errors(method_source)?;
+    let self_start = method_source.find("self.text").ok_or("missing receiver default read")?;
+    let self_span = Span::new(self_start, self_start + "self".len());
+    assert!(
+        method_errors
+            .iter()
+            .any(|error| error.span == self_span && error.message.contains("Unknown symbol 'self'")),
+        "the method default must be checked before self is bound: {method_errors:?}"
+    );
+
+    let bare_field_source =
+        "model Label:\n  text: str\n\n  def choose(self, value: str = text) -> str:\n    return value\n";
+    let bare_field_errors = callable_default_errors(bare_field_source)?;
+    let text_start = bare_field_source
+        .rfind("text")
+        .ok_or("missing bare field default read")?;
+    let text_span = Span::new(text_start, text_start + "text".len());
+    assert!(
+        bare_field_errors
+            .iter()
+            .any(|error| error.span == text_span && error.message.contains("Unknown symbol 'text'")),
+        "the method default must not resolve an enclosing instance field: {bare_field_errors:?}"
+    );
+
+    let bare_property_source = "model Label:\n  text: str\n\n  property display -> str:\n    return self.text\n\n  def choose(self, value: str = display) -> str:\n    return value\n";
+    let bare_property_errors = callable_default_errors(bare_property_source)?;
+    let display_start = bare_property_source
+        .rfind("display")
+        .ok_or("missing bare property default read")?;
+    let display_span = Span::new(display_start, display_start + "display".len());
+    assert!(
+        bare_property_errors
+            .iter()
+            .any(|error| error.span == display_span && error.message.contains("Unknown symbol 'display'")),
+        "the method default must not resolve an enclosing computed property: {bare_property_errors:?}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn callable_default_newtype_records_root_type_and_checked_coercion() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+type Attempts = newtype int:
+  def from_underlying(n: int) -> Result[Attempts, ValidationError]:
+    return Ok(Attempts(n))
+
+def choose(value: Attempts = 3) -> Attempts:
+  return value
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+    let default_start = source.rfind("3)").ok_or("missing newtype default")?;
+    let default_span = Span::new(default_start, default_start + 1);
+    assert_eq!(
+        checker.type_info().expr_type(default_span),
+        Some(&ResolvedType::Int),
+        "the default retains its source expression type rather than pretending to be the newtype"
+    );
+    let coercion = checker
+        .type_info()
+        .validated_newtype_coercion(default_span)
+        .ok_or("missing callable-default validated-newtype coercion")?;
+    assert_eq!(coercion.target_type, ResolvedType::Named("Attempts".to_string()));
+    assert_eq!(coercion.steps.len(), 1);
+    assert_eq!(coercion.steps[0].newtype_name, "Attempts");
+    assert_eq!(coercion.steps[0].ctor.as_deref(), Some("from_underlying"));
+
+    Ok(())
 }
 
 #[test]
@@ -11609,6 +11924,7 @@ def f(encoded: bytes) -> None:
             ty: ResolvedType::TypeVar("implBuf".to_string()),
             kind: ParamKind::Normal,
             has_default: false,
+            is_partial_preset: false,
         }],
         "expected exact call-span decode parameter shape"
     );
@@ -11723,6 +12039,7 @@ def f(encoded: bytes) -> None:
             ty: ResolvedType::TypeVar("implBuf".to_string()),
             kind: ParamKind::Normal,
             has_default: false,
+            is_partial_preset: false,
         }],
         "expected exact call-span decode parameter shape when receiver metadata lacks the trait edge"
     );
@@ -12835,6 +13152,50 @@ def foo() -> str:
   return sum("ok")
 "#;
     assert!(check_str(source).is_ok());
+}
+
+/// Issue #1116: a module binding takes precedence over an ambient core builtin, while `std.builtins` remains an
+/// explicit route to the builtin.
+#[test]
+fn module_len_shadowing_and_explicit_builtin_selection_are_supported_issue1116() {
+    let source = r#"
+def len(value: int) -> int:
+  return value + 1
+
+def shadowed_len_call() -> int:
+  return len(4)
+
+def explicit_builtin_len_call() -> int:
+  return std.builtins.len([10, 20, 30])
+"#;
+    assert_check_ok(source);
+}
+
+/// Issue #1116: an explicitly imported source function is a normal lexical binding, not a request for ambient
+/// builtin dispatch with the same spelling.
+#[test]
+fn imported_sum_shadowing_is_supported_issue1116() -> Result<(), String> {
+    let provider = parse_program(
+        r#"
+pub def sum(value: int) -> int:
+  return value + 1
+"#,
+        "issue1116 sum provider",
+    );
+    let consumer = parse_program(
+        r#"
+from aggregates import sum
+
+def imported_sum_call() -> int:
+  return sum(4)
+"#,
+        "issue1116 sum consumer",
+    );
+    let mut checker = TypeChecker::new();
+    checker
+        .check_with_imports(&consumer, &[("aggregates", &provider)])
+        .map_err(|errors| format!("imported `sum` should shadow the builtin: {errors:?}"))?;
+    Ok(())
 }
 
 #[test]
@@ -21246,24 +21607,24 @@ fn type_info_semantic_fact_store_exports_explicit_registry_subject_entries() -> 
         r#"
 from std.registry import Registry, RegistryEntry, RegistrySubject, SubjectKind
 
-type CapabilityId = newtype str
+type FeatureId = newtype str
 
 @derive(Descriptor)
 model CapabilitySpec:
   title: str
 
-pub static capabilities: Registry[CapabilityId, CapabilitySpec] = Registry.define(
+pub static capabilities: Registry[FeatureId, CapabilitySpec] = Registry.define(
   subjects=[SubjectKind.CompilationUnit, SubjectKind.Package],
 )
 
-pub static unit_capability: RegistryEntry[CapabilityId, CapabilitySpec] = capabilities.entry(
-  key=CapabilityId("unit"),
+pub static unit_capability: RegistryEntry[FeatureId, CapabilitySpec] = capabilities.entry(
+  key=FeatureId("unit"),
   subject=RegistrySubject.current_unit(),
   descriptor=CapabilitySpec(title="Current unit"),
 )
 
-pub static package_capability: RegistryEntry[CapabilityId, CapabilitySpec] = capabilities.entry(
-  key=CapabilityId("package"),
+pub static package_capability: RegistryEntry[FeatureId, CapabilitySpec] = capabilities.entry(
+  key=FeatureId("package"),
   subject=RegistrySubject.package(),
   descriptor=CapabilitySpec(title="Current package"),
 )
@@ -21327,19 +21688,19 @@ fn registry_entry_rejects_runtime_and_compiler_reserved_mutation_surfaces() {
 from std.registry import Registry, RegistryEntry, RegistrySubject, SubjectKind
 
 @derive(Clone, Eq)
-type CapabilityId = newtype str
+type FeatureId = newtype str
 
 @derive(Descriptor)
 model CapabilitySpec:
     title: str
 
-static capabilities: Registry[CapabilityId, CapabilitySpec] = Registry.define(
+static capabilities: Registry[FeatureId, CapabilitySpec] = Registry.define(
     subjects=[SubjectKind.CompilationUnit],
 )
 
-static parenthesized_entry: RegistryEntry[CapabilityId, CapabilitySpec] = (
+static parenthesized_entry: RegistryEntry[FeatureId, CapabilitySpec] = (
     capabilities.entry(
-        key=CapabilityId("parenthesized"),
+        key=FeatureId("parenthesized"),
         subject=RegistrySubject.current_unit(),
         descriptor=CapabilitySpec(title="parenthesized"),
     )
@@ -21348,18 +21709,18 @@ static parenthesized_entry: RegistryEntry[CapabilityId, CapabilitySpec] = (
 def register_at_runtime() -> None:
     capabilities.entries.append(
         RegistryEntry(
-            key=CapabilityId("forged-field"),
+            key=FeatureId("forged-field"),
             descriptor=CapabilitySpec(title="forged field"),
             subject=RegistrySubject.current_unit(),
         ),
     )
     capabilities.entry(
-        key=CapabilityId("runtime"),
+        key=FeatureId("runtime"),
         subject=RegistrySubject.current_unit(),
         descriptor=CapabilitySpec(title="runtime"),
     )
     capabilities._describe(
-        CapabilityId("forged"),
+        FeatureId("forged"),
         CapabilitySpec(title="forged"),
         RegistrySubject.current_unit(),
     )
@@ -22201,5 +22562,1002 @@ fn checked_c_resources_record_ownership_transfers_and_require_mutable_borrows() 
         mutable_borrow.errors.is_empty(),
         "unexpected mutable-borrow errors: {:?}",
         mutable_borrow.errors
+    );
+}
+
+// ========================================================================
+// Issue #1117: unreachable code after an unconditional `return`
+// ========================================================================
+
+/// Stable code carried by the unreachable-code warning, asserted here rather than message prose so these tests
+/// pin the machine-readable contract tooling consumes.
+const UNREACHABLE_CODE: &str = "INCAN-T0101";
+
+/// Collect only the unreachable-code warnings for `source`, ignoring any unrelated advisory diagnostics.
+///
+/// Uses [`check_str_warnings`], which panics if typechecking fails — so every caller also proves the diagnostic
+/// stays non-fatal.
+fn unreachable_warnings(source: &str, context: &str) -> Vec<CompileError> {
+    check_str_warnings(source, context)
+        .into_iter()
+        .filter(|warning| warning.stable_code() == Some(UNREACHABLE_CODE))
+        .collect()
+}
+
+/// Assert `source` produces exactly one unreachable-code warning and return it.
+fn single_unreachable_warning(source: &str, context: &str) -> CompileError {
+    match unreachable_warnings(source, context).as_slice() {
+        [warning] => warning.clone(),
+        other => panic!("{context}: expected exactly one unreachable-code warning, got: {other:?}"),
+    }
+}
+
+#[test]
+fn test_unreachable_code_after_direct_return_warns() {
+    let source = r#"
+def f() -> int:
+    return 1
+    println("dead code")
+    return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a direct `return`");
+
+    assert_eq!(warning.kind, ErrorKind::Warning);
+    assert!(
+        warning.message.contains("Unreachable code"),
+        "expected an unreachable-code message, got: {}",
+        warning.message
+    );
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead code\")\n    return 2",
+        "the span must cover the whole unreachable tail of the block"
+    );
+    assert_eq!(
+        warning.related_spans().len(),
+        1,
+        "expected the `return` that made the tail unreachable to be a related span, got: {:?}",
+        warning.related_spans()
+    );
+    assert_eq!(
+        &source[warning.related_spans()[0].span.start..warning.related_spans()[0].span.end],
+        "return 1",
+        "the related span must point at the `return` that ends the block"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_nested_if_body_warns() {
+    let source = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+        println("dead inside the if body")
+    return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a `return` inside an `if` body");
+
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead inside the if body\")",
+        "the span must cover only the nested block's unreachable tail"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_else_and_loop_bodies_warns() {
+    let else_body = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    else:
+        return 2
+        println("dead inside the else body")
+"#;
+    let _ = single_unreachable_warning(else_body, "statements after a `return` inside an `else` body");
+
+    let loop_body = r#"
+def f() -> int:
+    for value in [1, 2, 3]:
+        return value
+        println("dead inside the loop body")
+    return 0
+"#;
+    let _ = single_unreachable_warning(loop_body, "statements after a `return` inside a `for` body");
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_match_arm_block_warns() {
+    let source = r#"
+enum Color:
+    Red
+    Green
+
+def f(c: Color) -> int:
+    match c:
+        case Color.Red:
+            return 1
+            println("dead inside the match arm")
+        case Color.Green:
+            return 2
+"#;
+    let warning = single_unreachable_warning(source, "statements after a `return` inside a match-arm block");
+
+    assert_eq!(
+        &source[warning.span.start..warning.span.end],
+        "println(\"dead inside the match arm\")",
+        "the span must cover only the match arm's unreachable tail"
+    );
+}
+
+#[test]
+fn test_unreachable_code_after_return_in_method_body_warns() {
+    let source = r#"
+class Counter:
+    value: int
+
+    def get(self) -> int:
+        return self.value
+        println("dead inside the method body")
+"#;
+    let _ = single_unreachable_warning(source, "statements after a `return` inside a method body");
+}
+
+#[test]
+fn test_conditional_return_keeps_following_statements_reachable() {
+    let if_without_else = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    println("still reachable when flag is false")
+    return 2
+"#;
+    assert!(
+        unreachable_warnings(
+            if_without_else,
+            "a conditional `return` must not poison the outer block"
+        )
+        .is_empty(),
+        "statements after a conditional `return` are reachable and must not warn"
+    );
+
+    let both_branches_return = r#"
+def f(flag: bool) -> int:
+    if flag:
+        return 1
+    else:
+        return 2
+    println("conservatively treated as reachable")
+    return 3
+"#;
+    assert!(
+        unreachable_warnings(both_branches_return, "if/else divergence is out of scope for #1117").is_empty(),
+        "the narrow #1117 rule only follows a `return` in the same block, so if/else divergence must stay silent"
+    );
+
+    let loop_return = r#"
+def f() -> int:
+    for value in [1, 2, 3]:
+        return value
+    return 0
+"#;
+    assert!(
+        unreachable_warnings(
+            loop_return,
+            "a `return` inside a loop body must not poison the outer block"
+        )
+        .is_empty(),
+        "a loop body that returns does not make the statements after the loop unreachable"
+    );
+}
+
+#[test]
+fn test_trailing_return_and_return_free_bodies_do_not_warn() {
+    let trailing_return = r#"
+def f() -> int:
+    println("live")
+    return 1
+"#;
+    assert!(
+        unreachable_warnings(
+            trailing_return,
+            "a trailing `return` ends the block with nothing after it"
+        )
+        .is_empty(),
+        "a `return` as the last statement of a block must not warn"
+    );
+
+    let no_return = r#"
+def f() -> None:
+    println("live")
+    println("also live")
+"#;
+    assert!(
+        unreachable_warnings(no_return, "a body without `return` has nothing to make unreachable").is_empty(),
+        "a body without a `return` must not warn"
+    );
+}
+
+#[test]
+fn test_unreachable_statements_are_still_typechecked() {
+    let source = r#"
+def f() -> int:
+    return 1
+    println(undefined_name)
+"#;
+    let errors = check_str_err(source, "unreachable statements must still be typechecked");
+    assert!(
+        has_unknown_symbol_error(&errors, "undefined_name"),
+        "expected the unreachable statement's own type error to still be reported, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_unreachable_code_in_a_trait_default_method_is_reported_once_per_definition() {
+    let source = r#"
+trait Greeter:
+    def greet(self) -> int:
+        return 1
+        println("dead in the trait default method")
+
+class Alpha with Greeter:
+    value: int
+
+class Beta with Greeter:
+    value: int
+
+def main() -> None:
+    alpha = Alpha(value=1)
+    beta = Beta(value=2)
+    println(f"{alpha.greet()} {beta.greet()}")
+"#;
+    // A default method body is one block of source, so it must warn once — not once per implementing type.
+    let _ = single_unreachable_warning(source, "a trait default method body with dead code");
+}
+
+// ========================================================================
+// Issue #1132: statement-level tuple unpacking is a typechecking decision
+// ========================================================================
+
+#[test]
+fn test_statement_tuple_unpack_of_non_tuple_value_is_rejected() {
+    let source = r#"
+def main() -> None:
+    a, b = 5
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(source, "unpacking two names from an `int` must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot destructure 2 values from value of type 'int'")),
+        "the diagnostic must name the resolved value type: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_tuple_assign_spelling_of_non_tuple_value_is_rejected() {
+    // The `TupleAssign` spelling reaches a different statement arm than `TupleUnpack`; both carried the same
+    // `vec![Unknown; n]` fallback, so both need the diagnostic.
+    let source = r#"
+def main() -> None:
+    mut xs = [1, 2]
+    xs[0], xs[1] = 5
+"#;
+    let errors = check_str_err(source, "tuple-assigning two lvalues from an `int` must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot destructure 2 values from value of type 'int'")),
+        "the diagnostic must name the resolved value type: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_accepts_inferred_and_annotated_tuples() {
+    let inferred = r#"
+def main() -> None:
+    pair = (1, "two")
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(inferred).is_ok(),
+        "an inferred tuple literal must still destructure: {:?}",
+        check_str(inferred)
+    );
+
+    // A written `tuple[A, B]` annotation resolves through the collection-type registry as
+    // `ResolvedType::Generic("Tuple", args)`, not `ResolvedType::Tuple`. Reading only the latter left every
+    // binding typed `Unknown` and suppressed the arity guard.
+    let annotated = r#"
+def main() -> None:
+    pair: tuple[int, str] = (1, "two")
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(annotated).is_ok(),
+        "an annotated `tuple[int, str]` must destructure: {:?}",
+        check_str(annotated)
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_arity_mismatch_is_rejected_in_both_directions() {
+    let too_many_names = r#"
+def main() -> None:
+    a, b, c = (1, 2)
+    println(f"{a} {b} {c}")
+"#;
+    let errors = check_str_err(too_many_names, "unpacking three names from a 2-tuple must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot unpack 3 values from tuple with 2 elements")),
+        "expected the existing arity diagnostic: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+
+    // The guard used to be `element_types.len() < names.len()`, so a tuple with *more* elements than names was
+    // silently accepted. #1125 settled on an exact-arity comparison for loop patterns; statements match it.
+    let too_few_names = r#"
+def main() -> None:
+    a, b = (1, 2, 3)
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(too_few_names, "unpacking two names from a 3-tuple must be rejected");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Cannot unpack 2 values from tuple with 3 elements")),
+        "a tuple longer than the name list must not be silently truncated: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_of_a_bare_type_variable_is_rejected() {
+    // An unconstrained type variable is not "not yet known" — it is known to be underdetermined, and `T` can be
+    // instantiated as `int`. Incan's bounds are trait-based, so no caller can promise a tuple shape.
+    let source = r#"
+def split[T](value: T) -> None:
+    a, b = value
+    println(f"{a} {b}")
+"#;
+    let errors = check_str_err(source, "destructuring a bare type variable must be rejected");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Cannot destructure 2 values from value of type")),
+        "a bare type variable must not be treated as destructurable: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_statement_tuple_unpack_accepts_a_tuple_of_type_variables() {
+    // `tuple[K, V]` is a tuple whose *elements* are type variables. The shape is known even though the element
+    // types are not, so it destructures — this is the common `dict` item shape and must not regress.
+    let source = r#"
+def split[K, V](pair: tuple[K, V]) -> None:
+    a, b = pair
+    println(f"{a} {b}")
+"#;
+    assert!(
+        check_str(source).is_ok(),
+        "a tuple of type variables must destructure: {:?}",
+        check_str(source)
+    );
+}
+
+#[test]
+fn test_tuple_shape_classifier_covers_both_spellings_and_recovery_types() {
+    use super::check_stmt::{TupleShape, classify_tuple_shape};
+
+    // `Unknown` and `Never` are exercised directly: `Unknown` means checking already failed upstream, and `Never`
+    // reaches a value position only through Rust interop's diverging `!`, which is not cheaply source-expressible.
+    // Both must classify as recovery so no second diagnostic piles onto the real one.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::Unknown),
+        TupleShape::Recovery
+    ));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::Never),
+        TupleShape::Recovery
+    ));
+    assert!(matches!(classify_tuple_shape(&ResolvedType::Int), TupleShape::NotTuple));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::TypeVar("T".to_string())),
+        TupleShape::NotTuple
+    ));
+
+    // Regression for a false positive this change originally introduced: `std.json` destructures a
+    // `rust::HashMap` item, whose type is a Rust tuple path rather than either Incan spelling. Rejecting it broke
+    // the stdlib's own SDK component build.
+    match classify_tuple_shape(&ResolvedType::RustPath(
+        "(String,incan_stdlib::json::JsonValue)".to_string(),
+    )) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("a Rust tuple path must be destructurable with arity 2, got {other:?}"),
+    }
+    // Commas inside a nested generic must not inflate the arity.
+    match classify_tuple_shape(&ResolvedType::RustPath("(String,HashMap<K, V>)".to_string())) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("nested generic commas must not be counted, got {other:?}"),
+    }
+    // An opaque Rust path refuses rather than going silent. "No structural model of this type" is not the same
+    // claim as "checking already failed": treating it as recovery would let a real non-tuple Rust value reach a
+    // generated field projection, which is the same leakage this issue closes, arriving via interop.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("String".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("std::vec::Vec<u8>".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    // A one-element Rust tuple is one element, not two with an empty slot.
+    match classify_tuple_shape(&ResolvedType::RustPath("(String,)".to_string())) {
+        TupleShape::RustTuple(1) => {}
+        other => panic!("`(String,)` is a one-element tuple, got {other:?}"),
+    }
+    // But `(String)` is a parenthesised type with no `.0` field, not a one-element tuple. Reading it as one would
+    // let a single-name destructure lower to `.0` on a `String` — the same raw-Rust failure through a narrower
+    // spelling than `int`.
+    assert!(
+        matches!(
+            classify_tuple_shape(&ResolvedType::RustPath("(String)".to_string())),
+            TupleShape::OpaqueRust
+        ),
+        "a parenthesised Rust type must not be classified as a one-element tuple"
+    );
+
+    let literal = ResolvedType::Tuple(vec![ResolvedType::Int, ResolvedType::Str]);
+    let annotated = ResolvedType::Generic("Tuple".to_string(), vec![ResolvedType::Int, ResolvedType::Str]);
+    for (label, ty) in [("inferred", &literal), ("annotated", &annotated)] {
+        match classify_tuple_shape(ty) {
+            TupleShape::Tuple(elements) => assert_eq!(
+                elements,
+                vec![ResolvedType::Int, ResolvedType::Str],
+                "{label} tuple spelling must yield its element types"
+            ),
+            other => panic!("{label} tuple spelling must classify as a tuple, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_statement_tuple_unpack_of_an_opaque_rust_value_is_refused() {
+    // The `RustPath` path must apply the same rule as a bare type variable: not proven tuple-shaped refuses.
+    // Accepting it silently would re-open the leak through interop — a `rust::String` reaching a `.0` projection
+    // is the same defect as an `int` reaching one.
+    use super::check_stmt::{TupleShape, classify_tuple_shape};
+
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("String".to_string())),
+        TupleShape::OpaqueRust
+    ));
+    // `(String)` is the same type as `String`, only parenthesised, and must be refused identically.
+    assert!(matches!(
+        classify_tuple_shape(&ResolvedType::RustPath("(String)".to_string())),
+        TupleShape::OpaqueRust
+    ));
+
+    // And the readable tuple spelling the stdlib depends on must keep working, so the refusal is narrow.
+    match classify_tuple_shape(&ResolvedType::RustPath(
+        "(String,incan_stdlib::json::JsonValue)".to_string(),
+    )) {
+        TupleShape::RustTuple(2) => {}
+        other => panic!("a readable Rust tuple must still destructure, got {other:?}"),
+    }
+}
+
+/// A `capability` declaration must reach the symbol table with its RFC 104 clauses intact.
+///
+/// `requires` is deliberately checked as unresolved path segments: collection records what was written so that a
+/// capability may reference one declared later in the same module.
+#[test]
+fn capability_declarations_collect_their_description_scope_and_requires() -> Result<(), String> {
+    let source = r#"
+capability http_request:
+    description = "Issue an outbound HTTP request"
+    scope:
+        host: str
+    requires = [process.spawn]
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    let _ = checker.check_program(&program);
+
+    let symbol_id = checker
+        .symbols
+        .lookup("http_request")
+        .ok_or("the capability declaration was not collected into the symbol table")?;
+    let symbol = checker
+        .symbols
+        .get(symbol_id)
+        .ok_or("the collected symbol id did not resolve")?;
+    let SymbolKind::Capability(info) = &symbol.kind else {
+        return Err(format!("expected a capability symbol, got {:?}", symbol.kind));
+    };
+
+    assert_eq!(info.description.as_deref(), Some("Issue an outbound HTTP request"));
+    assert_eq!(info.scope.len(), 1, "one declared scope dimension");
+    assert_eq!(info.scope[0].0, "host");
+    assert_eq!(
+        info.scope[0].1,
+        ResolvedType::Str,
+        "scope dimension types are resolved at collection"
+    );
+    assert_eq!(info.requires.len(), 1);
+    assert_eq!(info.requires[0].path, vec!["process".to_string(), "spawn".to_string()]);
+    Ok(())
+}
+
+/// A capability must carry RFC 120's `Capability` identity kind rather than falling through to a gap marker.
+#[test]
+fn a_capability_symbol_carries_the_canonical_capability_identity_kind() {
+    use incan_semantics_core::SemanticSourceTargetKind;
+
+    let kind = SymbolKind::Capability(CapabilityInfo {
+        description: None,
+        scope: Vec::new(),
+        requires: Vec::new(),
+        is_public: false,
+    });
+
+    let spelling = TypeChecker::source_target_kind_for_symbol(&kind);
+    assert_eq!(spelling, Some("capability"));
+    assert_eq!(
+        SemanticSourceTargetKind::from_kind_str("capability"),
+        SemanticSourceTargetKind::Capability,
+        "the frontend spelling must decode to the canonical kind, not to Other",
+    );
+}
+
+/// Provider-operation metadata is a checked declaration fact, not a naming convention reconstructed by Body IR.
+#[test]
+fn provider_operation_decorator_resolves_and_records_its_capability_identity() -> Result<(), String> {
+    let source = r#"
+capability charge_card:
+    description = "Charge one approved card"
+
+@provider_operation(charge_card)
+pub def charge(amount: int) -> int:
+    return amount
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["ledger".to_string(), "api".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("provider operation should typecheck: {errs:?}"))?;
+
+    let operations = &checker.type_info().declarations.provider_operations;
+    let collected = operations.values().collect::<Vec<_>>();
+    let [operation] = collected.as_slice() else {
+        return Err(format!("expected one checked provider operation, got {operations:?}"));
+    };
+    assert_eq!(operation.operation.kind, SemanticSourceTargetKind::Function);
+    assert_eq!(
+        operation.operation.module_path(),
+        Some(vec!["ledger".to_string(), "api".to_string()].as_slice())
+    );
+    assert_eq!(operation.operation.declaration_name, "charge");
+    assert_eq!(operation.required_capability.kind, SemanticSourceTargetKind::Capability);
+    assert_eq!(
+        operation.required_capability.module_path(),
+        Some(vec!["ledger".to_string(), "api".to_string()].as_slice())
+    );
+    assert_eq!(operation.required_capability.declaration_name, "charge_card");
+    assert!(operation.runtime_requirements.is_empty());
+    Ok(())
+}
+
+/// A provider operation may only name a resolved RFC 104 capability, never a callable or a stringly value.
+#[test]
+fn provider_operation_decorator_rejects_a_non_capability_reference() -> Result<(), String> {
+    let source = r#"
+def not_a_capability() -> int:
+    return 1
+
+@provider_operation(not_a_capability)
+def charge(amount: int) -> int:
+    return amount
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["ledger".to_string(), "api".to_string()]));
+    let errors = checker
+        .check_program(&program)
+        .err()
+        .ok_or("a non-capability provider-operation reference must fail")?;
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("does not name a capability")),
+        "unexpected diagnostics: {errors:?}"
+    );
+    assert!(checker.type_info().declarations.provider_operations.is_empty());
+    Ok(())
+}
+
+/// A capability names an authority, so a bare reference to one is never a value use.
+#[test]
+fn referencing_a_capability_as_a_value_is_rejected() {
+    let source = r#"
+capability refund:
+    description = "Refund a captured charge"
+
+def use_it() -> int:
+    x = refund
+    return 1
+"#;
+    let Err(errs) = check_str(source) else {
+        panic!("referencing a capability as a value must fail");
+    };
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("names a runtime authority, not a value")),
+        "expected the capability-as-value diagnostic; got: {errs:?}"
+    );
+}
+
+/// `capability` is contextual, so every non-declaration position keeps it an ordinary identifier.
+#[test]
+fn capability_remains_usable_as_an_ordinary_identifier() -> Result<(), String> {
+    let source = r#"
+model Meter:
+    capability: int
+
+def read(m: Meter) -> int:
+    capability = m.capability
+    return capability
+"#;
+    check_str(source).map_err(|errs| format!("`capability` must stay an ordinary identifier: {errs:?}"))
+}
+
+/// RFC 104 treats the description as part of the authority's public contract, so its absence is a checked error
+/// rather than a parse failure — the grammar accepts the omission precisely so this can report it by name.
+#[test]
+fn a_capability_without_a_description_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    scope:
+        tenant: str
+"#,
+        "capability without a description",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("has no `description`")),
+        "expected the missing-description diagnostic; got: {errs:?}"
+    );
+}
+
+/// A `requires` entry is a checked symbol reference, so an expression that cannot name a declaration is refused at
+/// the entry's own span rather than being dropped during collection.
+#[test]
+fn a_requires_entry_that_is_not_a_reference_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = ["host.http.request"]
+"#,
+        "capability requiring a string",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("must be a capability reference")),
+        "expected the non-reference diagnostic; got: {errs:?}"
+    );
+}
+
+/// RFC 104 is explicit that a misspelled capability reference must fail at compile time rather than surviving to
+/// become a runtime denial reported far from the declaration that caused it.
+#[test]
+fn an_unknown_capability_requirement_is_rejected() {
+    let errs = check_str_err(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [nonexistent]
+"#,
+        "capability requiring an unknown name",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'nonexistent'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
+    );
+}
+
+/// A `requires` list naming a function describes an authority relationship that cannot exist, and a policy reading
+/// it would draw a false conclusion — so the wrong kind is refused as firmly as a missing one.
+#[test]
+fn a_requires_entry_naming_a_non_capability_is_rejected() {
+    let errs = check_str_err(
+        r#"
+def helper() -> int:
+    return 1
+
+capability refund:
+    description = "Refund a captured charge"
+    requires = [helper]
+"#,
+        "capability requiring a function",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("is a function, not a capability")),
+        "expected the wrong-kind diagnostic; got: {errs:?}"
+    );
+}
+
+/// Capabilities may reference each other in any order, which is why resolution is a checking pass rather than part
+/// of collection: requiring one declared further down the file must not depend on declaration order.
+#[test]
+fn a_capability_may_require_another_declared_later_in_the_module() -> Result<(), String> {
+    check_str(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [audit_write]
+
+capability audit_write:
+    description = "Append to the audit log"
+"#,
+    )
+    .map_err(|errs| format!("declaration order must not matter for `requires`: {errs:?}"))
+}
+
+/// A `pub capability` is exported and referenceable across a module boundary.
+///
+/// The stdlib is only the first capability publisher: a library author declares domain capabilities in their own
+/// module and consumers reference them by import. Withholding capabilities from the export set would make `pub`
+/// meaningless on the one declaration form whose entire purpose is to be referenced from elsewhere.
+#[test]
+fn a_public_capability_crosses_a_module_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    let dependency = parse_program(
+        r#"
+pub capability audit_write:
+    description = "Append to the audit log"
+"#,
+        "capability publisher",
+    );
+    let consumer = parse_program(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [publisher.audit_write]
+"#,
+        "capability consumer",
+    );
+
+    let mut checker = TypeChecker::new();
+    checker
+        .check_with_imports(&consumer, &[("publisher", &dependency)])
+        .map_err(|errs| format!("a `pub capability` must be referenceable across modules: {errs:?}"))?;
+    Ok(())
+}
+
+/// A capability that is *not* `pub` stays private, so a consumer referencing it fails to resolve.
+#[test]
+fn a_private_capability_does_not_cross_a_module_boundary() {
+    let dependency = parse_program(
+        r#"
+capability audit_write:
+    description = "Append to the audit log"
+"#,
+        "private capability publisher",
+    );
+    let consumer = parse_program(
+        r#"
+capability refund:
+    description = "Refund a captured charge"
+    requires = [publisher.audit_write]
+"#,
+        "private capability consumer",
+    );
+
+    let mut checker = TypeChecker::new();
+    let Err(errs) = checker.check_with_imports(&consumer, &[("publisher", &dependency)]) else {
+        panic!("a private capability must not be referenceable from another module");
+    };
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'publisher.audit_write'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
+    );
+}
+
+/// A `description` clause that is not compile-time text is rejected rather than silently stored as nothing.
+///
+/// Presence alone was not enough: collection keeps only text it can read, so a clause it cannot read left the
+/// declaration carrying no description while appearing to have one.
+#[test]
+fn a_capability_description_that_is_not_text_is_rejected() {
+    for source in [
+        "\ncapability refund:\n    description = 42\n",
+        "\ncapability refund:\n    description = [\"a\", \"b\"]\n",
+    ] {
+        let errs = check_str_err(source, "capability with a non-text description");
+        assert!(
+            errs.iter()
+                .any(|e| e.message.contains("`description` that is not a text literal")),
+            "expected the non-text description diagnostic for {source:?}; got: {errs:?}"
+        );
+    }
+}
+
+/// Collection and checking must agree about what counts as a description, so a rejected clause never reaches the
+/// symbol table as a silently absent one while the declaration still typechecks.
+#[test]
+fn a_rejected_description_never_leaves_a_capability_looking_documented() -> Result<(), String> {
+    let source = "\ncapability refund:\n    description = 42\n";
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    let result = checker.check_program(&program);
+
+    assert!(result.is_err(), "a non-text description must not typecheck");
+
+    let symbol_id = checker
+        .symbols
+        .lookup("refund")
+        .ok_or("the capability was not collected")?;
+    let symbol = checker.symbols.get(symbol_id).ok_or("the symbol id did not resolve")?;
+    let SymbolKind::Capability(info) = &symbol.kind else {
+        return Err(format!("expected a capability symbol, got {:?}", symbol.kind));
+    };
+    assert_eq!(
+        info.description, None,
+        "collection stores nothing it cannot read, which is exactly why checking must reject the clause"
+    );
+    Ok(())
+}
+
+// ---- #1072: plain assignment resolves outward; `let`/`mut` introduce bindings ----
+
+#[test]
+fn plain_assignment_in_a_block_reassigns_the_nearest_enclosing_binding() {
+    // `reassigns_outer` from `scopes_and_name_resolution.md`, promoted to an executable fixture as RFC 120 requires.
+    // Assignment checking used to look up only the innermost scope, so this silently created a fresh block-local
+    // and the outer `x` never moved -- with no diagnostic, and no way for a reader to tell.
+    let source = "def reassigns_outer() -> int:\n  mut x = 1\n  if true:\n    x = 2\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "a plain assignment to an enclosing `mut` binding must be accepted as a reassignment"
+    );
+}
+
+#[test]
+fn plain_assignment_to_an_enclosing_immutable_binding_is_rejected() {
+    // The mutability half of the same contract: reassignment requires `mut`, and the old innermost-only lookup
+    // could not enforce it across a block boundary because it never saw the outer binding at all.
+    let source = "def reassign_immutable() -> int:\n  let x = 1\n  if true:\n    x = 2\n  return x\n";
+    let errors = check_str_err(source, "reassigning an immutable enclosing binding must be rejected");
+
+    assert!(
+        errors.iter().any(|error| error.message.contains("Cannot mutate 'x'")),
+        "expected a mutability diagnostic, got: {errors:?}"
+    );
+}
+
+#[test]
+fn plain_assignment_across_a_block_is_type_checked_against_the_outer_binding() {
+    // The first repro in #1072. This typechecked cleanly before: the block-local shadow meant the `str` was never
+    // compared against the outer `int`, so a whole-type mismatch produced no diagnostic whatsoever.
+    let source = "def probe() -> None:\n  mut x: int = 1\n  if true:\n    x = \"hello\"\n";
+    let errors = check_str_err(
+        source,
+        "assigning a `str` to an enclosing `int` binding must be rejected",
+    );
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("type mismatch") && error.message.contains("'x'")),
+        "expected a type mismatch against the outer binding, got: {errors:?}"
+    );
+}
+
+#[test]
+fn let_in_a_block_introduces_a_new_binding_rather_than_reassigning() {
+    // `shadows_in_block` from the same document. This is the half that has to move with the outward lookup: a
+    // lookup that walks outward *without* honoring the declaration forms would turn this into a reassignment of
+    // an immutable outer binding, and reject a program the language documents as valid.
+    let source = "def shadows_in_block() -> int:\n  let x = 1\n  if true:\n    let x = 2\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "`let` in a nested block must introduce a new binding, not reassign the immutable outer one"
+    );
+}
+
+#[test]
+fn mut_declares_a_new_binding_rather_than_making_an_active_one_mutable() {
+    // RFC 120 is explicit that `mut name = value` is "not 'make the existing `name` mutable'", and that reading it
+    // as a modifier "inverts what it does to identity". The checker did read it that way: shadowing a parameter
+    // with `mut` was rejected as a mutation of an immutable binding, so the documented shadowing form could not be
+    // written at all over an active name.
+    let source = "def f(imported: str) -> str:\n  mut imported = imported\n  imported = \"bla\"\n  return imported\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "`mut` must declare a new binding that may shadow an active one"
+    );
+}
+
+#[test]
+fn shadowing_and_reassignment_compose_within_one_block() {
+    // `shadow_vs_reassign`, the demanding case: a reassignment of the outer binding, then a `mut` shadow, then a
+    // reassignment of the *inner* one -- all in the same block. It only typechecks if both halves of the contract
+    // hold at once, which is why the two fixes could not land separately.
+    let source = "def shadow_vs_reassign() -> int:\n  mut x = 10\n  if true:\n    x = 11\n    mut x = 12\n    x = 13\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "reassignment followed by a `mut` shadow and an inner reassignment must all be accepted"
+    );
+}
+
+#[test]
+fn reassigning_a_const_still_suggests_static_rather_than_mut() {
+    // A `const` is registered as a module-scope variable, so walking the scope chain now finds it. Without
+    // answering the more specific question first, this regressed to the generic "variable is immutable" hint,
+    // which points the reader at `mut` when what they need is a `static`.
+    let source = "const COUNTER: int = 0\n\ndef bump() -> None:\n  COUNTER = 1\n";
+    let errors = check_str_err(source, "reassigning a const must be rejected");
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Cannot reassign const 'COUNTER'")),
+        "expected the const-specific diagnostic rather than a generic mutability error, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.hints.iter().any(|hint| hint.contains("static"))),
+        "expected the hint to point at `static` rather than `mut`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_mutable_local_can_shadow_a_const_and_be_reassigned() {
+    let source = "const VALUE: int = 1\n\ndef use_local() -> int:\n  mut VALUE = 2\n  VALUE = 3\n  return VALUE\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "a local `mut` shadow must not be mistaken for the module const of the same spelling"
+    );
+}
+
+#[test]
+fn plain_tuple_unpack_reassigns_enclosing_mutable_bindings() {
+    let source = "def unpack() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left, right = (1, 2)\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain tuple unpack must resolve its targets through the enclosing scope chain"
+    );
+}
+
+#[test]
+fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
+    let source = "def assign() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left = right = 3\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain chained assignment must resolve every target through the enclosing scope chain"
     );
 }

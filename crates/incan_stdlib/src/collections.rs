@@ -5,7 +5,7 @@
 
 use core::borrow::Borrow;
 use core::fmt::Display;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::Hash;
 
 use crate::errors::{raise, raise_value_error};
@@ -115,6 +115,63 @@ where
     T: PartialEq,
 {
     list.iter().filter(|item| *item == value).count() as i64
+}
+
+/// Whether a list contains a value, by equality.
+///
+/// Backs Incan's `value in list`. The arguments are `(haystack, needle)`, the reverse of the source spelling, so
+/// every containment helper here agrees with `str_contains` and with `contains` throughout Rust; Body IR swaps the
+/// operands at the call site so the call matches the function it names.
+#[inline]
+#[must_use]
+pub fn list_contains<T: PartialEq>(list: &[T], value: &T) -> bool {
+    list.contains(value)
+}
+
+/// Whether a list does *not* contain a value, by equality.
+///
+/// A real function rather than a negated [`list_contains`] call, mirroring the `str_contains`/`str_not_contains`
+/// pair. `value not in list` is its own operator in the source and its own operation in Body IR, so it stays one
+/// call here too instead of becoming a negation a reader has to unwrap.
+#[inline]
+#[must_use]
+pub fn list_not_contains<T: PartialEq>(list: &[T], value: &T) -> bool {
+    !list.contains(value)
+}
+
+/// Whether a set contains a value.
+///
+/// Takes `&HashSet` rather than a slice because the point of the set is the hashed lookup; accepting a slice would
+/// quietly turn `value in set` into a linear scan.
+#[inline]
+#[must_use]
+pub fn set_contains<T: Eq + Hash>(set: &HashSet<T>, value: &T) -> bool {
+    set.contains(value)
+}
+
+/// Whether a set does *not* contain a value, as its own operation for the reason given on [`list_not_contains`].
+#[inline]
+#[must_use]
+pub fn set_not_contains<T: Eq + Hash>(set: &HashSet<T>, value: &T) -> bool {
+    !set.contains(value)
+}
+
+/// Whether a dict contains a **key**.
+///
+/// Dict membership tests keys, not values: `key in dict` asks whether the mapping has an entry for `key`. The name
+/// says so rather than leaving it to be inferred from the receiver, which is the same reason Body IR names the
+/// operation `DictContainsKey`.
+#[inline]
+#[must_use]
+pub fn dict_contains_key<K: Eq + Hash, V>(dict: &HashMap<K, V>, key: &K) -> bool {
+    dict.contains_key(key)
+}
+
+/// Whether a dict lacks an entry for a key, as its own operation for the reason given on [`list_not_contains`].
+#[inline]
+#[must_use]
+pub fn dict_not_contains_key<K: Eq + Hash, V>(dict: &HashMap<K, V>, key: &K) -> bool {
+    !dict.contains_key(key)
 }
 
 /// Compiler-only collection helpers used by generated Rust.
@@ -434,6 +491,53 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn containment_helpers_answer_membership_for_each_container() {
+        let list = vec![10, 20, 30];
+        assert!(list_contains(&list, &20));
+        assert!(!list_contains(&list, &40));
+        assert!(list_not_contains(&list, &40));
+        assert!(!list_not_contains(&list, &20));
+
+        let set: HashSet<i64> = [1, 2, 3].into_iter().collect();
+        assert!(set_contains(&set, &2));
+        assert!(!set_contains(&set, &9));
+        assert!(set_not_contains(&set, &9));
+        assert!(!set_not_contains(&set, &2));
+
+        let mut dict: HashMap<String, i64> = HashMap::new();
+        dict.insert("a".to_string(), 1);
+        assert!(dict_contains_key(&dict, &"a".to_string()));
+        assert!(!dict_contains_key(&dict, &"b".to_string()));
+        assert!(dict_not_contains_key(&dict, &"b".to_string()));
+        assert!(!dict_not_contains_key(&dict, &"a".to_string()));
+    }
+
+    #[test]
+    fn dict_membership_tests_keys_rather_than_values() {
+        // The distinction the helper is named for: a value present in the mapping is not membership.
+        let mut dict: HashMap<String, i64> = HashMap::new();
+        dict.insert("key".to_string(), 42);
+
+        assert!(dict_contains_key(&dict, &"key".to_string()));
+        assert!(!dict_contains_key(&dict, &"42".to_string()));
+    }
+
+    #[test]
+    fn containment_helpers_hold_for_empty_containers() {
+        let list: Vec<i64> = Vec::new();
+        assert!(!list_contains(&list, &1));
+        assert!(list_not_contains(&list, &1));
+
+        let set: HashSet<i64> = HashSet::new();
+        assert!(!set_contains(&set, &1));
+        assert!(set_not_contains(&set, &1));
+
+        let dict: HashMap<String, i64> = HashMap::new();
+        assert!(!dict_contains_key(&dict, &"a".to_string()));
+        assert!(dict_not_contains_key(&dict, &"a".to_string()));
+    }
 
     #[test]
     fn list_get_supports_negative_indices() {

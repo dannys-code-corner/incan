@@ -33,8 +33,8 @@ use incan_core::lang::types::numerics::{self, NumericFamily};
 use incan_core::lang::{conventions, keywords, magic_methods, stdlib as core_stdlib, trait_capabilities};
 
 use super::super::decl::{
-    IrDeclKind, IrEnum, IrEnumValue, IrEnumValueType, IrFunction, IrImportOrigin, IrImportQualifier, IrRustTraitImport,
-    IrTraitBound, IrTypeParam, Visibility,
+    FunctionParamDefault, IrDeclKind, IrEnum, IrEnumValue, IrEnumValueType, IrFunction, IrImportOrigin,
+    IrImportQualifier, IrRustTraitImport, IrTraitBound, IrTypeParam, Visibility,
 };
 use super::super::expr::{
     IrCallArg, IrDictEntry, IrExprKind, IrGeneratorClause, IrListEntry, IrMethodDispatch, MethodKind, Pattern,
@@ -461,7 +461,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
             if !param.is_self {
                 self.variable_types.insert(param.name.clone(), param.ty.clone());
             }
-            if let Some(default) = &param.default {
+            if let Some(FunctionParamDefault::Source(default)) = &param.default {
                 self.scan_expr(default);
             }
         }
@@ -2928,7 +2928,7 @@ impl<'a> IrEmitter<'a> {
     /// Collect union shapes from callable defaults that may be emitted as missing call arguments.
     fn collect_union_types_from_signature_defaults(signature: &FunctionSignature, out: &mut HashMap<String, IrType>) {
         for param in &signature.params {
-            if let Some(default) = &param.default {
+            if let Some(FunctionParamDefault::Source(default)) = &param.default {
                 Self::collect_union_types_from_expr_for_target(default, Some(&param.ty), out);
             }
         }
@@ -3302,7 +3302,7 @@ impl<'a> IrEmitter<'a> {
             IrDeclKind::Function(func) => {
                 for param in &func.params {
                     Self::collect_union_types_from_type(&param.ty, out);
-                    if let Some(default) = &param.default {
+                    if let Some(FunctionParamDefault::Source(default)) = &param.default {
                         Self::collect_union_types_from_expr(default, out);
                     }
                 }

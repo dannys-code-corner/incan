@@ -137,9 +137,7 @@ impl TypeChecker {
             let arm_ty = match &arm.node.body {
                 MatchBody::Expr(e) => self.check_expr(e),
                 MatchBody::Block(stmts) => {
-                    for stmt in stmts {
-                        self.check_statement(stmt);
-                    }
+                    self.check_statement_block(stmts);
                     ResolvedType::Unit
                 }
             };

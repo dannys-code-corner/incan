@@ -46,6 +46,46 @@ pub struct FieldDecl {
 }
 
 // ============================================================================
+// Capabilities (RFC 104 runtime authority declarations)
+// ============================================================================
+
+/// One named scope dimension a capability accepts, such as `tenant: str`.
+///
+/// A grant may constrain zero or more of a capability's declared dimensions. A grant naming a dimension the
+/// capability did not declare is a checked error rather than a silently ignored key, which is why the declared set
+/// is retained here rather than inferred at grant time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityScopeDim {
+    pub name: Ident,
+    pub ty: Spanned<Type>,
+}
+
+/// A `capability` declaration: a named runtime authority to perform a side-effecting operation (RFC 104).
+///
+/// This is authority ("may this run?"), which is a different thing from a *feature* ("does Incan have this?") and a
+/// *toolchain requirement* ("can this compile here?"). See #1228 for why those three words are kept apart.
+///
+/// The declaration site is what gives the capability its identity: RFC 104 requires a capability identity to be a
+/// checked symbol whose fully-qualified path derives from where it is declared, exactly as any other Incan
+/// declaration's does, never a string an author types out.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CapabilityDecl {
+    pub visibility: Visibility,
+    pub decorators: Vec<Spanned<Decorator>>,
+    pub name: Ident,
+    pub docstring: Option<String>,
+    /// Required human-readable description of what the capability authorizes.
+    pub description: Option<Spanned<Expr>>,
+    /// Typed scope dimensions a grant may constrain. Empty when the capability declares no scope.
+    pub scope: Vec<Spanned<CapabilityScopeDim>>,
+    /// Other capabilities this one's implementation needs, as checked symbol references.
+    ///
+    /// Documentation for a policy or host to inspect, never an implicit grant: holding this capability never grants
+    /// what it `requires`, which must always be granted separately.
+    pub requires: Vec<Spanned<Expr>>,
+}
+
+// ============================================================================
 // Classes (general-purpose types with inheritance and traits)
 // ============================================================================
 

@@ -2538,7 +2538,8 @@ impl<'a> IrEmitter<'a> {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: Self::manifest_param_default_to_ir_expr(library, param),
+                        default: Self::manifest_param_default_to_ir_expr(library, param)
+                            .map(crate::backend::ir::decl::FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -3203,7 +3204,10 @@ mod tests {
                 mutability: crate::backend::ir::Mutability::Immutable,
                 is_self: false,
                 kind: crate::frontend::ast::ParamKind::Normal,
-                default: Some(TypedExpr::new(IrExprKind::Int(8080), IrType::Int)),
+                default: Some(crate::backend::ir::decl::FunctionParamDefault::source(TypedExpr::new(
+                    IrExprKind::Int(8080),
+                    IrType::Int,
+                ))),
             }],
             return_type: IrType::Unit,
         };

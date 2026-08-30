@@ -79,14 +79,14 @@ extra:
 
 extra_css:
   - stylesheets/pygments.css
-  - /shared/incapunk/incapunk.css?v=20260816-release-05-4
+  - /shared/incapunk/incapunk.css?v=20260824-v06-roadmap-2
 
 extra_javascript:
   - _snippets/javascripts/mathjax.js
   - _snippets/javascripts/incan_home_motion.js?v=20260810-learning-refresh-1
   - shared/incapunk/incus-library/manifest.js?v=20260810-learning-refresh-1
-  - _snippets/javascripts/incan_docs_components.js?v=20260810-learning-refresh-1
-  - _snippets/javascripts/incan_mermaid.js?v=20260810-learning-refresh-1
+  - _snippets/javascripts/incan_docs_components.js?v=20260824-v06-roadmap-6
+  - _snippets/javascripts/incan_mermaid.js?v=20260824-v06-roadmap-9
   - https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js
   - _snippets/javascripts/tablesort.js
   - _snippets/javascripts/rfc_table_filter.js
@@ -284,6 +284,7 @@ nav:
           - Compiled SDK provider flow: tooling/explanation/compiled_sdk_provider_flow.md
           - Generated-build storage model: tooling/explanation/generated_build_storage.md
           - LSP architecture: tooling/explanation/lsp_architecture.md
+          - Backend selection & execution receipts: tooling/explanation/backend_selection_receipts.md
       - Reference:
           - CLI reference: tooling/reference/cli_reference.md
           - Binding inspection JSON schema: tooling/reference/binding_inspection_schema.md
@@ -329,11 +330,13 @@ nav:
           - "std.testing internals": contributing/explanation/stdlib_testing_internals.md
       - Reference:
           - Backend behavior inventory: contributing/reference/backend_behavior_inventory.md
+          - Replacement compatibility inventory: contributing/reference/replacement_compatibility_inventory.md
           - Generated Rust stdlib coverage: contributing/reference/generated_rust_stdlib_coverage.md
           - Hees.ai v0.5 dependency inventory: contributing/reference/hees_ai_v05_dependency_inventory.md
           - Rust-source backend deprecation policy: contributing/reference/rust_source_backend_deprecation.md
   - Release notes:
       - Overview: release_notes/index.md
+      - Release 0.6 (development): release_notes/0_6.md
       - Release 0.5: release_notes/0_5.md
       - Release 0.4: release_notes/0_4.md
       - Release 0.3: release_notes/0_3.md
@@ -346,11 +349,14 @@ nav:
           - Overview: design_records/index.md
           - Template: design_records/TEMPLATE.md
           - "DD-0001: GPU capability deferral": design_records/0001_gpu_target_capability_deferred.md
+          - "DD-0002: Single pinned Rust version": design_records/0002_single_pinned_rust_version.md
       - Whitepapers:
           - Overview: whitepapers/index.md
           - Incan ecosystem north star: whitepapers/incan_ecosystem_north_star.md
           - A Cargo-free toolchain for Incan and Rust: whitepapers/incan_oven_positioning.md
-      - Roadmap: roadmap.md
+      - Roadmap:
+          - Overview: roadmap.md
+          - Incan 0.6 delivery: project/v0_6_delivery.md
       - Learning journey QA: project/learning_journey.md
       # XXX: Temporary page while in beta
       - Stability policy: stability.md

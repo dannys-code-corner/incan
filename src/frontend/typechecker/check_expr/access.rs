@@ -2628,6 +2628,7 @@ impl TypeChecker {
                 ty: self.substitute_self_in_resolved_type(param.ty.clone(), receiver_ty),
                 kind: param.kind,
                 has_default: param.has_default,
+                is_partial_preset: param.is_partial_preset,
             })
             .collect();
         let return_type = self.substitute_self_in_resolved_type(method_info.return_type.clone(), receiver_ty);

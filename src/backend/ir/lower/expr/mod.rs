@@ -13,13 +13,14 @@ mod patterns;
 
 use std::collections::HashMap;
 
+use super::super::decl::FunctionParamDefault;
 use super::super::expr::{
     BuiltinFn, CollectionMethodKind, IrCallArg, IrCallArgKind, IrDictEntry, IrExpr, IrExprKind, IrListEntry,
     IrMethodDispatch, Literal as IrLiteral, MethodCallArgPolicy, MethodKind, NumericResizePolicy, RaceArm, UnaryOp,
     VarAccess, VarRefKind,
 };
 use super::super::types::IrType;
-use super::super::{IrCheckedCFunction, IrCheckedCType, TypedExpr};
+use super::super::{IrCheckedCFunction, IrCheckedCType, IrStmt, IrStmtKind, Mutability, TypedExpr};
 use super::AstLowering;
 use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
@@ -2269,57 +2270,177 @@ impl AstLowering {
             // ---- Yield (placeholder) ----
             ast::Expr::Yield(_) => (IrExprKind::Unit, IrType::Unknown),
             ast::Expr::Partial(partial) => {
-                let Some(crate::frontend::symbols::ResolvedType::Function(params, ret)) = self
+                let Some(crate::frontend::symbols::ResolvedType::Function(target_params, _)) = self
                     .type_info
                     .as_ref()
-                    .and_then(|info| info.expr_type(expr_span).cloned())
+                    .and_then(|info| info.expr_type(partial.target.span).cloned())
                 else {
                     return Err(LoweringError {
+                        message: "Partial callable target is missing typechecker signature metadata".to_string(),
+                        span: partial.target.span.into(),
+                    });
+                };
+                let signature = self
+                    .partial_expr_callable_signature(partial, expr_span)?
+                    .ok_or_else(|| LoweringError {
                         message: "Partial callable preset expression is missing typechecker projection metadata"
                             .to_string(),
                         span: expr_span.into(),
-                    });
-                };
-                let closure_params: Vec<(String, IrType)> = params
+                    })?;
+                let target = self.lower_expr_spanned(&partial.target)?;
+
+                // Evaluate every preset exactly once before the closure is constructed. The generated closure is
+                // `move`, so a later mutation of the source local cannot change an omitted preset argument.
+                let mut capture_stmts = Vec::with_capacity(partial.args.len());
+                let mut captures = HashMap::with_capacity(partial.args.len());
+                let mut capture_names = Vec::with_capacity(partial.args.len());
+                for (index, preset) in partial.args.iter().enumerate() {
+                    let value = self.lower_expr_spanned(&preset.value)?;
+                    let ty = value.ty.clone();
+                    let capture_name = format!("__incan_partial_preset_{index}_{}", preset.name);
+                    capture_stmts.push(IrStmt::new(IrStmtKind::Let {
+                        name: capture_name.clone(),
+                        ty: ty.clone(),
+                        type_annotation: None,
+                        mutability: Mutability::Immutable,
+                        value,
+                    }));
+                    captures.insert(preset.name.clone(), (capture_name.clone(), ty));
+                    capture_names.push(capture_name);
+                }
+
+                let closure_params: Vec<(String, IrType)> = signature
+                    .params
                     .iter()
-                    .enumerate()
-                    .map(|(idx, param)| {
-                        (
-                            param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                            Self::lower_param_container_type(param.kind, self.lower_resolved_type(&param.ty)),
-                        )
-                    })
+                    .map(|param| (param.name.clone(), param.ty.clone()))
                     .collect();
-                let _signature = self.partial_expr_callable_signature(partial, expr_span)?;
-                self.push_scope();
-                for (name, ty) in &closure_params {
-                    self.define_local_binding(name.clone(), ty.clone(), false);
+                let mut forward_args = Vec::with_capacity(target_params.len());
+                for (idx, target_param) in target_params.iter().enumerate() {
+                    let Some(name) = target_param.name.as_ref() else {
+                        return Err(LoweringError {
+                            message: format!(
+                                "Partial callable target has unsupported anonymous parameter at index {idx}"
+                            ),
+                            span: partial.target.span.into(),
+                        });
+                    };
+                    let target_ty =
+                        Self::lower_param_container_type(target_param.kind, self.lower_resolved_type(&target_param.ty));
+                    let parameter = signature.params.get(idx).ok_or_else(|| LoweringError {
+                        message: format!(
+                            "Partial callable target parameter '{name}' is absent from its callable signature"
+                        ),
+                        span: partial.target.span.into(),
+                    })?;
+                    let value = if matches!(
+                        parameter.default.as_ref(),
+                        Some(FunctionParamDefault::CapturedPartialPreset)
+                    ) {
+                        let (capture_name, capture_ty) = captures.get(name).ok_or_else(|| LoweringError {
+                            message: format!("Partial callable preset '{name}' has no construction-time capture"),
+                            span: expr_span.into(),
+                        })?;
+                        let fallback = TypedExpr::new(
+                            IrExprKind::Closure {
+                                params: Vec::new(),
+                                body: Box::new(TypedExpr::new(
+                                    IrExprKind::MethodCall {
+                                        receiver: Box::new(TypedExpr::new(
+                                            IrExprKind::Var {
+                                                name: capture_name.clone(),
+                                                access: VarAccess::Read,
+                                                ref_kind: VarRefKind::Value,
+                                            },
+                                            capture_ty.clone(),
+                                        )),
+                                        method: "clone".to_string(),
+                                        dispatch: None,
+                                        type_args: Vec::new(),
+                                        args: Vec::new(),
+                                        callable_signature: None,
+                                        arg_policy: MethodCallArgPolicy::Default,
+                                    },
+                                    capture_ty.clone(),
+                                )),
+                                captures: Vec::new(),
+                                annotate_param_types: false,
+                            },
+                            IrType::Function {
+                                params: Vec::new(),
+                                ret: Box::new(capture_ty.clone()),
+                            },
+                        );
+                        TypedExpr::new(
+                            IrExprKind::MethodCall {
+                                receiver: Box::new(TypedExpr::new(
+                                    IrExprKind::Var {
+                                        name: name.clone(),
+                                        access: VarAccess::Read,
+                                        ref_kind: VarRefKind::Value,
+                                    },
+                                    parameter.ty.clone(),
+                                )),
+                                method: "unwrap_or_else".to_string(),
+                                dispatch: None,
+                                type_args: Vec::new(),
+                                args: vec![IrCallArg {
+                                    name: None,
+                                    kind: IrCallArgKind::Positional,
+                                    expr: fallback,
+                                }],
+                                callable_signature: None,
+                                arg_policy: MethodCallArgPolicy::Default,
+                            },
+                            target_ty,
+                        )
+                    } else {
+                        TypedExpr::new(
+                            IrExprKind::Var {
+                                name: name.clone(),
+                                access: VarAccess::Read,
+                                ref_kind: VarRefKind::Value,
+                            },
+                            target_ty,
+                        )
+                    };
+                    forward_args.push(IrCallArg {
+                        name: Some(name.clone()),
+                        kind: IrCallArgKind::Named,
+                        expr: value,
+                    });
                 }
-                let mut forward_args = Vec::new();
-                for (name, _) in &closure_params {
-                    forward_args.push(ast::CallArg::Named(
-                        name.clone(),
-                        ast::Spanned::new(ast::Expr::Ident(name.clone()), expr_span),
-                    ));
-                }
-                let call = ast::Spanned::new(
-                    ast::Expr::Call(partial.target.clone(), partial.type_args.clone(), forward_args),
-                    expr_span,
+                let body = TypedExpr::new(
+                    IrExprKind::Call {
+                        func: Box::new(target),
+                        type_args: self.lower_call_site_type_args(expr_span, &partial.type_args),
+                        args: forward_args,
+                        callable_signature: None,
+                        canonical_path: None,
+                    },
+                    signature.return_type.clone(),
                 );
-                let body_result = self.lower_expr_spanned(&call);
-                self.pop_scope();
-                let body = body_result?;
-                let ret_ty = self.lower_resolved_type(ret.as_ref());
-                (
+                let closure = TypedExpr::new(
                     IrExprKind::Closure {
                         params: closure_params.clone(),
                         body: Box::new(body),
-                        captures: vec![],
-                        annotate_param_types: false,
+                        captures: capture_names,
+                        // A local partial has no surrounding Rust callable type to infer its parameters. Emit their
+                        // source-checked IR types, including `Option<T>` for overrideable preset slots.
+                        annotate_param_types: true,
                     },
                     IrType::Function {
                         params: closure_params.into_iter().map(|(_, ty)| ty).collect(),
-                        ret: Box::new(ret_ty),
+                        ret: Box::new(signature.return_type.clone()),
+                    },
+                );
+                (
+                    IrExprKind::Block {
+                        stmts: capture_stmts,
+                        value: Some(Box::new(closure)),
+                    },
+                    IrType::Function {
+                        params: signature.params.into_iter().map(|param| param.ty).collect(),
+                        ret: Box::new(signature.return_type),
                     },
                 )
             }

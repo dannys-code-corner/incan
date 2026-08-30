@@ -36,47 +36,7 @@
 /// ```
 use crate::errors::{raise_value_error, raise_zero_division};
 use core::fmt;
-
-// --- Numeric kernels (hot) ---------------------------------------------------------------------
-//
-// These are implemented in `incan_stdlib` (rather than calling into `incan_core`) so they can be
-// inlined aggressively into generated binaries without requiring LTO.
-
-#[inline(always)]
-fn py_mod_i64_impl(a: i64, b: i64) -> i64 {
-    debug_assert!(b != 0);
-    // Fast path for the dominant benchmark/runtime shape (`a >= 0`, `b > 0`).
-    // For this domain, Rust `%` already matches Python modulo semantics.
-    //
-    // TODO(perf): Teach lowering/codegen to emit native `%` directly when positivity is proven,
-    //             so hot loops can bypass helper calls entirely.
-    if a >= 0 && b > 0 {
-        return a % b;
-    }
-    // Use `wrapping_rem` to avoid the extra overflow guard Rust emits for `i64::MIN % -1`.
-    // (We still panic on division by zero at the wrapper layer for consistent Python-like errors.)
-    let r = a.wrapping_rem(b);
-    // Python semantics: remainder has the sign of the divisor.
-    if (r > 0 && b < 0) || (r < 0 && b > 0) { r + b } else { r }
-}
-
-#[inline]
-fn py_floor_div_i64_impl(a: i64, b: i64) -> i64 {
-    debug_assert!(b != 0);
-    let q = a / b;
-    let r = a % b;
-    // Python semantics: quotient rounds toward negative infinity.
-    if r == 0 {
-        return q;
-    }
-    if b > 0 {
-        if r < 0 { q - 1 } else { q }
-    } else if r > 0 {
-        q - 1
-    } else {
-        q
-    }
-}
+use incan_core::{python_floor_div_i64, python_mod_i64};
 
 #[inline]
 fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
@@ -119,6 +79,18 @@ fn non_negative_i64_or_overflow(value: u64, fn_name: &str) -> i64 {
         Ok(value) => value,
         Err(_) => raise_value_error(&format!("{fn_name} result overflows Incan int")),
     }
+}
+
+/// Apply shared signed floor-division semantics after refusing inputs unrepresentable in Incan's `i64` carrier.
+#[inline]
+fn checked_python_floor_div_i64(dividend: i64, divisor: i64) -> i64 {
+    if divisor == 0 {
+        raise_zero_division();
+    }
+    if dividend == i64::MIN && divisor == -1 {
+        raise_value_error("integer floor division result overflows Incan int");
+    }
+    python_floor_div_i64(dividend, divisor)
 }
 
 // --- Generic helpers and sealed traits ---------------------------------------------------------
@@ -333,7 +305,7 @@ impl PyModImpl<i64> for i64 {
     type Output = i64;
     #[inline]
     fn py_mod(self, rhs: i64) -> Self::Output {
-        py_mod_i64_impl(self, rhs)
+        python_mod_i64(self, rhs)
     }
 }
 
@@ -365,7 +337,7 @@ impl PyFloorDivImpl<i64> for i64 {
     type Output = i64;
     #[inline]
     fn py_floor_div(self, rhs: i64) -> Self::Output {
-        py_floor_div_i64_impl(self, rhs)
+        checked_python_floor_div_i64(self, rhs)
     }
 }
 
@@ -403,12 +375,17 @@ impl PyFloorDivImpl<f64> for f64 {
 
 // --- Compatibility wrappers (existing API) ----------------------------------------------------
 
+/// Python-style floor division for integers.
+///
+/// Rounds toward negative infinity and raises the standard zero-division failure when the divisor is zero.
+///
+/// ## Panics
+///
+/// Raises `ValueError` when the mathematical quotient cannot fit Incan's signed `i64` carrier, including
+/// `i64::MIN // -1`.
 #[inline]
 pub fn py_floor_div_i64(a: i64, b: i64) -> i64 {
-    if b == 0 {
-        raise_zero_division();
-    }
-    py_floor_div_i64_impl(a, b)
+    checked_python_floor_div_i64(a, b)
 }
 
 /// Python-style floor division for floats.
@@ -451,7 +428,7 @@ pub fn py_mod_i64(a: i64, b: i64) -> i64 {
     if b == 0 {
         raise_zero_division();
     }
-    py_mod_i64_impl(a, b)
+    python_mod_i64(a, b)
 }
 
 /// Python-style modulo for floats.
@@ -879,6 +856,12 @@ mod tests {
         assert!(approx_eq(py_floor_div(-7.0_f64, 3.0_f64), -3.0));
         assert!(approx_eq(py_floor_div(7.0_f64, -3.0_f64), -3.0));
         assert!(approx_eq(py_floor_div(-7.0_f64, -3.0_f64), 2.0));
+    }
+
+    #[test]
+    #[should_panic(expected = "ValueError: integer floor division result overflows Incan int")]
+    fn test_py_floor_div_i64_refuses_an_unrepresentable_quotient() {
+        let _ = py_floor_div_i64(i64::MIN, -1);
     }
 
     #[test]

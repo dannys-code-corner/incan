@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use super::super::super::decl::FunctionParam;
+use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{
     BuiltinFn, IrCallArg, IrCallArgKind, IrDictEntry, IrExprKind, IrInteropCoercionKind, IrListEntry,
     Literal as IrLiteral, MatchArm, MethodCallArgPolicy, Pattern, VarAccess, VarRefKind,
@@ -266,7 +266,9 @@ impl AstLowering {
                         },
                         is_self: false,
                         kind: param.node.kind,
-                        default: self.lower_param_default_expr(param.node.default.as_ref())?,
+                        default: self
+                            .lower_param_default_expr(param.node.default.as_ref())?
+                            .map(FunctionParamDefault::source),
                     })
                 })
                 .collect::<Result<_, LoweringError>>()?,
@@ -297,7 +299,9 @@ impl AstLowering {
                         },
                         is_self: false,
                         kind: param.node.kind,
-                        default: self.lower_param_default_expr(param.node.default.as_ref())?,
+                        default: self
+                            .lower_param_default_expr(param.node.default.as_ref())?
+                            .map(FunctionParamDefault::source),
                     })
                 })
                 .collect::<Result<_, LoweringError>>()?,
@@ -536,7 +540,9 @@ impl AstLowering {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: self.lower_pub_param_default(library, param),
+                        default: self
+                            .lower_pub_param_default(library, param)
+                            .map(FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -709,7 +715,9 @@ impl AstLowering {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: self.lower_pub_param_default(library, param),
+                        default: self
+                            .lower_pub_param_default(library, param)
+                            .map(FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -1114,7 +1122,9 @@ impl AstLowering {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: self.lower_pub_param_default(library, param),
+                        default: self
+                            .lower_pub_param_default(library, param)
+                            .map(FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -1145,7 +1155,9 @@ impl AstLowering {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: self.lower_compiled_provider_param_default(provider_crate, param),
+                        default: self
+                            .lower_compiled_provider_param_default(provider_crate, param)
+                            .map(FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -1178,7 +1190,9 @@ impl AstLowering {
                         mutability: Mutability::Immutable,
                         is_self: false,
                         kind,
-                        default: self.lower_compiled_provider_param_default(provider_crate, param),
+                        default: self
+                            .lower_compiled_provider_param_default(provider_crate, param)
+                            .map(FunctionParamDefault::source),
                     }
                 })
                 .collect(),
@@ -1312,7 +1326,9 @@ impl AstLowering {
                             mutability: Mutability::Immutable,
                             is_self: false,
                             kind,
-                            default: self.lower_compiled_provider_param_default(provider_crate, param),
+                            default: self
+                                .lower_compiled_provider_param_default(provider_crate, param)
+                                .map(FunctionParamDefault::source),
                         }
                     })
                     .collect(),

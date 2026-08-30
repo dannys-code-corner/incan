@@ -745,7 +745,7 @@ mod tests {
         CBindingDescriptor, CBindingEnum, CBindingEnumVariant, CBindingParameter, CBindingStruct, CBindingStructField,
         CBindingSymbol, CBindingType,
     };
-    use crate::oven_interop::{CapabilityRequirement, InteropTargetPlatform, OvenInteropTarget};
+    use crate::oven_interop::{InteropTargetPlatform, OvenInteropTarget, ToolchainRequirement};
     use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 
     fn fixture_binding(header: String) -> CBindingDescriptor {
@@ -803,11 +803,11 @@ mod tests {
     ) -> OvenInteropTarget {
         OvenInteropTarget {
             target: target.to_string(),
-            toolchain: Some(CapabilityRequirement {
+            toolchain: Some(ToolchainRequirement {
                 capability: "fixture-clang".to_string(),
                 version: None,
             }),
-            sdk: Some(CapabilityRequirement {
+            sdk: Some(ToolchainRequirement {
                 capability: match (&platform, target) {
                     (InteropTargetPlatform::Android { .. }, _) => "android",
                     (InteropTargetPlatform::Ios { .. }, _) => match crate::oven_interop::ios_target_kind(target) {

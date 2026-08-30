@@ -45,6 +45,25 @@ impl TypeChecker {
             return ResolvedType::Unknown;
         };
 
+        // Calling a stored callable is supported, but constructing another partial from one is not yet representable:
+        // the existing callable signature does not retain enough provenance to distinguish a preset captured by the
+        // target from one captured by this new partial. Reject this at the source boundary instead of accepting a
+        // program that legacy lowering or Body IR must later refuse.
+        if let Expr::Ident(name) = &partial.target.node
+            && self
+                .lookup_symbol(name)
+                .is_some_and(|symbol| matches!(&symbol.kind, SymbolKind::Variable(_)))
+        {
+            self.errors.push(CompileError::type_error(
+                "Partial application of a locally stored callable is not supported".to_string(),
+                partial.target.span,
+            ));
+            for arg in &partial.args {
+                self.check_expr(&arg.value);
+            }
+            return ResolvedType::Unknown;
+        }
+
         let Some(projected) = self.project_partial_params("<local partial>", "<callable>", params, &partial.args, span)
         else {
             for arg in &partial.args {
@@ -70,7 +89,9 @@ impl TypeChecker {
             }
         }
 
-        ResolvedType::Function(projected, ret)
+        // A local partial retains its complete callable signature. Presets become defaulted, name-overrideable
+        // slots; `is_partial_preset` preserves the separate positional rule that starts at the residual arguments.
+        ResolvedType::Function(Self::local_partial_params(projected, &partial.args), ret)
     }
 
     /// Resolve a field by canonical name or alias, returning the canonical name and FieldInfo.

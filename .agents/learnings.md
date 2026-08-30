@@ -81,6 +81,7 @@ Reference document for AI agents. These are hard-won insights from past RFC impl
 ## Agent orchestration
 
 - **Loop identity gates resumes**: Ralph-loop state must record the active repo, issue/RFC/milestone allowlist, and verification-only downstream repos; on resume, filter stale slices before scheduling work or consumer-repo validation can turn into unrelated implementation. (Incan 0.5 Ralph-loop scope drift, July 2026)
+- **Diff-based gate scripts need `--base` once changes are committed**: `scripts/check_changed_rustdocs.py`'s no-argument default only diffs uncommitted staged+unstaged changes; running it after `git commit` (with nothing left uncommitted) silently checks zero lines and prints a false "gate passed". Any diff-based check (this script, and by extension anything with the same `git diff`-against-working-tree shape) must be re-run with `--base <merge-base-or-ref>` once the change it is verifying is committed — a "passed" result from before the commit does not carry over. Caught in PR review after 31 undocumented functions slipped past a stale "rustdoc gate passed" claim on #1103. (Incan 0.6 Body IR v0, August 2026)
 
 ## Parser and lexer patterns
 

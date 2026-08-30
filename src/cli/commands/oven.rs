@@ -80,7 +80,7 @@ use crate::oven::{
     OvenBuildIntent, OvenCompilerSuiteRequest, OvenImportRequest, OvenReceipt, default_receipt_path, digest_bytes,
     import_frozen_project, receipt_native_compiler_suite, write_receipt,
 };
-use crate::oven_interop::{CapabilityRequirement, LockedInteropTarget};
+use crate::oven_interop::{LockedInteropTarget, ToolchainRequirement};
 use crate::provider::FeatureSelection;
 #[cfg(feature = "rust_inspect")]
 use crate::rust_inspect::{OvenInspectionRegistrySource, write_sealed_oven_inspection_source_authority};
@@ -782,7 +782,7 @@ fn selected_sdk_capability(
 fn required_selected_version(
     value: Option<&str>,
     label: &str,
-    requirement: &CapabilityRequirement,
+    requirement: &ToolchainRequirement,
 ) -> CliResult<String> {
     let version = value.filter(|value| !value.trim().is_empty()).ok_or_else(|| {
         CliError::failure(format!(
@@ -5736,7 +5736,7 @@ fn default_store_root(incan_home: Option<OsString>, home: Option<OsString>) -> O
             home.filter(|path| !path.is_empty())
                 .map(|path| PathBuf::from(path).join(".incan"))
         })
-        .map(|root| root.join("oven").join("store").join("v2"))
+        .map(|root| crate::oven::store::store_root_for_home(&root))
 }
 
 /// Return the platform home environment used by installed Incan binaries.

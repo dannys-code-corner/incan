@@ -6383,4 +6383,54 @@ Bad = partial Target(1)
             "expected keyword-only partial preset diagnostic, got {err:?}"
         );
     }
+
+    /// The full RFC 104 shape: docstring, description, a typed scope block, and checked `requires` references.
+    #[test]
+    fn parses_a_capability_declaration_with_scope_and_requires() -> Result<(), Box<dyn std::error::Error>> {
+        let source = concat!(
+            "capability refund:\n",
+            "    \"\"\"Issue a refund for a captured charge.\"\"\"\n",
+            "    description = \"Issue a refund for a captured charge\"\n",
+            "    scope:\n",
+            "        tenant: str\n",
+            "        region: str\n",
+            "    requires = [host.http.request]\n",
+        );
+        let program = parse_str(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let Declaration::Capability(cap) = &program.declarations[0].node else {
+            return Err(Box::from("expected a capability declaration".to_string()));
+        };
+        assert_eq!(cap.name, "refund");
+        assert!(cap.docstring.is_some());
+        assert!(cap.description.is_some());
+        assert_eq!(cap.scope.len(), 2);
+        assert_eq!(cap.scope[0].node.name, "tenant");
+        assert_eq!(cap.scope[1].node.name, "region");
+        assert_eq!(cap.requires.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn parses_a_capability_declaration_without_scope_or_requires() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "capability ping:\n    description = \"Reach a host\"\n";
+        let program = parse_str(source).map_err(|errs| std::io::Error::other(format!("{errs:?}")))?;
+        let Declaration::Capability(cap) = &program.declarations[0].node else {
+            return Err(Box::from("expected a capability declaration".to_string()));
+        };
+        assert_eq!(cap.name, "ping");
+        assert!(cap.scope.is_empty());
+        assert!(cap.requires.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn an_unknown_capability_clause_is_a_syntax_error() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "capability ping:\n    describe = \"typo\"\n";
+        let errors = parse_str_err(source, "an unknown clause must not parse");
+        assert!(
+            errors.iter().any(|error| error.message.contains("Unknown capability clause")),
+            "expected a clause-specific error, got {errors:?}"
+        );
+        Ok(())
+    }
 }

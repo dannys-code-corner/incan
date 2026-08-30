@@ -185,6 +185,93 @@ main = "src/main.incn"
     Ok(())
 }
 
+/// Issue #1116: real module bindings, including explicit imports, win over ambient core builtin functions; authors
+/// can still select a core builtin through `std.builtins`.
+#[test]
+fn builtin_function_shadowing_is_lexical_and_runtime_visible_issue1116() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("builtin_shadowing_contract");
+    let src_dir = tmp.path().join("src");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+    )?;
+    fs::write(
+        src_dir.join("aggregates.incn"),
+        r#"pub def sum(value: int) -> int:
+  return value + 1
+"#,
+    )?;
+    let main_path = src_dir.join("main.incn");
+    fs::write(
+        &main_path,
+        r#"from aggregates import sum
+
+def len(value: int) -> int:
+  return value + 1
+
+def main() -> None:
+  println(len(4))
+  println(sum(41))
+  println(std.builtins.len([10, 20, 30]))
+"#,
+    )?;
+
+    let out_dir = tmp.path().join("out");
+    let oven_home = tmp.path().join("incan-home");
+    let mut bake_command = incan_command();
+    bake_command
+        .args(["oven", "bake", "--project", "."])
+        .current_dir(tmp.path())
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home);
+    support::configure_explicit_oven_bake_command(&mut bake_command)?;
+    let bake_output = bake_command.output()?;
+    assert!(
+        bake_output.status.success(),
+        "expected explicit Oven bake to prepare the builtin-shadowing contract project.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bake_output.stdout),
+        String::from_utf8_lossy(&bake_output.stderr)
+    );
+
+    let build_output = incan_command()
+        .args([
+            "build",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home)
+        .output()?;
+    assert!(
+        build_output.status.success(),
+        "expected builtin-shadowing contract project to build.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let binary = out_dir.join("oven/release").join(&project_name);
+    assert!(
+        binary.is_file(),
+        "expected Oven to produce the builtin-shadowing executable at {}",
+        binary.display()
+    );
+    let run_output = Command::new(&binary).output()?;
+    assert!(
+        run_output.status.success(),
+        "expected builtin-shadowing executable to run.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&run_output.stdout),
+        String::from_utf8_lossy(&run_output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(run_output.stdout)?.lines().collect::<Vec<_>>(),
+        vec!["5", "42", "3"],
+        "module and imported bindings must win, while `std.builtins` must select the core builtin"
+    );
+    Ok(())
+}
+
 #[test]
 fn build_explicit_mutable_rust_generic_reaches_codegen_through_normal_cli_path()
 -> Result<(), Box<dyn std::error::Error>> {
@@ -3295,7 +3382,9 @@ def main() -> None:
 
 /// End-to-end codegen tests
 mod codegen_tests {
-    use super::{compiled_sdk_provider_artifact_root, incan_command, strip_ansi_escapes};
+    use super::{
+        compiled_sdk_provider_artifact_root, incan_command, strip_ansi_escapes, support, unique_test_project_name,
+    };
     use incan::backend::IrCodegen;
     use incan::frontend::{lexer, parser, typechecker};
     use std::fs;
@@ -3630,6 +3719,121 @@ def main() -> None:
         let stdout = strip_ansi_escapes(&String::from_utf8_lossy(&output.stdout));
         let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
         assert_eq!(lines, vec!["25"], "unexpected variadic rest output:\n{stdout}");
+        Ok(())
+    }
+
+    /// Compile and run one standalone local-partial program through the normal Oven-backed generated-Rust path.
+    fn compile_and_run_local_partial_project(
+        source: &str,
+        project_stem: &str,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let project_name = unique_test_project_name(project_stem);
+        let src_dir = tmp.path().join("src");
+        fs::create_dir_all(&src_dir)?;
+        fs::write(
+            tmp.path().join("incan.toml"),
+            format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+        )?;
+        let main_path = src_dir.join("main.incn");
+        fs::write(&main_path, source)?;
+
+        let oven_home = tmp.path().join("incan-home");
+        let mut bake_command = incan_command();
+        bake_command
+            .args(["oven", "bake", "--project", "."])
+            .current_dir(tmp.path())
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home);
+        support::configure_explicit_oven_bake_command(&mut bake_command)?;
+        let bake_output = bake_command.output()?;
+        assert!(
+            bake_output.status.success(),
+            "expected explicit Oven bake to prepare local-partial regression.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&bake_output.stdout),
+            String::from_utf8_lossy(&bake_output.stderr)
+        );
+
+        let out_dir = tmp.path().join("out");
+        let build_output = incan_command()
+            .args([
+                "build",
+                main_path.to_string_lossy().as_ref(),
+                out_dir.to_string_lossy().as_ref(),
+            ])
+            .current_dir(tmp.path())
+            .env("CARGO_NET_OFFLINE", "true")
+            .env("INCAN_HOME", &oven_home)
+            .output()?;
+        assert!(
+            build_output.status.success(),
+            "local partial generated-Rust build regression failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+            build_output.status,
+            String::from_utf8_lossy(&build_output.stdout),
+            String::from_utf8_lossy(&build_output.stderr)
+        );
+
+        let binary = out_dir.join("oven/release").join(&project_name);
+        assert!(
+            binary.is_file(),
+            "expected generated Rust executable at {}",
+            binary.display()
+        );
+        let run_output = Command::new(&binary).output()?;
+        assert!(
+            run_output.status.success(),
+            "local partial generated Rust executable failed.\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&run_output.stdout),
+            String::from_utf8_lossy(&run_output.stderr)
+        );
+        Ok(strip_ansi_escapes(&String::from_utf8_lossy(&run_output.stdout)))
+    }
+
+    #[test]
+    fn local_partial_default_and_override_compile_and_run_issue1124() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+def route(method: str, path: str, content_type: str = "text") -> str:
+  return method + path + content_type
+
+def main() -> None:
+  get = partial route(method="GET")
+  alias = get
+  println(alias("/health") + "|" + alias(method="HEAD", path="/head"))
+"#,
+            "local_partial_default_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["GET/healthtext|HEAD/headtext"],
+            "unexpected local partial output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn local_partial_runtime_preset_captures_at_construction_issue1124() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+def route(method: int, path: int, content_type: int = 3) -> int:
+  return method + path + content_type
+
+def main() -> None:
+  mut method = 1
+  get = partial route(method=method)
+  method = 2
+  println(get(4))
+  println(get(method=7, path=4))
+"#,
+            "local_partial_capture_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["8", "14"],
+            "the omitted preset must retain its construction-time value while a named call overrides it:\n{stdout}"
+        );
         Ok(())
     }
 
@@ -6215,6 +6419,63 @@ def main() -> None:
         Ok(())
     }
 
+    /// #1123 regression: generator-expression construction evaluates the outer source once, but every filter and
+    /// element evaluation remains deferred until a consumer polls the generator. This is a generated-Rust
+    /// compile-and-run oracle for the established source contract; it does not claim replacement-executor support.
+    #[test]
+    fn test_generator_expression_defers_filter_and_element_evaluation() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+def source() -> list[int]:
+    println("outer source")
+    return [1, 2, 3]
+
+
+def keep(value: int) -> bool:
+    println("filter")
+    return value > 1
+
+
+def project(value: int) -> int:
+    println("element")
+    return value * 10
+
+
+def main() -> None:
+    values = (project(value) for value in source() if keep(value))
+    println("after construction")
+    collected = values.collect()
+    println(collected[0])
+    println(collected[1])
+"#;
+        let output = run_incan_source(source);
+        assert!(
+            output.status.success(),
+            "generator-expression laziness regression failed: status={:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let stdout = strip_ansi_escapes(&String::from_utf8_lossy(&output.stdout));
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "outer source",
+                "after construction",
+                "filter",
+                "filter",
+                "element",
+                "filter",
+                "element",
+                "20",
+                "30",
+            ],
+            "generator-expression filters/elements must not run before construction completes:\n{stdout}"
+        );
+        Ok(())
+    }
+
     #[test]
     fn test_clone_self_struct_field_reads_do_not_move_out_of_borrowed_self() -> Result<(), Box<dyn std::error::Error>> {
         let output = incan_command()
@@ -8060,8 +8321,8 @@ async def main() -> None:
             r#"{
   "schema_version": 2,
   "sdk_id": "incan",
-  "sdk_version": "0.5.0",
-  "compiler_requirement": ">=0.5.1-dev.0,<0.6.0",
+  "sdk_version": "0.6.0",
+  "compiler_requirement": ">=0.6.0-dev.0,<0.7.0",
   "provider_codegen_revision": 4,
   "components": {},
   "profiles": {"default": []}

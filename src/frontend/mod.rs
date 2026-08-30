@@ -15,8 +15,10 @@ pub use incan_syntax::{ast, diagnostics, lexer, parser};
 // Compiler-specific pieces remain local.
 pub mod api_metadata;
 pub(crate) mod ast_walk;
+pub mod body_ir;
 pub mod contract_metadata;
 pub mod decorator_resolution;
+pub(crate) mod feature_metadata;
 pub mod hir;
 pub mod library_exports;
 pub mod library_manifest_index;

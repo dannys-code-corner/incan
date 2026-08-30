@@ -13,7 +13,7 @@ def collatz_inner(n: int) -> int:
     mut num = n
     while num != 1:
         if num % 2 == 0:
-            num = num / 2
+            num = num // 2
         else:
             num = 3 * num + 1
     return num
@@ -25,3 +25,11 @@ def reassign_in_if() -> int:
     if status == 0:
         status = 1
     return status
+
+# An entrypoint, so codegen emits the functions above. Without one, `try_generate` produced only the module
+# header and the snapshot captured none of the reassignment behaviour it exists to pin.
+
+def main() -> None:
+    println(bump())
+    println(collatz_inner(27))
+    println(reassign_in_if())

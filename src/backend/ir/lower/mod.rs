@@ -36,7 +36,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use super::TypedExpr;
-use super::decl::{FunctionParam, IrDecl, IrDeclKind, IrImportOrigin, IrImportQualifier, IrTypeParam};
+use super::decl::{
+    FunctionParam, FunctionParamDefault, IrDecl, IrDeclKind, IrImportOrigin, IrImportQualifier, IrTypeParam,
+};
 use super::expr::{IrCallArg, IrCallArgKind, IrExprKind, MethodCallArgPolicy, VarAccess, VarRefKind};
 use super::stmt::{IrStmt, IrStmtKind};
 use super::types::IrType;
@@ -553,7 +555,7 @@ impl AstLowering {
                     mutability,
                     is_self: false,
                     kind: param.kind,
-                    default: defaults.get(idx).cloned().flatten(),
+                    default: defaults.get(idx).cloned().flatten().map(FunctionParamDefault::source),
                 }
             })
             .collect()
@@ -673,7 +675,7 @@ impl AstLowering {
                     mutability,
                     is_self: false,
                     kind: param.kind,
-                    default,
+                    default: default.map(FunctionParamDefault::source),
                 })
             })
             .collect()
@@ -1356,8 +1358,13 @@ impl AstLowering {
         self.partial_expr_signatures.get(&(span.start, span.end)).cloned()
     }
 
-    /// Rehydrate a local partial expression into an IR callable signature so default values survive calls through
-    /// function-typed locals.
+    /// Record the callable signature of a local partial expression for calls through its bound closure value.
+    ///
+    /// A preset remains a name-overrideable default parameter. Its Rust closure slot is `Option<T>` and its
+    /// [`FunctionParamDefault::CapturedPartialPreset`] marker tells call emission to send `None` when the caller
+    /// omits it; the closure then selects the value captured at partial construction. Ordinary source defaults retain
+    /// their materializable source expression. Keeping these cases distinct prevents a mutable local preset from
+    /// being re-evaluated at each invocation.
     pub(super) fn partial_expr_callable_signature(
         &mut self,
         partial: &ast::PartialExpr,
@@ -1369,28 +1376,54 @@ impl AstLowering {
             return Ok(None);
         };
 
-        let mut defaults = HashMap::new();
-        for arg in &partial.args {
-            defaults.insert(arg.name.clone(), self.lower_expr_spanned(&arg.value)?);
-        }
-
-        let signature = FunctionSignature {
-            params: params
-                .iter()
-                .enumerate()
-                .map(|(idx, param)| {
-                    let base_ty = self.lower_resolved_type(&param.ty);
-                    let ty = Self::lower_param_container_type(param.kind, base_ty);
-                    FunctionParam {
-                        name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                        ty,
-                        mutability: Mutability::Immutable,
-                        is_self: false,
-                        kind: param.kind,
-                        default: param.name.as_ref().and_then(|name| defaults.get(name).cloned()),
+        let default_source = match &partial.target.node {
+            ast::Expr::Ident(name) => self.lookup_local_callable_signature(name),
+            _ => None,
+        };
+        let signature_params = params
+            .iter()
+            .enumerate()
+            .map(|(idx, param)| {
+                let base_ty = self.lower_resolved_type(&param.ty);
+                let ty = if param.is_partial_preset {
+                    IrType::Option(Box::new(Self::lower_param_container_type(param.kind, base_ty)))
+                } else {
+                    Self::lower_param_container_type(param.kind, base_ty)
+                };
+                let default = if param.is_partial_preset {
+                    Some(FunctionParamDefault::CapturedPartialPreset)
+                } else if param.has_default {
+                    let name = param.name.as_deref().unwrap_or("<anonymous>");
+                    let source_default = default_source
+                        .as_ref()
+                        .and_then(|signature| signature.params.iter().find(|source| source.name == name))
+                        .and_then(|source| source.default.clone());
+                    match source_default {
+                        Some(FunctionParamDefault::Source(default)) => Some(FunctionParamDefault::Source(default)),
+                        Some(FunctionParamDefault::CapturedPartialPreset) | None => {
+                            return Err(LoweringError {
+                                message: format!(
+                                    "Local partial default for '{name}' cannot be materialized from its callable target"
+                                ),
+                                span: span.into(),
+                            });
+                        }
                     }
+                } else {
+                    None
+                };
+                Ok(FunctionParam {
+                    name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
+                    ty,
+                    mutability: Mutability::Immutable,
+                    is_self: false,
+                    kind: param.kind,
+                    default,
                 })
-                .collect(),
+            })
+            .collect::<Result<Vec<_>, LoweringError>>()?;
+        let signature = FunctionSignature {
+            params: signature_params,
             return_type: self.lower_resolved_type(ret.as_ref()),
         };
         self.partial_expr_signatures
@@ -1437,6 +1470,15 @@ impl AstLowering {
                     params: params.iter().map(|param| param.ty.clone()).collect(),
                     ret: Box::new(return_type.clone()),
                 },
+            );
+        }
+        if let Some(scope) = self.local_callable_signature_scopes.first_mut() {
+            scope.insert(
+                name.to_string(),
+                Some(FunctionSignature {
+                    params: params.to_vec(),
+                    return_type: return_type.clone(),
+                }),
             );
         }
     }
@@ -1861,7 +1903,9 @@ impl AstLowering {
                                     mutability: self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node),
                                     is_self: false,
                                     kind: p.node.kind,
-                                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                                    default: self
+                                        .lower_param_default_expr(p.node.default.as_ref())?
+                                        .map(FunctionParamDefault::source),
                                 })
                             })
                             .collect()
@@ -1961,7 +2005,9 @@ impl AstLowering {
                                     },
                                     is_self: false,
                                     kind: p.node.kind,
-                                    default: self.lower_param_default_expr(p.node.default.as_ref())?,
+                                    default: self
+                                        .lower_param_default_expr(p.node.default.as_ref())?
+                                        .map(FunctionParamDefault::source),
                                 })
                             })
                             .collect()

@@ -19,8 +19,8 @@ use crate::provider::FeatureSelection;
 #[cfg(feature = "rust_inspect")]
 use super::common::CargoPolicy;
 use super::common::{
-    CliDiagnosticFailure, CompilationSession, collect_modules_detailed_with_session, resolve_project_root,
-    typecheck_modules_with_import_graph_detailed_for_c_abi_target,
+    CliDiagnostic, CliDiagnosticFailure, CompilationSession, collect_modules_detailed_with_session,
+    resolve_project_root, typecheck_modules_with_import_graph_detailed_for_c_abi_target,
 };
 #[cfg(feature = "rust_inspect")]
 use super::lock::{RustInspectTypecheckRequest, prepare_rust_inspect_typecheck_workspace};
@@ -32,11 +32,24 @@ pub enum DiagnosticOutputFormat {
     Json,
 }
 
+/// Schema version for the `incan check` report envelope.
+///
+/// Deliberately separate from [`DIAGNOSTIC_SCHEMA_VERSION`], which versions the `StableDiagnostic` payload itself
+/// and is also stamped onto `incan explain` output and the backend execution receipt. Version 2 changed only this
+/// envelope — `diagnostics` now carries non-fatal warnings alongside errors, so `ok` means "no error-severity
+/// diagnostics" rather than "no diagnostics at all". Bumping the shared constant instead would have falsely
+/// signalled a payload or receipt contract change to consumers of those other surfaces.
+pub(crate) const CHECK_REPORT_SCHEMA_VERSION: u32 = 2;
+
 /// One complete typecheck result, retained independently from CLI rendering so workspace orchestration can emit one
 /// coherent machine-readable report for several members.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct DiagnosticReport {
     schema_version: u32,
+    /// Whether typechecking found no error-severity diagnostics.
+    ///
+    /// Warnings do not clear this flag: a successful check with warnings reports `ok: true` and a non-empty
+    /// `diagnostics` array, mirroring the process exit code.
     ok: bool,
     diagnostics: Vec<StableDiagnostic>,
     #[serde(skip_serializing)]
@@ -44,7 +57,7 @@ pub(crate) struct DiagnosticReport {
 }
 
 impl DiagnosticReport {
-    /// Whether collection and typechecking succeeded without diagnostics.
+    /// Whether collection and typechecking succeeded without error-severity diagnostics.
     pub(crate) fn ok(&self) -> bool {
         self.ok
     }
@@ -186,10 +199,10 @@ pub(crate) fn check_path_report_with_interop_target_selection(
     );
 
     match typecheck {
-        Ok(()) => Ok(DiagnosticReport {
-            schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+        Ok(warnings) => Ok(DiagnosticReport {
+            schema_version: CHECK_REPORT_SCHEMA_VERSION,
             ok: true,
-            diagnostics: Vec::new(),
+            diagnostics: stable_diagnostics_from(&warnings),
             human_message: None,
         }),
         Err(failure) => Ok(diagnostic_report_from_failure(failure)),
@@ -281,10 +294,12 @@ fn render_check_report(report: &DiagnosticReport, format: DiagnosticOutputFormat
 }
 
 /// Convert source-aware compiler failures into the stable report consumed by both single-project and workspace paths.
-fn diagnostic_report_from_failure(failure: CliDiagnosticFailure) -> DiagnosticReport {
-    let human_message = failure.render_human();
-    let diagnostics = failure
-        .diagnostics
+/// Project collected CLI diagnostics into their stable machine-readable form, preserving input order.
+///
+/// Shared by the success and failure paths so warnings and errors are projected identically — the only thing that
+/// distinguishes them in the payload is the `severity` each one already carries.
+pub(crate) fn stable_diagnostics_from(collected: &[CliDiagnostic]) -> Vec<StableDiagnostic> {
+    collected
         .iter()
         .map(|diagnostic| {
             diagnostics::stable_diagnostic(
@@ -294,9 +309,21 @@ fn diagnostic_report_from_failure(failure: CliDiagnosticFailure) -> DiagnosticRe
                 diagnostic.phase,
             )
         })
-        .collect();
+        .collect()
+}
+
+/// Build the machine-readable check report for a failed collection or typecheck pass.
+///
+/// Reports the failure's errors together with any warnings gathered before it, so a file that has both does not
+/// hide the warning behind the error. The human message stays errors-only: warnings were already printed to
+/// stderr as they were produced.
+fn diagnostic_report_from_failure(failure: CliDiagnosticFailure) -> DiagnosticReport {
+    let human_message = failure.render_human();
+    // Errors first, then any warnings gathered before the failure, so a file with both reports both.
+    let mut diagnostics = stable_diagnostics_from(&failure.diagnostics);
+    diagnostics.extend(stable_diagnostics_from(&failure.warnings));
     DiagnosticReport {
-        schema_version: DIAGNOSTIC_SCHEMA_VERSION,
+        schema_version: CHECK_REPORT_SCHEMA_VERSION,
         ok: false,
         diagnostics,
         human_message: Some(human_message),

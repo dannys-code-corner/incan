@@ -13,6 +13,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::types::collections::CollectionTypeId;
 use incan_core::{NumericTy, result_numeric_type};
 use incan_semantics_core::SurfaceStmtTypeCheck;
+use incan_semantics_core::rust_tuple_arity;
 
 use super::{CAbiSpanLocal, CBindingType, COutputMode, LoopContextKind, TypeChecker};
 use crate::frontend::typechecker::helpers::{collection_type_id, ensure_bool_condition, option_ty};
@@ -45,6 +46,70 @@ struct BranchRefinement {
     ty: ResolvedType,
     is_mutable: bool,
     span: Span,
+}
+
+/// What a value's type says about whether it can be destructured into a fixed number of names.
+///
+/// Reading this once, in one place, is what keeps the three destructuring sites honest. Each used to answer the
+/// question inline and fall back to `vec![Unknown; n]` for anything it did not recognise, which sized the element
+/// list to the name list and so made the arity guard below it unreachable for a non-tuple (#1125, #1132).
+#[derive(Debug)]
+pub(in crate::frontend::typechecker) enum TupleShape {
+    /// A tuple in either Incan spelling, carrying its element types so arity can be checked against them.
+    Tuple(Vec<ResolvedType>),
+    /// A Rust-interop tuple whose arity the compiler can actually read, such as the `(String, JsonValue)` a
+    /// `rust::HashMap::items()` yields.
+    ///
+    /// Element types are not modelled, so it carries only the count and binds `Unknown` per name. Arity is still
+    /// checked, so interop is not simply exempted from the guard.
+    RustTuple(usize),
+    /// A Rust-interop value whose shape the compiler cannot establish.
+    ///
+    /// Deliberately *not* [`TupleShape::Recovery`]. "The frontend has no structural model of this type" is not the
+    /// same claim as "checking already failed", and treating it as recovery would let a genuine non-tuple Rust
+    /// value reach a generated field projection — the exact leakage class #1132 exists to close, arriving through
+    /// interop instead of through `int`. This is the same rule applied to a bare type variable: not proven
+    /// tuple-shaped must refuse.
+    OpaqueRust,
+    /// `Unknown` or `Never`: bind `Unknown` per name and stay silent.
+    ///
+    /// `Unknown` is recovery-only — checking already failed upstream, so a second diagnostic here is noise on top
+    /// of the real one. `Never` is the bottom type, and [`TypeChecker::types_compatible`] already answers
+    /// `(Never, _) => true` for every type including a tuple; accepting it is that established policy rather than
+    /// a carve-out, and the code is unreachable either way.
+    Recovery,
+    /// Anything else, including a bare type variable, which must be reported.
+    NotTuple,
+}
+
+/// Classify a value type for destructuring.
+///
+/// A tuple arrives in two spellings: a tuple *literal* infers [`ResolvedType::Tuple`], while a written
+/// `tuple[A, B]` annotation resolves through the collection-type registry as a [`ResolvedType::Generic`] named
+/// `Tuple`. Both are destructurable and both must be recognised here.
+///
+/// A bare type variable is deliberately [`TupleShape::NotTuple`]. It is not "not yet known" — it is known to be
+/// underdetermined, and `T` can be instantiated as `int`. Incan's bounds are trait-based, so no caller can promise
+/// a tuple shape. This does not affect `tuple[K, V]`, whose *elements* are type variables but whose shape is
+/// known; that takes the [`TupleShape::Tuple`] arm above.
+pub(in crate::frontend::typechecker) fn classify_tuple_shape(ty: &ResolvedType) -> TupleShape {
+    match ty {
+        ResolvedType::Tuple(types) => TupleShape::Tuple(types.clone()),
+        ResolvedType::Generic(name, args)
+            if matches!(collection_type_id(name.as_str()), Some(CollectionTypeId::Tuple)) =>
+        {
+            TupleShape::Tuple(args.clone())
+        }
+        ResolvedType::Unknown | ResolvedType::Never => TupleShape::Recovery,
+        // A Rust type is destructurable only when its shape can actually be read. The parenthesised tuple
+        // spelling gives a reliable arity — `std.json`'s `key, value = item` over a `rust::HashMap` item is
+        // exactly that shape — and everything else is refused rather than assumed.
+        ResolvedType::RustPath(path) => match rust_tuple_arity(path) {
+            Some(arity) => TupleShape::RustTuple(arity),
+            None => TupleShape::OpaqueRust,
+        },
+        _ => TupleShape::NotTuple,
+    }
 }
 
 /// Return the fallback binary dunder used when compound assignment cannot resolve an explicit in-place hook.
@@ -316,64 +381,20 @@ impl TypeChecker {
                 // Check the value expression and get its type
                 let value_ty = self.check_expr(&unpack.value);
 
-                // Extract element types if it's a tuple
-                let element_types: Vec<ResolvedType> = match &value_ty {
-                    ResolvedType::Tuple(types) => types.clone(),
-                    _ => {
-                        // Not a tuple, create Unknown types for each name
-                        vec![ResolvedType::Unknown; unpack.names.len()]
-                    }
-                };
+                let element_types = self.destructured_element_types(&value_ty, unpack.names.len(), stmt.span);
 
-                // Check that tuple has enough elements
-                if element_types.len() < unpack.names.len() {
-                    self.errors.push(errors::tuple_unpack_count_mismatch(
-                        unpack.names.len(),
-                        element_types.len(),
-                        stmt.span,
-                    ));
-                }
-
-                // Define each variable with its corresponding type
-                let is_mutable = matches!(unpack.binding, BindingKind::Mutable);
+                // A tuple-unpack source assignment follows the same lexical rule as `x = value`: a plain spelling
+                // reassigns the nearest active binding, while `let`/`mut` introduce names in this scope.
                 for (i, name) in unpack.names.iter().enumerate() {
                     let ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
-                    self.symbols.define(Symbol {
-                        name: name.clone(),
-                        kind: SymbolKind::Variable(VariableInfo {
-                            ty,
-                            is_mutable,
-                            is_used: false,
-                        }),
-                        span: stmt.span,
-                        scope: 0,
-                    });
-                    if is_mutable {
-                        self.mutable_bindings.insert(name.clone());
-                    }
+                    self.check_unannotated_assignment_target(name, unpack.binding, ty, stmt.span, unpack.value.span);
                 }
             }
             Statement::TupleAssign(assign) => {
                 // Check the value expression (should be a tuple)
                 let value_ty = self.check_expr(&assign.value);
 
-                // Extract element types if it's a tuple
-                let element_types: Vec<ResolvedType> = match &value_ty {
-                    ResolvedType::Tuple(types) => types.clone(),
-                    _ => {
-                        // Not a tuple, create Unknown types for each target
-                        vec![ResolvedType::Unknown; assign.targets.len()]
-                    }
-                };
-
-                // Check that tuple has enough elements
-                if element_types.len() < assign.targets.len() {
-                    self.errors.push(errors::tuple_unpack_count_mismatch(
-                        assign.targets.len(),
-                        element_types.len(),
-                        stmt.span,
-                    ));
-                }
+                let element_types = self.destructured_element_types(&value_ty, assign.targets.len(), stmt.span);
 
                 // Check each target expression - must be a valid lvalue
                 for (i, target) in assign.targets.iter().enumerate() {
@@ -421,22 +442,15 @@ impl TypeChecker {
                 // Check the value expression
                 let value_ty = self.check_expr(&ca.value);
 
-                // Define all target variables with the same type
-                let is_mutable = matches!(ca.binding, BindingKind::Mutable);
+                // Chained source assignment has the same declaration/reassignment distinction as a single target.
                 for target in &ca.targets {
-                    self.symbols.define(Symbol {
-                        name: target.clone(),
-                        kind: SymbolKind::Variable(VariableInfo {
-                            ty: value_ty.clone(),
-                            is_mutable,
-                            is_used: false,
-                        }),
-                        span: stmt.span,
-                        scope: 0,
-                    });
-                    if is_mutable {
-                        self.mutable_bindings.insert(target.clone());
-                    }
+                    self.check_unannotated_assignment_target(
+                        target,
+                        ca.binding,
+                        value_ty.clone(),
+                        stmt.span,
+                        ca.value.span,
+                    );
                 }
             }
         }
@@ -627,17 +641,38 @@ impl TypeChecker {
     /// trait-typed locals must not proceed to codegen because Rust has no valid bare trait type for `let` annotations.
     fn check_assignment(&mut self, assign: &AssignmentStmt, span: Span) {
         let annotated_ty = assign.ty.as_ref().map(|ty_ann| self.resolve_type_checked(ty_ann));
-        let reassignment_ty = self
-            .lookup_local_variable_info(&assign.name)
-            .map(|var_info| var_info.ty.clone());
+        // `let` and `mut` are declaration forms: they introduce a binding that may deliberately shadow an active
+        // outer one, so they never resolve against the scope chain. Only a bare `x = value` asks "does this name
+        // already exist somewhere out there", and the two halves have to move together — walking outward without
+        // this branch would turn every in-block `let` into a reassignment of the outer binding (#1072).
+        let introduces_binding = Self::binding_introduces_name(assign.binding);
+        let reassignment_ty = (!introduces_binding)
+            .then(|| {
+                self.lookup_variable_info_in_scope_chain(&assign.name)
+                    .map(|var_info| var_info.ty.clone())
+            })
+            .flatten();
         let value_ty = if let Some(var_ty) = reassignment_ty.as_ref() {
             self.check_expr_with_expected(&assign.value, Some(var_ty))
         } else {
             self.check_expr_with_expected(&assign.value, annotated_ty.as_ref())
         };
 
+        // A `const` is registered as a module-scope variable, so the scope-chain walk below finds it. Answer the
+        // more specific question first: reassigning a const is not a mutability mistake to be fixed with `mut`, it
+        // is a request for a `static`, and the generic "variable is immutable" error would send the reader the
+        // wrong way. A `let`/`mut` declaration that shadows a const is a new binding and never reaches here.
+        if !introduces_binding && self.active_binding_is_const(&assign.name) {
+            self.errors
+                .push(errors::const_reassignment_suggests_static(&assign.name, span));
+            return;
+        }
+
         // Check if it's a re-assignment
-        if let Some(var_info) = self.lookup_local_variable_info(&assign.name) {
+        if let Some(var_info) = (!introduces_binding)
+            .then(|| self.lookup_variable_info_in_scope_chain(&assign.name))
+            .flatten()
+        {
             let is_mutable = var_info.is_mutable;
             let var_ty = var_info.ty.clone();
 
@@ -672,12 +707,6 @@ impl TypeChecker {
                     assign.value.span,
                 ));
             }
-            return;
-        }
-
-        if self.const_decls.contains_key(&assign.name) {
-            self.errors
-                .push(errors::const_reassignment_suggests_static(&assign.name, span));
             return;
         }
 
@@ -733,6 +762,98 @@ impl TypeChecker {
         self.bind_c_abi_raw_result_assignment(&assign.name, assign.value.span);
         self.consumed_iterator_bindings.remove(&assign.name);
         self.transferred_c_resource_bindings.remove(&assign.name);
+    }
+
+    /// Whether this spelling deliberately declares a new source binding instead of resolving an active one.
+    const fn binding_introduces_name(binding: BindingKind) -> bool {
+        matches!(binding, BindingKind::Let | BindingKind::Mutable)
+    }
+
+    /// Whether the binding currently selected by lexical lookup is the collected module `const`.
+    ///
+    /// `const_decls` is keyed by spelling for constant evaluation, so consulting it alone mistakes an inner
+    /// `mut NAME` for the outer `const NAME`. Pairing it with the active symbol's declaration span preserves normal
+    /// lexical shadowing while retaining the dedicated const-reassignment diagnostic for the const itself.
+    fn active_binding_is_const(&self, name: &str) -> bool {
+        let Some((_, const_span)) = self.const_decls.get(name) else {
+            return false;
+        };
+        self.symbols
+            .lookup(name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .is_some_and(|symbol| symbol.span == *const_span)
+    }
+
+    /// Check or introduce one target from a tuple-unpack or chained source assignment.
+    ///
+    /// This is intentionally the unannotated half of [`Self::check_assignment`]: all three spellings share the
+    /// binding-form decision, but only a single assignment owns a local type annotation and C-ABI constructor facts.
+    fn check_unannotated_assignment_target(
+        &mut self,
+        name: &str,
+        binding: BindingKind,
+        value_ty: ResolvedType,
+        statement_span: Span,
+        value_span: Span,
+    ) {
+        if !Self::binding_introduces_name(binding) {
+            if self.active_binding_is_const(name) {
+                self.errors
+                    .push(errors::const_reassignment_suggests_static(name, statement_span));
+                return;
+            }
+            if let Some(var_info) = self.lookup_variable_info_in_scope_chain(name) {
+                let is_mutable = var_info.is_mutable;
+                let declared_ty = var_info.ty.clone();
+                if !is_mutable {
+                    self.errors.push(errors::mutation_without_mut(name, statement_span));
+                }
+                if !self.types_compatible(&value_ty, &declared_ty) {
+                    self.errors.push(errors::assignment_type_mismatch(
+                        name,
+                        &declared_ty.to_string(),
+                        &value_ty.to_string(),
+                        value_span,
+                    ));
+                }
+                self.consumed_iterator_bindings.remove(name);
+                self.transferred_c_resource_bindings.remove(name);
+                return;
+            }
+            if let Some(static_info) = self.lookup_static_info(name) {
+                if static_info.is_imported {
+                    self.errors
+                        .push(errors::imported_static_reassignment_not_allowed(name, statement_span));
+                    return;
+                }
+                let static_ty = static_info.ty.clone();
+                if !self.types_compatible(&value_ty, &static_ty) {
+                    self.errors.push(errors::type_mismatch(
+                        &static_ty.to_string(),
+                        &value_ty.to_string(),
+                        value_span,
+                    ));
+                }
+                return;
+            }
+        }
+
+        let is_mutable = matches!(binding, BindingKind::Mutable);
+        self.symbols.define(Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Variable(VariableInfo {
+                ty: value_ty,
+                is_mutable,
+                is_used: false,
+            }),
+            span: statement_span,
+            scope: 0,
+        });
+        if is_mutable {
+            self.mutable_bindings.insert(name.to_string());
+        }
+        self.consumed_iterator_bindings.remove(name);
+        self.transferred_c_resource_bindings.remove(name);
     }
 
     /// Give a compiler-managed C output constructor the ordinary local name supplied by its enclosing assignment.
@@ -1128,9 +1249,7 @@ impl TypeChecker {
         if let Some(narrowing) = true_narrowing {
             self.define_narrowed_binding(narrowing.name, narrowing.true_ty, narrowing.is_mutable, narrowing.span);
         }
-        for stmt in body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(body);
         self.symbols.exit_scope();
         self.available_c_abi_output_slots = available_before;
 
@@ -1140,9 +1259,7 @@ impl TypeChecker {
     /// Check an acknowledgement body in its surrounding ordinary statement scope.
     fn check_unsafe_stmt(&mut self, unsafe_stmt: &UnsafeStmt) {
         self.unsafe_depth += 1;
-        for statement in &unsafe_stmt.body {
-            self.check_statement(statement);
-        }
+        self.check_statement_block(&unsafe_stmt.body);
         self.unsafe_depth = self.unsafe_depth.saturating_sub(1);
     }
 
@@ -1164,9 +1281,7 @@ impl TypeChecker {
         if let Some(else_body) = &if_stmt.else_body {
             self.symbols.enter_scope(ScopeKind::Block);
             self.apply_branch_refinements(&false_refinements);
-            for stmt in else_body {
-                self.check_statement(stmt);
-            }
+            self.check_statement_block(else_body);
             self.symbols.exit_scope();
         }
     }
@@ -1181,9 +1296,7 @@ impl TypeChecker {
 
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.push_loop_context(LoopContextKind::Statement, None);
-                for stmt in &while_stmt.body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(&while_stmt.body);
                 let _ = self.pop_loop_context();
                 self.symbols.exit_scope();
             }
@@ -1193,9 +1306,7 @@ impl TypeChecker {
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.check_pattern(pattern, &value_ty);
                 self.push_loop_context(LoopContextKind::Statement, None);
-                for stmt in &while_stmt.body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(&while_stmt.body);
                 let _ = self.pop_loop_context();
                 self.symbols.exit_scope();
             }
@@ -1209,9 +1320,7 @@ impl TypeChecker {
     fn check_loop_stmt(&mut self, loop_stmt: &LoopStmt) {
         self.symbols.enter_scope(ScopeKind::Block);
         self.push_loop_context(LoopContextKind::Statement, None);
-        for stmt in &loop_stmt.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&loop_stmt.body);
         let _ = self.pop_loop_context();
         self.symbols.exit_scope();
     }
@@ -1246,14 +1355,60 @@ impl TypeChecker {
         };
 
         self.symbols.enter_scope(ScopeKind::Block);
+        // Record the resolved element type at the pattern's own span. Body IR's `lower_for` already reads the loop
+        // pattern's type back through `TypeCheckInfo::expr_type`, and every binding the pattern introduces -- one
+        // for a plain binding, or one per tuple element -- takes its type from it (#1125). Without this the loop
+        // bindings would carry `Unknown` even though the element type is fully resolved right here.
+        self.record_expr_type(for_stmt.pattern.span, elem_ty.clone());
         self.define_for_pattern_bindings(&for_stmt.pattern, &elem_ty);
         self.push_loop_context(LoopContextKind::Statement, None);
 
-        for stmt in &for_stmt.body {
-            self.check_statement(stmt);
-        }
+        self.check_statement_block(&for_stmt.body);
         let _ = self.pop_loop_context();
         self.symbols.exit_scope();
+    }
+
+    /// Resolve the element types a statement destructure should bind, reporting the right diagnostic when the
+    /// value cannot supply them.
+    ///
+    /// Returns exactly `arity` types so callers can bind positionally without re-checking length. The `Unknown`
+    /// padding it returns on the error paths is recovery state for the *rest* of the check, not a claim that the
+    /// value had that shape — the diagnostic has already been recorded by then.
+    fn destructured_element_types(&mut self, value_ty: &ResolvedType, arity: usize, span: Span) -> Vec<ResolvedType> {
+        match classify_tuple_shape(value_ty) {
+            TupleShape::Tuple(types) => {
+                if types.len() != arity {
+                    self.errors
+                        .push(errors::tuple_unpack_count_mismatch(arity, types.len(), span));
+                    return vec![ResolvedType::Unknown; arity];
+                }
+                types
+            }
+            TupleShape::RustTuple(rust_arity) => {
+                if rust_arity != arity {
+                    self.errors
+                        .push(errors::tuple_unpack_count_mismatch(arity, rust_arity, span));
+                }
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::OpaqueRust => {
+                self.errors.push(errors::tuple_unpack_rust_shape_unverified(
+                    arity,
+                    &value_ty.to_string(),
+                    span,
+                ));
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::NotTuple => {
+                self.errors.push(errors::tuple_unpack_expects_tuple_value(
+                    arity,
+                    &value_ty.to_string(),
+                    span,
+                ));
+                vec![ResolvedType::Unknown; arity]
+            }
+            TupleShape::Recovery => vec![ResolvedType::Unknown; arity],
+        }
     }
 
     /// Validate a `break` statement against the innermost active loop context.
@@ -1331,18 +1486,52 @@ impl TypeChecker {
             }
             Pattern::Wildcard => {}
             Pattern::Tuple(items) => {
-                let element_types = match ty {
-                    ResolvedType::Tuple(types) => {
+                // The shape question is answered by `classify_tuple_shape`, shared with the statement-level
+                // destructuring arms (#1132). Only the diagnostic differs: a loop names the *iteration item* type,
+                // because that is what the reader has to change.
+                let element_types = match classify_tuple_shape(ty) {
+                    TupleShape::Tuple(types) => {
                         if types.len() != items.len() {
                             self.errors.push(errors::tuple_unpack_count_mismatch(
                                 items.len(),
                                 types.len(),
                                 pattern.span,
                             ));
+                            vec![ResolvedType::Unknown; items.len()]
+                        } else {
+                            types
                         }
-                        types.clone()
                     }
-                    _ => vec![ResolvedType::Unknown; items.len()],
+                    TupleShape::RustTuple(rust_arity) => {
+                        if rust_arity != items.len() {
+                            self.errors.push(errors::tuple_unpack_count_mismatch(
+                                items.len(),
+                                rust_arity,
+                                pattern.span,
+                            ));
+                        }
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
+                    TupleShape::OpaqueRust => {
+                        self.errors.push(errors::for_pattern_rust_shape_unverified(
+                            items.len(),
+                            &ty.to_string(),
+                            pattern.span,
+                        ));
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
+                    TupleShape::NotTuple => {
+                        // A tuple pattern can only destructure a tuple. Binding `Unknown` per name and staying
+                        // silent used to hide `for a, b in items` over a `list[int]` completely, and Body IR would
+                        // then project `.0`/`.1` out of an `int` (#1125).
+                        self.errors.push(errors::for_pattern_expects_tuple_item(
+                            items.len(),
+                            &ty.to_string(),
+                            pattern.span,
+                        ));
+                        vec![ResolvedType::Unknown; items.len()]
+                    }
+                    TupleShape::Recovery => vec![ResolvedType::Unknown; items.len()],
                 };
 
                 for (i, item) in items.iter().enumerate() {
@@ -1374,9 +1563,7 @@ impl TypeChecker {
                 self.symbols.enter_scope(ScopeKind::Block);
                 self.apply_branch_refinements(incoming_refinements);
                 self.check_pattern(pattern, &value_ty);
-                for stmt in body {
-                    self.check_statement(stmt);
-                }
+                self.check_statement_block(body);
                 self.symbols.exit_scope();
                 None
             }
@@ -1549,6 +1736,14 @@ impl TypeChecker {
             ResolvedType::Generic(name, args) => {
                 if let Some(elem) = iter_ty.iterator_item_type() {
                     return elem.clone();
+                }
+                // A range is not a collection, so it has no `collection_type_id`, but iterating one still yields its
+                // element type. The inline `for i in 0..10` header never reaches here because `check_for_stmt`
+                // resolves that expression directly; only a range *bound to a local* arrives as a `Range[T]` value.
+                // Without this arm that binding iterates with an unknown item type, which stays invisible until
+                // something downstream needs the type -- `acc + i` refusing to lower, for instance.
+                if name == incan_core::lang::surface::types::RANGE_TYPE_NAME && !args.is_empty() {
+                    return args[0].clone();
                 }
                 match collection_type_id(name.as_str()) {
                     Some(CollectionTypeId::List) | Some(CollectionTypeId::Set) if !args.is_empty() => args[0].clone(),

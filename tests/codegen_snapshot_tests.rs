@@ -1681,6 +1681,27 @@ fn test_issue951_set_shadowing_codegen() {
     insta::assert_snapshot!("issue951_set_shadowing", rust_code);
 }
 
+/// Issue #1116: generated Rust must retain a module `len` call while lowering `std.builtins.len` as the core builtin.
+#[test]
+fn test_issue1116_builtin_len_shadowing_codegen() {
+    let source = load_test_file("issue1116_builtin_len_shadowing");
+    let rust_code = generate_rust(&source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    assert!(
+        compact.contains("fnlen(value:i64)->i64{"),
+        "expected the module `len` definition to survive codegen; generated:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("len(4)"),
+        "expected an unqualified `len(4)` call to select the module binding; generated:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("vec![10,20,30].len()asi64"),
+        "expected `std.builtins.len` to select the core builtin; generated:\n{rust_code}"
+    );
+    insta::assert_snapshot!("issue1116_builtin_len_shadowing", rust_code);
+}
+
 #[test]
 fn test_issue950_builtin_zip_only_codegen() {
     let source = load_test_file("issue950_builtin_zip_only");

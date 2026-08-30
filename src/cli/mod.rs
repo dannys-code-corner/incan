@@ -182,6 +182,46 @@ pub enum ColorMode {
     Never,
 }
 
+/// CLI-facing selector for [`crate::backend::selection::BackendKind`] (`--backend`).
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum BackendCliKind {
+    /// The current Rust-source-emission pipeline.
+    Legacy,
+    /// The intentionally partial Body-IR replacement backend.
+    Replacement,
+}
+
+impl From<BackendCliKind> for crate::backend::selection::BackendKind {
+    fn from(kind: BackendCliKind) -> Self {
+        match kind {
+            BackendCliKind::Legacy => crate::backend::selection::BackendKind::Legacy,
+            BackendCliKind::Replacement => crate::backend::selection::BackendKind::Replacement,
+        }
+    }
+}
+
+/// CLI-facing fallback policy for `incan build --backend-fallback`.
+///
+/// The #988 source-only profile exposes only `refuse`: it has no receipt-bound legacy execution path for an
+/// unsupported source profile, so accepting a target backend spelling here would promise a fallback the CLI cannot
+/// truthfully perform. #986 retains `FallbackPolicy::AllowTo` for a future profile that implements both dispatch
+/// and its paired execution receipt.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+#[value(rename_all = "lower")]
+pub enum BackendFallbackCliKind {
+    /// Refuse an unavailable backend selection instead of substituting another backend.
+    Refuse,
+}
+
+impl From<BackendFallbackCliKind> for crate::backend::selection::FallbackPolicy {
+    fn from(kind: BackendFallbackCliKind) -> Self {
+        match kind {
+            BackendFallbackCliKind::Refuse => crate::backend::selection::FallbackPolicy::Refuse,
+        }
+    }
+}
+
 /// Output encoding for generated-cache inspection and pruning reports.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CacheOutputFormat {
@@ -324,6 +364,20 @@ pub enum Command {
         /// first-contact command symmetry.
         #[arg(long)]
         release: bool,
+        /// Select the compiler backend for this build. Defaults to the legacy Rust-emission backend, declared
+        /// explicitly even when this flag is omitted. The `replacement` profile is source-only and partial: it
+        /// executes supported free functions from Body IR and refuses unsupported input visibly.
+        #[arg(long = "backend", value_enum)]
+        backend: Option<BackendCliKind>,
+        /// Request a source-observable shadow comparison against the replacement backend. Recorded explicitly as
+        /// unavailable when the selected profile has no such legacy/replacement comparator; generated Rust is not
+        /// used as semantic proof.
+        #[arg(long = "shadow")]
+        shadow: bool,
+        /// Declare the explicit refusal policy for an unavailable backend. The #988 source-only profile accepts
+        /// only `refuse` until a receipt-bound legacy fallback execution path exists.
+        #[arg(long = "backend-fallback", value_enum)]
+        backend_fallback: Option<BackendFallbackCliKind>,
         /// Emit a machine-readable build report
         #[arg(long = "report", value_enum)]
         report: Option<BuildReportFormat>,
@@ -702,6 +756,16 @@ pub enum Command {
 
 #[derive(Subcommand, Debug)]
 pub enum InspectCommand {
+    /// Inspect a backend-selection execution receipt (#986): requested/selected/executed backend,
+    /// fallback outcome, and shadow-comparison state for one build
+    BackendSelection {
+        /// Receipt written by a normal `incan build` (default `.incan/backend/receipt.json`)
+        #[arg(long, value_name = "PATH")]
+        receipt: PathBuf,
+        /// Output format
+        #[arg(long = "format", value_enum, default_value = "text")]
+        format: commands::build::BackendSelectionInspectFormat,
+    },
     /// Inspect an Oven receipt's reusable build unit, stored-plan selection, and bounded storage evidence
     Oven {
         /// Receipt written by normal Oven preparation or explicit import
@@ -1420,6 +1484,9 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
             cargo_all_features,
             generated_cargo_target_dir,
             release: _,
+            backend,
+            shadow,
+            backend_fallback,
             report,
             report_output,
             workspace,
@@ -1449,6 +1516,16 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
                     cargo_no_default_features,
                     cargo_all_features,
                     generated_cargo_target_dir,
+                    backend: commands::build::BackendSelectionOptions {
+                        requested: backend
+                            .map(Into::into)
+                            .unwrap_or(crate::backend::selection::BackendKind::Legacy),
+                        explicit: backend.is_some(),
+                        shadow,
+                        fallback_policy: backend_fallback
+                            .map(Into::into)
+                            .unwrap_or(crate::backend::selection::FallbackPolicy::Refuse),
+                    },
                 },
                 report_options: BuildReportOptions {
                     format: report,
@@ -1477,6 +1554,9 @@ fn execute(cli: Cli, use_color: bool) -> CliResult<ExitCode> {
         ),
         Some(Command::Explain { code, format }) => commands::explain_diagnostic(&code, format),
         Some(Command::Inspect { command }) => match command {
+            InspectCommand::BackendSelection { receipt, format } => {
+                commands::build::inspect_backend_selection(&receipt, format)
+            }
             InspectCommand::Oven { receipt, store, format } => {
                 commands::inspect_oven_receipt(commands::OvenReceiptInspectCommandOptions {
                     receipt,

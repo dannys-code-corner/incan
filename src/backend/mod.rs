@@ -30,6 +30,8 @@
 //!   - `lower.rs` - AST to IR lowering
 //!   - `emit.rs` - IR to Rust via syn/quote/prettyplease
 //! - `project/` - Rust source projection and explicit publisher support (plan, generator, cargo_toml, runner)
+//! - `selection.rs` - Backend-selection identity and execution receipt (#986)
+//! - `shadow.rs` - Bounded source-observable legacy/replacement shadow comparison (#1146)
 
 // Enforce explicit error handling in project generation code.
 // XXX: codegen modules emit `.unwrap()` as string literals in generated Rust code.
@@ -42,9 +44,26 @@
 pub(crate) mod c_abi;
 pub mod ir;
 pub mod project;
+pub mod replacement;
+pub mod selection;
+pub mod shadow;
 
 // Re-export the unified codegen entrypoint
 pub use ir::{GenerationError, IrCodegen};
+
+// Backend-selection identity and execution receipt (#986)
+pub use selection::{
+    BackendExecutionReceipt, BackendKind, BackendSelection, BackendSelectionError, CompatibilityProfile,
+    FallbackOutcome, FallbackPolicy, SelectionReason, ShadowComparisonState, digest_output, finalize_receipt,
+    resolve_execution, select_backend,
+};
+
+// Bounded source-observable shadow comparison between the two backends (#1146)
+pub use shadow::{
+    LegacyExecutionAuthority, RuntimeFailureClass, SHADOW_COMPARISON_PROFILE_ID, ShadowComparison,
+    ShadowComparisonProfile, ShadowUnavailable, SourceObservable, compare_source_observable,
+    legacy_oven::LegacyOvenCapability,
+};
 
 // Project generation (public API)
 pub use project::{

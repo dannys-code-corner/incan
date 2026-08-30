@@ -279,8 +279,29 @@ pub struct FunctionParam {
     pub is_self: bool,
     /// Surface call-binding kind preserved for RFC 038 rest parameters.
     pub kind: crate::frontend::ast::ParamKind,
-    /// Optional default argument expression (used for call-site default filling).
-    pub default: Option<super::IrExpr>,
+    /// Optional default plan used for call-site argument filling.
+    pub default: Option<FunctionParamDefault>,
+}
+
+/// The source of an optional [`FunctionParam`] argument value.
+///
+/// Source defaults remain an IR expression that the caller materializes. A captured partial preset deliberately has
+/// no source expression: its synthesized local closure owns the construction-time value, and omitted calls must
+/// pass `None` to its `Option<T>` slot so that closure selects that captured value. This distinction prevents legacy
+/// Rust lowering from re-evaluating a runtime-local preset at every invocation.
+#[derive(Debug, Clone)]
+pub enum FunctionParamDefault {
+    /// A default expression declared by the callable's source definition.
+    Source(Box<super::IrExpr>),
+    /// A local partial's construction-time captured, name-overrideable preset.
+    CapturedPartialPreset,
+}
+
+impl FunctionParamDefault {
+    /// Construct a source-owned default plan without inflating every parameter's in-memory representation.
+    pub fn source(expr: super::IrExpr) -> Self {
+        Self::Source(Box::new(expr))
+    }
 }
 
 /// IR struct definition

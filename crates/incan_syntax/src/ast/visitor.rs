@@ -21,6 +21,7 @@ pub trait Visitor {
             Declaration::Const(c) => self.visit_const(c),
             Declaration::Static(s) => self.visit_static(s),
             Declaration::Model(m) => self.visit_model(m),
+            Declaration::Capability(c) => self.visit_capability(c),
             Declaration::Class(c) => self.visit_class(c),
             Declaration::Trait(t) => self.visit_trait(t),
             Declaration::Alias(a) => self.visit_alias(a),
@@ -40,6 +41,8 @@ pub trait Visitor {
     fn visit_static(&mut self, _static_decl: &StaticDecl) {}
     fn visit_docstring(&mut self, _doc: &str) {}
     fn visit_model(&mut self, _model: &ModelDecl) {}
+    /// Visit an RFC 104 runtime authority declaration.
+    fn visit_capability(&mut self, _capability: &CapabilityDecl) {}
     fn visit_class(&mut self, _class: &ClassDecl) {}
     fn visit_trait(&mut self, _trait: &TraitDecl) {}
     /// Visit a module-level symbol alias declaration.

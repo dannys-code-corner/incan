@@ -7,7 +7,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
 use super::super::super::FunctionSignature;
-use super::super::super::decl::FunctionParam;
+use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{
     CollectionMethodKind, InternalMethodKind, IrCallArg, IrCallArgKind, IrExprKind, IrMethodDispatch,
     MethodCallArgPolicy, MethodKind, TypedExpr, VarAccess, VarRefKind,
@@ -414,16 +414,16 @@ impl<'a> IrEmitter<'a> {
                     } else if pos_idx < positional.len() {
                         out.push((positional[pos_idx].clone(), false));
                         pos_idx += 1;
-                    } else if let Some(default_arg) = &param.default {
-                        out.push((default_arg.clone(), true));
+                    } else if let Some(FunctionParamDefault::Source(default_arg)) = &param.default {
+                        out.push((default_arg.as_ref().clone(), true));
                     }
                 }
                 out
             } else {
                 let mut out: Vec<(TypedExpr, bool)> = args.iter().map(|arg| (arg.expr.clone(), false)).collect();
                 for param in sig.params.iter().skip(out.len()) {
-                    if let Some(default_arg) = &param.default {
-                        out.push((default_arg.clone(), true));
+                    if let Some(FunctionParamDefault::Source(default_arg)) = &param.default {
+                        out.push((default_arg.as_ref().clone(), true));
                     } else {
                         break;
                     }

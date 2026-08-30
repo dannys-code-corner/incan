@@ -15,10 +15,19 @@ use std::time::{Duration, Instant};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 
+use incan_semantics_core::HirSourceSpan;
 use serde::{Deserialize, Serialize};
 
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::runner::resolved_cargo_executable;
+use crate::backend::replacement::{
+    ReplacementExecutionError, execute_prevalidated_free_function, prepare_free_function_execution,
+};
+use crate::backend::selection::{
+    BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, ShadowComparisonState,
+    digest_output, finalize_receipt, resolve_execution, select_backend, unavailable_shadow_comparison,
+};
+use crate::backend::shadow::PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON;
 use crate::backend::{IrCodegen, ProjectGenerator};
 use crate::cli::{CliError, CliResult, ExitCode};
 use crate::compiled_sdk::CompiledSdkModules;
@@ -29,6 +38,10 @@ use crate::frontend::api_metadata::{
     materialize_checked_api_public_namespaces, validate_checked_api_docstrings,
 };
 use crate::frontend::ast::{Declaration, Decorator, Expr, ImportKind, Literal, Span, Spanned, Statement, Visibility};
+use crate::frontend::body_ir::{
+    build_body_ir_module_v0, is_direct_replacement_fieldless_enum, is_direct_replacement_plain_model,
+    is_direct_replacement_value_enum,
+};
 use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_model_bundles};
 use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, collect_checked_public_exports};
 use crate::frontend::library_manifest_index::{
@@ -44,15 +57,15 @@ use crate::frontend::registry_metadata::{
     collect_checked_registry_metadata, materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::frontend::{diagnostics, typechecker};
+use crate::frontend::{body_ir, diagnostics, lexer, parser, typechecker};
 use crate::generated_cache::resolve_generated_cargo_target;
 #[cfg(feature = "rust_inspect")]
 use crate::library_manifest::LibraryRustAbi;
 use crate::library_manifest::{
     CompiledProviderMetadata, LibraryManifest, ProviderCargoDependency, ProviderCargoDependencySource,
     ProviderDependencyKind, ProviderDependencyMetadata, ProviderFactKind, ProviderFactRequirement,
-    ProviderImplementationFacet, ProviderModuleClaim, digest_cargo_path_source_tree_with_cache,
-    digest_provider_artifact, digest_provider_source_inputs,
+    ProviderImplementationFacet, ProviderModuleClaim, ProviderOperationMetadata,
+    digest_cargo_path_source_tree_with_cache, digest_provider_artifact, digest_provider_source_inputs,
 };
 use crate::lockfile::{CargoFeatureSelection, IncanLock, provider_semantic_identities, semantic_lock_state};
 use crate::manifest::{DependencySource, DependencySpec, GitReference, MANIFEST_FILENAME, ProjectManifest};
@@ -119,7 +132,8 @@ use super::common::{
     discover_effective_project_manifest, effective_project_manifest_for_exact_root,
     enforce_project_toolchain_constraint, extend_requirements_with_provider_plan, format_dependency_error,
     imported_module_deps_for_with_index, merge_project_requirement_dependencies, module_key_index,
-    resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
+    render_module_warnings, resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies,
+    validate_output_dir,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
@@ -161,11 +175,10 @@ const OVEN_PACKAGED_LIBRARY_LOAF_MANIFEST_RELATIVE_PATH: &str = "oven/package-lo
 const OVEN_PACKAGED_LIBRARY_LOAF_SCHEMA_VERSION: u32 = 6;
 /// Current wire schema for completed receipt-bound project-output Loafs.
 ///
-/// Version 12 gives every declared executable entrypoint a stable target identity, retains a portable bake-time build
-/// report for frontend-free replay, and separates the canonical semantic lock authority from its derived dependency
-/// fingerprint. Tests validate the shared inspection authority and exact immutable constituents without trusting a
-/// mutable target receipt or report-only plan label.
-const OVEN_PROJECT_OUTPUT_PAYLOAD_SCHEMA_VERSION: u32 = 12;
+/// Version 13 carries the verified default backend execution receipt alongside every completed output. This lets a
+/// source-current cache hit retain the same compiler-backend provenance as the explicit bake without trusting a stale
+/// report snapshot.
+const OVEN_PROJECT_OUTPUT_PAYLOAD_SCHEMA_VERSION: u32 = 13;
 const OVEN_PROJECT_OUTPUT_PROJECTION_SCHEMA_VERSION: u32 = 3;
 const OVEN_PROJECT_OUTPUT_REPORT_SCHEMA_VERSION: u32 = 2;
 const OVEN_PROJECT_OUTPUT_REPORT_PATH_TAG: &str = "$incan_portable_path";
@@ -198,6 +211,49 @@ struct OvenPreparedProject {
     rust_inspect_manifest_dir: Option<PathBuf>,
 }
 
+/// CLI-facing backend-selection request for one build (`--backend`, `--backend-fallback`, `--shadow`).
+///
+/// Bridges those flags to [`select_backend`]. The default (no flags given) declares the legacy
+/// backend explicitly with [`FallbackPolicy::Refuse`] — matching the "declared legacy capability
+/// selection" behavior #986 requires even when nothing was explicitly requested, rather than
+/// leaving the default path unrecorded.
+#[derive(Debug, Clone)]
+pub struct BackendSelectionOptions {
+    /// Backend requested for this build.
+    pub requested: BackendKind,
+    /// Whether `requested` came from an explicit `--backend` flag rather than the default.
+    pub explicit: bool,
+    /// Whether `--shadow` was given, requesting a comparison against the replacement backend.
+    pub shadow: bool,
+    /// What to do if `requested` cannot execute.
+    pub fallback_policy: FallbackPolicy,
+}
+
+impl Default for BackendSelectionOptions {
+    fn default() -> Self {
+        Self {
+            requested: BackendKind::Legacy,
+            explicit: false,
+            shadow: false,
+            fallback_policy: FallbackPolicy::Refuse,
+        }
+    }
+}
+
+impl BackendSelectionOptions {
+    /// Whether this request can reuse a completed project output without changing its recorded backend provenance.
+    ///
+    /// An explicit backend, fallback policy, or shadow comparison is a new declared selection and must take the
+    /// source-aware preparation path so it can be recorded against the current invocation. Only the implicit legacy
+    /// default can reuse the verified default receipt sealed into a completed output.
+    fn allows_completed_output_reuse(&self) -> bool {
+        self.requested == BackendKind::Legacy
+            && !self.explicit
+            && !self.shadow
+            && self.fallback_policy == FallbackPolicy::Refuse
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct BuildCommandOptions {
     pub cargo_policy: CargoPolicy,
@@ -207,6 +263,7 @@ pub struct BuildCommandOptions {
     pub cargo_no_default_features: bool,
     pub cargo_all_features: bool,
     pub generated_cargo_target_dir: Option<PathBuf>,
+    pub backend: BackendSelectionOptions,
 }
 
 impl BuildCommandOptions {
@@ -558,6 +615,8 @@ struct OvenProjectOutputPayload {
     build_unit_identity: String,
     receipt_identity: String,
     plan_identity: String,
+    /// Verified backend selection and execution provenance from the explicit bake that produced this output.
+    backend_receipt: BackendExecutionReceipt,
     /// Singular project-level Rust inspection authority selected through this source-current output.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     inspection_authority: Option<OvenProjectInspectionAuthorityRef>,
@@ -640,6 +699,7 @@ struct OvenProjectOutputBakeRequest<'a> {
     inspection_authority: OvenProjectInspectionAuthorityRef,
     required_project_loafs: Vec<OvenPackagedLibraryLoafEntry>,
     package_loaf_store_relative_path: Option<String>,
+    backend_receipt: BackendExecutionReceipt,
     build_report: Option<OvenProjectOutputReportSnapshot>,
 }
 
@@ -670,6 +730,7 @@ struct PendingOvenProjectOutput {
     files: Vec<OvenProjectOutputBakeFile>,
     required_project_loafs: Vec<OvenPackagedLibraryLoafEntry>,
     package_loaf_store_relative_path: Option<String>,
+    backend_receipt: BackendExecutionReceipt,
     build_report: Option<OvenProjectOutputReportSnapshot>,
 }
 
@@ -2249,6 +2310,405 @@ fn rust_extern_report_paths(contexts: &[RustExternDeclContext]) -> Vec<String> {
     paths.sort();
     paths.dedup();
     paths
+}
+
+/// Content-derived identity of the source modules about to be compiled, computed before codegen runs.
+///
+/// Ordered by file path rather than collection order so the identity does not depend on module
+/// discovery order. Used as a [`BackendSelection`]'s `source_identity`.
+fn module_source_identity(modules: &[ParsedModule]) -> String {
+    let mut ordered: Vec<&ParsedModule> = modules.iter().collect();
+    ordered.sort_by(|left, right| left.file_path.cmp(&right.file_path));
+    let parts: Vec<&str> = ordered.iter().map(|module| module.source.as_str()).collect();
+    digest_output(&parts)
+}
+
+/// Content-derived identity of multi-file generated Rust output, used as a backend execution
+/// receipt's `output_identity`.
+///
+/// `rust_modules` is a `HashMap`, so entries are sorted by module path before digesting; the
+/// identity must not depend on `HashMap` iteration order.
+fn multi_file_output_identity(main_code: &str, rust_modules: &HashMap<Vec<String>, String>) -> String {
+    let mut sorted: Vec<(&Vec<String>, &String)> = rust_modules.iter().collect();
+    sorted.sort_by(|left, right| left.0.cmp(right.0));
+    let mut parts: Vec<&str> = vec![main_code];
+    parts.extend(sorted.into_iter().map(|(_, code)| code.as_str()));
+    digest_output(&parts)
+}
+
+/// Shadow-comparison state for one build's backend execution receipt.
+///
+/// #1146 implements a real source-observable comparison, but only for the bounded profile in
+/// `crate::backend::shadow`: one module, one named free function that is not the program entrypoint, and concrete
+/// scalar arguments. Every build path observes the module's `main` instead, whose return value the produced
+/// process does not expose, so a requested comparison stays explicitly `Unavailable` with that reason rather than
+/// silently `NotRequested` or inferred from generated Rust.
+fn backend_shadow_comparison(selection: &BackendSelection) -> ShadowComparisonState {
+    unavailable_shadow_comparison(selection.shadow_requested, PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON)
+}
+
+/// Declare and resolve a backend selection for one build, before codegen runs (#986).
+///
+/// Combines [`select_backend`] and [`resolve_execution`] — identical at both the executable
+/// (`prepare_oven_project`) and library (`prepare_library_project`) call sites — into the one
+/// step callers actually need: a declared selection plus the backend they must invoke, or a
+/// visible refusal.
+fn select_and_resolve_backend(
+    backend_options: &BackendSelectionOptions,
+    modules: &[ParsedModule],
+) -> CliResult<(BackendSelection, BackendKind)> {
+    let selection = select_backend(
+        backend_options.requested,
+        backend_options.explicit,
+        backend_options.shadow,
+        module_source_identity(modules),
+        backend_options.fallback_policy,
+    );
+    let executed = resolve_execution(&selection, selection.selected_backend.is_implemented())
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    Ok((selection, executed))
+}
+
+/// Bind a real output identity to a resolved backend selection and surface any declared fallback
+/// (#986). Combines [`finalize_receipt`], [`backend_shadow_comparison`], and
+/// [`report_backend_fallback`] — identical at both build-path call sites — into one step.
+fn finalize_backend_receipt(
+    selection: &BackendSelection,
+    executed: BackendKind,
+    output_identity: String,
+) -> CliResult<crate::backend::selection::BackendExecutionReceipt> {
+    let receipt = finalize_receipt(
+        selection,
+        executed,
+        output_identity,
+        backend_shadow_comparison(selection),
+        diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    report_backend_fallback(&receipt);
+    Ok(receipt)
+}
+
+/// Pre-flight refusal check for a declared `--backend` request (#986).
+///
+/// Must run before any "reuse a sealed cache-hit Loaf" shortcut in `build_file`,
+/// `build_file_report`, `build_library`, and `build_library_report`: those shortcuts return
+/// success without ever calling `prepare_oven_project`/`prepare_library_project`, which is where
+/// backend selection normally runs, so a refused request (for example `--backend replacement`
+/// with no working fallback) would otherwise be silently masked by reusing a previously sealed
+/// artifact instead of failing visibly.
+///
+/// Refusal depends only on the requested backend and its fallback policy, never on source
+/// content, so this uses a placeholder source identity rather than loading and hashing the
+/// project's modules just to decide whether to proceed — the real, source-identified selection is
+/// still built fresh inside `prepare_oven_project`/`prepare_library_project` whenever a build
+/// actually reaches them.
+fn ensure_backend_request_available(backend_options: &BackendSelectionOptions) -> CliResult<()> {
+    let selection = select_backend(
+        backend_options.requested,
+        backend_options.explicit,
+        backend_options.shadow,
+        "",
+        backend_options.fallback_policy,
+    );
+    resolve_execution(&selection, selection.selected_backend.is_implemented())
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    Ok(())
+}
+
+/// Surface a declared backend fallback on stderr, visible even when `--report` is not requested.
+fn report_backend_fallback(receipt: &crate::backend::selection::BackendExecutionReceipt) {
+    if let FallbackOutcome::Declared { from, to } = receipt.fallback_outcome {
+        eprintln!(
+            "⚠ backend fallback: `{from:?}` was selected but is not available; executed `{to:?}` instead (declared, not silent)"
+        );
+    }
+}
+
+/// Compiler-owned, project-relative destination for a build's backend-selection execution receipt.
+///
+/// Kept separate from `crate::oven::DEFAULT_RECEIPT_RELATIVE_PATH`: the Oven receipt is the
+/// build-unit/native-plan boundary, while this receipt is the backend-selection/execution
+/// boundary (#986). Oven and other clients consume this without reading private HIR/Body IR.
+const DEFAULT_BACKEND_RECEIPT_RELATIVE_PATH: &str = ".incan/backend/receipt.json";
+
+/// Stable schema marker for the direct Body-IR replacement execution report.
+///
+/// This is distinct from the Oven build-report schema because this path has no generated Rust, artifacts, or Oven
+/// plan to report. Consumers must inspect its backend receipt and direct-execution evidence rather than treating it
+/// as a partial legacy build report.
+const REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION: &str = "incan.replacement_execution.v0";
+
+/// Return the compiler-owned project-relative destination for a backend-selection execution receipt.
+fn default_backend_receipt_path(project_root: &Path) -> PathBuf {
+    project_root.join(DEFAULT_BACKEND_RECEIPT_RELATIVE_PATH)
+}
+
+/// Publish a backend-selection execution receipt through a same-directory staged file and atomic
+/// replacement, mirroring `crate::oven::write_receipt`'s durability guarantee for its own receipt.
+fn write_backend_receipt(receipt: &crate::backend::selection::BackendExecutionReceipt, path: &Path) -> CliResult<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| CliError::failure(format!("invalid backend-selection receipt path {}", path.display())))?;
+    fs::create_dir_all(parent)
+        .map_err(|error| CliError::failure(format!("failed to create {}: {error}", parent.display())))?;
+    let payload = serde_json::to_vec_pretty(receipt)
+        .map_err(|error| CliError::failure(format!("failed to serialize backend-selection receipt: {error}")))?;
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| CliError::failure(format!("invalid backend-selection receipt path {}", path.display())))?;
+    let staged_path = parent.join(format!(".{file_name}.tmp-{}", std::process::id()));
+    let result = crate::oven::write_receipt_staged(&payload, &staged_path, path, parent);
+    if result.is_err() && staged_path.exists() {
+        let _ = fs::remove_file(&staged_path);
+    }
+    result.map_err(|error| {
+        CliError::failure(format!(
+            "failed to publish backend-selection receipt {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Convert a typed replacement refusal into the CLI's stable source-location presentation.
+///
+/// `CliError` predates typed frontend diagnostics and carries display text only, so this adapter retains the
+/// replacement diagnostic code, entrypoint path, and original Body-IR span rather than discarding them at the CLI
+/// boundary.
+fn replacement_profile_cli_error(error: ReplacementExecutionError, entrypoint: &Path) -> CliError {
+    match error.primary_span() {
+        Some(span) => CliError::failure(format!(
+            "{}: {error}\nprimary Incan source location: {}:{}..{}",
+            error.diagnostic_code(),
+            entrypoint.display(),
+            span.start,
+            span.end
+        )),
+        None => CliError::failure(format!("{}: {error}", error.diagnostic_code())),
+    }
+}
+
+/// Return the first unsupported source-module boundary with its original Incan source span.
+fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> Option<ReplacementExecutionError> {
+    if let Some(rust_module) = &program.rust_module_path {
+        return Some(ReplacementExecutionError::unsupported_profile(
+            "Rust interop `rust.module` directive",
+            HirSourceSpan::new(rust_module.span.start, rust_module.span.end),
+        ));
+    }
+    let mut async_activation_seen = false;
+    for declaration in &program.declarations {
+        if matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_))
+            || matches!(&declaration.node, Declaration::Model(model) if is_direct_replacement_plain_model(model))
+            || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_fieldless_enum(enum_decl))
+            || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_value_enum(enum_decl))
+        {
+            continue;
+        }
+        if let Declaration::Import(import) = &declaration.node {
+            let exact_async_activation = matches!(
+                (&import.visibility, &import.kind, &import.alias),
+                (Visibility::Private, ImportKind::Module(path), None)
+                    if !path.is_absolute
+                        && path.parent_levels == 0
+                        && path.segments == ["std", "async"]
+            );
+            if exact_async_activation && !async_activation_seen {
+                async_activation_seen = true;
+                continue;
+            }
+            let description = if exact_async_activation {
+                "duplicate `import std.async` replacement activation"
+            } else {
+                "import declaration"
+            };
+            return Some(ReplacementExecutionError::unsupported_profile(
+                description,
+                HirSourceSpan::new(declaration.span.start, declaration.span.end),
+            ));
+        }
+        return Some(ReplacementExecutionError::unsupported_profile(
+            "non-function top-level declaration",
+            HirSourceSpan::new(declaration.span.start, declaration.span.end),
+        ));
+    }
+    None
+}
+
+/// Refuse one unsupported replacement profile through the canonical #986 selection boundary.
+///
+/// The resolver must reject the availability claim before the profile diagnostic reaches the CLI. If a future
+/// fallback policy resolves it anyway, that is a separate, visible failure rather than implicit legacy execution.
+fn refuse_replacement_profile<T>(
+    selection: &BackendSelection,
+    error: ReplacementExecutionError,
+    entrypoint: &Path,
+) -> CliResult<T> {
+    match resolve_execution(selection, false) {
+        Err(_) => Err(replacement_profile_cli_error(error, entrypoint)),
+        Ok(executed) => Err(CliError::failure(format!(
+            "{}: replacement source-profile refusal cannot execute `{executed:?}` because this CLI exposes no receipt-bound fallback path",
+            error.diagnostic_code()
+        ))),
+    }
+}
+
+/// Resolve an available direct replacement selection through the canonical #986 boundary.
+fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliResult<BackendKind> {
+    match resolve_execution(selection, true) {
+        Ok(BackendKind::Replacement) => Ok(BackendKind::Replacement),
+        Ok(executed) => Err(CliError::failure(format!(
+            "replacement profile selection resolved unexpected backend `{executed:?}`"
+        ))),
+        Err(error) => Err(CliError::failure(error.to_string())),
+    }
+}
+
+/// Refuse package-feature selections the manifest-free replacement profile cannot resolve faithfully.
+///
+/// Ordinary builds derive the active closure from `CompilationSession` and the project's manifest. The bounded
+/// direct Body-IR profile deliberately does neither: it accepts one source module with no package graph. Its shared
+/// input-contract helper therefore uses the empty projection, so accepting a caller-supplied feature selection here
+/// would silently compile a different program. A future project-aware replacement profile may consume the canonical
+/// session projection; this source-only profile must refuse it until then.
+fn reject_replacement_package_feature_selection(package_features: &FeatureSelection) -> CliResult<()> {
+    if package_features != &FeatureSelection::default() {
+        return Err(CliError::failure(
+            "the source-only replacement backend supports only the default package feature selection; remove `--features`, `--no-default-features`, or `--all-features`",
+        ));
+    }
+    Ok(())
+}
+
+/// Execute the first #988 replacement-backend profile directly from typed Body IR.
+///
+/// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
+/// containing free functions and executes its zero-argument `main` body through the replacement executor. A
+/// requested replacement build therefore either records a replacement receipt over a real Body-IR result or fails
+/// visibly at the original Incan span; it can never reach `IrCodegen` as an implicit compatibility fallback.
+///
+/// The pipeline is lex, parse, [`apply_body_ir_input_contract`], module-profile gate, typecheck, then
+/// [`build_body_ir_module_v0`]. The contract step is not optional sequencing: without it this path would hand
+/// lowering a program the legacy path would never have produced, which is the divergence #1166 closes.
+/// This deliberately accepts only the default package-feature selection. A non-default selection needs the
+/// project-aware `CompilationSession` projection and is refused before parsing rather than silently treated as
+/// featureless source.
+fn build_replacement_file_report(
+    file_path: &str,
+    options: BuildCommandOptions,
+    report_options: &BuildReportOptions,
+) -> CliResult<serde_json::Value> {
+    reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    reject_replacement_package_feature_selection(&options.package_features)?;
+    let start = Instant::now();
+    let entrypoint = if Path::new(file_path).is_absolute() {
+        PathBuf::from(file_path)
+    } else {
+        env::current_dir()
+            .map_err(|error| CliError::failure(format!("failed to determine current directory: {error}")))?
+            .join(file_path)
+    };
+    let source = fs::read_to_string(&entrypoint).map_err(|error| {
+        CliError::failure(format!(
+            "failed to read replacement entrypoint {}: {error}",
+            entrypoint.display()
+        ))
+    })?;
+    let tokens = lexer::lex(&source).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not lex {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let program = parser::parse(&tokens).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not parse {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let program = body_ir::apply_body_ir_input_contract(program, &entrypoint).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not desugar {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let selection = select_backend(
+        options.backend.requested,
+        options.backend.explicit,
+        options.backend.shadow,
+        digest_output(&[source.as_str()]),
+        options.backend.fallback_policy,
+    );
+    if let Some(error) = replacement_module_profile_error(&program) {
+        return refuse_replacement_profile(&selection, error, &entrypoint);
+    }
+    let module_path = vec![
+        entrypoint
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("main")
+            .to_string(),
+    ];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    checker.check_program(&program).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not typecheck {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+    let execution_plan = match prepare_free_function_execution(&body_ir, "main", &[]) {
+        Ok(plan) => plan,
+        Err(error) => return refuse_replacement_profile(&selection, error, &entrypoint),
+    };
+    let executed = resolve_available_replacement_execution(&selection)?;
+    let execution = execute_prevalidated_free_function(execution_plan)
+        .map_err(|error| replacement_profile_cli_error(error, &entrypoint))?;
+    let shadow_comparison = backend_shadow_comparison(&selection);
+    let backend_receipt = finalize_receipt(
+        &selection,
+        executed,
+        execution.output_identity.clone(),
+        shadow_comparison,
+        diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+    )
+    .map_err(|error| CliError::failure(error.to_string()))?;
+    let project_root = resolve_project_root(&entrypoint);
+    write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
+    for line in execution.emitted_output() {
+        print_build_progress(report_options, line);
+    }
+    print_build_progress(report_options, "✓ replacement backend executed typed Body IR directly");
+    print_build_progress(
+        report_options,
+        format!("Replacement result: {}", execution.value.observable_text()),
+    );
+    if !report_options.enabled() {
+        println!(
+            "✓ replacement backend executed `main`: {}",
+            execution.value.observable_text()
+        );
+    }
+    Ok(serde_json::json!({
+        "schema_version": REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION,
+        "compiler_version": crate::version::INCAN_VERSION,
+        "status": "success",
+        "mode": "executable",
+        "entrypoint": entrypoint,
+        "backend": backend_receipt,
+        "replacement_execution": {
+            "result": execution.value.observable_text(),
+            "output_identity": execution.output_identity,
+            "emitted_output": execution.emitted_output(),
+            "body_snapshot": execution.body_snapshot,
+            "ownership_reads": execution.ownership_evidence(),
+            "runtime_requirements": execution.runtime_requirement_evidence(),
+            "task_lifecycle": execution.task_lifecycle_evidence(),
+        },
+        "timings_ms": { "total": elapsed_ms(start) },
+    }))
 }
 
 /// Build the project identity block used by build and generated Rust inspection reports.
@@ -5012,6 +5472,7 @@ fn prepare_oven_project(
     profile: &str,
     oven_plan_mode: OvenProjectPlanMode,
     authority_context: Option<&mut OvenProjectBakeAuthorityContext>,
+    backend_options: &BackendSelectionOptions,
 ) -> CliResult<OvenPreparedProject> {
     if cargo_no_default_features || cargo_all_features || !cargo_features.is_empty() {
         return Err(CliError::failure(
@@ -5038,6 +5499,8 @@ fn prepare_oven_project(
     let Some(main_module) = modules.last() else {
         return Err(CliError::failure("No modules found"));
     };
+    // ---- Backend selection (#986) — declared before codegen, refused visibly if unavailable ----
+    let (backend_selection, backend_executed) = select_and_resolve_backend(backend_options, &modules)?;
     let dep_modules = &modules[..modules.len() - 1];
     let project_root = manifest
         .as_ref()
@@ -5290,7 +5753,7 @@ fn prepare_oven_project(
         || dep_modules
             .iter()
             .any(|module| compiled_sdk_modules.contains_emission_path(&module.path_segments));
-    if has_deps {
+    let backend_output_identity = if has_deps {
         let module_paths = emitted_dep_modules
             .iter()
             .map(|module| module.path_segments.clone())
@@ -5301,6 +5764,7 @@ fn prepare_oven_project(
         generator
             .generate_nested(&main_code, &rust_modules)
             .map_err(|error| CliError::failure(format!("Error generating project: {error}")))?;
+        multi_file_output_identity(&main_code, &rust_modules)
     } else {
         let rust_code = codegen
             .try_generate(&main_module.ast)
@@ -5308,7 +5772,14 @@ fn prepare_oven_project(
         generator
             .generate(&rust_code)
             .map_err(|error| CliError::failure(format!("Error generating project: {error}")))?;
-    }
+        digest_output(&[rust_code.as_str()])
+    };
+    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity)?;
+    // Not persisted here: `prepare_oven_project` runs for internal/dependency callers too (see
+    // `BackendSelectionOptions::default()` call sites), and real compilation (the Oven plan
+    // selection and rustc bake below) can still fail after this point. The receipt is instead
+    // published by the top-level `build_file_report`/`build_library_report` entry points, once
+    // and only once the whole build has actually succeeded (#986).
 
     let mut receipt_request = OvenGeneratedProjectRequest::new(
         &project_root,
@@ -5445,6 +5916,7 @@ fn prepare_oven_project(
         notes: vec![
             "Oven Alpha selected a receipt-bound direct-rustc plan; normal execution did not invoke Cargo or inspect a Cargo target directory.".to_string(),
         ],
+        backend: Some(backend_receipt),
     };
     Ok(OvenPreparedProject {
         generator,
@@ -7246,6 +7718,11 @@ fn stored_project_output_from_parts(
 /// Derive the completed-output authority from the project state that the explicit baker has already validated and
 /// compiled.
 fn project_output_payload_for_bake(request: OvenProjectOutputBakeRequest<'_>) -> CliResult<OvenProjectOutputPayload> {
+    request.backend_receipt.verify_identity().map_err(|error| {
+        CliError::failure(format!(
+            "completed Oven project output has an invalid backend receipt: {error}"
+        ))
+    })?;
     let entrypoint_relative_path =
         project_relative_entrypoint(request.project_root, request.entrypoint).ok_or_else(|| {
             CliError::failure(format!(
@@ -7345,6 +7822,7 @@ fn project_output_payload_for_bake(request: OvenProjectOutputBakeRequest<'_>) ->
         build_unit_identity: request.receipt.build_unit_identity.clone(),
         receipt_identity: request.receipt.identity.clone(),
         plan_identity: request.plan_identity,
+        backend_receipt: request.backend_receipt,
         inspection_authority: Some(request.inspection_authority),
         files,
         required_project_loafs,
@@ -7955,10 +8433,50 @@ fn project_output_report_snapshot(
     })
 }
 
+/// Return the verified implicit-default backend receipt sealed into one completed project output.
+///
+/// A completed output is reusable only when its own immutable payload proves that an explicit bake selected and
+/// executed the ordinary legacy default. Older, malformed, or differently selected outputs deliberately return
+/// `None` so the caller takes the normal source-aware path rather than treating cached provenance as current.
+fn completed_output_default_backend_receipt(output: &OvenStoredProjectOutput) -> Option<BackendExecutionReceipt> {
+    let receipt = &output.payload.backend_receipt;
+    if receipt.verify_identity().is_err()
+        || receipt.selection.selected_backend != BackendKind::Legacy
+        || receipt.selection.selection_reason != crate::backend::selection::SelectionReason::Default
+        || receipt.selection.fallback_policy != FallbackPolicy::Refuse
+        || receipt.selection.shadow_requested
+        || receipt.executed_backend != BackendKind::Legacy
+        || receipt.fallback_outcome != FallbackOutcome::NotNeeded
+        || receipt.shadow_comparison != ShadowComparisonState::NotRequested
+    {
+        return None;
+    }
+    Some(receipt.clone())
+}
+
+/// Materialize an executable completed output and republish the verified backend provenance it carries.
+///
+/// Keeping this coupled prevents either normal `build` output path from restoring native bytes while leaving a stale
+/// or unrelated project-local backend receipt behind.
+fn materialize_completed_executable_output(
+    project_root: &Path,
+    output: &OvenStoredProjectOutput,
+    backend_receipt: &BackendExecutionReceipt,
+) -> CliResult<()> {
+    if completed_output_default_backend_receipt(output).as_ref() != Some(backend_receipt) {
+        return Err(CliError::failure(
+            "completed Oven executable output does not carry the backend receipt selected for reuse",
+        ));
+    }
+    materialize_project_output(project_root, output)?;
+    write_backend_receipt(backend_receipt, &default_backend_receipt_path(project_root))
+}
+
 /// Restore and validate one bake-time executable report without reconstructing frontend-owned facts.
 fn completed_executable_output_report(
     project_root: &Path,
     output: &OvenStoredProjectOutput,
+    backend_receipt: &BackendExecutionReceipt,
     total_start: Instant,
 ) -> CliResult<serde_json::Value> {
     let snapshot = output.payload.build_report.as_ref().ok_or_else(|| {
@@ -8008,6 +8526,9 @@ fn completed_executable_output_report(
         .as_object_mut()
         .ok_or_else(|| CliError::failure("completed Oven executable build report is not a JSON object"))?;
     object.remove("workspace");
+    let backend = serde_json::to_value(backend_receipt)
+        .map_err(|error| CliError::failure(format!("failed to serialize completed-output backend receipt: {error}")))?;
+    object.insert("backend".to_string(), backend);
     let elapsed = elapsed_ms(total_start);
     object.insert(
         "timings_ms".to_string(),
@@ -8067,6 +8588,17 @@ fn completed_library_output_report(
             &caller_project_output_path(project_root, &native.caller_relative_path)?,
         ));
     }
+    let backend_receipt = completed_output_default_backend_receipt(release).ok_or_else(|| {
+        CliError::failure("completed Oven library output has no verified implicit-default backend receipt")
+    })?;
+    if outputs
+        .iter()
+        .any(|output| completed_output_default_backend_receipt(output).as_ref() != Some(&backend_receipt))
+    {
+        return Err(CliError::failure(
+            "completed Oven library outputs disagree on their verified implicit-default backend receipt",
+        ));
+    }
     let report = BuildReportDraft {
         mode: BuildReportMode::Library,
         profile: "release".to_string(),
@@ -8107,6 +8639,7 @@ fn completed_library_output_report(
             "Reused a completed Oven project-output Loaf; source, dependency, semantic, and interop details were verified at explicit bake time and are intentionally not recomputed during this replay."
                 .to_string(),
         ],
+        backend: Some(backend_receipt),
     };
     let mut timings_ms = BTreeMap::new();
     timings_ms.insert("completed_project_output_reuse".to_string(), elapsed_ms(total_start));
@@ -8442,9 +8975,13 @@ fn warn_for_completed_output_lock_fingerprint_drift<'a>(
 fn select_default_library_project_outputs(
     file_path: Option<&str>,
     policy: &CompletedOutputPolicy<'_>,
+    backend_options: &BackendSelectionOptions,
 ) -> CliResult<Option<Vec<OvenStoredProjectOutput>>> {
     policy.reject_cargo_feature_controls("library builds")?;
-    if policy.package_features != &FeatureSelection::default() || policy.sdk_profile.is_some() {
+    if policy.package_features != &FeatureSelection::default()
+        || policy.sdk_profile.is_some()
+        || !backend_options.allows_completed_output_reuse()
+    {
         return Ok(None);
     }
     let project_root = resolve_library_project_root(file_path)?;
@@ -8483,6 +9020,9 @@ fn select_default_library_project_outputs(
             }
             return Ok(None);
         };
+        if completed_output_default_backend_receipt(&selected).is_none() {
+            return Ok(None);
+        }
         outputs.push(selected);
     }
     Ok(Some(outputs))
@@ -8915,8 +9455,8 @@ fn select_default_executable_project_output(
     file_path: &str,
     output_dir: Option<&String>,
     options: &BuildCommandOptions,
-) -> CliResult<Option<(PathBuf, OvenStoredProjectOutput)>> {
-    if output_dir.is_some() {
+) -> CliResult<Option<(PathBuf, OvenStoredProjectOutput, BackendExecutionReceipt)>> {
+    if output_dir.is_some() || !options.backend.allows_completed_output_reuse() {
         return Ok(None);
     }
     let completed_output_policy = CompletedOutputPolicy {
@@ -8938,8 +9478,11 @@ fn select_default_executable_project_output(
     };
     let project_root = project_root_for_completed_output(&normalized_project_entrypoint(file_path)?)?
         .ok_or_else(|| CliError::failure("selected Oven project-output Loaf has no manifest-backed project root"))?;
+    let Some(backend_receipt) = completed_output_default_backend_receipt(&selected) else {
+        return Ok(None);
+    };
     warn_for_completed_output_lock_fingerprint_drift(&project_root, [&selected])?;
-    Ok(Some((project_root, selected)))
+    Ok(Some((project_root, selected, backend_receipt)))
 }
 
 /// Build an Incan file to a Rust project.
@@ -8950,11 +9493,17 @@ pub fn build_file(
     report_options: BuildReportOptions,
 ) -> CliResult<ExitCode> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        let report = build_replacement_file_report(file_path, options, &report_options)?;
+        emit_workspace_build_report(&report, &report_options)?;
+        return Ok(ExitCode::SUCCESS);
+    }
     if !report_options.enabled()
-        && let Some((project_root, selected)) =
+        && let Some((project_root, selected, backend_receipt)) =
             select_default_executable_project_output(file_path, output_dir, &options)?
     {
-        materialize_project_output(&project_root, &selected)?;
+        materialize_completed_executable_output(&project_root, &selected, &backend_receipt)?;
         println!(
             "✓ Oven build reused sealed project Loaf: {}",
             selected.native_output.display()
@@ -8974,9 +9523,15 @@ pub(crate) fn build_file_report(
     report_options: &BuildReportOptions,
 ) -> CliResult<serde_json::Value> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return build_replacement_file_report(file_path, options, report_options);
+    }
     let total_start = Instant::now();
-    if let Some((project_root, selected)) = select_default_executable_project_output(file_path, output_dir, &options)? {
-        materialize_project_output(&project_root, &selected)?;
+    if let Some((project_root, selected, backend_receipt)) =
+        select_default_executable_project_output(file_path, output_dir, &options)?
+    {
+        materialize_completed_executable_output(&project_root, &selected, &backend_receipt)?;
         print_build_progress(
             report_options,
             format!(
@@ -8984,7 +9539,7 @@ pub(crate) fn build_file_report(
                 selected.native_output.display()
             ),
         );
-        return completed_executable_output_report(&project_root, &selected, total_start);
+        return completed_executable_output_report(&project_root, &selected, &backend_receipt, total_start);
     }
     let prepare_start = Instant::now();
     let prepared = prepare_oven_project(
@@ -8999,6 +9554,7 @@ pub(crate) fn build_file_report(
         "release",
         OvenProjectPlanMode::ConsumeOnly,
         None,
+        &options.backend,
     )?;
     let prepare_ms = elapsed_ms(prepare_start);
 
@@ -9017,6 +9573,12 @@ pub(crate) fn build_file_report(
     print_build_progress(report_options, format!("Binary: {}", bake.output.display()));
     let mut report_draft = prepared.report.clone();
     report_draft.artifacts.push(artifact_report("binary", &bake.output));
+    // Published only now that the whole build — codegen, Oven plan selection, and the rustc bake
+    // above — has actually succeeded (#986); `prepare_oven_project` itself never persists this,
+    // since it also runs for internal/dependency callers that must not overwrite a real receipt.
+    if let Some(backend_receipt) = report_draft.backend.as_ref() {
+        write_backend_receipt(backend_receipt, &default_backend_receipt_path(&prepared.project_root))?;
+    }
     let report = report_draft.finish(BTreeMap::from([
         ("prepare".to_string(), prepare_ms),
         ("oven_build".to_string(), oven_build_ms),
@@ -9088,6 +9650,7 @@ fn prepare_library_project(
     include_interop_execution: bool,
     oven_plan_mode: OvenProjectPlanMode,
     authority_context: Option<&mut OvenProjectBakeAuthorityContext>,
+    backend_options: &BackendSelectionOptions,
 ) -> CliResult<PreparedLibraryProject> {
     let prepare_start = Instant::now();
     let mut timings_ms = BTreeMap::new();
@@ -9466,12 +10029,11 @@ fn prepare_library_project(
         };
         match check_result {
             Ok(()) => {
-                for warn in checker.warnings() {
-                    eprint!(
-                        "{}",
-                        diagnostics::format_error(module.file_path.to_string_lossy().as_ref(), &module.source, warn)
-                    );
-                }
+                render_module_warnings(
+                    module.file_path.to_string_lossy().as_ref(),
+                    &module.source,
+                    checker.warnings(),
+                );
                 let module_exports = collect_checked_public_exports(&module.ast, &checker);
                 api_metadata_modules.push(collect_checked_api_metadata(
                     &module.ast,
@@ -9600,15 +10162,16 @@ fn prepare_library_project(
     materialize_checked_api_public_namespaces(&mut checked_api)
         .map_err(|error| CliError::failure(format!("failed to publish checked module namespaces: {error}")))?;
     library_manifest.contract_metadata.api = Some(checked_api);
-    library_manifest.contract_metadata.provider = compiled_provider_metadata(
-        &manifest,
-        &package_feature_plan,
-        &provider_plan,
-        &library_manifest_index,
-        &out_dir,
-        &provider_metadata_modules,
-        lib_module,
-    )?;
+    library_manifest.contract_metadata.provider = compiled_provider_metadata(CompiledProviderMetadataInputs {
+        manifest: &manifest,
+        feature_plan: &package_feature_plan,
+        provider_plan: &provider_plan,
+        library_manifest_index: &library_manifest_index,
+        artifact_root: &out_dir,
+        modules: &provider_metadata_modules,
+        active_library_entrypoint: lib_module,
+        checked_type_info_by_path: &checked_type_info_by_path,
+    })?;
     let mut registry_metadata = CheckedRegistryMetadataPackage {
         schema_version: CHECKED_REGISTRY_METADATA_SCHEMA_VERSION,
         package: Some(CheckedRegistryPackageIdentity {
@@ -9632,6 +10195,9 @@ fn prepare_library_project(
     }
     record_timing(&mut timings_ms, "library_build_manifest_metadata", manifest_start);
     let manifest_path = out_dir.join(format!("{project_name}.incnlib"));
+
+    // ---- Backend selection (#986) — declared before codegen, refused visibly if unavailable ----
+    let (backend_selection, backend_executed) = select_and_resolve_backend(backend_options, &modules)?;
 
     let mut codegen = IrCodegen::new();
     codegen.set_preserve_dependency_public_items(true);
@@ -9790,6 +10356,7 @@ fn prepare_library_project(
         notes: vec![
             "Generated Rust is current backend output for inspection and debugging, not a stable Rust ABI.".to_string(),
         ],
+        backend: None,
     };
     generator.set_dependencies(resolved.dependencies);
     generator.set_dev_dependencies(resolved.dev_dependencies);
@@ -9797,7 +10364,7 @@ fn prepare_library_project(
     // Keep the historical aggregate for existing consumers, while separating the stages that were previously
     // attributed misleadingly as one `library_generate_rust` cost in Oven performance evidence.
     let codegen_start = Instant::now();
-    if emitted_dep_modules.is_empty() {
+    let backend_output_identity = if emitted_dep_modules.is_empty() {
         let emit_rust_start = Instant::now();
         let rust_code = codegen
             .try_generate(&lib_module.ast)
@@ -9808,6 +10375,7 @@ fn prepare_library_project(
             .generate(&rust_code)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
+        digest_output(&[rust_code.as_str()])
     } else {
         let module_paths: Vec<Vec<String>> = emitted_dep_modules
             .iter()
@@ -9823,7 +10391,13 @@ fn prepare_library_project(
             .generate_nested(&main_code, &rust_modules)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
-    }
+        multi_file_output_identity(&main_code, &rust_modules)
+    };
+    let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity)?;
+    // Not persisted here — see the matching comment in `prepare_oven_project`: this function
+    // also runs for internal/dependency callers, and real compilation still follows below. The
+    // receipt is published once by `build_library_report` after the whole build succeeds (#986).
+    report_draft.backend = Some(backend_receipt);
     let synchronize_provider_dependencies_start = Instant::now();
     synchronize_projected_provider_dependencies(
         &mut library_manifest,
@@ -10158,33 +10732,45 @@ fn synchronize_projected_provider_dependencies(
     Ok(())
 }
 
+/// Borrowed inputs needed to freeze checked provider facts into a library artifact.
+///
+/// The checked type information stays in the compiler pipeline until this projection. It carries the canonical
+/// callable-to-capability facts that provider operation lowering consumes through the selected manifest.
+struct CompiledProviderMetadataInputs<'a> {
+    manifest: &'a ProjectManifest,
+    feature_plan: &'a PackageFeaturePlan,
+    provider_plan: &'a ProviderPlan,
+    library_manifest_index: &'a LibraryManifestIndex,
+    artifact_root: &'a Path,
+    modules: &'a [ParsedModule],
+    active_library_entrypoint: &'a ParsedModule,
+    checked_type_info_by_path: &'a BTreeMap<PathBuf, typechecker::TypeCheckInfo>,
+}
+
 /// Build transport-stable provider facts from the checked physical artifact projection.
-fn compiled_provider_metadata(
-    manifest: &ProjectManifest,
-    feature_plan: &PackageFeaturePlan,
-    provider_plan: &ProviderPlan,
-    library_manifest_index: &LibraryManifestIndex,
-    artifact_root: &Path,
-    modules: &[ParsedModule],
-    active_library_entrypoint: &ParsedModule,
-) -> CliResult<CompiledProviderMetadata> {
-    let graph = PackageFeatureGraph::from_manifest(manifest).map_err(|error| CliError::failure(error.to_string()))?;
-    let root_features = feature_plan
+fn compiled_provider_metadata(inputs: CompiledProviderMetadataInputs<'_>) -> CliResult<CompiledProviderMetadata> {
+    let graph =
+        PackageFeatureGraph::from_manifest(inputs.manifest).map_err(|error| CliError::failure(error.to_string()))?;
+    let root_features = inputs
+        .feature_plan
         .root_package()
         .map(|package| &package.features)
         .ok_or_else(|| CliError::failure("resolved package feature plan is missing its root package"))?;
-    let library_entrypoint = modules
+    let library_entrypoint = inputs
+        .modules
         .iter()
-        .find(|module| module.file_path == active_library_entrypoint.file_path)
+        .find(|module| module.file_path == inputs.active_library_entrypoint.file_path)
         .ok_or_else(|| CliError::failure("unprojected provider graph is missing its library entrypoint"))?;
-    let source_root = resolve_source_root(manifest.project_root(), Some(manifest));
-    let module_requirements = provider_module_reachability_requirements(modules, library_entrypoint, &source_root)?;
-    let mut namespace_claims = modules
+    let source_root = resolve_source_root(inputs.manifest.project_root(), Some(inputs.manifest));
+    let module_requirements =
+        provider_module_reachability_requirements(inputs.modules, library_entrypoint, &source_root)?;
+    let mut namespace_claims = inputs
+        .modules
         .iter()
         .filter(|module| {
-            module.file_path != active_library_entrypoint.file_path
+            module.file_path != inputs.active_library_entrypoint.file_path
                 && !module.path_segments.is_empty()
-                && !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments)
+                && !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments)
         })
         .flat_map(|module| {
             module_requirements
@@ -10202,9 +10788,10 @@ fn compiled_provider_metadata(
 
     let public_features = graph.provider_metadata();
     let mut fact_requirements = Vec::new();
-    for module in modules
+    for module in inputs
+        .modules
         .iter()
-        .filter(|module| !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments))
+        .filter(|module| !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments))
     {
         let requirements = module_requirements.get(&module.path_segments).ok_or_else(|| {
             CliError::failure(format!(
@@ -10237,12 +10824,18 @@ fn compiled_provider_metadata(
     fact_requirements.sort();
     fact_requirements.dedup();
 
-    let provider_dependencies =
-        compiled_provider_dependencies(feature_plan, library_manifest_index, provider_plan, artifact_root)?;
+    let provider_dependencies = compiled_provider_dependencies(
+        inputs.feature_plan,
+        inputs.library_manifest_index,
+        inputs.provider_plan,
+        inputs.artifact_root,
+    )?;
     let implementation_facets = provider_implementation_facets(&namespace_claims);
-    let semantic_source_inputs = modules
+    let operation_descriptors = provider_operation_metadata_from_checked_type_info(inputs.checked_type_info_by_path)?;
+    let semantic_source_inputs = inputs
+        .modules
         .iter()
-        .filter(|module| !module_is_owned_by_dependency_provider(provider_plan, &module.path_segments))
+        .filter(|module| !module_is_owned_by_dependency_provider(inputs.provider_plan, &module.path_segments))
         .map(|module| {
             let label = if module.path_segments.is_empty() {
                 "<root>".to_string()
@@ -10256,8 +10849,8 @@ fn compiled_provider_metadata(
         .into_iter()
         .collect::<Vec<_>>();
     let semantic_source_digest = digest_provider_source_inputs(
-        manifest.project_root(),
-        manifest.path(),
+        inputs.manifest.project_root(),
+        inputs.manifest.path(),
         &semantic_source_inputs,
         &trusted_source_roots,
     )
@@ -10271,8 +10864,39 @@ fn compiled_provider_metadata(
         fact_requirements,
         required_sdk_components: root_features.required_sdk_components.clone(),
         implementation_facets,
+        operation_descriptors,
         ..CompiledProviderMetadata::default()
     })
+}
+
+/// Project declaration-side provider-operation facts into the selected library artifact.
+///
+/// The typechecker is the only source of these pairs: it resolved each decorated operation's capability in the
+/// declaring module. Sorting and rejecting duplicate canonical identities makes manifest output deterministic and
+/// prevents a package with two copies of one declaration from acquiring order-dependent provider meaning.
+fn provider_operation_metadata_from_checked_type_info(
+    checked_type_info_by_path: &BTreeMap<PathBuf, typechecker::TypeCheckInfo>,
+) -> CliResult<Vec<ProviderOperationMetadata>> {
+    let mut operation_descriptors = checked_type_info_by_path
+        .values()
+        .flat_map(|type_info| type_info.declarations.provider_operations.values())
+        .map(|operation| ProviderOperationMetadata {
+            operation: operation.operation.clone(),
+            required_capability: operation.required_capability.clone(),
+            runtime_requirements: operation.runtime_requirements.clone(),
+        })
+        .collect::<Vec<_>>();
+    operation_descriptors.sort_by(|left, right| left.operation.cmp(&right.operation));
+    if let Some(duplicate) = operation_descriptors
+        .windows(2)
+        .find(|entries| entries[0].operation == entries[1].operation)
+    {
+        return Err(CliError::failure(format!(
+            "provider operation metadata contains duplicate declaration `{}`",
+            duplicate[0].operation.declaration_name
+        )));
+    }
+    Ok(operation_descriptors)
 }
 
 /// Freeze the active Incan dependency edges into artifact-owned, relocation-safe provider metadata.
@@ -10834,6 +11458,7 @@ fn provider_declaration_name(declaration: &Declaration) -> Option<&str> {
         Declaration::Enum(item) => Some(&item.name),
         Declaration::Function(item) => Some(&item.name),
         Declaration::TestModule(item) => Some(&item.name),
+        Declaration::Capability(item) => Some(&item.name),
         Declaration::Import(_) | Declaration::VocabBlock(_) | Declaration::Docstring(_) => None,
     }
 }
@@ -10841,6 +11466,7 @@ fn provider_declaration_name(declaration: &Declaration) -> Option<&str> {
 /// Return whether one declaration contributes to the package's public checked surface.
 fn provider_declaration_is_public(declaration: &Declaration) -> bool {
     let visibility = match declaration {
+        Declaration::Capability(item) => item.visibility,
         Declaration::Const(item) => item.visibility,
         Declaration::Static(item) => item.visibility,
         Declaration::Model(item) => item.visibility,
@@ -12507,6 +13133,12 @@ pub fn build_library(
     options: BuildCommandOptions,
     report_options: BuildReportOptions,
 ) -> CliResult<ExitCode> {
+    ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return Err(CliError::failure(
+            "replacement backend #988 supports source-only executable free functions, not libraries or package artifacts",
+        ));
+    }
     let artifact_only = env::var_os(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV).is_some();
     if !artifact_only {
         reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
@@ -12520,10 +13152,18 @@ pub fn build_library(
         };
         if output_dir.is_none()
             && !report_options.enabled()
-            && let Some(outputs) = select_default_library_project_outputs(file_path, &completed_output_policy)?
+            && let Some(outputs) =
+                select_default_library_project_outputs(file_path, &completed_output_policy, &options.backend)?
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            let backend_receipt = outputs
+                .iter()
+                .find(|output| output.profile == "release")
+                .and_then(completed_output_default_backend_receipt)
+                .ok_or_else(|| {
+                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                })?;
             for selected in outputs {
                 materialize_project_output(&project_root, &selected)?;
                 println!(
@@ -12531,6 +13171,7 @@ pub fn build_library(
                     selected.native_output.display()
                 );
             }
+            write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
             return Ok(ExitCode::SUCCESS);
         }
     }
@@ -12737,6 +13378,7 @@ pub(crate) fn bake_oven_project_targets(
                     false,
                     OvenProjectPlanMode::ExplicitBake,
                     Some(&mut authority_context),
+                    &BackendSelectionOptions::default(),
                 )?;
                 #[cfg(feature = "rust_inspect")]
                 if let Some(manifest_dir) = prepared.rust_inspect_manifest_dir.as_ref() {
@@ -12745,6 +13387,9 @@ pub(crate) fn bake_oven_project_targets(
                 write_library_manifest_artifacts(&mut prepared)?;
                 let selected = prepared.oven.as_ref().ok_or_else(|| {
                     CliError::failure("explicit Oven library preparation did not produce a direct-rustc selection")
+                })?;
+                let backend_receipt = prepared.report.backend.clone().ok_or_else(|| {
+                    CliError::failure("explicit Oven library preparation did not produce backend provenance")
                 })?;
                 generated_sources.insert(
                     oven_bake_project_target_identity(&project_root, target, &prepared.entrypoint)?,
@@ -12862,6 +13507,7 @@ pub(crate) fn bake_oven_project_targets(
                         files,
                         required_project_loafs,
                         package_loaf_store_relative_path: Some(package_loaf_store_relative_path.clone()),
+                        backend_receipt: backend_receipt.clone(),
                         build_report: None,
                     });
                 }
@@ -12907,6 +13553,7 @@ pub(crate) fn bake_oven_project_targets(
                         profile,
                         OvenProjectPlanMode::ExplicitBake,
                         Some(&mut authority_context),
+                        &BackendSelectionOptions::default(),
                     )?;
                     #[cfg(feature = "rust_inspect")]
                     if let Some(manifest_dir) = prepared.rust_inspect_manifest_dir.as_ref() {
@@ -12918,6 +13565,9 @@ pub(crate) fn bake_oven_project_targets(
                     let receipt = project_bake_receipt_path(&project_root, target, &prepared.entrypoint, profile)?;
                     write_receipt(&prepared.receipt, &receipt).map_err(|error| CliError::failure(error.to_string()))?;
                     let bake = bake_oven_project(&prepared, profile, Some(&mut authority_context))?;
+                    let backend_receipt = prepared.report.backend.clone().ok_or_else(|| {
+                        CliError::failure("explicit Oven executable preparation did not produce backend provenance")
+                    })?;
                     let mut report = prepared.report.clone();
                     report.artifacts.push(artifact_report("binary", &bake.output));
                     let build_report = project_output_report_snapshot(&project_root, &report.finish(BTreeMap::new()))?;
@@ -12938,6 +13588,7 @@ pub(crate) fn bake_oven_project_targets(
                         files,
                         required_project_loafs: Vec::new(),
                         package_loaf_store_relative_path: None,
+                        backend_receipt,
                         build_report: Some(build_report),
                     });
                     remove_completed_generated_cargo_lock(prepared.generator.output_dir())?;
@@ -13003,6 +13654,7 @@ pub(crate) fn bake_oven_project_targets(
             inspection_authority: inspection_authority.reference.clone(),
             required_project_loafs: pending.required_project_loafs,
             package_loaf_store_relative_path: pending.package_loaf_store_relative_path,
+            backend_receipt: pending.backend_receipt,
             build_report: pending.build_report,
         })?;
         published_outputs.push(publish_project_output_loaf(&store, &pending.receipt, &payload, &files)?);
@@ -13032,6 +13684,12 @@ pub(crate) fn build_library_report(
     options: BuildCommandOptions,
     report_options: &BuildReportOptions,
 ) -> CliResult<crate::cli::commands::build_report::BuildReport> {
+    ensure_backend_request_available(&options.backend)?;
+    if options.backend.requested == BackendKind::Replacement {
+        return Err(CliError::failure(
+            "replacement backend #988 supports source-only executable free functions, not libraries or package artifacts",
+        ));
+    }
     let total_start = Instant::now();
     let artifact_only = env::var_os(INTERNAL_LIBRARY_ARTIFACT_ONLY_ENV).is_some();
     if !artifact_only {
@@ -13045,13 +13703,22 @@ pub(crate) fn build_library_report(
             cargo_all_features: options.cargo_all_features,
         };
         if output_dir.is_none()
-            && let Some(outputs) = select_default_library_project_outputs(file_path, &completed_output_policy)?
+            && let Some(outputs) =
+                select_default_library_project_outputs(file_path, &completed_output_policy, &options.backend)?
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            let backend_receipt = outputs
+                .iter()
+                .find(|output| output.profile == "release")
+                .and_then(completed_output_default_backend_receipt)
+                .ok_or_else(|| {
+                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                })?;
             for output in &outputs {
                 materialize_project_output(&project_root, output)?;
             }
+            write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
             return completed_library_output_report(&project_root, &outputs, total_start);
         }
     }
@@ -13070,6 +13737,7 @@ pub(crate) fn build_library_report(
         !artifact_only,
         OvenProjectPlanMode::ConsumeOnly,
         None,
+        &options.backend,
     )?;
 
     if artifact_only {
@@ -13111,6 +13779,12 @@ pub(crate) fn build_library_report(
                 .artifacts
                 .push(artifact_report(format!("rust_library_{profile}"), &bake.output));
         }
+        // Published only now that the whole build — codegen, Oven plan selection, and both
+        // debug/release rustc bakes above — has actually succeeded (#986); `prepare_library_project`
+        // itself never persists this (see the matching comment there).
+        if let Some(backend_receipt) = report_draft.backend.as_ref() {
+            write_backend_receipt(backend_receipt, &default_backend_receipt_path(&prepared.project_root))?;
+        }
         let mut timings_ms = prepared.timings_ms.clone();
         timings_ms.insert("oven_build".to_string(), oven_build_ms);
         timings_ms.insert("total".to_string(), elapsed_ms(total_start));
@@ -13120,6 +13794,59 @@ pub(crate) fn build_library_report(
     Err(CliError::failure(
         "normal `incan build --lib` requires a prepared Oven direct-rustc selection; Cargo library execution is not an available fallback",
     ))
+}
+
+/// Output format for `incan inspect backend-selection`.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendSelectionInspectFormat {
+    /// Human-readable summary of the receipt's key fields.
+    Text,
+    /// The complete receipt, pretty-printed.
+    Json,
+}
+
+/// Read, verify, and render one persisted backend-selection execution receipt (#986).
+///
+/// Mirrors `inspect_oven_receipt`'s read-verify-render shape, but has no bounded store to
+/// consult: a backend-selection receipt is self-contained, so verification is just
+/// `BackendExecutionReceipt::verify_identity`.
+pub fn inspect_backend_selection(path: &Path, format: BackendSelectionInspectFormat) -> CliResult<ExitCode> {
+    let bytes = fs::read(path).map_err(|error| {
+        CliError::failure(format!(
+            "failed to read backend-selection receipt {}: {error}",
+            path.display()
+        ))
+    })?;
+    let receipt =
+        serde_json::from_slice::<crate::backend::selection::BackendExecutionReceipt>(&bytes).map_err(|error| {
+            CliError::failure(format!(
+                "failed to parse backend-selection receipt {}: {error}",
+                path.display()
+            ))
+        })?;
+    receipt
+        .verify_identity()
+        .map_err(|error| CliError::failure(error.to_string()))?;
+    match format {
+        BackendSelectionInspectFormat::Text => {
+            println!("selected backend:   {:?}", receipt.selection.selected_backend);
+            println!("executed backend:   {:?}", receipt.executed_backend);
+            println!("selection reason:   {:?}", receipt.selection.selection_reason);
+            println!("fallback policy:    {:?}", receipt.selection.fallback_policy);
+            println!("fallback outcome:   {:?}", receipt.fallback_outcome);
+            println!("shadow comparison:  {:?}", receipt.shadow_comparison);
+            println!("compiler version:   {}", receipt.compiler_version);
+            println!("selection identity: {}", receipt.selection.identity);
+            println!("receipt identity:   {}", receipt.identity);
+        }
+        BackendSelectionInspectFormat::Json => {
+            let json = serde_json::to_string_pretty(&receipt).map_err(|error| {
+                CliError::failure(format!("failed to serialize backend-selection receipt: {error}"))
+            })?;
+            println!("{json}");
+        }
+    }
+    Ok(ExitCode::SUCCESS)
 }
 
 /// Generate and inspect the same Oven Alpha Rust projection used by normal commands without running its binary.
@@ -13140,6 +13867,7 @@ pub fn inspect_rust(path: &Path, lib_mode: bool, format: RustInspectionFormat) -
             false,
             OvenProjectPlanMode::ConsumeOnly,
             None,
+            &BackendSelectionOptions::default(),
         )?;
         rust_inspection_report(
             BuildReportMode::Library,
@@ -13160,6 +13888,7 @@ pub fn inspect_rust(path: &Path, lib_mode: bool, format: RustInspectionFormat) -
             "release",
             OvenProjectPlanMode::ConsumeOnly,
             None,
+            &BackendSelectionOptions::default(),
         )?;
         rust_inspection_report(
             BuildReportMode::Executable,
@@ -13260,6 +13989,7 @@ pub fn run_file(
         profile,
         OvenProjectPlanMode::ConsumeOnly,
         None,
+        &BackendSelectionOptions::default(),
     )?;
     run_oven_prepared_project(prepared, profile)
 }
@@ -13318,6 +14048,7 @@ pub fn run_inline_source(
         if release { "release" } else { "debug" },
         OvenProjectPlanMode::ConsumeOnly,
         None,
+        &BackendSelectionOptions::default(),
     )
     .and_then(|prepared| run_oven_prepared_project(prepared, if release { "release" } else { "debug" }));
     let _ = fs::remove_file(&source_path);
@@ -13368,6 +14099,76 @@ mod tests {
     };
     use crate::oven_interop::locked_oven_interop_targets;
     use std::fs;
+
+    #[test]
+    fn provider_operation_metadata_is_projected_from_checked_declaration_facts()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::collections::BTreeMap;
+        use std::path::PathBuf;
+
+        use crate::frontend::typechecker::{ProviderOperationDeclarationInfo, TypeCheckInfo};
+        use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
+
+        let operation = CanonicalSymbolId::module_declaration(
+            vec!["provider".to_string(), "billing".to_string()],
+            "charge",
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(20, 26),
+        );
+        let required_capability = CanonicalSymbolId::module_declaration(
+            vec!["provider".to_string(), "billing".to_string()],
+            "charge_card",
+            SemanticSourceTargetKind::Capability,
+            HirSourceSpan::new(1, 12),
+        );
+        let mut type_info = TypeCheckInfo::default();
+        type_info.declarations.provider_operations.insert(
+            operation.clone(),
+            ProviderOperationDeclarationInfo {
+                operation: operation.clone(),
+                required_capability: required_capability.clone(),
+                runtime_requirements: Vec::new(),
+            },
+        );
+
+        let descriptors = provider_operation_metadata_from_checked_type_info(&BTreeMap::from([(
+            PathBuf::from("src/billing.incn"),
+            type_info,
+        )]))?;
+        assert_eq!(descriptors.len(), 1);
+        assert_eq!(descriptors[0].operation, operation);
+        assert_eq!(descriptors[0].required_capability, required_capability);
+        assert!(descriptors[0].runtime_requirements.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn completed_output_reuse_requires_the_implicit_default_backend_selection() {
+        let default = BackendSelectionOptions::default();
+        assert!(default.allows_completed_output_reuse());
+        assert!(ensure_backend_request_available(&default).is_ok());
+
+        let replacement_refusal = BackendSelectionOptions {
+            requested: BackendKind::Replacement,
+            explicit: true,
+            shadow: false,
+            fallback_policy: FallbackPolicy::Refuse,
+        };
+        assert!(!replacement_refusal.allows_completed_output_reuse());
+        assert!(
+            ensure_backend_request_available(&replacement_refusal).is_ok(),
+            "the capability preflight recognizes the partial executor; source-profile support is resolved later through the source-bound selection"
+        );
+
+        let declared_fallback = BackendSelectionOptions {
+            requested: BackendKind::Replacement,
+            explicit: true,
+            shadow: false,
+            fallback_policy: FallbackPolicy::AllowTo(BackendKind::Legacy),
+        };
+        assert!(!declared_fallback.allows_completed_output_reuse());
+        assert!(ensure_backend_request_available(&declared_fallback).is_ok());
+    }
 
     #[test]
     fn test_dependency_envelope_promotes_aliases_features_and_paths_into_dependencies()
@@ -14255,6 +15056,20 @@ headers = ["interop/include/bridge.h"]
             caller_relative_path: format!("target/fixture/{profile}-{label}"),
             output_relative_path: OVEN_PROJECT_OUTPUT_ARTIFACT_PATH.to_string(),
         }];
+        let backend_selection = select_backend(
+            BackendKind::Legacy,
+            false,
+            false,
+            format!("sha256:fixture-source-{label}"),
+            FallbackPolicy::Refuse,
+        );
+        let backend_receipt = finalize_receipt(
+            &backend_selection,
+            BackendKind::Legacy,
+            format!("sha256:fixture-output-{label}"),
+            ShadowComparisonState::NotRequested,
+            diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+        )?;
         let payload = project_output_payload_for_bake(OvenProjectOutputBakeRequest {
             project_root,
             entrypoint: &entrypoint,
@@ -14272,6 +15087,7 @@ headers = ["interop/include/bridge.h"]
             },
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt,
             build_report: None,
         })?;
         Ok((receipt, payload, files))
@@ -14425,9 +15241,10 @@ headers = ["interop/include/bridge.h"]
             "release",
         )?
         .ok_or("published completed executable report was not selected")?;
-        materialize_project_output(project.path(), &selected)?;
-
-        let report = completed_executable_output_report(project.path(), &selected, Instant::now())?;
+        let backend_receipt = completed_output_default_backend_receipt(&selected)
+            .ok_or("completed output did not retain the verified default backend receipt")?;
+        materialize_completed_executable_output(project.path(), &selected, &backend_receipt)?;
+        let report = completed_executable_output_report(project.path(), &selected, &backend_receipt, Instant::now())?;
 
         assert_eq!(
             report.pointer("/dependencies/rust/0/crate_name"),
@@ -14438,6 +15255,13 @@ headers = ["interop/include/bridge.h"]
             Some(&serde_json::json!(project.path().to_string_lossy()))
         );
         assert!(report.get("workspace").is_none());
+        assert_eq!(
+            report.pointer("/backend/identity"),
+            Some(&serde_json::json!(&backend_receipt.identity))
+        );
+        let persisted = fs::read(default_backend_receipt_path(project.path()))?;
+        let persisted = serde_json::from_slice::<BackendExecutionReceipt>(&persisted)?;
+        assert_eq!(persisted, backend_receipt);
         assert!(report.pointer("/timings_ms/completed_project_output_reuse").is_some());
         Ok(())
     }
@@ -14666,6 +15490,19 @@ headers = ["interop/include/bridge.h"]
             ],
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt: finalize_receipt(
+                &select_backend(
+                    BackendKind::Legacy,
+                    false,
+                    false,
+                    "sha256:fixture-source",
+                    FallbackPolicy::Refuse,
+                ),
+                BackendKind::Legacy,
+                "sha256:fixture-output",
+                ShadowComparisonState::NotRequested,
+                diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            )?,
             build_report: None,
         };
         let files = vec![
@@ -14697,6 +15534,7 @@ headers = ["interop/include/bridge.h"]
             },
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
+            backend_receipt: payload.backend_receipt.clone(),
             build_report: None,
         });
         let Err(inconsistent) = inconsistent else {
@@ -14970,6 +15808,19 @@ headers = ["interop/include/bridge.h"]
                 base_loaf_identity: None,
             }],
             package_loaf_store_relative_path: Some("target/lib/oven/loafs".to_string()),
+            backend_receipt: finalize_receipt(
+                &select_backend(
+                    BackendKind::Legacy,
+                    false,
+                    false,
+                    "sha256:fixture-library-source",
+                    FallbackPolicy::Refuse,
+                ),
+                BackendKind::Legacy,
+                "sha256:fixture-library-output",
+                ShadowComparisonState::NotRequested,
+                diagnostics::DIAGNOSTIC_SCHEMA_VERSION,
+            )?,
             build_report: None,
         };
         let files = vec![
@@ -18236,6 +19087,190 @@ pub model Nested:
             .err()
             .ok_or("a source-free provider without a sealed package Loaf must fail closed")?;
         assert!(missing_handoff.to_string().contains("without its sealed package Loaf"));
+        Ok(())
+    }
+
+    // ---- Body IR input contract (#1166) ----
+
+    /// A raw vocab declaration whose owning library manifest this compilation never loaded.
+    ///
+    /// The parser only produces one of these when an import activates a library vocabulary, which the replacement
+    /// module profile still refuses, so building it by hand is the only way to put the desugar pass in front of a
+    /// node it must resolve.
+    fn undesugared_vocab_declaration() -> Spanned<Declaration> {
+        Spanned::new(
+            Declaration::VocabBlock(crate::frontend::ast::VocabBlockStmt {
+                keyword: "query".to_string(),
+                keyword_binding: crate::frontend::ast::VocabKeywordBinding {
+                    is_declaration_owned_clause: false,
+                    dependency_key: "demo.query".to_string(),
+                    activation_namespace: "demo".to_string(),
+                    surface_kind: incan_vocab::KeywordSurfaceKind::FunctionDecl,
+                    compound_tokens: Vec::new(),
+                    placement: incan_vocab::KeywordPlacement::TopLevel,
+                    clause_body_kind: None,
+                },
+                decorators: Vec::new(),
+                signature_head: None,
+                header_args: Vec::new(),
+                body: Vec::new(),
+                body_item_trailing_commas: Vec::new(),
+            }),
+            Span::new(0, 1),
+        )
+    }
+
+    /// Build the replacement-backend options a `--backend replacement` build resolves to.
+    fn replacement_build_options() -> BuildCommandOptions {
+        BuildCommandOptions {
+            backend: BackendSelectionOptions {
+                requested: BackendKind::Replacement,
+                explicit: true,
+                shadow: false,
+                fallback_policy: FallbackPolicy::Refuse,
+            },
+            ..BuildCommandOptions::default()
+        }
+    }
+
+    #[test]
+    fn the_contract_step_refuses_a_vocab_declaration_with_the_desugar_pass_own_diagnostic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The replacement path owes Body IR a desugared program. This is what "owes" means concretely: a vocab
+        // declaration whose library is unavailable stops here, with the resolution failure the desugar pass already
+        // reports, rather than travelling on to become a lowering refusal at the same span.
+        let program = crate::frontend::ast::Program {
+            declarations: vec![undesugared_vocab_declaration()],
+            ..Default::default()
+        };
+
+        let errors = body_ir::apply_body_ir_input_contract(program, Path::new("/fixture/main.incn"))
+            .err()
+            .ok_or("an undesugared vocab declaration must not pass the Body IR input contract")?;
+        let messages = errors
+            .iter()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            messages.contains("desugarer resolution failed") && messages.contains("demo.query"),
+            "the desugar pass must own this diagnostic, naming the unavailable dependency: {messages}"
+        );
+        assert!(
+            !messages.contains("input-contract violation"),
+            "one unavailable-manifest condition must not produce two divergent diagnostics: {messages}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_contract_step_projects_a_body_behind_an_inactive_feature_out_of_the_program()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Feature projection has to happen before the module-profile gate and before lowering, so this checks the
+        // program the rest of the pipeline actually receives rather than only the eventual build outcome.
+        let source =
+            "when feature(\"beta\"):\n    def gated() -> int:\n        return 7\n\ndef main() -> int:\n    return 1\n";
+        let tokens = lexer::lex(source).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        assert_eq!(
+            parsed.declarations.len(),
+            2,
+            "the fixture must carry a gated declaration, or the assertion below proves nothing"
+        );
+
+        let projected = body_ir::apply_body_ir_input_contract(parsed, Path::new("/fixture/main.incn"))
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let names = projected
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.node {
+                Declaration::Function(function) => Some(function.name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["main"],
+            "a declaration behind an inactive feature must not survive the contract step"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_refuses_nondefault_package_feature_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(&entrypoint, "def main() -> int:\n    return 7\n")?;
+        let feature_selections = [
+            FeatureSelection::new(["beta"]),
+            FeatureSelection {
+                no_default_features: true,
+                ..FeatureSelection::default()
+            },
+        ];
+
+        for package_features in feature_selections {
+            let mut options = replacement_build_options();
+            options.package_features = package_features;
+            let error =
+                build_replacement_file_report(&entrypoint.to_string_lossy(), options, &BuildReportOptions::default())
+                    .err()
+                    .ok_or(
+                        "a non-default package feature selection must not enter the source-only replacement profile",
+                    )?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("supports only the default package feature selection"),
+                "unexpected replacement feature-selection refusal: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_never_executes_a_main_behind_an_inactive_feature() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The end-to-end consequence, through the real CLI entry point: with no active feature there is no `main`
+        // to lower, so the build must refuse rather than execute a body this compilation does not contain.
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(
+            &entrypoint,
+            "when feature(\"beta\"):\n    def main() -> int:\n        return 7\n",
+        )?;
+
+        let error = build_replacement_file_report(
+            &entrypoint.to_string_lossy(),
+            replacement_build_options(),
+            &BuildReportOptions::default(),
+        )
+        .err()
+        .ok_or("a `main` behind an inactive feature must not produce a successful replacement build")?;
+        assert!(
+            !error.to_string().contains("7"),
+            "no gated body may have been executed: {error}"
+        );
+
+        // Same source, same contract, through the direct API the parity corpus and unit tests use: both entry
+        // points must agree that nothing was lowered, which is the point of stating the contract at all.
+        let tokens =
+            lexer::lex(&fs::read_to_string(&entrypoint)?).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let program = body_ir::apply_body_ir_input_contract(parsed, &entrypoint)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let module_path = vec!["main".to_string()];
+        let mut checker = typechecker::TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+        assert!(
+            body_ir.bodies.is_empty(),
+            "the direct API must lower the same nothing the CLI path did: {:?}",
+            body_ir.bodies.iter().map(|body| &body.name).collect::<Vec<_>>()
+        );
         Ok(())
     }
 }

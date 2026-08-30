@@ -422,7 +422,7 @@ fn write_fixture_sdk_provider_seed(root: &Path, profile: &str) -> Result<PathBuf
     let inventory = serde_json::json!({
         "schema_version": 2,
         "sdk_id": "incan-fixture",
-        "sdk_version": "0.5.0",
+        "sdk_version": "0.6.0",
         "compiler_requirement": format!("={compiler_version}"),
         "provider_codegen_revision": incan::version::SDK_PROVIDER_CODEGEN_REVISION,
         "components": inventory_components,
@@ -1270,7 +1270,7 @@ fn compiler_suite_action_composes_baker_guarded_runner_and_storage_evidence() ->
             && workflow.contains("{ partition: 2, display: 3 }")
             && workflow.contains("{ partition: 3, display: 4 }")
             && !workflow.contains("timeout-minutes:")
-            && workflow.matches("Install WASI target for vocab desugarers").count() == 6
+            && workflow.matches("Install WASI target for vocab desugarers").count() == 7
             && !workflow.contains("make test-oven-focused"),
         "pull-request CI must cancel superseded runs, prewarm the complete stable Linux suite once, replay its four receipt partitions without rebaking, retain independent process-containment coverage, and carry no explicit per-job budgets: a version bump cold-starts every completion-gated cache, and any budget below a cold build means the job can never re-warm, so the runner-level 6-hour ceiling is the only bound"
     );

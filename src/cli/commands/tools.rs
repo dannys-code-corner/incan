@@ -1,6 +1,6 @@
 //! Local toolchain inspection commands.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,11 +22,12 @@ use crate::frontend::contract_metadata::{
     CanonicalModelBundle, read_model_bundles_from_json, read_project_model_bundles,
 };
 use crate::frontend::diagnostics;
+use crate::frontend::feature_metadata::{PublicFeatureDescriptor, public_feature_descriptors};
 use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManifestIndexEntry};
 use crate::frontend::registry_metadata::{
     CHECKED_REGISTRY_METADATA_SCHEMA_VERSION, CheckedRegistryDefinition, CheckedRegistryEntry,
-    CheckedRegistryMetadataPackage, CheckedRegistryPackageIdentity, CheckedRegistryValue,
-    collect_checked_registry_metadata, materialize_registry_reexport_projections,
+    CheckedRegistryMetadataPackage, CheckedRegistryPackageIdentity, collect_checked_registry_metadata,
+    materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker;
 use crate::library_manifest::{LibraryManifest, ParamExport, ParamKindExport, TypeRef};
@@ -34,7 +35,7 @@ use crate::manifest::ProjectManifest;
 
 use super::common::{
     CompilationSession, collect_modules, collect_modules_detailed_with_session, discover_effective_project_manifest,
-    imported_module_deps_for_with_index, module_key_index, resolve_project_root,
+    imported_module_deps_for_with_index, module_key_index, render_module_warnings, resolve_project_root,
 };
 
 /// Output format for `incan tools doctor`.
@@ -229,28 +230,28 @@ pub fn inspect_registry(
     Ok(ExitCode::SUCCESS)
 }
 
-/// Regenerate the public feature inventory from the checked `std.capabilities` registry.
+/// Regenerate the public feature inventory from the checked `std.features` registry.
 ///
 /// This deliberately walks the same checked registry metadata used by `incan inspect registry`; it never scrapes
 /// Incan comments, rereads descriptor source, or evaluates the runtime registry. The descriptor shape is owned by the
 /// standard library module and is validated here only at the documentation boundary that renders its public contract.
 pub fn write_feature_inventory_reference(path: &Path) -> CliResult<()> {
-    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/capabilities.incn");
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/features.incn");
     write_feature_inventory_reference_from_source(&source, path)
 }
 
-/// Regenerate the public feature inventory from an explicit checked `std.capabilities` source.
+/// Regenerate the public feature inventory from an explicit checked `std.features` source.
 ///
 /// Build artifacts use this entry point so their source checkout can be relocated independently from the machine that
 /// compiled the generator.
 pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path) -> CliResult<()> {
     let package = collect_registry_metadata_package(source)?;
-    let entries = stdlib_capability_inventory(&package)?;
+    let entries = stdlib_feature_inventory(&package)?;
     let mut output = String::new();
     output.push_str("# Incan feature inventory\n\n");
     output.push_str("!!! warning \"Generated file\"\n");
     output.push_str(
-        "    Do not edit this page by hand. If it looks wrong/outdated, update `crates/incan_stdlib/stdlib/capabilities.incn` and regenerate it.\n",
+        "    Do not edit this page by hand. If it looks wrong/outdated, update `crates/incan_stdlib/stdlib/features.incn` and regenerate it.\n",
     );
     output.push('\n');
     output.push_str("    Regenerate with: `cargo run --features cli --bin generate_feature_inventory`\n\n");
@@ -318,155 +319,11 @@ pub fn write_feature_inventory_reference_from_source(source: &Path, path: &Path)
     fs::write(path, output).map_err(|error| CliError::failure(format!("failed to write {}: {error}", path.display())))
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct CapabilityInventoryEntry {
-    id: String,
-    name: String,
-    category: String,
-    since: String,
-    rfc: String,
-    stability: String,
-    activation: String,
-    summary: String,
-    canonical_forms: Vec<String>,
-    prefer_over: String,
-    references: Vec<(String, String)>,
-}
+type FeatureInventoryEntry = PublicFeatureDescriptor;
 
 /// Decode the stable standard-library capability descriptor using only checked structural values.
-fn stdlib_capability_inventory(package: &CheckedRegistryMetadataPackage) -> CliResult<Vec<CapabilityInventoryEntry>> {
-    let Some(module) = package.modules.iter().find(|module| {
-        module
-            .registries
-            .iter()
-            .any(|registry| registry.identity == "capabilities::capabilities")
-    }) else {
-        return Err(CliError::failure("checked std.capabilities registry was not found"));
-    };
-    let entries = module
-        .entries
-        .iter()
-        .filter(|entry| entry.registry_identity == "capabilities::capabilities")
-        .map(capability_inventory_entry)
-        .collect::<CliResult<Vec<_>>>()?;
-    if entries.is_empty() {
-        return Err(CliError::failure(
-            "checked std.capabilities inventory must contain at least one entry",
-        ));
-    }
-    Ok(entries)
-}
-
-/// Decode one checked `CapabilityDescriptor` entry into the generator's presentation model.
-fn capability_inventory_entry(entry: &CheckedRegistryEntry) -> CliResult<CapabilityInventoryEntry> {
-    let fields = checked_model_fields(&entry.descriptor, "CapabilityDescriptor")?;
-    let id = checked_newtype_string(checked_required_field(&fields, "id")?, "CapabilityId")?;
-    let name = checked_string(checked_required_field(&fields, "name")?)?;
-    let category = checked_enum_variant(checked_required_field(&fields, "category")?, "CapabilityCategory")?;
-    let since = checked_string(checked_required_field(&fields, "since")?)?;
-    let rfc = checked_string(checked_required_field(&fields, "rfc")?)?;
-    let stability = checked_enum_variant(checked_required_field(&fields, "stability")?, "CapabilityStability")?;
-    let activation = checked_string(checked_required_field(&fields, "activation")?)?;
-    let summary = checked_string(checked_required_field(&fields, "summary")?)?;
-    let canonical_forms = checked_list(checked_required_field(&fields, "canonical_forms")?)?
-        .iter()
-        .map(checked_string)
-        .collect::<CliResult<Vec<_>>>()?;
-    let prefer_over = checked_string(checked_required_field(&fields, "prefer_over")?)?;
-    let references = checked_list(checked_required_field(&fields, "references")?)?
-        .iter()
-        .map(|reference| {
-            let fields = checked_model_fields(reference, "CapabilityReference")?;
-            Ok((
-                checked_string(checked_required_field(&fields, "label")?)?,
-                checked_string(checked_required_field(&fields, "path")?)?,
-            ))
-        })
-        .collect::<CliResult<Vec<_>>>()?;
-    Ok(CapabilityInventoryEntry {
-        id,
-        name,
-        category,
-        since,
-        rfc,
-        stability,
-        activation,
-        summary,
-        canonical_forms,
-        prefer_over,
-        references,
-    })
-}
-
-/// Return the named fields of a checked model value after confirming its descriptor type.
-fn checked_model_fields(
-    value: &CheckedRegistryValue,
-    expected_name: &str,
-) -> CliResult<BTreeMap<String, CheckedRegistryValue>> {
-    let CheckedRegistryValue::Model { name, fields } = value else {
-        return Err(CliError::failure(format!("expected {expected_name} descriptor model")));
-    };
-    if name != expected_name {
-        return Err(CliError::failure(format!(
-            "expected {expected_name} descriptor model, found {name}"
-        )));
-    }
-    Ok(fields
-        .iter()
-        .map(|field| (field.name.clone(), field.value.clone()))
-        .collect())
-}
-
-/// Return one required descriptor field or report the schema drift at the documentation boundary.
-fn checked_required_field<'a>(
-    fields: &'a BTreeMap<String, CheckedRegistryValue>,
-    name: &str,
-) -> CliResult<&'a CheckedRegistryValue> {
-    fields
-        .get(name)
-        .ok_or_else(|| CliError::failure(format!("CapabilityDescriptor is missing `{name}`")))
-}
-
-/// Extract a checked string value without coercing other structural shapes.
-fn checked_string(value: &CheckedRegistryValue) -> CliResult<String> {
-    match value {
-        CheckedRegistryValue::String(value) => Ok(value.clone()),
-        _ => Err(CliError::failure("expected checked string descriptor value")),
-    }
-}
-
-/// Extract the string payload of one checked newtype with the expected domain identity.
-fn checked_newtype_string(value: &CheckedRegistryValue, expected_name: &str) -> CliResult<String> {
-    let CheckedRegistryValue::Newtype { name, value } = value else {
-        return Err(CliError::failure(format!("expected {expected_name} newtype value")));
-    };
-    if name != expected_name {
-        return Err(CliError::failure(format!(
-            "expected {expected_name} newtype value, found {name}"
-        )));
-    }
-    checked_string(value)
-}
-
-/// Extract a checked enum variant and ensure that it belongs to the expected enum.
-fn checked_enum_variant(value: &CheckedRegistryValue, expected_enum: &str) -> CliResult<String> {
-    let CheckedRegistryValue::ConstRef(path) = value else {
-        return Err(CliError::failure(format!("expected {expected_enum} enum value")));
-    };
-    if path.first().map(String::as_str) != Some(expected_enum) {
-        return Err(CliError::failure(format!("expected {expected_enum} enum value")));
-    }
-    path.last()
-        .cloned()
-        .ok_or_else(|| CliError::failure(format!("expected {expected_enum} enum variant")))
-}
-
-/// Borrow a checked structural list without accepting a runtime-shaped substitute.
-fn checked_list(value: &CheckedRegistryValue) -> CliResult<&[CheckedRegistryValue]> {
-    match value {
-        CheckedRegistryValue::List(values) => Ok(values),
-        _ => Err(CliError::failure("expected checked descriptor list value")),
-    }
+fn stdlib_feature_inventory(package: &CheckedRegistryMetadataPackage) -> CliResult<Vec<FeatureInventoryEntry>> {
+    public_feature_descriptors(package).map_err(CliError::failure)
 }
 
 /// Escape table delimiters and line breaks in generated Markdown table cells.
@@ -862,15 +719,15 @@ fn collect_api_metadata_package(path: &Path) -> CliResult<CheckedApiMetadataPack
             checker.set_declared_crate_names(names);
         }
         checker.set_library_manifest_index(library_manifest_index.clone());
+        super::common::register_module_path_segments(&mut checker, &modules);
 
         match checker.check_with_imports(&module.ast, &deps_for_module) {
             Ok(()) => {
-                for warn in checker.warnings() {
-                    eprint!(
-                        "{}",
-                        diagnostics::format_error(module.file_path.to_string_lossy().as_ref(), &module.source, warn)
-                    );
-                }
+                render_module_warnings(
+                    module.file_path.to_string_lossy().as_ref(),
+                    &module.source,
+                    checker.warnings(),
+                );
                 metadata_modules.push(collect_checked_api_metadata(
                     &module.ast,
                     &checker,
@@ -1863,10 +1720,10 @@ mod tests {
     }
 
     #[test]
-    fn std_capability_inventory_is_checked_and_generates_reference() -> Result<(), Box<dyn std::error::Error>> {
-        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/capabilities.incn");
+    fn std_feature_inventory_is_checked_and_generates_reference() -> Result<(), Box<dyn std::error::Error>> {
+        let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("crates/incan_stdlib/stdlib/features.incn");
         let package = collect_registry_metadata_package(&source)?;
-        let entries = stdlib_capability_inventory(&package)?;
+        let entries = stdlib_feature_inventory(&package)?;
         assert!(!entries.is_empty());
         assert!(entries.iter().any(|entry| {
             entry.id == "StdRegistry"
@@ -1897,7 +1754,7 @@ mod tests {
         assert!(rendered.contains("Workspace and multi-package projects"));
         assert!(rendered.contains("Compiled providers, SDK components, and package features"));
         assert!(rendered.contains("Fallible iteration and combinators"));
-        assert!(rendered.contains("crates/incan_stdlib/stdlib/capabilities.incn"));
+        assert!(rendered.contains("crates/incan_stdlib/stdlib/features.incn"));
         Ok(())
     }
 

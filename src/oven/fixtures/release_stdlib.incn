@@ -6,7 +6,7 @@ import std.async.race
 import std.async.sync
 import std.async.task
 import std.async.time
-import std.capabilities
+import std.features
 import std.checksum
 import std.collections
 import std.compression

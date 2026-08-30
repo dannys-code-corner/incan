@@ -6,7 +6,7 @@ use std::process::Command;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let workspace_root = workspace_root()?;
     build_workspace_cli(&workspace_root)?;
-    let source = workspace_root.join("crates/incan_stdlib/stdlib/capabilities.incn");
+    let source = workspace_root.join("crates/incan_stdlib/stdlib/features.incn");
     let output = workspace_root.join("workspaces/docs-site/docs/language/reference/feature_inventory.md");
     incan::cli::commands::tools::write_feature_inventory_reference_from_source(&source, &output)?;
     Ok(())
