@@ -24,8 +24,9 @@ use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
     OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
     OvenRustcArtifactManifest, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
-    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rustc_host_target, rustc_identity,
-    select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
+    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rerooted_artifact_staging_source,
+    rustc_host_target, rustc_identity, select_direct_rustc_plan_identity,
+    validate_project_extension_payload_against_base,
 };
 use super::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
@@ -46,7 +47,9 @@ pub const OVEN_LEGACY_CARGO_PROVENANCE_SCHEMA_VERSION: u32 = 2;
 /// Version 10 records the generated root's registry packages so recomposition reproduces substitution regimes.
 /// Version 11 re-roots retained extension artifacts that collide with the base execution closure into
 /// `extension-deps`, so plans composed under the older digest-stamping rule must rebake.
-pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 11;
+/// Version 12 salts extension crate identities (`-C metadata=incan-extension`) so shared interior units coexist
+/// with the sealed base's twins as distinct crates; plans built with unsalted identities must rebake.
+pub const OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION: u32 = 12;
 /// Wire schema for one independently admitted compiler-suite target shard.
 ///
 /// Version 2 adds the direct-Rustc workspace library/proc-macro materialization DAG. Consumers of schema-10 suite
@@ -1389,6 +1392,7 @@ pub fn prepare_direct_rustc_plan(
         transient_limit,
         request.publication_kind,
         request.compact_debug_info,
+        request.base_loaf.is_some(),
     )?;
     let cargo_lock = generated_project.join("Cargo.lock");
     let cargo_lock_bytes = regular_file_bytes(&cargo_lock)?;
@@ -1601,6 +1605,30 @@ pub fn prepare_direct_rustc_plan(
                 "explicit project bake produced no non-stdlib artifacts; consume the selected standard-library Loaf directly"
                     .to_string(),
             ));
+        }
+        // ---- Stage re-rooted collision artifacts before atomic copying ----
+        // Cohort composition moves a salted extension artifact whose filename collides with the base's execution
+        // closure into its `extension-deps` sibling directory, but the built file still sits in the Cargo `deps`
+        // output. Materialization resolves every source as the staging root joined with the recorded relative path,
+        // so link each re-rooted artifact into its recorded home here.
+        for relative_path in &partition.extension_paths {
+            let Some(source) = rerooted_artifact_staging_source(relative_path) else {
+                continue;
+            };
+            let source_path = staging.join(&source);
+            let target_path = staging.join(relative_path);
+            if let Some(parent) = target_path.parent() {
+                fs::create_dir_all(parent).map_err(|source| OvenLegacyCargoError::Io {
+                    path: parent.to_path_buf(),
+                    source,
+                })?;
+            }
+            if fs::hard_link(&source_path, &target_path).is_err() {
+                fs::copy(&source_path, &target_path).map_err(|source| OvenLegacyCargoError::Io {
+                    path: target_path.clone(),
+                    source,
+                })?;
+            }
         }
         let materialized_plan = complete_plan
             .artifact_fragment(&partition.extension_paths)
@@ -1861,6 +1889,7 @@ pub fn prepare_compiler_test_suite(
         &OvenLegacyCargoInvocationTarget::WorkspaceTests,
         true,
         false,
+        false,
     )?;
     let unit_graph_elapsed_ms = unit_graph_started.elapsed().as_millis();
     let unit_graph = parse_compiler_suite_unit_graph(&unit_graph_output)?;
@@ -1897,6 +1926,7 @@ pub fn prepare_compiler_test_suite(
         publisher_transient_limit,
         "build",
         &OvenLegacyCargoInvocationTarget::PackageLibrary,
+        false,
         false,
         false,
     )?;
@@ -2012,6 +2042,7 @@ pub fn prepare_compiler_test_suite(
         "build",
         &OvenLegacyCargoInvocationTarget::CompilerCli,
         true,
+        false,
         false,
     )?;
     let cli_unit_graph = parse_compiler_suite_unit_graph(&cli_unit_graph_output)?;
@@ -3120,6 +3151,7 @@ fn run_legacy_cargo(
     transient_limit: u64,
     publication_kind: OvenLegacyCargoPublicationKind,
     compact_debug_info: bool,
+    distinct_extension_identities: bool,
 ) -> Result<Vec<CargoInvocationOutput>, OvenLegacyCargoError> {
     let first = run_legacy_cargo_invocation(
         cargo,
@@ -3142,6 +3174,7 @@ fn run_legacy_cargo(
         },
         false,
         compact_debug_info,
+        distinct_extension_identities,
     )?;
     let mut outputs = vec![first];
     if publication_kind == OvenLegacyCargoPublicationKind::LibraryTests {
@@ -3161,6 +3194,7 @@ fn run_legacy_cargo(
             &OvenLegacyCargoInvocationTarget::CompilerCli,
             false,
             compact_debug_info,
+            distinct_extension_identities,
         )?);
     }
     Ok(outputs)
@@ -7159,6 +7193,7 @@ fn run_legacy_cargo_invocation(
     target_selection: &OvenLegacyCargoInvocationTarget,
     unit_graph: bool,
     compact_debug_info: bool,
+    distinct_extension_identities: bool,
 ) -> Result<CargoInvocationOutput, OvenLegacyCargoError> {
     let cargo = canonical_tool_file(cargo, "cargo")?;
     let rustc = canonical_tool_file(rustc, "rustc")?;
@@ -7274,6 +7309,18 @@ fn run_legacy_cargo_invocation(
             "--remap-path-prefix={}=/rustc/{commit}",
             toolchain_root.join("lib/rustlib/src/rust").display()
         ));
+    }
+    // ---- Distinct extension crate identities ----
+    // rustc refuses to load two crates with one StableCrateId, and byte-identity across machines is unattainable
+    // because rustc folds its own install path into the strict version hash. A project extension therefore salts
+    // every unit's `-C metadata` set (rustc hashes all values together with Cargo's own entries), giving extension
+    // units StableCrateIds distinct from the sealed base's twins: both copies of a shared interior unit may then
+    // legally coexist in one crate graph, and rustc selects each dependent's copy by recorded hash. Declared
+    // root-linked crates still substitute onto the base copy by package semantics, so trait identities that can
+    // cross the boundary keep unifying. Base loaf bakes never salt — theirs are the canonical identities.
+    if distinct_extension_identities {
+        remap_flags.push("-C".to_string());
+        remap_flags.push("metadata=incan-extension".to_string());
     }
     command.env("CARGO_ENCODED_RUSTFLAGS", remap_flags.join("\u{1f}"));
     command
@@ -12026,6 +12073,7 @@ version = "1.0.0"
             &OvenLegacyCargoInvocationTarget::None,
             false,
             false,
+            false,
         )?;
 
         assert_eq!(
@@ -12059,6 +12107,7 @@ version = "1.0.0"
             1024 * 1024,
             "build",
             &OvenLegacyCargoInvocationTarget::None,
+            false,
             false,
             false,
         )?;
@@ -12195,6 +12244,7 @@ version = "1.0.0"
             &OvenLegacyCargoInvocationTarget::None,
             false,
             false,
+            false,
         );
 
         assert!(matches!(
@@ -12268,6 +12318,7 @@ version = "1.0.0"
             1024 * 1024,
             "test",
             &OvenLegacyCargoInvocationTarget::WorkspaceTests,
+            false,
             false,
             false,
         )?;
@@ -13171,6 +13222,7 @@ version = "1.0.0"
                 package: "fixture-package".to_string(),
                 target: "smoke".to_string(),
             },
+            false,
             false,
             false,
         )?;

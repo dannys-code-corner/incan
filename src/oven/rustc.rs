@@ -2254,6 +2254,54 @@ fn discard_orphaned_metadata_sidecars(manifest: &mut OvenRustcArtifactManifest) 
     });
 }
 
+/// Directory that holds a project extension's retained artifacts whose filenames collide with the selected release
+/// base's execution closure.
+///
+/// A salted extension unit carries a StableCrateId distinct from the sealed base's twin, so both copies of a
+/// shared interior unit legally coexist in one crate graph — but Cargo still names them identically, because the
+/// rustc-level `-C metadata` salt never enters Cargo's extra-filename hash. Artifact records are keyed by relative
+/// path, so the extension's copy moves into this sibling of its `deps` directory; rustc selects each dependent's
+/// copy by recorded hash, and the filename — the linkage identity — never changes.
+pub(crate) const OVEN_EXTENSION_REROOT_DIR: &str = "extension-deps";
+
+/// Return the `extension-deps` sibling path for an artifact that lives directly in a `deps` directory.
+///
+/// Returns `None` for artifacts outside a `deps` directory (registry sources, build-script `out/` staging, native
+/// libraries): those have no re-rooted home, so a digest collision there remains a genuine incompatibility.
+fn rerooted_extension_artifact_path(relative_path: &str) -> Option<String> {
+    let path = Path::new(relative_path);
+    let file_name = path.file_name()?;
+    let parent = path.parent()?;
+    if parent.file_name()? != "deps" {
+        return None;
+    }
+    let rerooted = match parent.parent() {
+        Some(grandparent) => grandparent.join(OVEN_EXTENSION_REROOT_DIR).join(file_name),
+        None => Path::new(OVEN_EXTENSION_REROOT_DIR).join(file_name),
+    };
+    Some(rerooted.to_string_lossy().into_owned())
+}
+
+/// Return the original `deps` staging location for a re-rooted extension artifact, or `None` when the path is not
+/// re-rooted.
+///
+/// [`OvenRustcArtifactManifest::materialized_artifacts`] resolves every artifact's source as the staging root joined
+/// with its recorded relative path, so the publisher stages a re-rooted artifact by linking the built file from this
+/// returned `deps` location into its `extension-deps` home before atomic copying.
+pub(crate) fn rerooted_artifact_staging_source(relative_path: &str) -> Option<String> {
+    let path = Path::new(relative_path);
+    let file_name = path.file_name()?;
+    let parent = path.parent()?;
+    if parent.file_name()? != OVEN_EXTENSION_REROOT_DIR {
+        return None;
+    }
+    let source = match parent.parent() {
+        Some(grandparent) => grandparent.join("deps").join(file_name),
+        None => Path::new("deps").join(file_name),
+    };
+    Some(source.to_string_lossy().into_owned())
+}
+
 /// Return the metadata-sidecar partner of a compiled artifact path: `libX-<hash>.rlib` pairs with the sibling
 /// `libX-<hash>.rmeta` and vice versa.
 ///
@@ -3179,24 +3227,13 @@ impl OvenRustcArtifactManifest {
                         .map(|artifact| (artifact.relative_path.clone(), artifact.digest.clone())),
                 )
                 .collect::<BTreeMap<_, _>>();
-            // A colliding artifact reconciles onto the base only when it is provably the same compilation. When the
-            // unit's other half already matches the release — its rlib was substituted onto the base copy, or its
-            // metadata sidecar is byte-identical because only path-bearing object code differs — the strict version
-            // hash agrees with the base, so retained consumers load the base copy fine and the colliding half
-            // adopts the base digest. Anything else is a reproducibility failure: the deterministic path remapping
-            // makes identical locked units byte-identical across machines, and rustc cannot load two crates with
-            // one StableCrateId, so composing both copies would produce an unlinkable plan. Fail closed and name
-            // the artifact instead.
-            let partner_follows_the_base = |relative_path: &str| {
-                metadata_sidecar_pair_path(relative_path).is_some_and(|partner| {
-                    declared_paths.get(&partner).is_some_and(|partner_digest| {
-                        release_artifacts
-                            .get(&partner)
-                            .is_some_and(|release| &release.digest == partner_digest)
-                    })
-                })
-            };
-            let mut base_adopted_paths = BTreeSet::new();
+            // A salted extension unit shares its Cargo filename with the base's twin while carrying a distinct
+            // StableCrateId, so the plan needs both files: the extension's copy moves into `extension-deps` with
+            // its split-metadata sidecar, the directory joins the search paths, and the base's copy joins the plan
+            // untouched below. rustc then selects each dependent's copy by the exact hash it recorded. Only a
+            // colliding artifact outside a `deps` directory has no re-rooted home; that remains a hard
+            // incompatibility, reported by the merge below.
+            let mut rerooted_paths = BTreeMap::new();
             for (relative_path, digest) in &declared_paths {
                 let Some(release) = release_artifacts.get(relative_path) else {
                     continue;
@@ -3204,50 +3241,48 @@ impl OvenRustcArtifactManifest {
                 if &release.digest == digest {
                     continue;
                 }
-                if partner_follows_the_base(relative_path) {
-                    base_adopted_paths.insert(relative_path.clone());
+                let Some(rerooted) = rerooted_extension_artifact_path(relative_path) else {
+                    continue;
+                };
+                rerooted_paths.insert(relative_path.clone(), rerooted);
+            }
+            for (relative_path, rerooted) in rerooted_paths.clone() {
+                let Some(partner) = metadata_sidecar_pair_path(&relative_path) else {
+                    continue;
+                };
+                if !declared_paths.contains_key(&partner) || rerooted_paths.contains_key(&partner) {
                     continue;
                 }
-                // A dynamic library's bytes include linker wrapping rustc's remapping cannot reach — Mach-O N_OSO
-                // stab entries record object-file paths and modification times, and the image UUID hashes them — so
-                // proc-macro dylibs never reproduce byte-for-byte even on one machine. The embedded crate metadata
-                // is rustc-emitted and path-remapped, so the same locked unit carries the same strict version hash
-                // in both copies and dependents load either; adopt the base's.
-                if relative_path.ends_with(".dylib") || relative_path.ends_with(".so") {
-                    base_adopted_paths.insert(relative_path.clone());
+                let Some(partner_rerooted) = metadata_sidecar_pair_path(&rerooted) else {
                     continue;
-                }
-                return Err(OvenRustcError::InvalidInput {
-                    field: "project extension base",
-                    message: format!(
-                        "artifact `{relative_path}` was compiled with different bytes than the selected release \
-                         base's copy of the same locked unit ({digest} here, {} in the base); reproducible builds \
-                         should make these identical, so a build input is leaking machine state — clear the \
-                         project's target directory and rebake, and report this if it persists",
-                        release.digest
-                    ),
-                });
+                };
+                rerooted_paths.insert(partner, partner_rerooted);
             }
-            for artifact in &mut composed.externs {
-                if base_adopted_paths.contains(&artifact.relative_path)
-                    && let Some(release) = release_artifacts.get(&artifact.relative_path)
-                {
-                    artifact.digest = release.digest.clone();
+            if !rerooted_paths.is_empty() {
+                for artifact in &mut composed.externs {
+                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path) {
+                        artifact.relative_path = rerooted.clone();
+                    }
                 }
-            }
-            for artifact in &mut composed.supporting_artifacts {
-                if base_adopted_paths.contains(&artifact.relative_path)
-                    && let Some(release) = release_artifacts.get(&artifact.relative_path)
-                {
-                    artifact.digest = release.digest.clone();
+                for artifact in &mut composed.supporting_artifacts {
+                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path) {
+                        artifact.relative_path = rerooted.clone();
+                    }
                 }
-            }
-            for leaf in &mut composed.registry_leaves {
-                if base_adopted_paths.contains(&leaf.artifact.relative_path)
-                    && let Some(release) = release_artifacts.get(&leaf.artifact.relative_path)
-                {
-                    leaf.artifact.digest = release.digest.clone();
+                for leaf in &mut composed.registry_leaves {
+                    if let Some(rerooted) = rerooted_paths.get(&leaf.artifact.relative_path) {
+                        leaf.artifact.relative_path = rerooted.clone();
+                    }
                 }
+                let mut rerooted_search_dirs = BTreeSet::new();
+                for rerooted in rerooted_paths.values() {
+                    if let Some(parent) = Path::new(rerooted).parent()
+                        && !parent.as_os_str().is_empty()
+                    {
+                        rerooted_search_dirs.insert(parent.to_string_lossy().into_owned());
+                    }
+                }
+                composed.dependency_search_paths.extend(rerooted_search_dirs);
             }
         } else {
             for artifact in &mut composed.externs {
@@ -8072,13 +8107,12 @@ mod tests {
     }
 
     #[test]
-    fn conservative_regime_fails_closed_on_a_nonreproducible_base_collision() -> Result<(), Box<dyn std::error::Error>>
-    {
-        // Deterministic path remapping makes identical locked units byte-identical across machines, and rustc
-        // cannot load two crates with one StableCrateId, so a conservative plan facing a same-identity leaf with
-        // different bytes has no linkable composition. The composition must fail closed naming the artifact — and
-        // when only the linkable half diverges while the metadata sidecar matches the base, the unit is the same
-        // compilation and adopts the base digest instead.
+    fn conservative_regime_reroots_retained_leaves_that_collide_with_a_foreign_base_copy()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // A salted extension unit shares its Cargo filename with the sealed base's twin while carrying a distinct
+        // StableCrateId, so the composed plan must keep the project's copy — re-rooted into `extension-deps` with
+        // its split-metadata sidecar — while the base's copy joins the plan at its own path for the sealed runtime,
+        // and rustc selects each dependent's copy by recorded hash.
         let root = tempfile::tempdir()?;
         let receipt = intent(root.path())?;
         let source = OvenRustcRegistrySource {
@@ -8193,48 +8227,61 @@ mod tests {
             ],
         };
 
-        // `engine` is root-linked with no base counterpart, so the plan retains extension-built consumers; the
-        // shared-filename `cfg_ish` leaf carries different bytes than the base's copy and must refuse composition.
-        let divergent = project.with_release_cohort_from_base(&base, &BTreeSet::new());
-        match divergent {
-            Err(OvenRustcError::InvalidInput { message, .. }) => {
-                assert!(
-                    message.contains("libcfg_ish-aaaa.rlib") && message.contains("reproducible"),
-                    "the failure must name the divergent artifact and the reproducibility contract: {message}"
-                );
-            }
-            other => {
-                return Err(format!("expected a fail-closed composition error, got {other:?}").into());
-            }
-        }
-
-        // When the metadata sidecar matches the base byte-for-byte, only path-bearing object code differs: the unit
-        // is the same compilation, so the linkable half adopts the base digest across every record kind.
-        let mut adopting = project.clone();
-        for artifact in &mut adopting.supporting_artifacts {
-            if artifact.relative_path == "target/debug/deps/libcfg_ish-aaaa.rmeta" {
-                artifact.digest = "sha256:base-cfg-ish-meta".to_string();
-            }
-        }
-        let composed = adopting.with_release_cohort_from_base(&base, &BTreeSet::new())?;
-        let adopted = composed
+        // `engine` is root-linked with no base counterpart, so the plan retains extension-built consumers and the
+        // shared-filename `cfg_ish` leaf must not adopt the base bytes its dependents never recorded.
+        let composed = project.with_release_cohort_from_base(&base, &BTreeSet::new())?;
+        let rerooted = composed
             .registry_leaves
             .iter()
             .find(|candidate| candidate.crate_name == "cfg_ish")
-            .ok_or("composed plan lost the cfg_ish leaf")?;
-        assert_eq!(adopted.artifact.relative_path, "target/debug/deps/libcfg_ish-aaaa.rlib");
-        assert_eq!(adopted.artifact.digest, "sha256:base-cfg-ish");
+            .ok_or("composed plan lost the retained cfg_ish leaf")?;
+        assert_eq!(
+            rerooted.artifact.relative_path,
+            "target/debug/extension-deps/libcfg_ish-aaaa.rlib"
+        );
+        assert_eq!(rerooted.artifact.digest, "sha256:project-cfg-ish");
+        let supporting_paths = composed
+            .supporting_artifacts
+            .iter()
+            .map(|artifact| (artifact.relative_path.as_str(), artifact.digest.as_str()))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            supporting_paths.contains(&(
+                "target/debug/extension-deps/libcfg_ish-aaaa.rlib",
+                "sha256:project-cfg-ish"
+            )),
+            "the retained rlib must move to extension-deps with its project digest"
+        );
+        assert!(
+            supporting_paths.contains(&(
+                "target/debug/extension-deps/libcfg_ish-aaaa.rmeta",
+                "sha256:project-cfg-ish-meta"
+            )),
+            "the split-metadata sidecar must move with its rlib"
+        );
+        assert!(
+            supporting_paths.contains(&("target/debug/deps/libcfg_ish-aaaa.rlib", "sha256:base-cfg-ish")),
+            "the base copy must join the plan at its own path for the sealed runtime"
+        );
         assert!(
             composed
-                .supporting_artifacts
+                .dependency_search_paths
                 .iter()
-                .all(
-                    |artifact| artifact.relative_path != "target/debug/deps/libcfg_ish-aaaa.rlib"
-                        || artifact.digest == "sha256:base-cfg-ish"
-                ),
-            "the adopted rlib record must carry the base digest"
+                .any(|path| path == "target/debug/extension-deps"),
+            "the re-rooted directory must join the dependency search paths"
         );
         composed.validate_release_cohort_from_base(&base)?;
+        let partition = composed.partition_against_base(&base)?;
+        assert!(
+            partition
+                .extension_paths
+                .contains("target/debug/extension-deps/libcfg_ish-aaaa.rlib")
+        );
+        assert!(partition.base_paths.contains("target/debug/deps/libcfg_ish-aaaa.rlib"));
+        assert_eq!(
+            super::rerooted_artifact_staging_source("target/debug/extension-deps/libcfg_ish-aaaa.rlib").as_deref(),
+            Some("target/debug/deps/libcfg_ish-aaaa.rlib")
+        );
         Ok(())
     }
 
