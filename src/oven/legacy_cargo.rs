@@ -24,9 +24,8 @@ use super::process::{isolate_process_group, terminate_process_group};
 use super::rustc::{
     OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH, OvenRustcArtifactExtern,
     OvenRustcArtifactManifest, OvenRustcRegistryLeaf, OvenRustcRegistrySource, OvenRustcRegistrySourcePackage,
-    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rerooted_artifact_staging_source,
-    rustc_host_target, rustc_identity, select_direct_rustc_plan_identity,
-    validate_project_extension_payload_against_base,
+    OvenRustcSupportingArtifact, clear_inherited_cargo_environment, rustc_host_target, rustc_identity,
+    select_direct_rustc_plan_identity, validate_project_extension_payload_against_base,
 };
 use super::store::{
     OvenArtifactKind, OvenArtifactMaterializedFile, OvenArtifactPublishRequest, OvenStore, OvenStoreError,
@@ -1602,30 +1601,6 @@ pub fn prepare_direct_rustc_plan(
                 "explicit project bake produced no non-stdlib artifacts; consume the selected standard-library Loaf directly"
                     .to_string(),
             ));
-        }
-        // ---- Stage re-rooted collision artifacts before atomic copying ----
-        // Cohort composition moves a retained extension artifact whose filename collides with the base's execution
-        // closure into its `extension-deps` sibling directory, but the built file still sits in the Cargo `deps`
-        // output. Materialization resolves every source as the staging root joined with the recorded relative path,
-        // so link each re-rooted artifact into its recorded home here.
-        for relative_path in &partition.extension_paths {
-            let Some(source) = rerooted_artifact_staging_source(relative_path) else {
-                continue;
-            };
-            let source_path = staging.join(&source);
-            let target_path = staging.join(relative_path);
-            if let Some(parent) = target_path.parent() {
-                fs::create_dir_all(parent).map_err(|source| OvenLegacyCargoError::Io {
-                    path: parent.to_path_buf(),
-                    source,
-                })?;
-            }
-            if fs::hard_link(&source_path, &target_path).is_err() {
-                fs::copy(&source_path, &target_path).map_err(|source| OvenLegacyCargoError::Io {
-                    path: target_path.clone(),
-                    source,
-                })?;
-            }
         }
         let materialized_plan = complete_plan
             .artifact_fragment(&partition.extension_paths)
@@ -7266,6 +7241,28 @@ fn run_legacy_cargo_invocation(
         source,
     })?;
     clear_inherited_cargo_environment(&mut command);
+    // ---- Deterministic path remapping for reproducible unit bytes ----
+    // Cargo's `-<hash>` extra-filename and rustc's StableCrateId summarize declared unit inputs, so the same locked
+    // unit compiles to the same identity on every machine — but the strict version hash also reflects absolute
+    // source paths (registry checkouts under the Cargo home, the staged package, the target directory). Left
+    // unmapped, a release base baked on one machine and an extension baked on another publish the same identity
+    // with different bytes, and rustc refuses to load both halves of that split in one crate graph (colliding
+    // StableCrateId values). Remapping every machine-variant root to a stable virtual prefix makes identical units
+    // byte-identical everywhere, so shared leaves reconcile by digest instead. RUSTFLAGS do not enter the
+    // extra-filename hash, so these per-machine flag strings never fork unit identities.
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
+    let mut remap_flags: Vec<String> = Vec::new();
+    if let Some(cargo_home) = &cargo_home {
+        remap_flags.push(format!(
+            "--remap-path-prefix={}=/incan/cargo-home",
+            cargo_home.display()
+        ));
+    }
+    remap_flags.push(format!("--remap-path-prefix={}=/incan/package", package_root.display()));
+    remap_flags.push(format!("--remap-path-prefix={}=/incan/target", target.display()));
+    command.env("CARGO_ENCODED_RUSTFLAGS", remap_flags.join("\u{1f}"));
     command
         .env("RUSTC", &rustc)
         .stdout(Stdio::from(stdout))
