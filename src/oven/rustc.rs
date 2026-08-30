@@ -3233,12 +3233,31 @@ impl OvenRustcArtifactManifest {
             // untouched below. rustc then selects each dependent's copy by the exact hash it recorded. Only a
             // colliding artifact outside a `deps` directory has no re-rooted home; that remains a hard
             // incompatibility, reported by the merge below.
+            // A colliding artifact re-roots only when the plan retained the project's compilation of its whole
+            // unit. When the unit's linkable half already follows the release — a root-linked leaf substituted onto
+            // the base copy — the colliding metadata sidecar describes the base's compilation and adopts the base
+            // digest instead of moving: dragging the substituted record into `extension-deps` would pair a
+            // base-digest record with salted project bytes.
+            let partner_follows_the_base = |relative_path: &str| {
+                metadata_sidecar_pair_path(relative_path).is_some_and(|partner| {
+                    declared_paths.get(&partner).is_some_and(|partner_digest| {
+                        release_artifacts
+                            .get(&partner)
+                            .is_some_and(|release| &release.digest == partner_digest)
+                    })
+                })
+            };
             let mut rerooted_paths = BTreeMap::new();
+            let mut base_adopted_paths = BTreeSet::new();
             for (relative_path, digest) in &declared_paths {
                 let Some(release) = release_artifacts.get(relative_path) else {
                     continue;
                 };
                 if &release.digest == digest {
+                    continue;
+                }
+                if partner_follows_the_base(relative_path) {
+                    base_adopted_paths.insert(relative_path.clone());
                     continue;
                 }
                 let Some(rerooted) = rerooted_extension_artifact_path(relative_path) else {
@@ -3250,13 +3269,37 @@ impl OvenRustcArtifactManifest {
                 let Some(partner) = metadata_sidecar_pair_path(&relative_path) else {
                     continue;
                 };
-                if !declared_paths.contains_key(&partner) || rerooted_paths.contains_key(&partner) {
+                if !declared_paths.contains_key(&partner)
+                    || rerooted_paths.contains_key(&partner)
+                    || base_adopted_paths.contains(&partner)
+                {
                     continue;
                 }
                 let Some(partner_rerooted) = metadata_sidecar_pair_path(&rerooted) else {
                     continue;
                 };
                 rerooted_paths.insert(partner, partner_rerooted);
+            }
+            for artifact in &mut composed.externs {
+                if base_adopted_paths.contains(&artifact.relative_path)
+                    && let Some(release) = release_artifacts.get(&artifact.relative_path)
+                {
+                    artifact.digest = release.digest.clone();
+                }
+            }
+            for artifact in &mut composed.supporting_artifacts {
+                if base_adopted_paths.contains(&artifact.relative_path)
+                    && let Some(release) = release_artifacts.get(&artifact.relative_path)
+                {
+                    artifact.digest = release.digest.clone();
+                }
+            }
+            for leaf in &mut composed.registry_leaves {
+                if base_adopted_paths.contains(&leaf.artifact.relative_path)
+                    && let Some(release) = release_artifacts.get(&leaf.artifact.relative_path)
+                {
+                    leaf.artifact.digest = release.digest.clone();
+                }
             }
             if !rerooted_paths.is_empty() {
                 for artifact in &mut composed.externs {
