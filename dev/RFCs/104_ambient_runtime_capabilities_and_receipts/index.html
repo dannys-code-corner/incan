@@ -49,7 +49,7 @@
     
       <link rel="stylesheet" href="../../stylesheets/pygments.css">
     
-      <link rel="stylesheet" href="/shared/incapunk/incapunk.css?v=20260816-release-05-4">
+      <link rel="stylesheet" href="/shared/incapunk/incapunk.css?v=20260824-v06-roadmap-2">
     
     <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
     
@@ -6376,6 +6376,8 @@
       
         
       
+        
+      
     
     
     
@@ -6518,6 +6520,34 @@
     
   
     LSP architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tooling/explanation/backend_selection_receipts/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Backend selection & execution receipts
   
 
     
@@ -8001,6 +8031,8 @@
       
         
       
+        
+      
     
     
     
@@ -8059,6 +8091,34 @@
     
   
     Backend behavior inventory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../contributing/reference/replacement_compatibility_inventory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Replacement compatibility inventory
   
 
     
@@ -8194,6 +8254,8 @@
       
         
       
+        
+      
     
     
     
@@ -8244,6 +8306,34 @@
           </label>
           <ul class="md-nav__list" data-md-scrollfix>
             
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../release_notes/0_6/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release 0.6 (development)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
               
             
               
@@ -8517,6 +8607,8 @@
       
         
       
+        
+      
     
     
     
@@ -8619,6 +8711,41 @@
     
   
     DD-0001: GPU capability deferral
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--Accepted"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../design_records/0002_single_pinned_rust_version/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    DD-0002: Single pinned Rust version
   
 
     
@@ -8800,9 +8927,29 @@
   
   
   
-    <li class="md-nav__item">
-      <a href="../../roadmap/" class="md-nav__link">
+    
+    
+      
         
+      
+        
+      
+    
+    
+    
+      
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_8_5" id="__nav_8_5_label" tabindex="0">
+            
   
   
   <span class="md-ellipsis">
@@ -8816,7 +8963,79 @@
   
   
 
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Roadmap
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
       </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project/v0_6_delivery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Incan 0.6 delivery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
     </li>
   
 
@@ -9055,6 +9274,17 @@
     <span class="md-ellipsis">
       
         Capability declarations
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#provider-operation-declarations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Provider-operation declarations
       
     </span>
   </a>
@@ -9567,6 +9797,16 @@ incan run app.incn --allow host.env.read,host.http.request --report json
 <p>RFC 102 semantic inspection must be able to expose capability declarations, their scope schemas, and their <code>requires</code> relationships as project facts.</p>
 <p>Package-defined capabilities must not grant host authority by implication alone. <code>requires</code> documents that a domain capability's implementation needs a host capability; it is metadata the runtime, host policy, and the static check in "Typed action alignment" can inspect and warn against when missing, but granting the domain capability never automatically grants the capabilities it <code>requires</code>. Those must always be granted separately.</p>
 <p>Scope values are never written into a static declaration such as <code>@action(caps=[...])</code> -- a static declaration only names which capabilities, generically, an action needs. Scope values bind at grant time (<code>--allow example_lib.policy.refund:tenant=acct_a</code>) and are checked against the actual attributes of the operation being performed at the moment it happens, independent of whatever the calling code decided. This holds for both host and package capabilities: a scoped <code>host.http.request</code> grant is checked against the real outbound host at the point <code>std.http</code> makes the request, not against anything decided when the action was defined.</p>
+<h3 id="provider-operation-declarations">Provider-operation declarations<a class="headerlink" href="#provider-operation-declarations" title="Permanent link">&para;</a></h3>
+<p>A package provider attaches its checked capability requirement to an authority-bearing callable with exactly one <code>@provider_operation(...)</code> decorator argument:</p>
+<div class="language-incan highlight"><pre><span></span><code><span class="n">capability</span> <span class="n">refund</span><span class="p">:</span>
+    <span class="n">description</span> <span class="o">=</span> <span class="s2">&quot;Issue a refund for a captured charge&quot;</span>
+
+<span class="nd">@provider_operation</span><span class="p">(</span><span class="n">refund</span><span class="p">)</span>
+<span class="k">pub</span> <span class="k">def</span><span class="w"> </span><span class="nf">issue_refund</span><span class="p">(</span><span class="n">charge_id</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span><span class="p">:</span>
+    <span class="o">...</span>
+</code></pre></div>
+<p>The decorator argument is a capability reference, not a string. The compiler resolves it at the provider declaration and publishes the canonical callable-to-capability pair in the provider manifest. A missing reference, a non-capability reference, or multiple provider-operation decorators is a compiler diagnostic. Importing <code>issue_refund</code> remains ordinary source resolution and grants nothing. When a selected provider operation is invoked, its backend plan carries the checked pair to the authority and receipt contracts; it must not rederive either identity from the call spelling, provider name, or emitted Rust.</p>
 <h3 id="receipts">Receipts<a class="headerlink" href="#receipts" title="Permanent link">&para;</a></h3>
 <p>A receipt is a structured runtime fact emitted by a capability-aware operation. A receipt must include:</p>
 <ul>
@@ -9789,9 +10029,9 @@ incan run app.incn --allow host.env.read,host.http.request --report json
       
         <script src="../../shared/incapunk/incus-library/manifest.js?v=20260810-learning-refresh-1"></script>
       
-        <script src="../../_snippets/javascripts/incan_docs_components.js?v=20260810-learning-refresh-1"></script>
+        <script src="../../_snippets/javascripts/incan_docs_components.js?v=20260824-v06-roadmap-6"></script>
       
-        <script src="../../_snippets/javascripts/incan_mermaid.js?v=20260810-learning-refresh-1"></script>
+        <script src="../../_snippets/javascripts/incan_mermaid.js?v=20260824-v06-roadmap-9"></script>
       
         <script src="https://unpkg.com/tablesort@5.3.0/dist/tablesort.min.js"></script>
       
