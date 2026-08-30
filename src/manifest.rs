@@ -1019,7 +1019,6 @@ fn parse_manifest_content(content: &str, path: &Path) -> Result<ProjectManifest,
             .validate()
             .map_err(|message| manifest_invalid(path, spans.table_location(&["oven", "interop"]), message))?;
     }
-
     if let Some(vocab) = &raw.vocab {
         if let Some(crate_path) = &vocab.crate_path {
             if crate_path.trim().is_empty() {

@@ -437,11 +437,20 @@ impl AstLowering {
             }) else {
                 continue;
             };
+            let original_params = match binding.original_unbound_ty {
+                crate::frontend::symbols::ResolvedType::Function(params, _) => params,
+                _ => Vec::new(),
+            };
             let crate::frontend::symbols::ResolvedType::Function(params, ret) = binding.unbound_ty else {
                 continue;
             };
             let static_name = Self::decorator_method_static_binding_name(type_name, &method.node.name);
-            let decorated_ty = self.function_type_from_callable_surface(&params, &ret);
+            let decorated_signature =
+                self.decorated_method_callable_signature(&params, &ret, &method.node, Some(&original_params))?;
+            let decorated_ty = IrType::Function {
+                params: decorated_signature.params.into_iter().map(|param| param.ty).collect(),
+                ret: Box::new(decorated_signature.return_type),
+            };
             let application = self.decorator_method_application_expr(type_name, &method.node)?;
             let mut value = self.lower_expr_spanned(&application)?;
             value.ty = decorated_ty.clone();
@@ -503,14 +512,13 @@ impl AstLowering {
             return self.lower_method_with_type_params(method, owner_type_param_names);
         };
         let receiver_ty = self.lower_resolved_type(&receiver_param.ty);
-        let original_surface_params = match binding.original_unbound_ty {
-            crate::frontend::symbols::ResolvedType::Function(original_params, _) => {
-                original_params.into_iter().skip(1).collect::<Vec<_>>()
-            }
+        let original_callable_params = match binding.original_unbound_ty {
+            crate::frontend::symbols::ResolvedType::Function(original_params, _) => original_params,
             _ => Vec::new(),
         };
+        let original_surface_params = original_callable_params.get(1..).unwrap_or(&[]);
         let defaults =
-            self.decorated_param_defaults_for_surface(surface_params, &original_surface_params, &method.params)?;
+            self.decorated_param_defaults_for_surface(surface_params, original_surface_params, &method.params)?;
         let mut wrapper_params = Vec::with_capacity(surface_params.len() + 1);
         let receiver = method.receiver.unwrap_or(ast::Receiver::Immutable);
         wrapper_params.push(FunctionParam {
@@ -525,20 +533,16 @@ impl AstLowering {
             kind: ast::ParamKind::Normal,
             default: None,
         });
-        wrapper_params.extend(surface_params.iter().enumerate().map(|(idx, param)| {
-            let base_ty = self.lower_resolved_type(&param.ty);
-            FunctionParam {
-                name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                ty: Self::lower_param_container_type(param.kind, base_ty),
-                mutability: Mutability::Immutable,
-                is_self: false,
-                kind: param.kind,
-                default: defaults.get(idx).cloned().flatten().map(FunctionParamDefault::source),
-            }
-        }));
+        wrapper_params.extend(self.function_params_from_callable_surface(
+            surface_params,
+            &defaults,
+            Some(&method.params),
+            Some(original_surface_params),
+        ));
         let return_type = self.lower_resolved_type(&ret);
         let static_name = Self::decorator_method_static_binding_name(owner, &method.name);
-        let callable_signature = self.function_signature_from_callable_surface(&params, &ret);
+        let callable_signature =
+            self.decorated_method_callable_signature(&params, &ret, method, Some(&original_callable_params))?;
         let static_func = TypedExpr::new(
             IrExprKind::StaticRead { name: static_name },
             IrType::Function {
@@ -586,6 +590,49 @@ impl AstLowering {
         })
     }
 
+    /// Build the callable ABI shared by a decorated method's static binding and public wrapper.
+    fn decorated_method_callable_signature(
+        &mut self,
+        callable_params: &[crate::frontend::symbols::CallableParam],
+        callable_ret: &crate::frontend::symbols::ResolvedType,
+        method: &ast::MethodDecl,
+        original_callable_params: Option<&[crate::frontend::symbols::CallableParam]>,
+    ) -> Result<super::super::FunctionSignature, LoweringError> {
+        let Some((receiver_param, surface_params)) = callable_params.split_first() else {
+            return Err(LoweringError {
+                message: format!(
+                    "decorated method '{}' has no receiver in callable metadata",
+                    method.name
+                ),
+                span: ast::Span::default().into(),
+            });
+        };
+        let receiver = method.receiver.unwrap_or(ast::Receiver::Immutable);
+        let mut params = vec![FunctionParam {
+            name: "self".to_string(),
+            ty: self.lower_resolved_type(&receiver_param.ty),
+            mutability: if matches!(receiver, ast::Receiver::Mutable) {
+                Mutability::Mutable
+            } else {
+                Mutability::Immutable
+            },
+            is_self: true,
+            kind: ast::ParamKind::Normal,
+            default: None,
+        }];
+        let original_surface_params = original_callable_params.and_then(|params| params.get(1..));
+        params.extend(self.function_params_from_callable_surface(
+            surface_params,
+            &[],
+            Some(&method.params),
+            original_surface_params,
+        ));
+        Ok(super::super::FunctionSignature {
+            params,
+            return_type: self.lower_resolved_type(callable_ret),
+        })
+    }
+
     /// Lower the associated adapter that exposes the original method as an unbound callable value.
     fn decorated_method_original_adapter(
         &mut self,
@@ -616,17 +663,12 @@ impl AstLowering {
             kind: ast::ParamKind::Normal,
             default: None,
         });
-        adapter_params.extend(surface_params.iter().enumerate().map(|(idx, param)| {
-            let base_ty = self.lower_resolved_type(&param.ty);
-            FunctionParam {
-                name: param.name.clone().unwrap_or_else(|| format!("__incan_arg_{idx}")),
-                ty: Self::lower_param_container_type(param.kind, base_ty),
-                mutability: Mutability::Immutable,
-                is_self: false,
-                kind: param.kind,
-                default: None,
-            }
-        }));
+        adapter_params.extend(self.function_params_from_callable_surface(
+            surface_params,
+            &[],
+            Some(&method.params),
+            Some(surface_params),
+        ));
         let return_type = self.lower_resolved_type(&ret);
         let receiver = TypedExpr::new(
             IrExprKind::Var {
@@ -1351,15 +1393,13 @@ impl AstLowering {
                     &mut hidden_type_params,
                     &mut hidden_counter,
                 );
+                let base_ty = self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty, base_ty);
                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);
+                let mutability = self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node);
                 Ok(FunctionParam {
                     name: p.node.name.clone(),
                     ty: param_ty,
-                    mutability: if p.node.is_mut {
-                        Mutability::Mutable
-                    } else {
-                        Mutability::Immutable
-                    },
+                    mutability,
                     is_self: false,
                     kind: p.node.kind,
                     default: self
@@ -1371,7 +1411,7 @@ impl AstLowering {
         params.extend(other_params);
 
         for (source_param, lowered_param) in m.params.iter().zip(params.iter().filter(|param| !param.is_self)) {
-            let binding_type = if source_param.node.is_mut {
+            let binding_type = if lowered_param.mutability == Mutability::Mutable {
                 IrType::RefMut(Box::new(lowered_param.ty.clone()))
             } else {
                 lowered_param.ty.clone()
@@ -1601,9 +1641,11 @@ impl AstLowering {
                     &mut hidden_type_params,
                     &mut hidden_counter,
                 );
+                let base_ty = self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty, base_ty);
                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);
-                // For mutable parameters, wrap in RefMut
-                let ty = if p.node.is_mut {
+                let mutability = self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node);
+                // Ordinary mutable Incan parameters are references. Direct Rust handles keep owned ABI identity.
+                let ty = if mutability == Mutability::Mutable {
                     IrType::RefMut(Box::new(param_ty.clone()))
                 } else {
                     param_ty.clone()
@@ -1616,11 +1658,7 @@ impl AstLowering {
                 Ok(FunctionParam {
                     name: p.node.name.clone(),
                     ty: param_ty,
-                    mutability: if p.node.is_mut {
-                        Mutability::Mutable
-                    } else {
-                        Mutability::Immutable
-                    },
+                    mutability,
                     is_self: p.node.name == keywords::as_str(KeywordId::SelfKw),
                     kind: p.node.kind,
                     default: self
@@ -1754,4 +1792,83 @@ pub(in crate::backend::ir::lower) enum PropertyLoweringMode {
     Inherent,
     TraitDecl,
     TraitImpl,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::{lexer, parser, typechecker::TypeChecker};
+
+    #[test]
+    fn decorated_method_static_signature_keeps_first_projected_surface_parameter() -> Result<(), String> {
+        let source = r#"
+def preserve[F]() -> ((F) -> F):
+  return (function) => function
+
+from rust::std::vec import Vec as ProviderHandle
+
+class Container:
+  @preserve()
+  def replace(self, mut items: ProviderHandle[tuple[int, int]]) -> None:
+    pass
+"#;
+        let tokens = lexer::lex(source).map_err(|errors| format!("lexer failed: {errors:?}"))?;
+        let program = parser::parse(&tokens).map_err(|errors| format!("parser failed: {errors:?}"))?;
+        let class = program
+            .declarations
+            .iter()
+            .find_map(|declaration| match &declaration.node {
+                ast::Declaration::Class(class) if class.name == "Container" => Some(class),
+                _ => None,
+            })
+            .ok_or("missing Container class")?;
+        let method = &class.methods.first().ok_or("Container has no methods")?.node;
+
+        let mut checker = TypeChecker::new();
+        checker
+            .check_program(&program)
+            .map_err(|errors| format!("typecheck failed: {errors:?}"))?;
+        let binding = checker
+            .type_info()
+            .declarations
+            .decorated_method_bindings
+            .get(&("Container".to_string(), "replace".to_string()))
+            .cloned()
+            .ok_or("missing decorated method binding")?;
+        let crate::frontend::symbols::ResolvedType::Function(params, ret) = binding.unbound_ty else {
+            return Err("decorated method has no callable surface".to_string());
+        };
+        let original_params = match binding.original_unbound_ty {
+            crate::frontend::symbols::ResolvedType::Function(params, _) => params,
+            _ => return Err("decorated method has no original callable surface".to_string()),
+        };
+
+        let mut type_info = checker.type_info().clone();
+        let annotation = "ProviderHandle[tuple[int, int]]";
+        let start = source
+            .find(annotation)
+            .ok_or("projection annotation missing from source")?;
+        type_info.rust.mutable_reference_type_argument_projections.insert(
+            (start, start + annotation.len()),
+            vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![0], vec![1]],
+            }],
+        );
+        let mut lowering = AstLowering::new_with_type_info(type_info);
+        lowering
+            .lower_program(&program)
+            .map_err(|errors| format!("lowering failed: {errors:?}"))?;
+        let signature = lowering
+            .decorated_method_callable_signature(&params, &ret, method, Some(&original_params))
+            .map_err(|error| format!("signature lowering failed: {error:?}"))?;
+
+        assert_eq!(signature.params.len(), 2);
+        assert_eq!(signature.params[1].mutability, Mutability::OwnedMutable);
+        assert_eq!(
+            signature.params[1].ty.rust_name(),
+            "ProviderHandle<(&mut i64, &mut i64)>"
+        );
+        Ok(())
+    }
 }

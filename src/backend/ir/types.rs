@@ -38,7 +38,13 @@ pub(crate) enum SetConstructorIteration {
 pub enum Mutability {
     #[default]
     Immutable,
+    /// Mutable source-owned Incan parameter passed to Rust as `&mut T`.
     Mutable,
+    /// Direct Rust import parameter passed by value as `mut name: T`.
+    ///
+    /// Incan's ordinary mutable parameters preserve the language's borrowing contract. Some Rust APIs instead inject
+    /// owned handles whose bindings must be mutable, so their ABI must remain distinct.
+    OwnedMutable,
 }
 
 /// IR type representation

@@ -354,7 +354,19 @@ impl OvenStore {
 
     /// Publish an immutable payload after capacity admission and atomic same-filesystem staging.
     pub fn publish(&self, request: &OvenArtifactPublishRequest) -> Result<OvenArtifactManifest, OvenStoreError> {
-        self.publish_with_legacy_cargo_publisher_permission(request, false)
+        self.publish_with_legacy_cargo_publisher_permission(request, false, true)
+    }
+
+    /// Publish a portable package constituent under its exact receipt-bound identity.
+    ///
+    /// A shared direct plan may be reusable under a compatible receipt in its originating store. A package handoff,
+    /// however, records the precise receipt that owns the provider output, so its destination store must retain that
+    /// receipt-specific manifest instead of returning another entry with equivalent bytes and older provenance.
+    pub(crate) fn publish_receipt_bound(
+        &self,
+        request: &OvenArtifactPublishRequest,
+    ) -> Result<OvenArtifactManifest, OvenStoreError> {
+        self.publish_with_legacy_cargo_publisher_permission(request, false, false)
     }
 
     /// Publish one immutable result owned by the explicit compatibility baker.
@@ -366,7 +378,7 @@ impl OvenStore {
         &self,
         request: &OvenArtifactPublishRequest,
     ) -> Result<OvenArtifactManifest, OvenStoreError> {
-        self.publish_with_legacy_cargo_publisher_permission(request, true)
+        self.publish_with_legacy_cargo_publisher_permission(request, true, true)
     }
 
     /// Implement one publication, admitting the active legacy publisher only through its named transition boundary.
@@ -374,6 +386,7 @@ impl OvenStore {
         &self,
         request: &OvenArtifactPublishRequest,
         allow_legacy_cargo_publisher: bool,
+        reuse_equivalent_direct_plan: bool,
     ) -> Result<OvenArtifactManifest, OvenStoreError> {
         let domain = normalized_domain(&request.domain)?;
         if request.payload.is_empty() {
@@ -418,7 +431,9 @@ impl OvenStore {
             touch_entry(&entry_path)?;
             return Ok(verified.manifest);
         }
-        if let Some((existing, existing_path)) = self.reusable_existing_manifest(&manifest)? {
+        if reuse_equivalent_direct_plan
+            && let Some((existing, existing_path)) = self.reusable_existing_manifest(&manifest)?
+        {
             touch_entry(&existing_path)?;
             return Ok(existing);
         }
@@ -1249,8 +1264,8 @@ impl OvenStore {
             return Err(OvenStoreError::CapacityBlocked {
                 domain: domain.to_string(),
                 message: format!(
-                    "active retained physical bytes leave no compatibility-baker staging capacity; skipped active entries {:?}",
-                    report.skipped_active_entries
+                    "active retained physical bytes leave no compatibility-baker staging capacity; skipped active entries {:?}. Run `incan oven store inspect`, then `incan oven store prune --max-physical-bytes <bytes>` to reclaim inactive artifacts before retrying; active leases remain protected",
+                    report.skipped_active_entries,
                 ),
             });
         }
@@ -3726,6 +3741,36 @@ mod tests {
             "an inactive reusable entry must reduce the staging allowance instead of being discarded speculatively"
         );
         assert_eq!(store.inspect()?.entries.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_publisher_capacity_failure_names_the_safe_prune_recovery_path() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let temp = tempfile::tempdir()?;
+        let project = tempfile::tempdir()?;
+        write_project(project.path())?;
+        let unbounded = OvenStore::new(temp.path(), OvenStoreLimits::new(1_000_000, 1_000_000, 1_000_000));
+        let first = unbounded.publish(&request(project.path(), "engine", b"retained publisher entry")?)?;
+        let physical_bytes = unbounded.inspect()?.physical_bytes;
+        let bounded = OvenStore::new(
+            temp.path(),
+            OvenStoreLimits::new(physical_bytes, physical_bytes, 1_000_000),
+        );
+        let (_entry, lease) = bounded.select(&first.identity)?;
+
+        let error = bounded
+            .reserve_legacy_cargo_publisher_capacity("engine")
+            .err()
+            .ok_or("a fully retained active entry must block publisher staging")?;
+
+        assert!(error.to_string().contains("incan oven store inspect"));
+        assert!(
+            error
+                .to_string()
+                .contains("incan oven store prune --max-physical-bytes")
+        );
+        drop(lease);
         Ok(())
     }
 

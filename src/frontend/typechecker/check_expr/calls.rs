@@ -25,6 +25,7 @@ use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::keywords::{self, KeywordId};
 use incan_core::lang::stdlib;
 use incan_core::lang::surface::types::{self as surface_types, SurfaceTypeId};
+use incan_core::lang::traits::{self, TraitId};
 use std::collections::HashSet;
 
 use super::TypeChecker;
@@ -496,12 +497,21 @@ impl TypeChecker {
                                         || (type_info.variants.is_empty() && args.is_empty()) =>
                                 {
                                     let error_count_before = self.errors.len();
-                                    let result = self.check_rust_named_field_constructor_call(
-                                        info.path.as_str(),
-                                        type_info,
-                                        args,
-                                        span,
-                                    );
+                                    let result = if type_info.fields.iter().all(|field| field.name.is_empty()) {
+                                        self.check_rust_tuple_struct_constructor_call(
+                                            info.path.as_str(),
+                                            type_info,
+                                            args,
+                                            span,
+                                        )
+                                    } else {
+                                        self.check_rust_named_field_constructor_call(
+                                            info.path.as_str(),
+                                            type_info,
+                                            args,
+                                            span,
+                                        )
+                                    };
                                     if self.errors.len() == error_count_before {
                                         self.record_expr_type(callee.span, ResolvedType::RustPath(info.path.clone()));
                                         self.type_info
@@ -1947,6 +1957,21 @@ impl TypeChecker {
         args.len() >= required && (accepts_extra || args.len() <= normal_params.len())
     }
 
+    /// Return whether inspected type metadata proves omitted named fields can be filled through `Default`.
+    fn rust_type_supports_default_field_fill(type_info: &RustTypeInfo) -> bool {
+        let is_default = |path: &str| {
+            traits::rust_paths(TraitId::Default).contains(&path) || path == traits::as_str(TraitId::Default)
+        };
+        type_info
+            .implemented_traits
+            .iter()
+            .any(|implemented| !implemented.mutable_reference && is_default(implemented.path.as_str()))
+            || type_info
+                .expanded_derive_traits
+                .iter()
+                .any(|implemented| is_default(implemented.path.as_str()))
+    }
+
     /// Type-check a call to an imported Rust named-field struct using rust-inspect field metadata.
     fn check_rust_named_field_constructor_call(
         &mut self,
@@ -2020,20 +2045,86 @@ impl TypeChecker {
             }
         }
 
+        let supports_default_fill = Self::rust_type_supports_default_field_fill(type_info);
+        let mut omitted_fields = false;
         for field in &type_info.fields {
             if !provided.contains(&field.name) {
-                self.errors.push(errors::missing_required_constructor_field(
-                    path,
-                    field.name.as_str(),
-                    span,
-                ));
-                has_shape_error = true;
+                omitted_fields = true;
+                if !supports_default_fill {
+                    self.errors.push(errors::missing_required_constructor_field(
+                        path,
+                        field.name.as_str(),
+                        span,
+                    ));
+                    has_shape_error = true;
+                }
             }
         }
 
         if !has_shape_error {
             self.type_info
                 .record_rust_named_field_constructor_fields(span, selected_fields);
+            if omitted_fields {
+                self.type_info.record_rust_named_field_constructor_fills_defaults(span);
+            }
+        }
+        ResolvedType::RustPath(path.to_string())
+    }
+
+    /// Type-check a positional imported Rust tuple-struct constructor using rust-inspect field metadata.
+    ///
+    /// Empty field labels are the shared metadata representation for tuple positions. Keeping that distinction in
+    /// metadata lets lowering emit `Type(value)` instead of incorrectly treating the type as an unconstructible
+    /// named-field record.
+    fn check_rust_tuple_struct_constructor_call(
+        &mut self,
+        path: &str,
+        type_info: &RustTypeInfo,
+        args: &[CallArg],
+        span: Span,
+    ) -> ResolvedType {
+        let mut has_shape_error = false;
+        let mut positional_index = 0usize;
+        let mut emitted_arity_error = false;
+
+        for arg in args {
+            match arg {
+                CallArg::Positional(expr) => {
+                    let Some(field) = type_info.fields.get(positional_index) else {
+                        self.check_expr(expr);
+                        if !emitted_arity_error {
+                            self.errors
+                                .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+                            emitted_arity_error = true;
+                        }
+                        has_shape_error = true;
+                        continue;
+                    };
+                    positional_index += 1;
+                    let arg_ty = self.check_rust_struct_field_expr(path, field, expr);
+                    self.validate_rust_boundary_value(path, field.type_display.as_str(), expr, &arg_ty, true);
+                }
+                CallArg::Named(_, expr) | CallArg::PositionalUnpack(expr) | CallArg::KeywordUnpack(expr) => {
+                    self.check_expr(expr);
+                    if !emitted_arity_error {
+                        self.errors
+                            .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+                        emitted_arity_error = true;
+                    }
+                    has_shape_error = true;
+                }
+            }
+        }
+
+        if positional_index != type_info.fields.len() && !emitted_arity_error {
+            self.errors
+                .push(errors::builtin_arity(path, type_info.fields.len(), args.len(), span));
+            has_shape_error = true;
+        }
+
+        if !has_shape_error {
+            self.type_info
+                .record_rust_named_field_constructor_fields(span, vec![String::new(); type_info.fields.len()]);
         }
         ResolvedType::RustPath(path.to_string())
     }

@@ -65,6 +65,36 @@ toolchain_release() {
   sed -n '1p' "$release_file" | tr -d '\r\n'
 }
 
+toolchain_rust_channel() {
+  local channel_file="${dist_dir}/rust-channel-${host_target}.txt"
+  [ -f "$channel_file" ] || fail "missing packaged Rust channel: ${channel_file}"
+  local channel
+  channel="$(sed -n '1p' "$channel_file" | tr -d '\r\n')"
+  [ -n "$channel" ] || fail "packaged Rust channel is empty: ${channel_file}"
+  printf '%s\n' "$channel"
+}
+
+packaged_rustc() {
+  local channel
+  channel="$(toolchain_rust_channel)"
+  if [ -n "${RUSTC:-}" ]; then
+    local reported
+    reported="$("$RUSTC" --version 2>/dev/null || true)"
+    case "$reported" in
+      "rustc ${channel}"*)
+        printf '%s\n' "$RUSTC"
+        return
+        ;;
+    esac
+  fi
+  require_command rustup
+  local rustc
+  rustc="$(rustup which --toolchain "$channel" rustc 2>/dev/null)" \
+    || fail "Rust ${channel} sealed this archive, but rustup cannot locate its rustc"
+  [ -x "$rustc" ] || fail "Rust ${channel} sealed this archive, but rustup reported no executable rustc"
+  printf '%s\n' "$rustc"
+}
+
 archive_path() {
   printf '%s/incan-%s-%s.tar.gz\n' "$dist_dir" "$(toolchain_release)" "$host_target"
 }
@@ -286,6 +316,13 @@ smoke_homebrew() {
   require_command ruby
   require_incan_run_bin
   ensure_platform_archive_fixtures
+  # The packaged compiler's immutable Loafs are sealed against the Rust release recorded beside the archive. The
+  # direct/npm/pip smokes intentionally use --skip-rust, so their ambient Rust may belong to a different release.
+  # Formula rendering imports Rust APIs and must therefore select the archive's exact compiler. An explicit runner is
+  # a test/developer authority and keeps its caller-supplied environment unchanged.
+  if [ -z "$incan_run_bin_override" ]; then
+    export RUSTC="$(packaged_rustc)"
+  fi
   INCAN_REPO_ROOT="$root" \
     INCAN_TOOLCHAIN_DIST_DIR="$dist_dir" \
     INCAN_TOOLCHAIN_GENERATED_AT="$generated_at" \

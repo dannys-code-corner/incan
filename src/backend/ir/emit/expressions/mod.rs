@@ -1304,7 +1304,11 @@ impl<'a> IrEmitter<'a> {
                 Ok(quote! { (#(#item_tokens),*) })
             }
 
-            IrExprKind::Struct { name, fields } => self.emit_struct_expr(name, fields),
+            IrExprKind::Struct {
+                name,
+                fields,
+                fill_defaults,
+            } => self.emit_struct_expr(name, fields, *fill_defaults),
 
             IrExprKind::If {
                 condition,

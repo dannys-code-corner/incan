@@ -2006,6 +2006,7 @@ impl TypeChecker {
             ) {
                 return Some(ret);
             }
+            self.preserve_unresolved_rust_call_argument_returns(args);
             return None;
         };
         match &metadata.kind {
@@ -2071,6 +2072,7 @@ impl TypeChecker {
                         return Some(ret);
                     }
                     // Stay permissive when no unambiguous imported trait or trait method signature can be selected.
+                    self.preserve_unresolved_rust_call_argument_returns(args);
                     return Some(ResolvedType::Unknown);
                 };
                 let receiver_is_type_name = matches!(
@@ -2169,7 +2171,10 @@ impl TypeChecker {
             }
             // Function, Trait, Module, Constant: metadata is incomplete for method surfaces.
             // Stay permissive and let rustc catch genuine errors at compile time.
-            _ => Some(ResolvedType::Unknown),
+            _ => {
+                self.preserve_unresolved_rust_call_argument_returns(args);
+                Some(ResolvedType::Unknown)
+            }
         }
     }
 

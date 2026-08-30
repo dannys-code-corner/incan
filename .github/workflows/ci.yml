@@ -133,7 +133,9 @@ jobs:
     runs-on: ${{ matrix.runner }}
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
+    # No explicit budget: a version bump changes Cargo.lock and misses this job's build cache, and the cache only
+    # saves when the job completes, so any budget below a full cold workspace build on a 2-core runner means the job
+    # can never re-warm. The runner-level 6-hour ceiling still bounds it.
     strategy:
       fail-fast: false
       matrix:
@@ -191,7 +193,8 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
+    # No explicit budget, like oven-platform-smoke: the completion-gated cache must be able to save after a cold
+    # workspace build. The runner-level 6-hour ceiling still bounds it.
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -238,7 +241,6 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     outputs:
       oven_suite_cache_key: ${{ steps.oven-suite-cache-key.outputs.key }}
     steps:
@@ -284,7 +286,7 @@ jobs:
           INCAN_TEST_PREWARM_TOOLCHAIN=stable
           INCAN_TEST_LOAF_TOOLCHAIN=stable
           INCAN_TEST_SUITE_TOOLCHAIN=stable
-          make -s test-prewarm-oven-loafs
+          make -s test-prewarm-oven-loafs test-prewarm-oven-release-loafs
       - name: Derive immutable prepared-suite cache key
         id: oven-suite-cache-key
         run: echo "key=incan-oven-suite-v1-Linux-X64-${{ github.sha }}" >> "$GITHUB_OUTPUT"
@@ -295,6 +297,7 @@ jobs:
           path: |
             .incan/oven/compiler-libtests-receipt.json
             target/share/incan/oven/loafs
+            target/oven-alpha-release-toolchain
             target/oven-compiler-suite-store
             target/incan_test_sdk_provider_store
             target/incan_test_sdk_provider_path
@@ -311,7 +314,6 @@ jobs:
     runs-on: ubuntu-latest
     needs: changes
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -343,7 +345,9 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 25
+    # No per-job budget, deliberately: the CI contract test forbids one, because a version bump
+    # cold-starts every completion-gated cache and any budget below a cold build means the job can
+    # never re-warm. The runner-level six-hour ceiling is the only bound, like every other Oven job.
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -436,6 +440,7 @@ jobs:
           path: |
             .incan/oven/compiler-libtests-receipt.json
             target/share/incan/oven/loafs
+            target/oven-alpha-release-toolchain
             target/oven-compiler-suite-store
             target/incan_test_sdk_provider_store
             target/incan_test_sdk_provider_path
@@ -444,6 +449,8 @@ jobs:
         run: |
           test -s .incan/oven/compiler-libtests-receipt.json
           test -d target/share/incan/oven/loafs
+          test -x target/oven-alpha-release-toolchain/bin/incan
+          test -d target/oven-alpha-release-toolchain/share/incan/oven/loafs
           test -d target/oven-compiler-suite-store
           test -s target/incan_test_sdk_provider_path
       - name: Run receipt-bound Oven partition
@@ -476,7 +483,6 @@ jobs:
       - changes
       - linux-tool-handoff
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
-    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

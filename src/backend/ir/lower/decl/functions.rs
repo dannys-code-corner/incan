@@ -380,9 +380,11 @@ impl AstLowering {
                     &mut hidden_type_params,
                     &mut hidden_counter,
                 );
+                let base_ty = self.apply_mutable_rust_type_argument_projections(p.node.is_mut, &p.node.ty, base_ty);
                 let param_ty = Self::lower_param_container_type(p.node.kind, base_ty);
-                // For mutable parameters, wrap in RefMut to track that it's a &mut reference
-                let ty = if p.node.is_mut {
+                let mutability = self.lower_parameter_mutability(p.node.is_mut, &p.node.ty.node);
+                // Ordinary mutable Incan parameters are references. Direct Rust handles keep owned ABI identity.
+                let ty = if mutability == Mutability::Mutable {
                     IrType::RefMut(Box::new(param_ty.clone()))
                 } else {
                     param_ty.clone()
@@ -398,13 +400,8 @@ impl AstLowering {
                         .as_ref()
                         .and_then(|displays| displays.get(index))
                         .map(|display| IrType::RustDisplay(display.clone()))
-                        .unwrap_or(param_ty), /* Store the emitted parameter type (emit will add &mut for mutable
-                                               * params) */
-                    mutability: if p.node.is_mut {
-                        Mutability::Mutable
-                    } else {
-                        Mutability::Immutable
-                    },
+                        .unwrap_or(param_ty), // `Mutability` selects the borrowed or owned ABI at emission time.
+                    mutability,
                     is_self: false,
                     kind: p.node.kind,
                     default: self

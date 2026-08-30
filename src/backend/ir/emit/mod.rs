@@ -507,10 +507,23 @@ pub struct IrEmitter<'a> {
     source_dependency_constructor_reexports_dirty: bool,
     /// Constructor metadata keyed by the exact public dependency and namespace-relative declaration path.
     pub_dependency_constructor_metadata: HashMap<(String, Vec<String>), StructConstructorMetadata>,
+    /// Unambiguous public nominal types keyed by short name and their Rust-visible provider path.
+    ///
+    /// Crate-root anonymous union wrappers are emitted before ordinary `use` items. A wrapper can therefore retain a
+    /// provider-local member name from checked `pub::` metadata even when the consumer never imported that member
+    /// directly. Keep the checked provider path so that payload can be emitted without relying on crate-root
+    /// re-exports that the provider did not declare.
+    public_dependency_type_paths: HashMap<String, Vec<String>>,
     /// Transparent local type aliases keyed by alias name.
     type_aliases: HashMap<String, IrType>,
     /// Incan `rusttype` aliases that should use compiler-owned call conversion rules at the surface boundary.
     rusttype_alias_names: HashSet<String>,
+    /// Source newtypes keyed by the exact Rust nominal type that backs their single carrier field.
+    ///
+    /// A newtype may invoke an associated Rust function on its carrier while implementing its source API. The carrier
+    /// retains its qualified Rust identity, but the call needs the source newtype's ownership signature. This mapping
+    /// permits that explicit relationship without treating arbitrary same-named Rust and Incan types as equivalent.
+    newtype_backing_type_names: HashMap<String, HashSet<String>>,
     /// Method signature lookup for Incan-owned nominal receivers, including imported modules.
     method_signatures: HashMap<(String, String), FunctionSignature>,
     /// Impl-level generic parameter order for method signatures.
@@ -523,6 +536,8 @@ pub struct IrEmitter<'a> {
     const_bindings: std::collections::HashMap<String, (IrType, TypedExpr)>,
     /// Map of type name -> module path segments for dependency modules.
     type_module_paths: HashMap<String, Vec<String>>,
+    /// Nominal declarations owned by the program currently being emitted.
+    local_nominal_type_names: HashSet<String>,
     /// Provider module paths owned by linked compiled SDK providers.
     ///
     /// These paths do not use the consumer-only `__incan_std` namespace, so generated support fast paths need an
@@ -659,14 +674,17 @@ impl<'a> IrEmitter<'a> {
             source_dependency_constructor_reexports: Vec::new(),
             source_dependency_constructor_reexports_dirty: false,
             pub_dependency_constructor_metadata: HashMap::new(),
+            public_dependency_type_paths: HashMap::new(),
             type_aliases: HashMap::new(),
             rusttype_alias_names: HashSet::new(),
+            newtype_backing_type_names: HashMap::new(),
             method_signatures: HashMap::new(),
             method_signature_type_params: HashMap::new(),
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
             const_bindings: std::collections::HashMap::new(),
             type_module_paths: HashMap::new(),
+            local_nominal_type_names: HashSet::new(),
             compiled_sdk_module_paths: HashSet::new(),
             compiled_sdk_type_module_paths: HashMap::new(),
             ambiguous_type_names: HashSet::new(),
@@ -1525,6 +1543,20 @@ impl<'a> IrEmitter<'a> {
         self.emit_dependency_item_path(&facade_path, name)
     }
 
+    /// Emit a checked public-provider type through its Rust-visible path when a crate-root wrapper cannot rely on
+    /// imports.
+    pub(in crate::backend::ir::emit) fn emit_public_dependency_type_path(&self, name: &str) -> Option<TokenStream> {
+        if name.contains("::") || self.local_nominal_type_names.contains(name) {
+            return None;
+        }
+        let path = self.public_dependency_type_paths.get(name)?;
+        let mut segments = path.iter().map(|segment| Self::rust_ident(segment));
+        let first = segments.next()?;
+        let name = Self::rust_ident(name);
+        let path = segments.fold(quote! { #first }, |path, segment| quote! { #path :: #segment });
+        Some(quote! { #path :: #name })
+    }
+
     /// Emit a dependency-qualified value path when a local value name is ambiguous.
     pub(in crate::backend::ir::emit) fn emit_dependency_value_path(&self, name: &str) -> Option<TokenStream> {
         if name.contains("::") || self.ambiguous_value_names.contains(name) {
@@ -1569,10 +1601,50 @@ impl<'a> IrEmitter<'a> {
     /// dependency modules.
     pub(crate) fn seed_public_dependency_nominal_metadata(&mut self, index: &LibraryManifestIndex) {
         let mut counts = HashMap::<String, usize>::new();
+        let mut public_type_paths = HashMap::<String, HashSet<Vec<String>>>::new();
         for library in index.known_libraries() {
             let Some(LibraryManifestIndexEntry::Loaded { manifest, .. }) = index.get(&library) else {
                 continue;
             };
+            let mut manifest_nominal_names = manifest
+                .exports
+                .models
+                .iter()
+                .map(|model| model.name.clone())
+                .chain(manifest.exports.classes.iter().map(|class| class.name.clone()))
+                .chain(manifest.exports.enums.iter().map(|enum_| enum_.name.clone()))
+                .chain(manifest.exports.newtypes.iter().map(|newtype| newtype.name.clone()))
+                .collect::<Vec<_>>();
+            manifest_nominal_names.sort();
+            manifest_nominal_names.dedup();
+            for name in manifest_nominal_names {
+                public_type_paths.entry(name).or_default().insert(vec![library.clone()]);
+            }
+            if let Some(api) = manifest.contract_metadata.api.as_ref() {
+                for module in &api.modules {
+                    let mut provider_path = vec![library.clone()];
+                    if !matches!(module.module_path.as_slice(), [root] if root == "lib" || root == "main") {
+                        provider_path.extend(module.module_path.iter().cloned());
+                    }
+                    for declaration in module.declarations.iter().filter(|declaration| {
+                        crate::frontend::api_metadata::checked_api_declaration_is_public_namespace_member(declaration)
+                    }) {
+                        let nominal_name = match declaration {
+                            ApiDeclaration::Model(model) => Some(&model.name),
+                            ApiDeclaration::Class(class) => Some(&class.name),
+                            ApiDeclaration::Enum(enum_) => Some(&enum_.name),
+                            ApiDeclaration::Newtype(newtype) => Some(&newtype.name),
+                            _ => None,
+                        };
+                        if let Some(name) = nominal_name {
+                            public_type_paths
+                                .entry(name.clone())
+                                .or_default()
+                                .insert(provider_path.clone());
+                        }
+                    }
+                }
+            }
             let mut public_names = manifest
                 .exports
                 .models
@@ -1619,6 +1691,17 @@ impl<'a> IrEmitter<'a> {
                 }
             }
         }
+
+        self.public_dependency_type_paths = public_type_paths
+            .into_iter()
+            .filter_map(|(name, paths)| {
+                if paths.len() == 1 {
+                    paths.into_iter().next().map(|path| (name, path))
+                } else {
+                    None
+                }
+            })
+            .collect();
 
         for library in index.known_libraries() {
             let Some(LibraryManifestIndexEntry::Loaded { manifest, .. }) = index.get(&library) else {
@@ -2091,6 +2174,14 @@ impl<'a> IrEmitter<'a> {
         // Newtypes carry method bodies just like models and classes. Consumers do not lower the provider source, so
         // their artifact metadata must participate in the same Incan ownership planning as every other nominal type.
         for newtype in newtypes {
+            if let IrType::Struct(backing_type) | IrType::NamedGeneric(backing_type, _) =
+                Self::manifest_type_ref_to_ir_type(&newtype.underlying)
+            {
+                self.newtype_backing_type_names
+                    .entry(backing_type)
+                    .or_default()
+                    .insert(newtype.name.clone());
+            }
             self.register_manifest_method_metadata(&newtype.name, &newtype.methods, &newtype.type_params);
         }
     }
@@ -2174,6 +2265,19 @@ impl<'a> IrEmitter<'a> {
                             (module_path.clone(), s.name.clone()),
                             StructConstructorMetadata::from_source_dependency(module_path, s),
                         );
+                    }
+                    // Constructor metadata is keyed by the short source type name and must therefore ignore ambiguous
+                    // dependency declarations. A newtype carrier relationship is different: it is keyed by the exact
+                    // raw Rust type, and `method_signature_for_receiver` refuses a non-unique result. Preserve those
+                    // ownership facts even when the source wrapper name itself is ambiguous.
+                    if s.kind == IrStructKind::Newtype
+                        && let Some(IrType::Struct(backing_type) | IrType::NamedGeneric(backing_type, _)) =
+                            s.fields.first().map(|field| &field.ty)
+                    {
+                        self.newtype_backing_type_names
+                            .entry(backing_type.clone())
+                            .or_default()
+                            .insert(s.name.clone());
                     }
                     if skip_ambiguous && self.ambiguous_type_names.contains(&s.name) {
                         continue;
@@ -2626,24 +2730,100 @@ impl<'a> IrEmitter<'a> {
     }
 
     /// Return an Incan-owned method signature for a receiver type when typechecker call-site metadata is unavailable.
+    ///
+    /// A qualified nominal name is already an identity, so it must match the registry exactly. The one deliberate
+    /// bridge is an exact Rust backing type recorded for a source newtype, whose source API supplies ownership facts
+    /// while implementing that newtype. Falling back to a final segment would instead let unrelated Rust and Incan
+    /// types collide: for example, an external `bevy::prelude::App` would acquire defaults from Incan `App`.
     pub(super) fn method_signature_for_receiver(
         &self,
         receiver_ty: &IrType,
         method_name: &str,
     ) -> Option<&FunctionSignature> {
         match receiver_ty {
-            IrType::Struct(name) | IrType::NamedGeneric(name, _) => self
-                .method_signatures
-                .get(&(name.clone(), method_name.to_string()))
-                .or_else(|| {
-                    name.rsplit("::").next().and_then(|short_name| {
+            IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
+                let (is_rust_import_alias, canonical_import_aliases) = {
+                    let rust_import_paths = self.rust_import_paths.borrow();
+                    let canonical_name = name.trim_start_matches("::");
+                    (
+                        rust_import_paths.contains_key(name),
+                        rust_import_paths
+                            .iter()
+                            .filter(|(_, path)| path.join("::") == canonical_name)
+                            .map(|(alias, _)| alias.clone())
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                if !is_rust_import_alias
+                    && let Some(signature) = self.method_signatures.get(&(name.clone(), method_name.to_string()))
+                {
+                    return Some(signature);
+                }
+                if name.contains("::") || is_rust_import_alias {
+                    // A source newtype records its carrier using the local Rust-import alias, while method lowering
+                    // can retain either that alias or its canonical Rust path. Relate only those two representations
+                    // of the same import; a normal `rust::` alias must never acquire a source method with the same
+                    // short name.
+                    let mut backing_type_names = vec![name.clone()];
+                    backing_type_names.extend(canonical_import_aliases);
+                    let backing_newtypes = backing_type_names
+                        .iter()
+                        .filter_map(|backing_type| self.newtype_backing_type_names.get(backing_type))
+                        .flat_map(|newtypes| newtypes.iter())
+                        .collect::<HashSet<_>>();
+                    let mut signatures = backing_newtypes.iter().filter_map(|newtype_name| {
                         self.method_signatures
-                            .get(&(short_name.to_string(), method_name.to_string()))
-                    })
-                }),
+                            .get(&((*newtype_name).clone(), method_name.to_string()))
+                    });
+                    let signature = signatures.next()?;
+                    return signatures.next().is_none().then_some(signature);
+                }
+                name.rsplit("::").next().and_then(|short_name| {
+                    self.method_signatures
+                        .get(&(short_name.to_string(), method_name.to_string()))
+                })
+            }
             IrType::Ref(inner) | IrType::RefMut(inner) => self.method_signature_for_receiver(inner, method_name),
             _ => None,
         }
+    }
+
+    /// Return the call-site signature applicable to a method receiver.
+    ///
+    /// Semantic call-site metadata can retain source defaults before backend lowering has established that a short
+    /// nominal name is a direct Rust import. Rust methods cannot have source-language defaults, so retain their type
+    /// shapes but clear defaults for those receivers. A source newtype carrier is the deliberate exception: its
+    /// imported Rust alias implements a source-owned API and therefore still owns its declared defaults.
+    pub(super) fn method_call_signature_for_receiver(
+        &self,
+        receiver_ty: &IrType,
+        call_signature: Option<&FunctionSignature>,
+    ) -> Option<FunctionSignature> {
+        let mut call_signature = call_signature?.clone();
+        let direct_rust_alias_without_newtype = match receiver_ty {
+            IrType::Struct(name) | IrType::NamedGeneric(name, _) => {
+                let short_name = name.rsplit("::").next().unwrap_or(name);
+                let rust_import_paths = self.rust_import_paths.borrow();
+                let matching_import_aliases = rust_import_paths
+                    .keys()
+                    .filter(|alias| *alias == name || *alias == short_name)
+                    .collect::<Vec<_>>();
+                !matching_import_aliases.is_empty()
+                    && !matching_import_aliases
+                        .iter()
+                        .any(|alias| self.newtype_backing_type_names.contains_key(*alias))
+            }
+            IrType::Ref(inner) | IrType::RefMut(inner) => {
+                return self.method_call_signature_for_receiver(inner, Some(&call_signature));
+            }
+            _ => false,
+        };
+        if direct_rust_alias_without_newtype {
+            for param in &mut call_signature.params {
+                param.default = None;
+            }
+        }
+        Some(call_signature)
     }
 
     /// Return a method signature specialized through a concrete generic receiver target.
@@ -2918,7 +3098,9 @@ impl<'a> IrEmitter<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConstructorProviderIdentity, IrEmitter, StructConstructorMetadata, StructConstructorSurface};
+    use super::{
+        ConstructorProviderIdentity, FunctionSignature, IrEmitter, StructConstructorMetadata, StructConstructorSurface,
+    };
     use crate::backend::ir::decl::{
         IrDecl, IrDeclKind, IrImportItem, IrImportOrigin, IrImportQualifier, IrStruct, IrStructKind, StructField,
         Visibility,
@@ -2943,6 +3125,123 @@ mod tests {
             &IrType::RustDisplay("&mut egui::Ui".to_string()),
             &IrType::Struct("Frame".to_string()),
         ));
+    }
+
+    #[test]
+    fn qualified_rust_receiver_does_not_inherit_same_named_incan_method_signature() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.method_signatures.insert(
+            ("App".to_string(), "run".to_string()),
+            FunctionSignature {
+                params: Vec::new(),
+                return_type: IrType::Unit,
+            },
+        );
+        emitter
+            .newtype_backing_type_names
+            .entry("RustJsonValue".to_string())
+            .or_default()
+            .insert("JsonValue".to_string());
+        emitter.rust_import_paths.borrow_mut().insert(
+            "RustJsonValue".to_string(),
+            vec!["incan_stdlib".to_string(), "json".to_string(), "JsonValue".to_string()],
+        );
+        emitter.method_signatures.insert(
+            ("JsonValue".to_string(), "string".to_string()),
+            FunctionSignature {
+                params: vec![crate::backend::ir::decl::FunctionParam {
+                    name: "value".to_string(),
+                    ty: IrType::String,
+                    mutability: crate::backend::ir::Mutability::Immutable,
+                    is_self: false,
+                    kind: crate::frontend::ast::ParamKind::Normal,
+                    default: None,
+                }],
+                return_type: IrType::Struct("JsonValue".to_string()),
+            },
+        );
+
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
+                .is_some(),
+            "an Incan nominal receiver uses its own method metadata"
+        );
+        emitter.rust_import_paths.borrow_mut().insert(
+            "App".to_string(),
+            vec!["bevy".to_string(), "prelude".to_string(), "App".to_string()],
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("bevy::prelude::App".to_string()), "run")
+                .is_none(),
+            "qualified Rust receivers must not use an unrelated short-name Incan signature"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("App".to_string()), "run")
+                .is_none(),
+            "a local Rust import alias must not use an unrelated source method signature"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("incan_stdlib::json::JsonValue".to_string()), "string",)
+                .is_some(),
+            "a source newtype may supply call ownership facts through its exact Rust import identity"
+        );
+        assert!(
+            emitter
+                .method_signature_for_receiver(&IrType::Struct("RustJsonValue".to_string()), "string")
+                .is_some(),
+            "a source newtype may supply call ownership facts through its local Rust import alias"
+        );
+
+        let signature_with_source_default = FunctionSignature {
+            params: vec![crate::backend::ir::decl::FunctionParam {
+                name: "port".to_string(),
+                ty: IrType::Int,
+                mutability: crate::backend::ir::Mutability::Immutable,
+                is_self: false,
+                kind: crate::frontend::ast::ParamKind::Normal,
+                default: Some(crate::backend::ir::decl::FunctionParamDefault::source(TypedExpr::new(
+                    IrExprKind::Int(8080),
+                    IrType::Int,
+                ))),
+            }],
+            return_type: IrType::Unit,
+        };
+        let direct_alias_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("App".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a direct Rust import alias receiver should produce a call signature")?;
+        assert!(
+            direct_alias_signature.params[0].default.is_none(),
+            "a direct Rust import alias must not retain source-language defaults"
+        );
+        let qualified_chain_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("std::web::App".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a source-qualified call-chain receiver should produce a call signature")?;
+        assert!(
+            qualified_chain_signature.params[0].default.is_none(),
+            "a call-chain receiver retaining a source-qualified spelling must still respect its Rust import alias"
+        );
+        let newtype_carrier_signature = emitter
+            .method_call_signature_for_receiver(
+                &IrType::Struct("RustJsonValue".to_string()),
+                Some(&signature_with_source_default),
+            )
+            .ok_or("a source newtype carrier receiver should produce a call signature")?;
+        assert!(
+            newtype_carrier_signature.params[0].default.is_some(),
+            "a source newtype carrier retains its source-owned defaults"
+        );
+        Ok(())
     }
 
     fn checked_source_class(

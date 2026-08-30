@@ -1,6 +1,8 @@
 //! Class declaration lowering, including inherited field/method collection.
 
+use super::super::super::Mutability;
 use super::super::super::decl::{IrStruct, IrStructKind, StructField};
+use super::super::super::types::IrType;
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
@@ -116,7 +118,7 @@ impl AstLowering {
         let has_opaque_rust_field = c.name.starts_with('_')
             && c.fields
                 .iter()
-                .any(|f| self.field_uses_direct_rust_import(&f.node.ty.node));
+                .any(|f| self.type_uses_direct_rust_import(&f.node.ty.node));
         if !has_opaque_rust_field && !derives.iter().any(|d| d == debug) {
             derives.push(debug.to_string());
         }
@@ -145,8 +147,8 @@ impl AstLowering {
         })
     }
 
-    /// Return whether a class field annotation names a direct Rust import.
-    fn field_uses_direct_rust_import(&self, ty: &ast::Type) -> bool {
+    /// Return whether a source type annotation contains a direct Rust import.
+    pub(in crate::backend::ir::lower) fn type_uses_direct_rust_import(&self, ty: &ast::Type) -> bool {
         match ty {
             ast::Type::Simple(name) | ast::Type::ConstrainedPrimitive(name, _) => {
                 self.rust_import_aliases.contains_key(name)
@@ -157,19 +159,118 @@ impl AstLowering {
             ast::Type::Dotted(_) => false,
             ast::Type::Generic(base, args) => {
                 self.rust_import_aliases.contains_key(base)
-                    || args.iter().any(|arg| self.field_uses_direct_rust_import(&arg.node))
+                    || args.iter().any(|arg| self.type_uses_direct_rust_import(&arg.node))
             }
-            ast::Type::DottedGeneric(_, args) => args.iter().any(|arg| self.field_uses_direct_rust_import(&arg.node)),
+            ast::Type::DottedGeneric(_, args) => args.iter().any(|arg| self.type_uses_direct_rust_import(&arg.node)),
             ast::Type::Function(params, ret) => {
                 params
                     .iter()
-                    .any(|param| self.field_uses_direct_rust_import(&param.node))
-                    || self.field_uses_direct_rust_import(&ret.node)
+                    .any(|param| self.type_uses_direct_rust_import(&param.node))
+                    || self.type_uses_direct_rust_import(&ret.node)
             }
-            ast::Type::Ref(inner) | ast::Type::RefMut(inner) => self.field_uses_direct_rust_import(&inner.node),
-            ast::Type::Tuple(items) => items.iter().any(|item| self.field_uses_direct_rust_import(&item.node)),
+            ast::Type::Ref(inner) | ast::Type::RefMut(inner) => self.type_uses_direct_rust_import(&inner.node),
+            ast::Type::Tuple(items) => items.iter().any(|item| self.type_uses_direct_rust_import(&item.node)),
             ast::Type::Unit | ast::Type::SelfType | ast::Type::IntLiteral(_) | ast::Type::Infer => false,
         }
+    }
+
+    /// Return whether the outer annotation itself names one imported Rust type.
+    ///
+    /// This intentionally differs from [`Self::type_uses_direct_rust_import`]. A mutable Incan container or tuple
+    /// that happens to contain a Rust value still follows the ordinary borrowed-parameter ABI; only a top-level Rust
+    /// handle needs an owned mutable binding.
+    pub(in crate::backend::ir::lower) fn type_is_top_level_direct_rust_import(&self, ty: &ast::Type) -> bool {
+        match ty {
+            ast::Type::Simple(name) | ast::Type::ConstrainedPrimitive(name, _) | ast::Type::Generic(name, _) => {
+                self.rust_import_aliases.contains_key(name)
+            }
+            ast::Type::Qualified(segments) => segments
+                .first()
+                .is_some_and(|name| self.rust_import_aliases.contains_key(name)),
+            ast::Type::Dotted(_)
+            | ast::Type::DottedGeneric(_, _)
+            | ast::Type::Function(_, _)
+            | ast::Type::Ref(_)
+            | ast::Type::RefMut(_)
+            | ast::Type::Tuple(_)
+            | ast::Type::Unit
+            | ast::Type::SelfType
+            | ast::Type::IntLiteral(_)
+            | ast::Type::Infer => false,
+        }
+    }
+
+    /// Lower source mutability without conflating an owned Rust handle with an Incan borrow.
+    pub(in crate::backend::ir::lower) fn lower_parameter_mutability(&self, is_mut: bool, ty: &ast::Type) -> Mutability {
+        if !is_mut {
+            Mutability::Immutable
+        } else if self.type_is_top_level_direct_rust_import(ty) {
+            Mutability::OwnedMutable
+        } else {
+            Mutability::Mutable
+        }
+    }
+
+    /// Apply a frontend-recorded ownership projection to one mutable imported Rust generic.
+    ///
+    /// The typechecker has already inspected the foreign generic contract and keyed its structural decision by this
+    /// annotation span. Lowering deliberately does not consult provider/type names or project configuration.
+    pub(in crate::backend::ir::lower) fn apply_mutable_rust_type_argument_projections(
+        &self,
+        is_mut: bool,
+        source_ty: &Spanned<ast::Type>,
+        lowered_ty: IrType,
+    ) -> IrType {
+        if !is_mut {
+            return lowered_ty;
+        }
+        let Some(projections) = self.type_info.as_ref().and_then(|type_info| {
+            type_info
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(source_ty.span.start, source_ty.span.end))
+        }) else {
+            return lowered_ty;
+        };
+        let IrType::NamedGeneric(name, mut arguments) = lowered_ty else {
+            return lowered_ty;
+        };
+        for projection in projections {
+            if let Some(argument) = arguments.get_mut(projection.argument_position) {
+                *argument = Self::project_mutable_rust_reference_paths(
+                    argument.clone(),
+                    projection.reference_leaf_paths.as_slice(),
+                );
+            }
+        }
+        IrType::NamedGeneric(name, arguments)
+    }
+
+    /// Project the exact tuple leaves the frontend proved need a mutable Rust reference.
+    fn project_mutable_rust_reference_paths(ty: IrType, paths: &[Vec<usize>]) -> IrType {
+        if paths.iter().any(Vec::is_empty) {
+            return match ty {
+                IrType::Ref(_) | IrType::RefMut(_) => ty,
+                other => IrType::RefMut(Box::new(other)),
+            };
+        }
+        let IrType::Tuple(mut items) = ty else {
+            return ty;
+        };
+        for (index, item) in items.iter_mut().enumerate() {
+            let child_paths = paths
+                .iter()
+                .filter_map(|path| {
+                    path.first()
+                        .filter(|first| **first == index)
+                        .map(|_| path[1..].to_vec())
+                })
+                .collect::<Vec<_>>();
+            if !child_paths.is_empty() {
+                *item = Self::project_mutable_rust_reference_paths(item.clone(), child_paths.as_slice());
+            }
+        }
+        IrType::Tuple(items)
     }
 
     /// Recursively collect all methods from this class and parent classes.
