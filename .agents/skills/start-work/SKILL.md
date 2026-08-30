@@ -111,6 +111,19 @@ Read `.agents/learnings.md` and check whether any section is relevant to the tas
 
 If a relevant section exists, summarize the key takeaways for the user.
 
+### Step 4a: Record v0.6 ledger start
+
+If the resolved issue belongs to the `0.6 Release` milestone, read the current ledger and update format on [#1074](https://github.com/encero-systems/incan/issues/1074). Before the first production edit, publish an append-only `Active` ledger update naming:
+
+- the owning issue and branch (or planned branch);
+- the bounded scope and acceptance contract;
+- known dependencies and blockers; and
+- the first targeted verification command or evidence lane.
+
+Do not edit another contributor's ledger comment. If the task does not authorize a GitHub write, show the exact update text to the maintainer and wait for publication before editing production code.
+
+When work becomes blocked, ready for integration, materially rescaled, or complete, publish the corresponding follow-up update on #1074. Completion updates must name actual verification evidence; never infer it from a green legacy path or an unrun command.
+
 ### Step 5: Check for parallel work opportunities
 
 If the task clearly decomposes into independent slices and the user explicitly wants delegation or parallel work, stop after gathering context and hand off to `orchestrate-parallel-work`.

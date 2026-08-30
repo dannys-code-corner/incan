@@ -36,6 +36,17 @@ Incan is a Python-like language that compiles to Rust. The compiler itself is wr
 
 Skills (`.agents/skills/`) and learnings (`.agents/learnings.md`) live under **this repository’s** `.agents/` directory and are committed here. Working state and review-run artifacts (`.agents/state/`) live in the same directory but are **not** committed — they're gitignored, per-machine scratch, except `.agents/state/findings-ledger.md` which is a symlink into a private workspace-level log (see `.agents/skills/review/SKILL.md` and `.agents/skills/ralph-loop/SKILL.md` for how it's used).
 
+## v0.6 execution ledger
+
+For every implementation issue in the `0.6 Release` milestone, [#1074](https://github.com/encero-systems/incan/issues/1074) is the central execution ledger. The RFC and owning issue remain the semantic authority; the ledger records delivery state, dependencies, and evidence across the programme.
+
+- Before the first production edit, post a structured `Active` update on #1074 that identifies the issue, branch or PR when one exists, intended scope, dependencies, and initial verification plan.
+- Post another update when the work is blocked, ready for integration, materially rescaled, or completed. Do not call v0.6 work ready to merge or complete without its ledger evidence.
+- Use the update format published on #1074. Updates are append-only comments so concurrent contributors do not overwrite each other; do not edit another contributor's update.
+- Keep public updates reproducible and repository-scoped: no local absolute paths, private environment details, or claims that unrun verification passed.
+
+This requirement applies to contributors and automated implementation workflows alike. If the current task does not authorize a GitHub write, prepare the exact update text and ask the maintainer to publish it before proceeding.
+
 ## General Workflow
 
 1. **Branch from main**: Create a feature branch using the naming convention `<type>/<issue>-<slug>`, where type is `feature`, `chore`, or `bugfix`. Examples: `feature/165-implement-rfc-031-library-system-phase-1`, `chore/88-vocab-drift-guardrails`, `bugfix/42-fix-parser-crash`. Use the `/start-work` skill to automate this.
