@@ -372,6 +372,14 @@ impl TypeChecker {
                         } else {
                             None
                         };
+                        // Exact-width floating operands must not flow through the legacy two-class numeric promotion
+                        // table: it only distinguishes `int` and `float`, so `f32 + f32` would incorrectly become
+                        // the default `float` (`f64`). Mixed-width expressions still use that established policy.
+                        if left_ty == right_ty
+                            && matches!(left_ty, ResolvedType::Numeric(NumericTypeId::F32 | NumericTypeId::F64))
+                        {
+                            return left_ty;
+                        }
                         let result = result_numeric_type(num_op, lhs, rhs, pow_exp);
                         match result {
                             NumericTy::Int => ResolvedType::Int,
@@ -612,7 +620,12 @@ impl TypeChecker {
         let operand_ty = self.check_expr(operand);
         match op {
             UnaryOp::Neg => {
-                if self.types_compatible(&operand_ty, &ResolvedType::Int) {
+                if matches!(
+                    operand_ty,
+                    ResolvedType::Numeric(NumericTypeId::F32 | NumericTypeId::F64)
+                ) {
+                    operand_ty
+                } else if self.types_compatible(&operand_ty, &ResolvedType::Int) {
                     ResolvedType::Int
                 } else if self.types_compatible(&operand_ty, &ResolvedType::Float) {
                     ResolvedType::Float

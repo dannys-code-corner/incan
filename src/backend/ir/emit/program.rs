@@ -828,7 +828,7 @@ impl<'program> GeneratedUseAnalyzer<'program> {
                     self.scan_expr(item);
                 }
             }
-            IrExprKind::Struct { name, fields } => {
+            IrExprKind::Struct { name, fields, .. } => {
                 self.mark_reachable_item(name);
                 for (_, expr) in fields {
                     self.scan_expr(expr);
@@ -3397,15 +3397,19 @@ impl<'a> IrEmitter<'a> {
         match ty {
             IrType::Struct(name) | IrType::Enum(name) | IrType::Trait(name) => self
                 .emit_dependency_type_path(name)
+                .or_else(|| self.emit_public_dependency_type_path(name))
                 .unwrap_or_else(|| self.emit_type(ty)),
             IrType::NamedGeneric(name, args) if name == super::super::types::IR_UNION_TYPE_NAME => {
                 self.emit_union_type_path(ty)
             }
             IrType::NamedGeneric(name, args) => {
-                let base = self.emit_dependency_type_path(name).unwrap_or_else(|| {
-                    let ident = Self::rust_ident(name);
-                    quote! { #ident }
-                });
+                let base = self
+                    .emit_dependency_type_path(name)
+                    .or_else(|| self.emit_public_dependency_type_path(name))
+                    .unwrap_or_else(|| {
+                        let ident = Self::rust_ident(name);
+                        quote! { #ident }
+                    });
                 let args: Vec<_> = args
                     .iter()
                     .map(|arg| self.emit_generated_union_member_type(arg))
@@ -3488,6 +3492,21 @@ impl<'a> IrEmitter<'a> {
     pub fn emit_program(&mut self, program: &IrProgram) -> Result<String, EmitError> {
         self.iterator_sum_used.replace(false);
         self.const_bindings.clear();
+        self.local_nominal_type_names = program
+            .declarations
+            .iter()
+            .filter_map(|decl| match &decl.kind {
+                IrDeclKind::Struct(strukt) => Some(strukt.name.clone()),
+                IrDeclKind::Enum(enum_) => Some(enum_.name.clone()),
+                IrDeclKind::Trait(trait_decl) => Some(trait_decl.name.clone()),
+                IrDeclKind::TypeAlias { name, .. } | IrDeclKind::SymbolAlias { name, .. } => Some(name.clone()),
+                IrDeclKind::Function(_)
+                | IrDeclKind::Const { .. }
+                | IrDeclKind::Static { .. }
+                | IrDeclKind::Import { .. }
+                | IrDeclKind::Impl(_) => None,
+            })
+            .collect();
         // RFC 023: propagate rust.module() path from IR to emitter for @rust.extern delegation.
         if self.rust_module_path.is_none() {
             self.rust_module_path = program.rust_module_path.clone();
@@ -4246,6 +4265,37 @@ mod tests {
         assert!(
             collected.contains_key(&local_name),
             "uncovered local union sibling should still be collected"
+        );
+        Ok(())
+    }
+
+    /// Regression for #1203: crate-root union definitions keep public-provider payloads qualified without an import.
+    #[test]
+    fn generated_union_qualifies_public_provider_payloads_issue1203() -> Result<(), String> {
+        let program = IrProgram::new();
+        let mut emitter = IrEmitter::new(&program.function_registry);
+        emitter.public_dependency_type_paths.insert(
+            "ProviderPayload".to_string(),
+            vec!["provider".to_string(), "public_types".to_string()],
+        );
+        let rendered = emitter
+            .emit_generated_union_type(&union(vec![
+                IrType::Struct("ProviderPayload".to_string()),
+                IrType::NamedGeneric(
+                    "Envelope".to_string(),
+                    vec![IrType::Struct("ProviderPayload".to_string())],
+                ),
+            ]))
+            .ok_or("expected an anonymous union definition")?
+            .to_string();
+
+        assert!(
+            rendered.contains("provider :: public_types :: ProviderPayload"),
+            "expected the public provider payload to stay qualified: {rendered}"
+        );
+        assert!(
+            rendered.contains("Envelope < provider :: public_types :: ProviderPayload >"),
+            "expected nested public provider payloads to stay qualified: {rendered}"
         );
         Ok(())
     }

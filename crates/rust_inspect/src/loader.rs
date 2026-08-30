@@ -3,6 +3,7 @@
 //! This module is intentionally behind the rust-inspect preparation/cache boundary. It owns the unstable rust-analyzer
 //! embedding details so parser/typechecker/codegen code does not load Cargo workspaces directly.
 
+use std::any::Any;
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -11,7 +12,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ra_ap_hir::Crate;
 use ra_ap_ide_db::RootDatabase;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_project_model::CargoConfig;
+use ra_ap_paths::AbsPathBuf;
+use ra_ap_project_model::{CargoConfig, RustLibSource};
 use ra_ap_vfs::Vfs;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};
@@ -28,6 +30,11 @@ pub struct RustWorkspace {
     crate_index: HashMap<String, Crate>,
     #[allow(dead_code)]
     vfs: Vfs,
+    /// Keep the external proc-macro process alive for lazy semantic queries such as derive expansion. The concrete
+    /// client stays opaque here: rust-inspect owns its lifetime, but must not introduce a second direct instance of
+    /// rust-analyzer's proc-macro API crate into Oven's self-hosted compiler graph.
+    #[allow(dead_code)]
+    proc_macro_client: Option<Box<dyn Any + Send + Sync>>,
 }
 
 /// A sequence scoped to this process keeps generated direct-project descriptions independent when libtests run in
@@ -35,12 +42,47 @@ pub struct RustWorkspace {
 /// tree or in Cargo's cache.
 static OVEN_PROJECT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Resolve the proc-macro server installed beside the active Rust compiler.
+fn active_proc_macro_server() -> ProcMacroServerChoice {
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let Ok(output) = std::process::Command::new(rustc).args(["--print", "sysroot"]).output() else {
+        return ProcMacroServerChoice::Sysroot;
+    };
+    if !output.status.success() {
+        return ProcMacroServerChoice::Sysroot;
+    }
+    let Some(sysroot) = std::str::from_utf8(&output.stdout)
+        .ok()
+        .map(str::trim)
+        .filter(|path| !path.is_empty())
+    else {
+        return ProcMacroServerChoice::Sysroot;
+    };
+    for candidate in proc_macro_server_candidates(Path::new(sysroot), std::env::consts::EXE_SUFFIX) {
+        if candidate.is_file() {
+            return ProcMacroServerChoice::Explicit(AbsPathBuf::assert_utf8(candidate));
+        }
+    }
+    ProcMacroServerChoice::Sysroot
+}
+
+/// Return the active-toolchain proc-macro-server locations in rustup and standalone-install order.
+fn proc_macro_server_candidates(sysroot: &Path, executable_suffix: &str) -> [PathBuf; 2] {
+    let server_name = format!("rust-analyzer-proc-macro-srv{executable_suffix}");
+    [
+        sysroot.join("libexec").join(&server_name),
+        sysroot.join("lib").join(server_name),
+    ]
+}
+
 /// Compiler-authored marker for an inspection projection that must use the direct rust-project loader.
 ///
 /// The marker lives only in a generated inspection directory. It keeps the selection local to the prepared Oven
 /// invocation instead of relying on an ambient environment variable that could accidentally make a legacy Cargo
 /// inspection session lose build-script support.
 pub const OVEN_DIRECT_INSPECTION_MARKER: &str = ".incan_oven_direct_rust_project";
+/// Compiler-authored marker for the explicit Oven publisher's one-time Cargo-backed semantic bootstrap.
+pub const OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER: &str = ".incan_oven_cargo_rust_inspection";
 /// Compiler-authored source authority consumed by the direct Oven inspection loader.
 pub const OVEN_DIRECT_INSPECTION_AUTHORITY_FILE: &str = ".incan_oven_rust_sources.json";
 const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 2;
@@ -116,6 +158,41 @@ pub fn write_sealed_oven_inspection_source_authority(
     )
 }
 
+/// Return the exact source roots named by a prepared Oven inspection authority.
+///
+/// This lightweight helper validates only schema and source-root accessibility. Callers that need full identity and
+/// digest validation must use the direct-inspection workspace loader. The typechecker uses these roots solely to
+/// constrain later fast source-metadata lookup; it does not rediscover Cargo's ambient cache.
+pub fn oven_inspection_registry_source_roots(manifest_dir: &Path) -> Result<Vec<PathBuf>, RustMetadataError> {
+    let path = manifest_dir.join(OVEN_DIRECT_INSPECTION_AUTHORITY_FILE);
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let authority = serde_json::from_slice::<OvenInspectionSourceAuthority>(&fs::read(&path)?).map_err(|error| {
+        RustMetadataError::LoadWorkspace {
+            path: path.clone(),
+            message: format!("invalid Oven Rust source authority: {error}"),
+        }
+    })?;
+    if !(1..=OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION).contains(&authority.schema_version) {
+        return Err(RustMetadataError::LoadWorkspace {
+            path,
+            message: format!(
+                "unsupported Oven Rust source authority schema {}",
+                authority.schema_version
+            ),
+        });
+    }
+    let mut roots = authority
+        .sources
+        .into_iter()
+        .map(|source| source.source_root.canonicalize())
+        .collect::<Result<Vec<_>, _>>()?;
+    roots.sort();
+    roots.dedup();
+    Ok(roots)
+}
+
 /// Serialize deterministic inspection authority using the caller's declared validation boundary.
 fn write_oven_inspection_source_authority_with_validation(
     manifest_dir: &Path,
@@ -161,6 +238,7 @@ struct OvenProjectCrate {
     display_name: String,
     root_module: PathBuf,
     edition: String,
+    is_proc_macro: bool,
     dependencies: Vec<OvenProjectDependency>,
     cfg: Vec<String>,
 }
@@ -275,20 +353,42 @@ impl RustWorkspace {
         name.replace('-', "_")
     }
 
+    /// Insert every rust-analyzer spelling for one crate without replacing a higher-authority entry.
+    fn insert_crate_names(index: &mut HashMap<String, Crate>, krate: Crate, db: &RootDatabase) {
+        if let Some(display_name) = krate.display_name(db) {
+            index
+                .entry(Self::normalize_crate_name(display_name.to_string().as_str()))
+                .or_insert(krate);
+            index
+                .entry(Self::normalize_crate_name(display_name.crate_name().as_str()))
+                .or_insert(krate);
+            index
+                .entry(Self::normalize_crate_name(display_name.canonical_name().as_str()))
+                .or_insert(krate);
+        }
+    }
+
+    /// Build the crate-name index with root direct dependencies taking precedence over duplicate transitive names.
     fn build_crate_index(db: &RootDatabase) -> HashMap<String, Crate> {
         let mut index = HashMap::new();
-        for krate in Crate::all(db) {
-            if let Some(display_name) = krate.display_name(db) {
+        // A Cargo graph may contain multiple versions of the same canonical crate name. Rust source at the generated
+        // project root resolves that spelling through the root's direct dependency edge, not whichever transitive
+        // version happens to appear first in rust-analyzer's crate enumeration. Seed those named edges before the
+        // graph-wide fallback so inspection follows the same namespace authority as rustc.
+        for root in Crate::all(db)
+            .into_iter()
+            .filter(|krate| !krate.is_builtin(db) && krate.reverse_dependencies(db).is_empty())
+        {
+            Self::insert_crate_names(&mut index, root, db);
+            for dependency in root.dependencies(db) {
                 index
-                    .entry(Self::normalize_crate_name(display_name.to_string().as_str()))
-                    .or_insert(krate);
-                index
-                    .entry(Self::normalize_crate_name(display_name.crate_name().as_str()))
-                    .or_insert(krate);
-                index
-                    .entry(Self::normalize_crate_name(display_name.canonical_name().as_str()))
-                    .or_insert(krate);
+                    .entry(Self::normalize_crate_name(dependency.name.as_str()))
+                    .or_insert(dependency.krate);
+                Self::insert_crate_names(&mut index, dependency.krate, db);
             }
+        }
+        for krate in Crate::all(db) {
+            Self::insert_crate_names(&mut index, krate, db);
         }
         index
     }
@@ -298,9 +398,12 @@ impl RustWorkspace {
     /// rust-analyzer may run `cargo check` to discover build-script output. Keep those nested Cargo artifacts inside
     /// the generated workspace target selected by Incan instead of inheriting a caller-level target or unstable
     /// Cargo `build-dir` override.
-    fn metadata_cargo_config(target_dir: &Path) -> CargoConfig {
+    fn metadata_cargo_config(target_dir: &Path, discover_sysroot: bool) -> CargoConfig {
         let target_dir = target_dir.to_string_lossy().into_owned();
-        let mut config = CargoConfig::default();
+        let mut config = CargoConfig {
+            sysroot: discover_sysroot.then_some(RustLibSource::Discover),
+            ..CargoConfig::default()
+        };
         config
             .extra_env
             .insert("CARGO_TARGET_DIR".to_string(), Some(target_dir.clone()));
@@ -318,6 +421,11 @@ impl RustWorkspace {
     /// calls remain on their explicitly selected route.
     pub(crate) fn oven_direct_inspection_active(manifest_dir: &Path) -> bool {
         manifest_dir.join(OVEN_DIRECT_INSPECTION_MARKER).is_file()
+    }
+
+    /// Whether this inspection workspace is the explicit Oven publisher's Cargo-backed semantic bootstrap.
+    pub(crate) fn oven_cargo_bootstrap_inspection_active(manifest_dir: &Path) -> bool {
+        manifest_dir.join(OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER).is_file()
     }
 
     /// Materialize a minimal rust-analyzer project description for one compiler-authored manifest without invoking
@@ -676,6 +784,13 @@ impl RustWorkspace {
                 .and_then(toml::Value::as_str)
                 .unwrap_or(package_name)
                 .replace('-', "_");
+            let is_proc_macro = match manifest.get("lib").and_then(|library| library.get("proc-macro")) {
+                Some(value) => value.as_bool().ok_or_else(|| RustMetadataError::LoadWorkspace {
+                    path: manifest_path.clone(),
+                    message: "direct Oven inspection requires lib.proc-macro to be a boolean".to_string(),
+                })?,
+                None => false,
+            };
             let edition = package
                 .get("edition")
                 .and_then(toml::Value::as_str)
@@ -783,6 +898,7 @@ impl RustWorkspace {
                 display_name,
                 root_module,
                 edition,
+                is_proc_macro,
                 dependencies,
                 cfg,
             })
@@ -902,6 +1018,7 @@ impl RustWorkspace {
                     "cfg": direct_crate.cfg,
                     "env": {},
                     "is_workspace_member": true,
+                    "is_proc_macro": direct_crate.is_proc_macro,
                 })
             })
             .collect::<Vec<_>>();
@@ -950,7 +1067,12 @@ impl RustWorkspace {
         let _ = fs::remove_dir(&project_dir);
         let (db, vfs, _pm) = result?;
         let crate_index = Self::build_crate_index(&db);
-        Ok(RustWorkspace { db, crate_index, vfs })
+        Ok(RustWorkspace {
+            db,
+            crate_index,
+            vfs,
+            proc_macro_client: None,
+        })
     }
 
     /// Load the Cargo project rooted at `manifest_dir` (directory containing `Cargo.toml`).
@@ -981,17 +1103,25 @@ impl RustWorkspace {
         if Self::oven_direct_inspection_active(manifest_dir) {
             return Self::load_oven_project(manifest_dir, target_dir, progress, load_out_dirs_from_check);
         }
+        let cargo_bootstrap = Self::oven_cargo_bootstrap_inspection_active(manifest_dir);
+        let load_out_dirs_from_check = load_out_dirs_from_check || cargo_bootstrap;
         let manifest_dir = manifest_dir.canonicalize()?;
-        let cargo_config = Self::metadata_cargo_config(target_dir);
+        let cargo_config = Self::metadata_cargo_config(target_dir, load_out_dirs_from_check);
         let load_config = LoadCargoConfig {
             load_out_dirs_from_check,
-            // Proc macros are optional for many crates; `None` keeps CI fast.
-            with_proc_macro_server: ProcMacroServerChoice::None,
+            // A caller that explicitly requests Cargo's build-script outputs is already at the expensive preparation
+            // boundary. Load the matching proc-macro server there as well so semantic extraction sees actual generated
+            // Rust rather than inferring a macro's behavior from its source spelling.
+            with_proc_macro_server: if load_out_dirs_from_check {
+                active_proc_macro_server()
+            } else {
+                ProcMacroServerChoice::None
+            },
             prefill_caches: false,
             num_worker_threads: 1,
             proc_macro_processes: 1,
         };
-        let (db, vfs, _pm) = load_workspace_at(&manifest_dir, &cargo_config, &load_config, progress).map_err(|e| {
+        let (db, vfs, pm) = load_workspace_at(&manifest_dir, &cargo_config, &load_config, progress).map_err(|e| {
             RustMetadataError::LoadWorkspace {
                 path: manifest_dir.clone(),
                 // `rust-analyzer` adds the manifest path as its outer context. Preserve its inner Cargo diagnostic as
@@ -1000,8 +1130,19 @@ impl RustWorkspace {
                 message: format!("{e:#}"),
             }
         })?;
+        if cargo_bootstrap && pm.is_none() {
+            return Err(RustMetadataError::LoadWorkspace {
+                path: manifest_dir,
+                message: "explicit Oven Rust inspection could not start the active toolchain's rust-analyzer proc-macro server; install the rust-analyzer component for that toolchain and retry the bake".to_string(),
+            });
+        }
         let crate_index = Self::build_crate_index(&db);
-        Ok(RustWorkspace { db, crate_index, vfs })
+        Ok(RustWorkspace {
+            db,
+            crate_index,
+            vfs,
+            proc_macro_client: pm.map(|client| Box::new(client) as Box<dyn Any + Send + Sync>),
+        })
     }
 
     /// Shared read-only access to the underlying database.
@@ -1022,15 +1163,32 @@ mod tests {
 
     use super::{
         OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource, RustWorkspace, digest_oven_source_tree,
-        write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
+        proc_macro_server_candidates, write_oven_inspection_source_authority,
+        write_sealed_oven_inspection_source_authority,
     };
 
     use tempfile::tempdir;
 
     #[test]
+    fn proc_macro_server_candidates_preserve_windows_executable_suffix() {
+        let candidates = proc_macro_server_candidates(std::path::Path::new("toolchain"), ".exe");
+        assert_eq!(
+            candidates,
+            [
+                std::path::PathBuf::from("toolchain/libexec/rust-analyzer-proc-macro-srv.exe"),
+                std::path::PathBuf::from("toolchain/lib/rust-analyzer-proc-macro-srv.exe"),
+            ]
+        );
+    }
+
+    #[test]
     fn metadata_loader_allows_cargo_to_resolve_uncached_dependencies() -> Result<(), Box<dyn std::error::Error>> {
         let workspace = tempdir()?;
-        let cargo_config = RustWorkspace::metadata_cargo_config(&workspace.path().join("target"));
+        let cargo_config = RustWorkspace::metadata_cargo_config(&workspace.path().join("target"), false);
+        assert!(
+            cargo_config.sysroot.is_none(),
+            "ordinary source inspection must not load the complete Rust sysroot"
+        );
         assert!(
             !cargo_config.extra_args.iter().any(|arg| arg == "--offline"),
             "rust-inspect workspace loads must not force offline metadata resolution"
@@ -1039,6 +1197,11 @@ mod tests {
             cargo_config.extra_env.get("CARGO_NET_OFFLINE"),
             None,
             "rust-inspect workspace loads must not force Cargo into offline mode"
+        );
+        let bootstrap_config = RustWorkspace::metadata_cargo_config(&workspace.path().join("target"), true);
+        assert_eq!(
+            bootstrap_config.sysroot,
+            Some(ra_ap_project_model::RustLibSource::Discover)
         );
         Ok(())
     }
@@ -1055,7 +1218,7 @@ mod tests {
 
         let resolved_target = crate::cache::cargo_configured_target_dir(workspace.path());
         assert_eq!(resolved_target, configured_target);
-        let cargo_config = RustWorkspace::metadata_cargo_config(&resolved_target);
+        let cargo_config = RustWorkspace::metadata_cargo_config(&resolved_target, false);
         let expected = Some(configured_target.to_string_lossy().into_owned());
         assert_eq!(cargo_config.extra_env.get("CARGO_TARGET_DIR"), Some(&expected));
         assert_eq!(cargo_config.extra_env.get("CARGO_BUILD_BUILD_DIR"), Some(&expected));
@@ -1094,6 +1257,56 @@ mod tests {
             .as_str()
             .ok_or("direct Oven project omitted the binary root module")?;
         assert_eq!(root_module, binary_root.canonicalize()?.to_string_lossy());
+        Ok(())
+    }
+
+    #[test]
+    fn direct_oven_project_preserves_proc_macro_crate_identity() -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempdir()?;
+        let tuple_driver = workspace.path().join("tuple-driver");
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::create_dir_all(tuple_driver.join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\nversion = \"0.1.0\"\n\n[dependencies]\ntuple-driver = { path = \"tuple-driver\" }\n",
+        )?;
+        fs::write(workspace.path().join("src/main.rs"), "fn main() {}\n")?;
+        fs::write(
+            tuple_driver.join("Cargo.toml"),
+            "[package]\nname = \"tuple-driver\"\nversion = \"0.1.0\"\n\n[lib]\nproc-macro = true\n",
+        )?;
+        fs::write(tuple_driver.join("src/lib.rs"), "extern crate proc_macro;\n")?;
+        write_oven_inspection_source_authority(workspace.path(), Vec::new())?;
+
+        let payload = RustWorkspace::oven_project_json_payload(workspace.path())?;
+        let graph: serde_json::Value = serde_json::from_slice(&payload)?;
+        let crates = graph["crates"].as_array().ok_or("direct Oven graph omitted crates")?;
+        let root = crates
+            .iter()
+            .find(|candidate| candidate["display_name"] == "root")
+            .ok_or("direct Oven graph omitted root")?;
+        let proc_macro = crates
+            .iter()
+            .find(|candidate| candidate["display_name"] == "tuple_driver")
+            .ok_or("direct Oven graph omitted proc-macro dependency")?;
+        assert_eq!(root["is_proc_macro"], false);
+        assert_eq!(proc_macro["is_proc_macro"], true);
+        Ok(())
+    }
+
+    #[test]
+    fn direct_oven_project_rejects_non_boolean_proc_macro_declarations() -> Result<(), Box<dyn std::error::Error>> {
+        let workspace = tempdir()?;
+        fs::create_dir_all(workspace.path().join("src"))?;
+        fs::write(
+            workspace.path().join("Cargo.toml"),
+            "[package]\nname = \"root\"\nversion = \"0.1.0\"\n\n[lib]\nproc-macro = \"yes\"\n",
+        )?;
+        fs::write(workspace.path().join("src/lib.rs"), "pub fn api() {}\n")?;
+
+        let error = RustWorkspace::oven_project_json_payload(workspace.path())
+            .expect_err("a malformed proc-macro declaration must not be silently treated as a normal crate");
+        assert!(error.to_string().contains("lib.proc-macro to be a boolean"));
         Ok(())
     }
 

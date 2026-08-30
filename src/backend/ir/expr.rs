@@ -294,6 +294,8 @@ pub enum IrExprKind {
     Struct {
         name: String,
         fields: Vec<(String, IrExpr)>,
+        /// Fill omitted imported Rust named fields with `Default::default()`.
+        fill_defaults: bool,
     },
 
     // If expression

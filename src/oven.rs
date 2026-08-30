@@ -85,9 +85,11 @@ pub const DEFAULT_RECEIPT_RELATIVE_PATH: &str = ".incan/oven/receipt.json";
 
 /// Default aggregate physical allocation retained by an everyday Alpha Oven store.
 ///
-/// A project bake retains independent debug and release plans. Eight GiB keeps both real project closures bounded
-/// without allowing the publisher's private target to grow without limit.
-pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// A project bake retains independent debug and release plans. A measured IncQL/DataFusion provider retains about
+/// 4.23 GiB while its consumer's compatibility publisher transiently needs about 3.80 GiB. Nine GiB admits that
+/// ordinary provider-to-consumer hand-off with practical headroom while keeping the publisher's private target
+/// bounded.
+pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 9 * 1024 * 1024 * 1024;
 /// Default physical allocation cap for one compatibility domain.
 ///
 /// A checked IncQL/DataFusion debug plan retains 1.21 GiB while its following release publisher needs a bounded
@@ -427,6 +429,9 @@ pub enum OvenError {
     /// Supplemental source evidence cannot identify a portable build unit.
     #[error("Oven import requires a non-empty supplemental source {field}")]
     EmptySupplementalSource { field: &'static str },
+    /// A requested receipt transformation named a build-unit input that was not present.
+    #[error("Oven receipt has no build-unit input `{input}`")]
+    MissingBuildUnitInput { input: String },
     /// A generated source input could not be read or did not satisfy the Alpha regular-file closure rules.
     #[error("invalid Oven generated source {path}: {message}")]
     InvalidGeneratedSource { path: PathBuf, message: String },
@@ -592,6 +597,33 @@ pub(crate) fn receipt_with_build_unit_input(
     let value = normalized_value(&value.into(), "build-unit input value")?;
     let mut selected = receipt.clone();
     selected.sources.build_unit_inputs.insert(input, value);
+    selected.identity = receipt_identity(
+        &selected.project,
+        &selected.sources,
+        &selected.intent,
+        &selected.compatibility,
+    )?;
+    selected.build_unit_identity = build_unit_identity(
+        &selected.intent,
+        &selected.compatibility,
+        &selected.sources.build_unit_inputs,
+    )?;
+    Ok(selected)
+}
+
+/// Derive a new complete receipt with one selected build-unit input removed.
+///
+/// This is the inverse of [`receipt_with_build_unit_input`] for the narrow cases where a compiler-owned capability
+/// must be selected independently from a project-only input. The returned receipt is independently identity-checked;
+/// callers must still prove that any selected immutable artifact provides the capability they need.
+pub(crate) fn receipt_without_build_unit_input(receipt: &OvenReceipt, input: &str) -> Result<OvenReceipt, OvenError> {
+    receipt.verify_identity()?;
+    let mut selected = receipt.clone();
+    if selected.sources.build_unit_inputs.remove(input).is_none() {
+        return Err(OvenError::MissingBuildUnitInput {
+            input: input.to_string(),
+        });
+    }
     selected.identity = receipt_identity(
         &selected.project,
         &selected.sources,
@@ -1464,23 +1496,8 @@ mod tests {
         OvenCompilerSuiteRequest, OvenGeneratedProjectRequest, OvenImportRequest, OvenReceipt, default_receipt_path,
         digest_bytes, generated_project_source_evidence, import_frozen_project, receipt_generated_project,
         receipt_generated_project_with_source_evidence, receipt_native_compiler_suite, receipt_with_build_unit_input,
-        write_receipt,
+        receipt_without_build_unit_input, write_receipt,
     };
-
-    fn receipt_without_build_unit_input(
-        receipt: &OvenReceipt,
-        input: &str,
-    ) -> Result<OvenReceipt, Box<dyn std::error::Error>> {
-        receipt.verify_identity()?;
-        let mut base = receipt.clone();
-        if base.sources.build_unit_inputs.remove(input).is_none() {
-            return Err(std::io::Error::other(format!("receipt has no build-unit input `{input}`")).into());
-        }
-        base.identity = super::receipt_identity(&base.project, &base.sources, &base.intent, &base.compatibility)?;
-        base.build_unit_identity =
-            super::build_unit_identity(&base.intent, &base.compatibility, &base.sources.build_unit_inputs)?;
-        Ok(base)
-    }
 
     #[test]
     fn receipt_identity_is_portable_and_observes_explicit_build_inputs() -> Result<(), Box<dyn std::error::Error>> {

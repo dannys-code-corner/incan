@@ -22,6 +22,7 @@ impl<'a> IrEmitter<'a> {
         &self,
         name: &str,
         fields: &[(String, TypedExpr)],
+        fill_defaults: bool,
     ) -> Result<TokenStream, EmitError> {
         if fields.len() == 1
             && fields.first().is_some_and(|(field_name, _)| field_name.is_empty())
@@ -75,9 +76,6 @@ impl<'a> IrEmitter<'a> {
                     ambiguous = self.ambiguous_type_names.contains(name),
                     "struct constructor metadata unavailable, emitting provided fields only"
                 );
-                if fields.is_empty() {
-                    return Ok(quote! { #n {} });
-                }
                 let field_tokens: Vec<TokenStream> = fields
                     .iter()
                     .map(|(fname, fval)| {
@@ -86,7 +84,11 @@ impl<'a> IrEmitter<'a> {
                         Ok(quote! { #fn_ident: #fv })
                     })
                     .collect::<Result<_, EmitError>>()?;
-                return Ok(quote! { #n { #(#field_tokens),* } });
+                return if fill_defaults {
+                    Ok(quote! { #n { #(#field_tokens,)* ..Default::default() } })
+                } else {
+                    Ok(quote! { #n { #(#field_tokens),* } })
+                };
             };
             if metadata.fields.is_empty() {
                 return Ok(quote! { #n {} });
@@ -102,5 +104,26 @@ impl<'a> IrEmitter<'a> {
                 Ok(quote! { #n { #(#fields),* } })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::ir::expr::IrExprKind;
+    use crate::backend::ir::{FunctionRegistry, IrType};
+
+    #[test]
+    fn imported_named_struct_can_emit_metadata_proven_default_fill() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let fields = vec![("count".to_string(), TypedExpr::new(IrExprKind::Int(7), IrType::Int))];
+
+        let rendered = emitter
+            .emit_struct_expr("demo::Record", &fields, true)
+            .map_err(|error| format!("expected default-filled Rust struct emission, got {error:?}"))?
+            .to_string();
+        assert_eq!(rendered, "demo :: Record { count : 7 , .. Default :: default () }");
+        Ok(())
     }
 }

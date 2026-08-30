@@ -108,7 +108,7 @@ impl<'a> IrEmitter<'a> {
             IrExprKind::InteropCoerce { expr, .. } => expr.as_ref(),
             _ => expr,
         };
-        if let IrExprKind::Struct { name, fields } = &expr.kind
+        if let IrExprKind::Struct { name, fields, .. } = &expr.kind
             && name == constructors::as_str(constructor)
         {
             return fields.first().map(|(_, payload)| payload);

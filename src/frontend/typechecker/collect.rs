@@ -553,6 +553,7 @@ impl TypeChecker {
             collect_method_overloads(&model.methods, self, Some(&model.name), &model.type_params);
         let mut methods = collect_methods_from_overloads(&method_overloads);
 
+        self.record_local_rust_derive_paths(&model.name, &model.decorators);
         let derives = self.extract_derive_names(&model.decorators);
         let field_order: Vec<Ident> = model.fields.iter().map(|f| f.node.name.clone()).collect();
         inject_validate_methods(
@@ -635,6 +636,7 @@ impl TypeChecker {
         methods.extend(collect_methods_from_overloads(&own_method_overloads));
         method_overloads.extend(own_method_overloads);
 
+        self.record_local_rust_derive_paths(&class.name, &class.decorators);
         let derives = self.extract_derive_names(&class.decorators);
         let method_aliases = collect_method_aliases(&class.method_aliases, &mut methods, &mut method_overloads);
         self.collect_method_partials(&class.name, &class.method_partials, &mut methods, &mut method_overloads);
@@ -1183,6 +1185,7 @@ impl TypeChecker {
                     .map(|target| (rebinding.node.name.clone(), target))
             })
             .collect();
+        self.record_local_rust_derive_paths(&nt.name, &nt.decorators);
         let derives = self.extract_derive_names(&nt.decorators);
         let mut trait_adoptions = self.collect_trait_adoption_infos(&nt.traits, Some(&nt.name), &nt.type_params);
         trait_adoptions.extend(self.collect_derive_trait_adoption_infos(&derives));
@@ -1298,6 +1301,7 @@ impl TypeChecker {
             .iter()
             .map(|alias| (alias.node.name.clone(), alias.node.target.clone()))
             .collect();
+        self.record_local_rust_derive_paths(&en.name, &en.decorators);
         let derives = self.extract_derive_names(&en.decorators);
         let value_enum = en.value_type.as_ref().map(|value_type| ValueEnumInfo {
             value_type: value_enum_backing(value_type.node),

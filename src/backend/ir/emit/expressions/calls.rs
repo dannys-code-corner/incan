@@ -244,7 +244,8 @@ impl<'a> IrEmitter<'a> {
         union_qualifier: Option<&[String]>,
         site: ValueUseSite<'_>,
     ) -> Result<Option<TokenStream>, EmitError> {
-        let Some(value_ty) = self.union_payload_candidate_type(arg, target_ty) else {
+        let target_ty = self.resolve_type_aliases_for_emit(target_ty);
+        let Some(value_ty) = self.union_payload_candidate_type(arg, &target_ty) else {
             return Ok(None);
         };
         let Some(variant_index) = target_ty.union_variant_index_for_member(&value_ty) else {
@@ -257,7 +258,7 @@ impl<'a> IrEmitter<'a> {
             return Ok(None);
         };
         let variant_ident = quote::format_ident!("{}", IrType::union_variant_name(variant_index));
-        let union_path = self.emit_union_type_path_with_qualifier(target_ty, union_qualifier);
+        let union_path = self.emit_union_type_path_with_qualifier(&target_ty, union_qualifier);
         let emitted = self.emit_expr_for_use(arg, Self::retarget_value_use_site(site, Some(member_ty)))?;
         Ok(Some(quote! { #union_path :: #variant_ident(#emitted) }))
     }
@@ -508,7 +509,7 @@ impl<'a> IrEmitter<'a> {
                 Ok(None)
             }
             // ---- Context: seed `Ok`/`Err` constructors lowered as struct-like IR ----
-            (IrExprKind::Struct { name, fields }, IrType::Result(ok_ty, err_ty)) => {
+            (IrExprKind::Struct { name, fields, .. }, IrType::Result(ok_ty, err_ty)) => {
                 let Some((_, first_arg)) = fields.first() else {
                     return Ok(None);
                 };
@@ -1319,10 +1320,13 @@ impl<'a> IrEmitter<'a> {
                 }
             }
             BinOpEmitKind::Pow { result_is_int } => {
+                // `**` emits as a method call, so the base becomes a receiver and binds tighter than any operation
+                // inside it. Without parentheses, `(x + y) ** 0.5` emits `x + y.powf(0.5)`, which silently changes
+                // the result; a coerced base also emits an invalid method call on an `as` cast.
                 if result_is_int {
-                    Ok(quote! { #l.pow(#r as u32) })
+                    Ok(quote! { (#l).pow(#r as u32) })
                 } else {
-                    Ok(quote! { #l.powf(#r) })
+                    Ok(quote! { (#l).powf(#r) })
                 }
             }
             BinOpEmitKind::Infix { token } => {
@@ -1696,6 +1700,7 @@ mod tests {
             IrExprKind::Struct {
                 name: constructors::as_str(constructor).to_string(),
                 fields: vec![(String::new(), payload)],
+                fill_defaults: false,
             },
             ty,
         )
@@ -2079,6 +2084,49 @@ mod tests {
             })?;
 
         assert_eq!(render(tokens), "querykit::accept_optional(Some(querykit::lit()))");
+        Ok(())
+    }
+
+    /// Regression for #1198: external wrapper names and variant indexes use one canonical union member order.
+    #[test]
+    fn emit_union_payload_canonicalizes_external_union_variant_index_issue1198()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target_ty = IrType::ExternalUnion {
+            library: "widgets".to_string(),
+            union: Box::new(IrType::NamedGeneric(
+                IR_UNION_TYPE_NAME.to_string(),
+                vec![
+                    IrType::Struct("BoolColumnExpr".to_string()),
+                    IrType::Struct("NumberColumnExpr".to_string()),
+                    IrType::Struct("BoolLiteralExpr".to_string()),
+                    IrType::Struct("StringLiteralExpr".to_string()),
+                ],
+            )),
+        };
+        let canonical_union = IrType::NamedGeneric(
+            IR_UNION_TYPE_NAME.to_string(),
+            vec![
+                IrType::Struct("BoolColumnExpr".to_string()),
+                IrType::Struct("BoolLiteralExpr".to_string()),
+                IrType::Struct("NumberColumnExpr".to_string()),
+                IrType::Struct("StringLiteralExpr".to_string()),
+            ],
+        );
+        let canonical_name = canonical_union
+            .union_type_name()
+            .ok_or("expected the canonical union to have a generated name")?;
+        let arg = local_arg("always_true", IrType::Struct("widgets::BoolLiteralExpr".to_string()));
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+
+        let emitted = emitter
+            .emit_union_payload_arg(&arg, &target_ty, None)?
+            .ok_or("expected BoolLiteralExpr to fit the provider union")?;
+
+        assert_eq!(
+            render(emitted),
+            format!("widgets::{canonical_name}::V1(always_true.clone())")
+        );
         Ok(())
     }
 

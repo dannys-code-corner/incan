@@ -2,14 +2,19 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::{Arc, Barrier};
 
 mod support;
 
-fn configured_incan_command(project_root: &Path, incan_home: &Path) -> Command {
-    let mut command = Command::new(support::incan_binary());
+/// Configure a project command with one caller-selected compiler binary.
+///
+/// A compiler-suite test normally launches its receipt-selected direct-Rustc CLI. These probes deliberately remove
+/// that scheduler authority, so their ordinary-consumer phase must instead use the staged release CLI that owns the
+/// release Loaf envelope. Explicit bakes continue to use the compiler-suite CLI and its narrowly injected capability.
+fn configured_incan_command_with_binary(binary: PathBuf, project_root: &Path, incan_home: &Path) -> Command {
+    let mut command = Command::new(binary);
     command
         .current_dir(project_root)
         // Normal Oven commands must not inherit a generated-Cargo cache control from the test harness.
@@ -33,12 +38,26 @@ fn configured_incan_command(project_root: &Path, incan_home: &Path) -> Command {
     command
 }
 
+/// Return the staged release CLI for the normal-consumer phase of a compiler-suite test.
+///
+/// Outside the stored suite, this remains the ordinary integration-test binary. The Make gate supplies the staged
+/// release binary only after it has baked the matching release Loaf family.
+fn normal_consumer_incan_binary() -> PathBuf {
+    if support::oven_compiler_suite_is_active()
+        && let Some(binary) =
+            std::env::var_os("INCAN_INTERNAL_OVEN_NORMAL_CONSUMER_BIN").filter(|path| !path.is_empty())
+    {
+        return PathBuf::from(binary);
+    }
+    support::incan_binary()
+}
+
 /// Prepare a normal Incan command with any scheduler-granted baker capability removed.
 ///
 /// The explicit bake below is allowed to use the package-qualified fixture Cargo proxy. Every replay, drift, and
 /// lock assertion must instead reach the PATH guard if normal command handling ever regresses to Cargo.
 fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
-    let mut command = configured_incan_command(project_root, incan_home);
+    let mut command = configured_incan_command_with_binary(normal_consumer_incan_binary(), project_root, incan_home);
     command
         .env_remove("CARGO")
         .env_remove("INCAN_INTERNAL_OVEN_LOAF_EXECUTION")
@@ -49,8 +68,17 @@ fn incan_command(project_root: &Path, incan_home: &Path) -> Command {
 }
 
 /// Prepare the one explicit project-bake command that owns the Cargo fixture capability.
+///
+/// Its later normal commands use the staged release CLI, so the bake must select that exact release Loaf envelope
+/// too. The compiler-suite contributes only the narrowly scoped Cargo publisher capability; it must not supply the
+/// compiler-suite data-root authority that would make the persisted receipt incompatible with its normal consumer.
 fn baker_incan_command(project_root: &Path, incan_home: &Path) -> Command {
-    configured_incan_command(project_root, incan_home)
+    let mut command = configured_incan_command_with_binary(normal_consumer_incan_binary(), project_root, incan_home);
+    command
+        .env_remove("INCAN_INTERNAL_OVEN_LOAF_EXECUTION")
+        .env_remove("INCAN_INTERNAL_TOOLCHAIN_DATA_ROOT")
+        .env_remove("INCAN_INTERNAL_OVEN_RUNTIME_ROOT");
+    command
 }
 
 fn run_checked(mut command: Command, label: &str) -> Result<Output, Box<dyn std::error::Error>> {

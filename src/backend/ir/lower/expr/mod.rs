@@ -2186,6 +2186,7 @@ impl AstLowering {
                     IrExprKind::Struct {
                         name: name.clone(),
                         fields,
+                        fill_defaults: false,
                     },
                     IrType::Struct(name.clone()),
                 )

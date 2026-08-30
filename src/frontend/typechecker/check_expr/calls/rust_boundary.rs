@@ -129,44 +129,59 @@ impl TypeChecker {
         self.prewarm_rust_type_identity_metadata(ty);
     }
 
-    /// Reuse Rust identity metadata for nominal paths nested inside Rust display types.
-    ///
-    /// rust-inspect can report public signatures such as `Arc<crate::Type>` while another API returns the same type
-    /// through its defining module, for example `Arc<crate::private::Type>`. The outer generic wrapper is not the
-    /// semantic identity; the nested Rust path is. Reading prepared metadata for those nested paths lets compatibility
-    /// use known definition aliases without doing hidden extraction from this hot path.
-    fn prewarm_rust_type_identity_metadata(&self, ty: &ResolvedType) {
+    /// Visit nominal Rust paths nested inside a resolved type with one metadata probe policy.
+    fn prewarm_rust_type_identity_metadata_with(&self, ty: &ResolvedType, probe: &impl Fn(&Self, &str)) {
         match ty {
             ResolvedType::RustPath(path) => {
                 let (base, args) = self.rust_path_base_and_args(path);
                 if Self::rust_identity_metadata_base_should_probe(base.as_str()) {
-                    let _ = self.rust_item_metadata_for_path(base.as_str());
+                    probe(self, base.as_str());
                 }
                 for arg in args {
-                    self.prewarm_rust_type_identity_metadata(&arg);
+                    self.prewarm_rust_type_identity_metadata_with(&arg, probe);
                 }
             }
-            ResolvedType::Ref(inner) | ResolvedType::RefMut(inner) => self.prewarm_rust_type_identity_metadata(inner),
+            ResolvedType::Ref(inner) | ResolvedType::RefMut(inner) => {
+                self.prewarm_rust_type_identity_metadata_with(inner, probe)
+            }
             ResolvedType::Generic(_, args) | ResolvedType::Tuple(args) => {
                 for arg in args {
-                    self.prewarm_rust_type_identity_metadata(arg);
+                    self.prewarm_rust_type_identity_metadata_with(arg, probe);
                 }
             }
             ResolvedType::FrozenList(inner) | ResolvedType::FrozenSet(inner) => {
-                self.prewarm_rust_type_identity_metadata(inner);
+                self.prewarm_rust_type_identity_metadata_with(inner, probe);
             }
             ResolvedType::FrozenDict(key, value) => {
-                self.prewarm_rust_type_identity_metadata(key);
-                self.prewarm_rust_type_identity_metadata(value);
+                self.prewarm_rust_type_identity_metadata_with(key, probe);
+                self.prewarm_rust_type_identity_metadata_with(value, probe);
             }
             ResolvedType::Function(params, ret) => {
                 for param in params {
-                    self.prewarm_rust_type_identity_metadata(&param.ty);
+                    self.prewarm_rust_type_identity_metadata_with(&param.ty, probe);
                 }
-                self.prewarm_rust_type_identity_metadata(ret);
+                self.prewarm_rust_type_identity_metadata_with(ret, probe);
             }
             _ => {}
         }
+    }
+
+    /// Reuse cache-only Rust identity metadata while checking ordinary compatibility.
+    fn prewarm_rust_type_identity_metadata(&self, ty: &ResolvedType) {
+        self.prewarm_rust_type_identity_metadata_with(ty, &|checker, path| {
+            let _ = checker.rust_item_metadata_for_path(path);
+        });
+    }
+
+    /// Prewarm Rust identity metadata for a type explicitly named by a Rust call boundary.
+    ///
+    /// The ordinary compatibility path must remain metadata-light, but a public Rust API can name a type that is
+    /// re-exported through macro-generated source. This permits blocking inspection on a cache miss and is invoked
+    /// only while validating an explicit call argument, never from [`Self::types_compatible`].
+    fn prewarm_rust_boundary_type_identity_metadata(&self, ty: &ResolvedType) {
+        self.prewarm_rust_type_identity_metadata_with(ty, &|checker, path| {
+            let _ = checker.rust_item_metadata_for_path_blocking(path);
+        });
     }
 
     /// Return whether cache-only identity prewarm should ask rust-inspect for this Rust display base.
@@ -285,6 +300,14 @@ impl TypeChecker {
         incan_ret: &ResolvedType,
         span: Span,
     ) {
+        if self
+            .type_info
+            .rust
+            .native_return_consumers
+            .contains(&(span.start, span.end))
+        {
+            return;
+        }
         let normalized = rust_return_type.replace(' ', "");
         let is_borrowed_str = normalized == "&str" || (normalized.starts_with("&'") && normalized.ends_with("str"));
         let target = if is_borrowed_str && matches!(incan_ret, ResolvedType::Str) {
@@ -550,6 +573,12 @@ impl TypeChecker {
         if let Some(incan_display) = Self::incan_boundary_type_display(arg_ty)
             && Self::is_builtin_rust_boundary_display(normalized.as_str())
         {
+            if Self::rust_display_borrow_kind(display.as_str()).is_none() {
+                let target_ty = self.resolved_type_from_rust_display(normalized.as_str());
+                if self.types_compatible(arg_ty, &target_ty) {
+                    return RustArgBoundaryMatch::Exact;
+                }
+            }
             return match admitted_builtin_coercion(incan_display.as_str(), normalized.as_str()) {
                 Some(CoercionPolicy::Exact) => RustArgBoundaryMatch::Exact,
                 Some(policy) => RustArgBoundaryMatch::Coercion(RustArgCoercionKind::Builtin(policy)),
@@ -577,7 +606,7 @@ impl TypeChecker {
         let Some(trait_path) = trait_object_display.trim().strip_prefix("dyn ").map(str::trim) else {
             return false;
         };
-        let Some((actual_path, _, _)) = self.rust_identity_for_type(arg_ty) else {
+        let Some((actual_path, _, _, _)) = self.rust_identity_for_type(arg_ty) else {
             return false;
         };
         let Some(metadata) = self.rust_item_metadata_for_complete_type(actual_path.as_str()) else {
@@ -621,9 +650,24 @@ impl TypeChecker {
         let target_ty =
             self.resolved_rust_boundary_target_from_param_display_for_owner_path(rust_type_display, owner_path);
         self.prewarm_rust_type_identity_metadata(arg_ty);
-        self.prewarm_rust_type_identity_metadata(&target_ty);
+        self.prewarm_rust_boundary_type_identity_metadata(&target_ty);
         match self.rust_arg_boundary_match(arg_ty, param_display.as_str()) {
             RustArgBoundaryMatch::Exact => {
+                if Self::rust_display_type_var_name(normalized.as_str()).is_some() {
+                    // A borrowed Rust result passed directly into a generic Rust parameter must keep its native
+                    // reference type. Owning it first changes generic selection and can add an unnecessary clone
+                    // (for example `String::from(match_.as_str())`). Record the consumption as well as clearing an
+                    // existing coercion because return and argument artifacts can be discovered in either order.
+                    // The Rust bound remains the final authority.
+                    self.type_info
+                        .rust
+                        .native_return_consumers
+                        .insert((arg_expr.span.start, arg_expr.span.end));
+                    self.type_info
+                        .rust
+                        .return_coercions
+                        .remove(&(arg_expr.span.start, arg_expr.span.end));
+                }
                 if record_exact_builtin_coercion
                     && let Some(incan_display) = Self::incan_boundary_type_display(arg_ty)
                     && admitted_builtin_coercion(incan_display.as_str(), normalized.as_str())
@@ -659,6 +703,23 @@ impl TypeChecker {
                     arg_expr.span,
                 ));
             }
+        }
+    }
+
+    /// Preserve direct Rust-return arguments when the receiving Rust callable has no inspected signature.
+    ///
+    /// Without parameter metadata the compiler cannot justify converting a borrowed Rust result into its owned Incan
+    /// surface representation before handing it straight back to Rust. Retain the native result and leave the unknown
+    /// boundary to rustc. The expression marker also makes this independent of return/argument traversal order.
+    pub(in crate::frontend::typechecker) fn preserve_unresolved_rust_call_argument_returns(
+        &mut self,
+        args: &[CallArg],
+    ) {
+        for arg in args {
+            let expr = Self::call_arg_expr(arg);
+            let key = (expr.span.start, expr.span.end);
+            self.type_info.rust.native_return_consumers.insert(key);
+            self.type_info.rust.return_coercions.remove(&key);
         }
     }
 
@@ -898,6 +959,7 @@ impl TypeChecker {
             self.errors
                 .push(errors::async_call_without_await(callable_display, span));
         }
+        let owner_path = Self::rust_method_owner_path(callable_display);
         let params = if Self::rust_signature_has_receiver(sig) {
             &sig.params[1..]
         } else {
@@ -906,12 +968,12 @@ impl TypeChecker {
         let has_keyword_args = args
             .iter()
             .any(|arg| matches!(arg, CallArg::Named(_, _) | CallArg::KeywordUnpack(_)));
-        self.record_rust_call_site_params(span, params, callable_display, has_keyword_args);
+        self.record_rust_call_site_params(span, params, owner_path, has_keyword_args);
 
         let binding_errors_before = self.errors.len();
         let bindings = self.bind_rust_call_args(callable_display, params, args, arg_types, span);
         if self.errors.len() != binding_errors_before {
-            return self.resolved_rust_call_type_from_sig(sig, callable_display, span);
+            return self.resolved_rust_call_type_from_sig(sig, owner_path, span);
         }
 
         for binding in bindings {
@@ -919,7 +981,7 @@ impl TypeChecker {
             let param = binding.param;
             let target_ty = self.resolved_rust_boundary_target_from_param_display_for_owner_path(
                 param.type_display.as_str(),
-                callable_display,
+                owner_path,
             );
             let contextual_arg_ty = if (matches!(arg_expr.node, Expr::Closure(_, _))
                 && matches!(&target_ty, ResolvedType::Function(_, _)))
@@ -933,10 +995,10 @@ impl TypeChecker {
             if preserves_lookup_arg_shape && self.rust_lookup_probe_boundary_match(arg_ty, &target_ty) {
                 continue;
             }
-            self.validate_rust_boundary_value(callable_display, param.type_display.as_str(), arg_expr, arg_ty, false);
+            self.validate_rust_boundary_value(owner_path, param.type_display.as_str(), arg_expr, arg_ty, false);
         }
 
-        let ret = self.resolved_rust_call_type_from_sig(sig, callable_display, span);
+        let ret = self.resolved_rust_call_type_from_sig(sig, owner_path, span);
         self.record_rust_return_coercion_from_display(sig.return_type.as_str(), &ret, span);
         ret
     }
@@ -1006,8 +1068,8 @@ mod validate_rust_function_call_tests {
     use crate::frontend::symbols::{
         CallableParam, NewtypeInfo, ResolvedType, ScopeKind, Symbol, SymbolKind, TypeInfo, VariableInfo,
     };
-    use crate::frontend::typechecker::RustArgCoercionKind;
-    use incan_core::interop::{RustFunctionSig, RustParam};
+    use crate::frontend::typechecker::{RustArgCoercionInfo, RustArgCoercionKind};
+    use incan_core::interop::{CoercionPolicy, RustFunctionSig, RustParam};
     use incan_core::lang::types::numerics::NumericTypeId;
     use std::collections::HashMap;
 
@@ -1021,6 +1083,9 @@ mod validate_rust_function_call_tests {
             visibility: RustVisibility::Public,
             kind: RustItemKind::Type(RustTypeInfo {
                 type_params: Vec::new(),
+                type_param_defaults: Vec::new(),
+                mutable_reference_type_params: Vec::new(),
+                expanded_derive_traits: Vec::new(),
                 has_const_params: false,
                 alias_target: None,
                 metadata_completeness: Default::default(),
@@ -1053,6 +1118,63 @@ mod validate_rust_function_call_tests {
     }
 
     #[test]
+    fn exact_generic_rust_boundary_preserves_nested_borrowed_return() {
+        let mut checker = TypeChecker::new();
+        let span = Span::new(10, 20);
+        let argument = Spanned::new(Expr::Ident("borrowed".to_string()), span);
+        checker.type_info.rust.return_coercions.insert(
+            (span.start, span.end),
+            RustArgCoercionInfo {
+                rust_target_type: "String".to_string(),
+                target_type: ResolvedType::Str,
+                kind: RustArgCoercionKind::Builtin(CoercionPolicy::Exact),
+            },
+        );
+
+        checker.validate_rust_boundary_value("std::string::String::from", "T", &argument, &ResolvedType::Str, false);
+
+        assert!(
+            checker.type_info.rust.return_coercions.is_empty(),
+            "a direct generic Rust consumer must receive the original borrowed Rust result"
+        );
+        checker.record_rust_return_coercion_from_display("&str", &ResolvedType::Str, span);
+        assert!(
+            checker.type_info.rust.return_coercions.is_empty(),
+            "later return inspection must preserve the generic consumer's native Rust value"
+        );
+        assert_eq!(
+            checker.type_info.rust.native_return_consumers,
+            std::collections::HashSet::from([(span.start, span.end)])
+        );
+    }
+
+    #[test]
+    fn unresolved_rust_call_preserves_direct_native_return() {
+        let mut checker = TypeChecker::new();
+        let span = Span::new(30, 45);
+        let argument = Spanned::new(Expr::Ident("borrowed".to_string()), span);
+        checker.type_info.rust.return_coercions.insert(
+            (span.start, span.end),
+            RustArgCoercionInfo {
+                rust_target_type: "String".to_string(),
+                target_type: ResolvedType::Str,
+                kind: RustArgCoercionKind::Builtin(CoercionPolicy::Exact),
+            },
+        );
+
+        checker.preserve_unresolved_rust_call_argument_returns(&[CallArg::Positional(argument)]);
+
+        assert!(checker.type_info.rust.return_coercions.is_empty());
+        assert!(
+            checker
+                .type_info
+                .rust
+                .native_return_consumers
+                .contains(&(span.start, span.end))
+        );
+    }
+
+    #[test]
     fn rust_concrete_reference_parameters_record_the_required_borrow_shape() {
         let checker = TypeChecker::new();
         let header = ResolvedType::RustPath("demo::Header".to_string());
@@ -1071,6 +1193,21 @@ mod validate_rust_function_call_tests {
         );
         assert_eq!(
             checker.rust_arg_boundary_match(&ResolvedType::RefMut(Box::new(header)), "&mut demo::Header"),
+            RustArgBoundaryMatch::Exact
+        );
+    }
+
+    #[test]
+    fn canonical_rust_collection_namespaces_keep_structural_boundary_identity() {
+        let checker = TypeChecker::new();
+        let strings = ResolvedType::Generic("List".to_string(), vec![ResolvedType::Str]);
+
+        assert_eq!(
+            checker.rust_arg_boundary_match(&strings, "alloc::vec::Vec<alloc::string::String>"),
+            RustArgBoundaryMatch::Exact
+        );
+        assert_eq!(
+            checker.rust_arg_boundary_match(&ResolvedType::Bytes, "alloc::vec::Vec<u8>"),
             RustArgBoundaryMatch::Exact
         );
     }
@@ -1923,6 +2060,9 @@ mod validate_rust_function_call_tests {
                 visibility: RustVisibility::Public,
                 kind: RustItemKind::Type(RustTypeInfo {
                     type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
                     has_const_params: false,
                     alias_target: None,
                     metadata_completeness: Default::default(),

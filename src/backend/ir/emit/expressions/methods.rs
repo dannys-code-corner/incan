@@ -359,21 +359,22 @@ impl<'a> IrEmitter<'a> {
             Some(IrType::Result(ok_ty, _)) => Some(ok_ty.as_ref()),
             other => other,
         };
+        let receiver_call_signature = self.method_call_signature_for_receiver(&receiver.ty, context.callable_signature);
         let receiver_specialized_signature = self.specialized_method_signature_for_receiver(&receiver.ty, method);
         let target_specialized_signature =
             receiver_target_ty.and_then(|ty| self.specialized_method_signature_for_receiver(ty, method));
-        let result_specialized_call_signature = context.callable_signature.and_then(|signature| {
+        let result_specialized_call_signature = receiver_call_signature.as_ref().and_then(|signature| {
             context
                 .result_target_ty
                 .and_then(|ty| Self::specialize_signature_by_result_target(signature, ty))
         });
-        let receiver_specialized_call_signature = context.callable_signature.and_then(|signature| {
+        let receiver_specialized_call_signature = receiver_call_signature.as_ref().and_then(|signature| {
             receiver_target_ty.and_then(|ty| Self::specialize_signature_by_receiver_args(signature, ty))
         });
         let callable_signature = result_specialized_call_signature
             .as_ref()
             .or(receiver_specialized_call_signature.as_ref())
-            .or(context.callable_signature);
+            .or(receiver_call_signature.as_ref());
         let receiver_signature = receiver_specialized_signature
             .as_ref()
             .or_else(|| self.method_signature_for_receiver(&receiver.ty, method))

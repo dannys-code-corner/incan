@@ -255,6 +255,37 @@ fn for_body_needs_mut_iteration(pattern: &Pattern, body: &[IrStmt]) -> bool {
     body.iter().any(|s| stmt_mutates_var(s, loop_var))
 }
 
+/// Collect `for` pattern bindings mutated by the loop body.
+///
+/// Incan patterns do not spell Rust's local `mut` qualifier. When a source assignment writes through an iterator item,
+/// emit `mut` for that binding so any concrete Rust iterator item that requires a mutable local remains writable.
+fn for_pattern_mutated_bindings(pattern: &Pattern, body: &[IrStmt]) -> HashSet<String> {
+    let mut bindings = HashSet::new();
+    collect_pattern_binding_names(pattern, &mut bindings);
+    bindings.retain(|binding| body.iter().any(|stmt| stmt_mutates_var(stmt, binding)));
+    bindings
+}
+
+/// Collect all names introduced by one destructuring pattern.
+fn collect_pattern_binding_names(pattern: &Pattern, bindings: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Var(name) => {
+            bindings.insert(name.clone());
+        }
+        Pattern::Tuple(items) | Pattern::Enum { fields: items, .. } | Pattern::Or(items) => {
+            for item in items {
+                collect_pattern_binding_names(item, bindings);
+            }
+        }
+        Pattern::Struct { fields, .. } => {
+            for (_, pattern) in fields {
+                collect_pattern_binding_names(pattern, bindings);
+            }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) => {}
+    }
+}
+
 /// Return whether the expression calls a Rust helper that returns `!`.
 ///
 /// Source stdlib code often writes `return raise_value_error(...)` because the source language does not expose Rust's
@@ -1252,7 +1283,8 @@ impl<'a> IrEmitter<'a> {
                 iterable,
                 body,
             } => {
-                let pat = self.emit_pattern(pattern);
+                let mutable_bindings = for_pattern_mutated_bindings(pattern, body);
+                let pat = self.emit_pattern_with_mutable_bindings(pattern, &mutable_bindings);
                 let body_stmts = self.emit_stmts(body)?;
                 // For non-copy collections, iterate by reference to avoid move
                 // This handles the common case where a collection is used multiple times

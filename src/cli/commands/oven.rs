@@ -530,6 +530,7 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
         inspection_packages: None,
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::GeneratedSource,
         compact_debug_info: false,
+        source_compiler_vocab_support: false,
         base_loaf: None,
     })
     .map_err(oven_error)?;
@@ -1695,6 +1696,7 @@ fn finish_loaf_bake(
         inspection_packages: Some(Vec::new()),
         direct_dependency_closure: OvenLegacyCargoDirectDependencyClosure::CheckedDeclared,
         compact_debug_info: false,
+        source_compiler_vocab_support: false,
         base_loaf: None,
     })
     .map_err(oven_error)?;
@@ -5677,11 +5679,16 @@ fn resolve_limits_with_environment_and_defaults(
             defaults.max_physical_bytes,
         )?,
     };
-    let domain_physical = match options.max_domain_physical_bytes {
+    let environment_domain_physical = environment_value(OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV);
+    let domain_physical_was_explicit = options.max_domain_physical_bytes.is_some()
+        || environment_domain_physical
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty());
+    let mut domain_physical = match options.max_domain_physical_bytes {
         Some(value) => value,
         None => parse_limit_value(
             OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV,
-            environment_value(OVEN_MAX_DOMAIN_PHYSICAL_BYTES_ENV),
+            environment_domain_physical,
             defaults.max_domain_physical_bytes,
         )?,
     };
@@ -5699,9 +5706,12 @@ fn resolve_limits_with_environment_and_defaults(
         ));
     }
     if domain_physical > aggregate {
-        return Err(CliError::failure(
-            "Oven per-domain physical policy must not exceed aggregate physical policy",
-        ));
+        if domain_physical_was_explicit {
+            return Err(CliError::failure(
+                "Oven per-domain physical policy must not exceed aggregate physical policy",
+            ));
+        }
+        domain_physical = aggregate;
     }
     Ok(OvenStoreLimits::new(aggregate, domain_physical, domain_logical))
 }
@@ -7088,12 +7098,32 @@ mod tests {
             ),
         )?;
         assert_eq!(limits.max_physical_bytes, DEFAULT_OVEN_MAX_PHYSICAL_BYTES);
-        assert_eq!(limits.max_physical_bytes, 8 * 1024 * 1024 * 1024);
+        assert_eq!(limits.max_physical_bytes, 9 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_physical_bytes, DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES);
         assert_eq!(limits.max_domain_physical_bytes, 6 * 1024 * 1024 * 1024);
         assert_eq!(limits.max_domain_logical_bytes, DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES);
         assert_eq!(limits.max_domain_logical_bytes, 3 * 1024 * 1024 * 1024);
         assert!(limits.max_domain_physical_bytes <= limits.max_physical_bytes);
+        Ok(())
+    }
+
+    #[test]
+    fn storage_policy_clamps_an_inherited_domain_limit_to_an_explicit_aggregate_limit()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let limits = resolve_limits_with_environment_and_defaults(
+            &OvenStoreCommandOptions {
+                root: None,
+                max_physical_bytes: Some(4 * 1024),
+                max_domain_physical_bytes: None,
+                max_domain_logical_bytes: None,
+            },
+            |_| None,
+            OvenStoreLimits::new(8 * 1024, 6 * 1024, 3 * 1024),
+        )?;
+
+        assert_eq!(limits.max_physical_bytes, 4 * 1024);
+        assert_eq!(limits.max_domain_physical_bytes, 4 * 1024);
+        assert_eq!(limits.max_domain_logical_bytes, 3 * 1024);
         Ok(())
     }
 

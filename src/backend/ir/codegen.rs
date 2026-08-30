@@ -1961,6 +1961,23 @@ mod tests {
         }
     }
 
+    /// Build lowering with the frontend-owned ownership proof for one source type annotation.
+    fn lowering_with_mutable_reference_projection(
+        source: &str,
+        annotation: &str,
+        projections: Vec<crate::frontend::typechecker::MutableRustTypeArgumentProjection>,
+    ) -> Result<AstLowering, Box<dyn std::error::Error>> {
+        let start = source
+            .find(annotation)
+            .ok_or_else(|| format!("projection annotation `{annotation}` must occur in source"))?;
+        let mut type_info = TypeCheckInfo::default();
+        type_info
+            .rust
+            .mutable_reference_type_argument_projections
+            .insert((start, start + annotation.len()), projections);
+        Ok(AstLowering::new_with_type_info(type_info))
+    }
+
     fn generate(source: &str) -> String {
         let tokens = must_ok(lexer::lex(source));
         let ast = must_ok(parser::parse(&tokens));
@@ -2606,6 +2623,7 @@ def main() -> None:
                         IrExprKind::Struct {
                             name: String::from("Widget"),
                             fields: Vec::new(),
+                            fill_defaults: false,
                         },
                         widget_ty.clone(),
                     ),
@@ -4354,6 +4372,9 @@ pub def build_pair() -> None:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: vec!["T".to_string(), "U".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
@@ -4435,6 +4456,9 @@ pub def make_pair() -> Pair:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
@@ -4482,6 +4506,1171 @@ pub def make_pair() -> Pair:
 
     #[cfg(feature = "rust_inspect")]
     #[test]
+    fn test_codegen_emits_tuple_struct_constructor_for_imported_rust_type() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam, RustTypeInfo,
+            RustTypeShape, RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import ClearColor, Color
+
+pub def clear() -> ClearColor:
+  return ClearColor(Color.srgb(0.15, 0.55, 0.95))
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut tc = TypeChecker::new();
+        tc.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::ClearColor".to_string(),
+                    definition_path: Some("demo::ClearColor".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: vec![RustFieldInfo {
+                            name: String::new(),
+                            type_display: "demo::Color".to_string(),
+                            type_shape: RustTypeShape::RustPath {
+                                path: "demo::Color".to_string(),
+                                args: Vec::new(),
+                            },
+                        }],
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed ClearColor metadata: {error}")))?;
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Color".to_string(),
+                    definition_path: Some("demo::Color".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: vec![RustMethodSig {
+                            name: "srgb".to_string(),
+                            signature: RustFunctionSig {
+                                type_params: Vec::new(),
+                                params: vec![
+                                    RustParam {
+                                        name: Some("red".to_string()),
+                                        type_display: "f32".to_string(),
+                                    },
+                                    RustParam {
+                                        name: Some("green".to_string()),
+                                        type_display: "f32".to_string(),
+                                    },
+                                    RustParam {
+                                        name: Some("blue".to_string()),
+                                        type_display: "f32".to_string(),
+                                    },
+                                ],
+                                return_type: "demo::Color".to_string(),
+                                is_async: false,
+                                is_unsafe: false,
+                            },
+                        }],
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed Color metadata: {error}")))?;
+        tc.check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let mut lowering = AstLowering::new_with_type_info(tc.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("ClearColor(Color::srgb(0.15, 0.55, 0.95))"),
+            "expected tuple-struct Rust constructor, got:\n{code}"
+        );
+        assert!(
+            !code.contains("return ClearColor {"),
+            "tuple structs must not emit named-field syntax, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_preserves_owned_mutable_direct_rust_parameter() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam, RustTypeInfo, RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import Commands
+
+pub class System:
+  def setup(self, mut commands: Commands) -> None:
+    commands.spawn_empty()
+
+pub def setup(mut commands: Commands) -> None:
+  commands.spawn_empty()
+
+pub def retain(mut commands: List[Commands]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut tc = TypeChecker::new();
+        tc.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Commands".to_string(),
+                    definition_path: Some("demo::Commands".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: vec![RustMethodSig {
+                            name: "spawn_empty".to_string(),
+                            signature: RustFunctionSig {
+                                type_params: Vec::new(),
+                                params: vec![RustParam {
+                                    name: Some("self".to_string()),
+                                    type_display: "&mut demo::Commands".to_string(),
+                                }],
+                                return_type: "()".to_string(),
+                                is_async: false,
+                                is_unsafe: false,
+                            },
+                        }],
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed Commands metadata: {error}")))?;
+        tc.check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let mut lowering = AstLowering::new_with_type_info(tc.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.matches("mut commands: Commands").count() == 2 && code.contains("commands.spawn_empty();"),
+            "expected free-function and method owned mutable Rust handles, got:\n{code}"
+        );
+        assert!(
+            !code.contains("commands: &mut Commands"),
+            "direct Rust system parameters must not be rewritten as borrowed Incan aggregates, got:\n{code}"
+        );
+        assert!(
+            code.contains("&mut Vec<Commands>") && !code.contains("mut commands: Vec<Commands>"),
+            "mutable Incan containers containing Rust values must retain their borrowed ABI, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_codegen_preserves_explicit_mutable_rust_generic_arguments_in_mutating_for_loop()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from rust::demo import FooBar, Gadget, Widget
+
+pub def move_items(mut items: FooBar[tuple[&mut Widget, &mut Gadget]]) -> None:
+  for widget, gadget in items.iter_mut():
+    widget.position = 1.0
+    gadget.speed = 1.0
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let mut lowering = AstLowering::new();
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("FooBar<(&mut Widget, &mut Gadget)>"),
+            "explicit mutable Rust type arguments must be retained, got:\n{code}"
+        );
+        assert!(
+            code.contains("mut items: FooBar<(&mut Widget, &mut Gadget)>"),
+            "a mutable direct Rust generic must keep its owned outer ABI, got:\n{code}"
+        );
+        assert!(
+            code.contains("for (mut widget, mut gadget) in items.iter_mut()"),
+            "source mutation must mark destructured Rust iterator bindings mutable, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_projects_metadata_directed_mutable_rust_generic_arguments_without_nominal_matching()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::ir::Mutability;
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustItemKind, RustItemMetadata, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustTypeInfo,
+            RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Gadget, Widget
+
+pub def move_items(mut items: ProviderHandle[tuple[Widget, Gadget]]) -> None:
+  for widget, gadget in items.iter_mut():
+    widget.position = 1.0
+    gadget.speed = 1.0
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::FooBar".to_string(),
+                    definition_path: Some("demo::FooBar".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: vec![RustMutableReferenceTypeParam {
+                            type_param: "T".to_string(),
+                            direct_trait_bounds: vec!["demo::MutableData".to_string()],
+                            mutable_reference_candidates: vec![RustMutableReferenceCandidate {
+                                required_traits: Vec::new(),
+                                required_associated_type_bindings: Vec::new(),
+                                fallback_is_complete: true,
+                            }],
+                            tuple_composition_arities: vec![2],
+                        }],
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed Rust generic metadata: {error}")))?;
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+        let annotation = "ProviderHandle[tuple[Widget, Gadget]]";
+        let start = source
+            .find(annotation)
+            .ok_or("projection annotation missing from source")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(start, start + annotation.len())),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![0], vec![1]],
+            }]),
+            "the frontend must preserve the structural foreign-contract decision for lowering"
+        );
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let signature = ir_program
+            .function_registry
+            .get("move_items")
+            .ok_or("missing projected function signature")?;
+        assert_eq!(signature.params[0].mutability, Mutability::OwnedMutable);
+        assert_eq!(
+            signature.params[0].ty.rust_name(),
+            "ProviderHandle<(&mut Widget, &mut Gadget)>",
+            "the callable registry must carry the same projected ABI that final lowering emits"
+        );
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("mut items: ProviderHandle<(&mut Widget, &mut Gadget)>"),
+            "frontend-owned metadata must project an arbitrary imported alias structurally, then own the outer handle and borrow the payload, got:\n{code}"
+        );
+        assert!(
+            code.contains("for (mut widget, mut gadget) in items.iter_mut()"),
+            "mutated destructured Rust iterator bindings must remain mutable, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_does_not_project_tuple_without_inspected_composition_contract()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustItemKind, RustItemMetadata, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustTypeInfo,
+            RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Gadget, Widget
+
+pub def inspect(mut items: ProviderHandle[tuple[Widget, Gadget]]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::FooBar".to_string(),
+                    definition_path: Some("demo::FooBar".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: vec![RustMutableReferenceTypeParam {
+                            type_param: "T".to_string(),
+                            direct_trait_bounds: vec!["demo::MutableData".to_string()],
+                            mutable_reference_candidates: vec![RustMutableReferenceCandidate {
+                                required_traits: Vec::new(),
+                                required_associated_type_bindings: Vec::new(),
+                                fallback_is_complete: true,
+                            }],
+                            tuple_composition_arities: Vec::new(),
+                        }],
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed Rust generic metadata: {error}")))?;
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        assert!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .is_empty(),
+            "tuple leaves must remain owned when inspection has not proved element-wise composition"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_preserves_direct_foreign_argument_when_only_a_sibling_needs_mutable_reference()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustImplementedTrait, RustItemKind, RustItemMetadata, RustMutableReferenceCandidate,
+            RustMutableReferenceTypeParam, RustTypeInfo, RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import Entity, FooBar as ProviderHandle, Widget
+
+pub def move_items(mut items: ProviderHandle[tuple[Entity, Widget]]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        let projection_rule = RustMutableReferenceTypeParam {
+            type_param: "T".to_string(),
+            direct_trait_bounds: vec!["demo::MutableData".to_string()],
+            mutable_reference_candidates: vec![RustMutableReferenceCandidate {
+                required_traits: Vec::new(),
+                required_associated_type_bindings: Vec::new(),
+                fallback_is_complete: true,
+            }],
+            tuple_composition_arities: vec![2],
+        };
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::FooBar".to_string(),
+                    definition_path: Some("demo::FooBar".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: vec![projection_rule],
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed generic metadata: {error}")))?;
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Entity".to_string(),
+                    definition_path: Some("demo::Entity".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: vec![RustImplementedTrait {
+                            path: "demo::MutableData".to_string(),
+                            mutable_reference: false,
+                        }],
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed direct trait metadata: {error}")))?;
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let annotation = "ProviderHandle[tuple[Entity, Widget]]";
+        let start = source.find(annotation).ok_or("projection annotation missing")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(start, start + annotation.len())),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![1]],
+            }]),
+            "a direct bound implementation must remain owned while only the unsatisfied sibling selects the reference alternative"
+        );
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+        assert!(
+            code.contains("ProviderHandle<(Entity, &mut Widget)>"),
+            "the direct argument must not be borrowed, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_fails_closed_after_solver_rejects_associated_type_candidate()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+
+        let tmp = tempfile::tempdir()?;
+        fs::create_dir_all(tmp.path().join("src"))?;
+        let provider = tmp.path().join("solver_provider");
+        fs::create_dir_all(provider.join("src"))?;
+        fs::write(
+            tmp.path().join("Cargo.toml"),
+            r#"[package]
+name = "ra_solver_codegen_consumer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+solver_provider = { path = "solver_provider" }
+"#,
+        )?;
+        fs::write(tmp.path().join("src/lib.rs"), "pub fn consumer() {}\n")?;
+        fs::write(
+            provider.join("Cargo.toml"),
+            r#"[package]
+name = "solver_provider"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )?;
+        fs::write(
+            provider.join("src/lib.rs"),
+            r#"use core::marker::PhantomData;
+
+pub trait QueryData {}
+pub trait Component { type Mutability; }
+pub struct Mutable;
+pub struct Immutable;
+pub struct Dynamic;
+pub struct Static;
+pub struct FooBar<T: QueryData>(PhantomData<T>);
+
+impl Component for Dynamic { type Mutability = Mutable; }
+impl Component for Static { type Mutability = Immutable; }
+impl<T: Component<Mutability = Mutable>> QueryData for &mut T {}
+"#,
+        )?;
+
+        let source = r#"
+from rust::solver_provider import Dynamic, FooBar, Static
+
+pub def update(mut values: FooBar[Dynamic]) -> None:
+  pass
+
+pub def inspect(mut values: FooBar[Static]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        for path in [
+            "solver_provider::FooBar",
+            "solver_provider::Dynamic",
+            "solver_provider::Static",
+        ] {
+            checker
+                .rust_inspect_cache
+                .get_or_extract_complete(&manifest_dir, path, &|_| ())
+                .map_err(|error| std::io::Error::other(format!("extract {path}: {error}")))?;
+        }
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let dynamic = "FooBar[Dynamic]";
+        let dynamic_start = source.find(dynamic).ok_or("dynamic annotation missing")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(dynamic_start, dynamic_start + dynamic.len())),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![]],
+            }]),
+            "the complete solver must accept the matching associated-type candidate"
+        );
+        let static_annotation = "FooBar[Static]";
+        let static_start = source.find(static_annotation).ok_or("static annotation missing")?;
+        assert!(
+            !checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .contains_key(&(static_start, static_start + static_annotation.len())),
+            "an authoritative solver rejection must not be weakened to the bare Component trait"
+        );
+
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+        assert!(
+            code.contains("FooBar<&mut Dynamic>"),
+            "expected mutable candidate, got:\n{code}"
+        );
+        assert!(
+            code.contains("FooBar<Static>") && !code.contains("FooBar<&mut Static>"),
+            "solver-negative associated-type candidate must remain unprojected, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_projects_local_type_from_actual_rust_derive_output() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustAssociatedTypeBinding, RustAssociatedTypeRequirement, RustExpandedDeriveTrait, RustItemKind,
+            RustItemMetadata, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustTraitInfo,
+            RustTypeInfo, RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Component
+from rust::demo_derive import Component as ComponentMacro
+
+@derive(Component)
+model Velocity:
+  x: f32
+
+@rust.derive(ComponentMacro)
+model ExplicitVelocity:
+  x: f32
+
+@rust.derive("demo_derive::Component")
+model StringPathVelocity:
+  x: f32
+
+pub def inspect(mut values: ProviderHandle[Velocity]) -> None:
+  pass
+
+pub def inspect_explicit(mut values: ProviderHandle[ExplicitVelocity]) -> None:
+  pass
+
+pub def inspect_string_path(mut values: ProviderHandle[StringPathVelocity]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_declared_crate_names(std::collections::HashSet::from([
+            "demo".to_string(),
+            "demo_derive".to_string(),
+        ]));
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::FooBar".to_string(),
+                    definition_path: Some("demo::FooBar".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: vec![RustMutableReferenceTypeParam {
+                            type_param: "T".to_string(),
+                            direct_trait_bounds: vec!["provider::QueryData".to_string()],
+                            mutable_reference_candidates: vec![RustMutableReferenceCandidate {
+                                required_traits: vec!["provider::Component".to_string()],
+                                required_associated_type_bindings: vec![RustAssociatedTypeRequirement {
+                                    trait_path: "provider::Component".to_string(),
+                                    name: "Mutability".to_string(),
+                                    value_path: "provider::Mutable".to_string(),
+                                }],
+                                fallback_is_complete: true,
+                            }],
+                            tuple_composition_arities: Vec::new(),
+                        }],
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed owner metadata: {error}")))?;
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Component".to_string(),
+                    definition_path: Some("provider::Component".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Trait(RustTraitInfo {
+                        items: Vec::new(),
+                        derive_macro: Some(incan_core::interop::RustMacroInfo {
+                            expanded_traits: vec![RustExpandedDeriveTrait {
+                                path: "provider::Component".to_string(),
+                                associated_type_bindings: vec![RustAssociatedTypeBinding {
+                                    name: "Mutability".to_string(),
+                                    value_path: "provider::Mutable".to_string(),
+                                }],
+                            }],
+                        }),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed derive metadata: {error}")))?;
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo_derive::Component".to_string(),
+                    definition_path: Some("demo_derive::Component".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Macro(incan_core::interop::RustMacroInfo {
+                        expanded_traits: vec![RustExpandedDeriveTrait {
+                            path: "provider::Component".to_string(),
+                            associated_type_bindings: vec![RustAssociatedTypeBinding {
+                                name: "Mutability".to_string(),
+                                value_path: "provider::Mutable".to_string(),
+                            }],
+                        }],
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed derive macro metadata: {error}")))?;
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let annotation = "ProviderHandle[Velocity]";
+        let start = source.find(annotation).ok_or("provider annotation missing")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(start, start + annotation.len())),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![]],
+            }]),
+            "a local type may project mutably only from the exact inspected derive expansion"
+        );
+        let explicit_annotation = "ProviderHandle[ExplicitVelocity]";
+        let explicit_start = source
+            .find(explicit_annotation)
+            .ok_or("explicit provider annotation missing")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(explicit_start, explicit_start + explicit_annotation.len())),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![]],
+            }]),
+            "the documented explicit Rust derive route must retain the same exact expansion evidence"
+        );
+        let string_path_annotation = "ProviderHandle[StringPathVelocity]";
+        let string_path_start = source
+            .find(string_path_annotation)
+            .ok_or("string-path provider annotation missing")?;
+        assert_eq!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .get(&(string_path_start, string_path_start + string_path_annotation.len(),)),
+            Some(&vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![]],
+            }]),
+            "an explicit declared Rust derive path must retain the same exact expansion evidence"
+        );
+
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+        assert!(
+            code.contains("ProviderHandle<&mut Velocity>"),
+            "expected actual derive output to drive mutable lowering, got:\n{code}"
+        );
+        assert!(
+            code.contains("ProviderHandle<&mut ExplicitVelocity>"),
+            "expected explicit Rust derive output to drive mutable lowering, got:\n{code}"
+        );
+        assert!(
+            code.contains("ProviderHandle<&mut StringPathVelocity>"),
+            "expected explicit Rust derive path output to drive mutable lowering, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_rejects_inexact_expanded_derive_trait_contracts() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustAssociatedTypeBinding, RustAssociatedTypeRequirement, RustExpandedDeriveTrait, RustItemKind,
+            RustItemMetadata, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustTypeInfo,
+            RustVisibility,
+        };
+
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Gadget, Widget
+
+pub def inspect(mut values: ProviderHandle[Widget]) -> None:
+  pass
+
+pub def inspect_other(mut values: ProviderHandle[Gadget]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut checker = TypeChecker::new();
+        checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::FooBar".to_string(),
+                    definition_path: Some("demo::FooBar".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: vec!["T".to_string()],
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: vec![RustMutableReferenceTypeParam {
+                            type_param: "T".to_string(),
+                            direct_trait_bounds: vec!["demo::MutableData".to_string()],
+                            mutable_reference_candidates: vec![RustMutableReferenceCandidate {
+                                required_traits: vec!["provider::Component".to_string()],
+                                required_associated_type_bindings: vec![RustAssociatedTypeRequirement {
+                                    trait_path: "provider::Component".to_string(),
+                                    name: "Mutability".to_string(),
+                                    value_path: "provider::Mutable".to_string(),
+                                }],
+                                fallback_is_complete: true,
+                            }],
+                            tuple_composition_arities: Vec::new(),
+                        }],
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed owner metadata: {error}")))?;
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Widget".to_string(),
+                    definition_path: Some("demo::Widget".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: vec![RustExpandedDeriveTrait {
+                            path: "other::Component".to_string(),
+                            associated_type_bindings: vec![RustAssociatedTypeBinding {
+                                name: "Mutability".to_string(),
+                                value_path: "provider::Mutable".to_string(),
+                            }],
+                        }],
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed candidate metadata: {error}")))?;
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Gadget".to_string(),
+                    definition_path: Some("demo::Gadget".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: vec![RustExpandedDeriveTrait {
+                            path: "provider::Component".to_string(),
+                            associated_type_bindings: vec![RustAssociatedTypeBinding {
+                                name: "Mutability".to_string(),
+                                value_path: "provider::Immutable".to_string(),
+                            }],
+                        }],
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: Vec::new(),
+                        implemented_traits: Vec::new(),
+                        fields: Vec::new(),
+                        variants: Vec::new(),
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed associated candidate metadata: {error}")))?;
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        assert!(
+            checker
+                .type_info()
+                .rust
+                .mutable_reference_type_argument_projections
+                .is_empty(),
+            "neither a same-name trait from another path nor the wrong associated type may satisfy the candidate"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_codegen_projects_each_metadata_directed_mutable_rust_generic_argument()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Gadget, Widget
+
+pub def replace_items(mut items: ProviderHandle[Widget, Gadget]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let mut lowering = lowering_with_mutable_reference_projection(
+            source,
+            "ProviderHandle[Widget, Gadget]",
+            vec![
+                crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                    argument_position: 0,
+                    reference_leaf_paths: vec![vec![]],
+                },
+                crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                    argument_position: 1,
+                    reference_leaf_paths: vec![vec![]],
+                },
+            ],
+        )?;
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("ProviderHandle<&mut Widget, &mut Gadget>"),
+            "every frontend-recorded generic argument position must be projected through the imported provider alias, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_codegen_projects_metadata_directed_mutable_rust_generic_arguments_in_trait_method()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use crate::backend::ir::Mutability;
+        use crate::backend::ir::decl::IrDeclKind;
+
+        let source = r#"
+from rust::demo import FooBar as ProviderHandle, Gadget, Widget
+
+trait ReplacesItems:
+  def replace(self, mut items: ProviderHandle[tuple[Widget, Gadget]]) -> None: ...
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let mut lowering = lowering_with_mutable_reference_projection(
+            source,
+            "ProviderHandle[tuple[Widget, Gadget]]",
+            vec![crate::frontend::typechecker::MutableRustTypeArgumentProjection {
+                argument_position: 0,
+                reference_leaf_paths: vec![vec![0], vec![1]],
+            }],
+        )?;
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let trait_decl = ir_program
+            .declarations
+            .iter()
+            .find_map(|decl| match &decl.kind {
+                IrDeclKind::Trait(trait_decl) if trait_decl.name == "ReplacesItems" => Some(trait_decl),
+                _ => None,
+            })
+            .ok_or("missing lowered trait declaration")?;
+        let method = trait_decl.methods.first().ok_or("missing lowered trait method")?;
+
+        assert_eq!(method.params[1].mutability, Mutability::OwnedMutable);
+        assert_eq!(
+            method.params[1].ty.rust_name(),
+            "ProviderHandle<(&mut Widget, &mut Gadget)>",
+            "trait methods must retain the same owned generic Rust ABI as free functions"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_codegen_leaves_unconfigured_rust_generics_literal() -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+from rust::demo import FooBar, Gadget, Widget
+
+pub def inspect(mut items: FooBar[tuple[Widget, Gadget]]) -> None:
+  pass
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let mut lowering = AstLowering::new();
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("FooBar<(Widget, Gadget)>") && !code.contains("FooBar<(&mut Widget, &mut Gadget)>"),
+            "unconfigured foreign generics must preserve their literal source type, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
+    fn test_codegen_preserves_f32_arithmetic_at_rust_boundary_issue1219() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{RustFunctionSig, RustItemKind, RustItemMetadata, RustParam, RustVisibility};
+
+        let source = r#"
+from rust::demo import accept_f32
+
+pub def translate(time: f32, velocity: f32) -> f32:
+  return accept_f32(-time + time * velocity)
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut tc = TypeChecker::new();
+        tc.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::accept_f32".to_string(),
+                    definition_path: Some("demo::accept_f32".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Function(RustFunctionSig {
+                        type_params: Vec::new(),
+                        params: vec![RustParam {
+                            name: Some("value".to_string()),
+                            type_display: "f32".to_string(),
+                        }],
+                        return_type: "f32".to_string(),
+                        is_async: false,
+                        is_unsafe: false,
+                    }),
+                },
+            )
+            .map_err(|error| std::io::Error::other(format!("seed accept_f32 metadata: {error}")))?;
+        tc.check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+
+        let mut lowering = AstLowering::new_with_type_info(tc.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
+
+        assert!(
+            code.contains("pub fn translate(time: f32, velocity: f32) -> f32")
+                && code.contains("accept_f32(-time + time * velocity)"),
+            "expected f32 arithmetic to cross the imported Rust f32 boundary without widening, got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
     fn test_codegen_emits_raw_rust_field_names_for_keyword_fields_issue725() -> Result<(), Box<dyn std::error::Error>> {
         use crate::frontend::typechecker::TypeChecker;
         use incan_core::interop::{
@@ -4513,6 +5702,9 @@ pub def rebuild(join: JoinRel) -> JoinRel:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
@@ -4641,6 +5833,9 @@ pub def forward(payload: Payload) -> int:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
@@ -4910,6 +6105,9 @@ pub async def register_csv() -> None:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),
@@ -4968,6 +6166,9 @@ pub async def register_csv() -> None:
                     visibility: RustVisibility::Public,
                     kind: RustItemKind::Type(RustTypeInfo {
                         type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
                         has_const_params: false,
                         alias_target: None,
                         metadata_completeness: Default::default(),

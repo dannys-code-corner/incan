@@ -1027,14 +1027,21 @@ pub(crate) fn incan_mutable_param_passed_as_rust_mut_ref(param: &FunctionParam) 
     param.mutability == Mutability::Mutable && mut_param_passed_by_rust_mut_ref(&param.ty)
 }
 
+/// Returns whether a mutable callee parameter preserves its existing Rust value at the call boundary.
+///
+/// Ordinary mutable aggregates are passed by mutable reference, while [`Mutability::OwnedMutable`]
+/// direct-Rust handles move their outer value once. Neither form may take Incan's usual clone or
+/// collection-materialization path.
 fn incan_mutable_param_skips_incan_value_conversions(param: &FunctionParam) -> bool {
-    param.mutability == Mutability::Mutable && mut_param_skips_incan_value_conversions(&param.ty)
+    matches!(param.mutability, Mutability::Mutable | Mutability::OwnedMutable)
+        && mut_param_skips_incan_value_conversions(&param.ty)
 }
 
 /// Like [`determine_conversion`], but uses callee parameter metadata when available.
 ///
-/// For mutable aggregate parameters, codegen emits `&mut` of the binding. The generic Incan rule that clones non-copy
-/// locals on non-final reads would produce an owned value and break Rust (`expected &mut Vec`, `found Vec`).
+/// For mutable aggregate parameters, codegen emits `&mut` of the binding. For owned mutable Rust handles, it moves the
+/// handle through the Incan call unchanged. In both cases, the generic Incan rule that clones non-copy locals on
+/// non-final reads would produce an invalid Rust call.
 pub(crate) fn determine_conversion_for_incan_call(
     expr: &IrExpr,
     target_ty: Option<&IrType>,
@@ -1177,6 +1184,45 @@ mod tests {
             conv,
             Conversion::None,
             "mutable aggregate args must not clone at call sites"
+        );
+    }
+
+    #[test]
+    fn test_incan_call_moves_owned_mutable_rust_handle() {
+        let items_ty = IrType::NamedGeneric(
+            "ProviderHandle".to_string(),
+            vec![IrType::Tuple(vec![
+                IrType::RefMut(Box::new(IrType::Int)),
+                IrType::RefMut(Box::new(IrType::Int)),
+            ])],
+        );
+        let expr = IrExpr::new(
+            IrExprKind::Var {
+                name: "items".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            items_ty.clone(),
+        );
+        let param = FunctionParam {
+            name: "items".to_string(),
+            ty: items_ty,
+            mutability: Mutability::OwnedMutable,
+            is_self: false,
+            kind: crate::frontend::ast::ParamKind::Normal,
+            default: None,
+        };
+
+        let conversion = determine_conversion_for_incan_call(
+            &expr,
+            Some(&param.ty),
+            ConversionContext::IncanFunctionArg,
+            Some(&param),
+        );
+        assert_eq!(
+            conversion,
+            Conversion::None,
+            "an owned mutable Rust handle must move through an Incan adapter instead of requiring Clone"
         );
     }
 
