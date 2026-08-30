@@ -5464,7 +5464,11 @@ fn a_pattern_assertion_binding_is_a_declared_local_read_by_the_statements_after_
     let bir::Pattern::Enum { variant, fields, .. } = pattern else {
         return Err(format!("expected `Some(..)` to lower to a constructor pattern: {pattern:?}").into());
     };
-    assert_eq!(variant, "Some");
+    assert_eq!(
+        variant,
+        constructors::as_str(constructors::ConstructorId::Some),
+        "the assertion must lower `Some(..)` to the registry's own constructor spelling",
+    );
     let [bir::Pattern::Var(binding)] = fields.as_slice() else {
         return Err(format!("expected one `PatternBinding` payload: {fields:?}").into());
     };
