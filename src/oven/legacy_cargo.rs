@@ -7262,6 +7262,19 @@ fn run_legacy_cargo_invocation(
     }
     remap_flags.push(format!("--remap-path-prefix={}=/incan/package", package_root.display()));
     remap_flags.push(format!("--remap-path-prefix={}=/incan/target", target.display()));
+    // Standard-library spans leak through inlined core/alloc generics. A toolchain with the `rust-src` component
+    // resolves them to its real sysroot checkout while one without emits the virtual `/rustc/<commit>` form, so the
+    // same unit compiles to different bytes depending on which components happen to be installed. Remap the source
+    // checkout onto the exact virtual form so every toolchain agrees; on a src-less toolchain the prefix never
+    // matches and the flag is inert.
+    if let Some(toolchain_root) = rustc.parent().and_then(Path::parent)
+        && let Some(commit) = rustc_commit_hash(&rustc)
+    {
+        remap_flags.push(format!(
+            "--remap-path-prefix={}=/rustc/{commit}",
+            toolchain_root.join("lib/rustlib/src/rust").display()
+        ));
+    }
     command.env("CARGO_ENCODED_RUSTFLAGS", remap_flags.join("\u{1f}"));
     command
         .env("RUSTC", &rustc)
@@ -7723,6 +7736,20 @@ fn stage_registry_source(
         relative_root,
         digest,
     })
+}
+
+/// Return the exact commit hash reported by `rustc -vV`, used to remap installed `rust-src` checkouts onto the
+/// virtual `/rustc/<commit>` prefix a source-less toolchain embeds in standard-library debug spans.
+fn rustc_commit_hash(rustc: &Path) -> Option<String> {
+    let output = Command::new(rustc).arg("-vV").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8(output.stdout).ok()?;
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("commit-hash: "))
+        .map(|hash| hash.trim().to_string())
 }
 
 /// Copy one registry package into private baker state without Cargo's mutable package-local target cache.
