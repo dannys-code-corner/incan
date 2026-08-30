@@ -16,6 +16,20 @@ use super::*;
 fn undesugared_label(node: &str) -> String {
     format!("undesugared {node} (Body IR input-contract violation: caller skipped the vocab desugar pass)")
 }
+
+/// Name a raw top-level declaration that the desugar pass had to remove before Body IR collection.
+///
+/// Top-level collection normally produces bodies only for executable declarations. A raw vocabulary declaration
+/// therefore has no containing body to hold its refusal, so the module builder injects this label into every body
+/// it did lower. That makes every direct execution fail at the declaration's original span rather than selecting an
+/// otherwise-valid body from an incomplete module.
+pub(super) fn unsupported_top_level_declaration_label(declaration: &ast::Declaration) -> Option<String> {
+    match declaration {
+        ast::Declaration::VocabBlock(_) => Some(undesugared_label("top-level vocab block")),
+        _ => None,
+    }
+}
+
 /// Short diagnostic label for a statement kind v0 does not lower.
 ///
 /// Statement-position `loop:` is named explicitly because it is the one entry here whose Body IR vocabulary

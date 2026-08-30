@@ -484,7 +484,6 @@ def run() -> None:
     assert boom() raises IndexError, "wanted an index error"
 "#;
 
-
 fn case_pattern_assertion_binding_reaches_body_ir() -> ComparisonOutcome {
     let outcome = outcome_from_body_ir(CASE_20_SRC, "a pattern assertion to lower without a placeholder");
     if !matches!(outcome, ComparisonOutcome::Match) {

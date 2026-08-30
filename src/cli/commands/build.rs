@@ -2560,6 +2560,22 @@ fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliR
     }
 }
 
+/// Refuse package-feature selections the manifest-free replacement profile cannot resolve faithfully.
+///
+/// Ordinary builds derive the active closure from `CompilationSession` and the project's manifest. The bounded
+/// direct Body-IR profile deliberately does neither: it accepts one source module with no package graph. Its shared
+/// input-contract helper therefore uses the empty projection, so accepting a caller-supplied feature selection here
+/// would silently compile a different program. A future project-aware replacement profile may consume the canonical
+/// session projection; this source-only profile must refuse it until then.
+fn reject_replacement_package_feature_selection(package_features: &FeatureSelection) -> CliResult<()> {
+    if package_features != &FeatureSelection::default() {
+        return Err(CliError::failure(
+            "the source-only replacement backend supports only the default package feature selection; remove `--features`, `--no-default-features`, or `--all-features`",
+        ));
+    }
+    Ok(())
+}
+
 /// Execute the first #988 replacement-backend profile directly from typed Body IR.
 ///
 /// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
@@ -2570,12 +2586,16 @@ fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliR
 /// The pipeline is lex, parse, [`apply_body_ir_input_contract`], module-profile gate, typecheck, then
 /// [`build_body_ir_module_v0`]. The contract step is not optional sequencing: without it this path would hand
 /// lowering a program the legacy path would never have produced, which is the divergence #1166 closes.
+/// This deliberately accepts only the default package-feature selection. A non-default selection needs the
+/// project-aware `CompilationSession` projection and is refused before parsing rather than silently treated as
+/// featureless source.
 fn build_replacement_file_report(
     file_path: &str,
     options: BuildCommandOptions,
     report_options: &BuildReportOptions,
 ) -> CliResult<serde_json::Value> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    reject_replacement_package_feature_selection(&options.package_features)?;
     let start = Instant::now();
     let entrypoint = if Path::new(file_path).is_absolute() {
         PathBuf::from(file_path)
@@ -18751,6 +18771,38 @@ pub model Nested:
             ["main"],
             "a declaration behind an inactive feature must not survive the contract step"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_refuses_nondefault_package_feature_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(&entrypoint, "def main() -> int:\n    return 7\n")?;
+        let feature_selections = [
+            FeatureSelection::new(["beta"]),
+            FeatureSelection {
+                no_default_features: true,
+                ..FeatureSelection::default()
+            },
+        ];
+
+        for package_features in feature_selections {
+            let mut options = replacement_build_options();
+            options.package_features = package_features;
+            let error =
+                build_replacement_file_report(&entrypoint.to_string_lossy(), options, &BuildReportOptions::default())
+                    .err()
+                    .ok_or(
+                        "a non-default package feature selection must not enter the source-only replacement profile",
+                    )?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("supports only the default package feature selection"),
+                "unexpected replacement feature-selection refusal: {error}"
+            );
+        }
         Ok(())
     }
 

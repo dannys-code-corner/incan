@@ -114,12 +114,52 @@ use crate::provider::ProviderPlan;
 /// submodule), so a broken caller is a visible diagnostic at the original span instead of a silently missing body.
 /// Those refusals are a safety net, never the normal path; the desugar pass keeps ownership of the real diagnostic
 /// when a vocabulary's library manifest is unavailable.
+///
+/// The bounded replacement and comparison profiles have no project manifest or feature graph, so they deliberately
+/// use [`apply_body_ir_input_contract`]'s empty feature projection. A command that receives a non-default package
+/// feature selection must reject it before reaching this boundary rather than silently treating it as featureless.
 pub fn build_body_ir_module_v0(
     program: &ast::Program,
     module_path: &[String],
     type_info: &TypeCheckInfo,
 ) -> bir::BodyIrModule {
     build_body_ir_module_v0_with_provider_operations(program, module_path, type_info, &ProviderOperationCatalog::new())
+}
+
+/// Prepare one manifest-free parsed module so it satisfies [`build_body_ir_module_v0`]'s input contract.
+///
+/// This lives beside the boundary it governs rather than inside any one caller, because every manifest-free caller
+/// owes Body IR the same debt. The replacement CLI, parity corpus, and source-observable comparison route use this
+/// helper; a caller that skips it hands lowering a program the legacy path would never have produced, which is the
+/// divergence #1166 closes.
+///
+/// The legacy pipeline owes Body IR a desugared, feature-projected program, and it pays that debt at parse time:
+/// `CompilationSession::parse_source` (`src/cli/commands/common.rs`) parses, runs
+/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then projects the result through the session's active
+/// package features — all before the program is typechecked or lowered. A manifest-free caller has no package
+/// feature graph, so it applies the same two steps with the empty feature projection. It must reject an explicit
+/// package-feature selection rather than using this helper to approximate one.
+///
+/// Ordering matters beyond the pair itself. The caller applies this immediately after parsing, ahead of
+/// [`replacement_module_profile_error`] and typechecking, because both of those must see the projected program: an
+/// import behind an inactive feature is not part of this compilation, and refusing it as an unsupported profile
+/// boundary would report a declaration the build does not contain.
+///
+/// # Errors
+///
+/// Returns the desugar pass's own diagnostics unchanged. A scoped-DSL surface whose owning library manifest is
+/// unavailable is refused there, at that boundary, and this deliberately adds no second diagnostic for it.
+pub fn apply_body_ir_input_contract(
+    mut program: crate::frontend::ast::Program,
+    entrypoint: &std::path::Path,
+) -> Result<crate::frontend::ast::Program, Vec<crate::frontend::diagnostics::CompileError>> {
+    let entrypoint_display = entrypoint.to_string_lossy();
+    crate::frontend::vocab_desugar_pass::desugar_program_vocab_blocks(
+        &mut program,
+        Some(entrypoint_display.as_ref()),
+        &crate::frontend::library_manifest_index::LibraryManifestIndex::default(),
+    )?;
+    Ok(program.projected_for_features(&std::collections::BTreeSet::new()))
 }
 
 /// Build Body IR using the checked provider-operation facts selected for this compilation.
@@ -186,7 +226,7 @@ fn build_body_ir_module_v0_with_provider_operations(
         module_path,
         provider_operations,
     };
-    let bodies = program
+    let mut bodies = program
         .declarations
         .iter()
         .flat_map(|decl| -> Vec<bir::Body> {
@@ -232,13 +272,41 @@ fn build_body_ir_module_v0_with_provider_operations(
                 _ => Vec::new(),
             }
         })
-        .collect();
+        .collect::<Vec<_>>();
+    apply_top_level_input_contract_refusal(program, &mut bodies);
     bir::BodyIrModule {
         module_id,
         nominal_declarations,
         fieldless_enum_declarations,
         value_enum_declarations,
         bodies,
+    }
+}
+
+/// Make a broken caller's raw top-level vocabulary declaration fail every executable body rather than disappearing.
+///
+/// `BodyIrModule` intentionally remains a total lowering result, so it cannot return a module-level error. The
+/// visible fail-closed representation is therefore an `Unsupported` marker at the original declaration span in
+/// every lowered body. An executor selecting any source body stops before evaluating source statements, while a
+/// declaration-only module still has no executable body to select.
+fn apply_top_level_input_contract_refusal(program: &ast::Program, bodies: &mut [bir::Body]) {
+    let Some((description, span)) = program.declarations.iter().find_map(|declaration| {
+        refusals::unsupported_top_level_declaration_label(&declaration.node)
+            .map(|description| (description, hir_span(declaration.span)))
+    }) else {
+        return;
+    };
+
+    for body in bodies {
+        body.block.stmts.insert(
+            0,
+            bir::Statement {
+                kind: bir::StatementKind::Unsupported {
+                    description: description.clone(),
+                },
+                span,
+            },
+        );
     }
 }
 
@@ -982,46 +1050,4 @@ mod tuple_destructure_interop_tests {
             "a Rust tuple of the wrong arity must still be refused"
         );
     }
-}
-
-/// Prepare one parsed module so it satisfies [`build_body_ir_module_v0`]'s input contract.
-///
-/// This lives beside the boundary it governs rather than inside any one caller, because every caller owes Body IR
-/// the same debt. The CLI's replacement path and the parity corpus both route through here; a caller that skips it
-/// hands lowering a program the legacy path would never have produced, which is exactly the divergence #1166
-/// closes.
-///
-/// The legacy pipeline owes Body IR a desugared, feature-projected program, and it pays that debt at parse time:
-/// `CompilationSession::parse_source` (`src/cli/commands/common.rs`) parses, runs
-/// `vocab_desugar_pass::desugar_program_vocab_blocks`, then projects the result through the session's active
-/// package features — all before the program is typechecked or lowered. This applies the same two steps in the
-/// same order for the replacement path, so a vocab-authored body means the same thing through either backend
-/// (#1166).
-///
-/// Ordering matters beyond the pair itself. The caller applies this immediately after parsing, ahead of
-/// [`replacement_module_profile_error`] and typechecking, because both of those must see the projected program: an
-/// import behind an inactive feature is not part of this compilation, and refusing it as an unsupported profile
-/// boundary would report a declaration the build does not contain.
-///
-/// Two deliberate differences from the legacy session, both consequences of this path reading no project manifest.
-/// No package feature is active, so every `when feature(...)` declaration projects away here — which is the
-/// correct answer for a compilation with no feature graph, not a shortcut. And feature *names* are not validated
-/// against a declared-feature set, because there is no manifest to declare one; that check stays a project-level
-/// concern rather than becoming a manifest-free approximation that could disagree with the legacy path.
-///
-/// # Errors
-///
-/// Returns the desugar pass's own diagnostics unchanged. A scoped-DSL surface whose owning library manifest is
-/// unavailable is refused there, at that boundary, and this deliberately adds no second diagnostic for it.
-pub fn apply_body_ir_input_contract(
-    mut program: crate::frontend::ast::Program,
-    entrypoint: &std::path::Path,
-) -> Result<crate::frontend::ast::Program, Vec<crate::frontend::diagnostics::CompileError>> {
-    let entrypoint_display = entrypoint.to_string_lossy();
-    crate::frontend::vocab_desugar_pass::desugar_program_vocab_blocks(
-        &mut program,
-        Some(entrypoint_display.as_ref()),
-        &crate::frontend::library_manifest_index::LibraryManifestIndex::default(),
-    )?;
-    Ok(program.projected_for_features(&std::collections::BTreeSet::new()))
 }
