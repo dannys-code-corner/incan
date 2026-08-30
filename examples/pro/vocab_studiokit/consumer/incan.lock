@@ -3,65 +3,65 @@
 
 [incan]
 format = 2
-incan-version = "0.5.1-rc12"
-deps-fingerprint = "sha256:7babe8eeb797d0696b0c51d7b529c7e1c0841a012f04d627d062c5d56116212c"
+incan-version = "0.5.1"
+deps-fingerprint = "sha256:9042fab3f5e7aaaa5ef99d70083810345757f7da653243d231a560eb9c79bd28"
 cargo-features = []
 cargo-no-default-features = false
 cargo-all-features = false
 
 [semantic.sdk]
-identity = "incan@0.5.1-rc12"
-inventory_digest = "sha256:1a4d24684517ef3895d7b7679d59e2d0c3e29320b728f84ffadcef1b88b31df4"
+identity = "incan@0.5.1"
+inventory_digest = "sha256:ab7840e8bd704cdaa1f30b0d4bc729aa99e65e598073d6035d3d3f09f6a2cf3c"
 profile = "default"
 
 [[semantic.sdk.components]]
 id = "stdlib-async"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-codecs"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-compression"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-core"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "mandatory"
 
 [[semantic.sdk.components]]
 id = "stdlib-data"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-interop"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-observability"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-system"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "dependency:stdlib-codecs"
 
 [[semantic.sdk.components]]
 id = "stdlib-testing"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.sdk.components]]
 id = "stdlib-web"
-version = "0.5.1-rc12"
+version = "0.5.1"
 reason = "profile:default"
 
 [[semantic.packages]]
@@ -91,7 +91,7 @@ default_features = true
 optional = false
 
 [[semantic.providers]]
-identity = "incan_stdlib_async@0.5.0#sha256:64be66de6c18372583f9f94d8c5c5a0ecee0e63fece9418c9e939221aecf3e16[]"
+identity = "incan_stdlib_async@0.5.0#sha256:12bf50222a2a20a028d1633ff707e6ce81ec0619f552128704faffc1edb59811[]"
 participation = "enabled"
 namespace_claims = [["std", "async"], ["std", "async", "channel"], ["std", "async", "race"], ["std", "async", "sync"], ["std", "async", "task"], ["std", "async", "time"]]
 used_modules = []
@@ -99,7 +99,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_codecs@0.5.0#sha256:9464e9d67f6c7a050bd082ed35b5f16ce02864f869331c710f0a63fbe342c71c[]"
+identity = "incan_stdlib_codecs@0.5.0#sha256:f6e85482cb30930c0bd6195cb04d6befc976dd3c4d2681fd9002993625217d4a[]"
 participation = "enabled"
 namespace_claims = [["std", "checksum"], ["std", "encoding"], ["std", "encoding", "_shared"], ["std", "encoding", "base32"], ["std", "encoding", "base58"], ["std", "encoding", "base64"], ["std", "encoding", "base85"], ["std", "encoding", "bech32"], ["std", "encoding", "hex"]]
 used_modules = []
@@ -107,7 +107,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_compression@0.5.0#sha256:72efff236e97e0ee18fc9036db29c998c0815bdf1068b28fbe6669ff9f46439e[]"
+identity = "incan_stdlib_compression@0.5.0#sha256:0b101901be2503aff24404d2e29ff6b88a2f1ae4345f16e74e96f1d70bbae216[]"
 participation = "enabled"
 namespace_claims = [["std", "compression"], ["std", "compression", "_auto"], ["std", "compression", "_core"], ["std", "compression", "bz2"], ["std", "compression", "deflate"], ["std", "compression", "gzip"], ["std", "compression", "lzma"], ["std", "compression", "snappy"], ["std", "compression", "snappy", "raw"], ["std", "compression", "zlib"], ["std", "compression", "zstd"]]
 used_modules = []
@@ -115,7 +115,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_core@0.5.0#sha256:d0d08090585fac6fbfc5979100dfce51675dd2b5b125b3802ba364123454b125[]"
+identity = "incan_stdlib_core@0.5.0#sha256:4ebded99dbdcc974c1ef2d5074ec532ce618a8288ad77b5ed74775d344b1f0f4[]"
 participation = "used"
 namespace_claims = [["std", "capabilities"], ["std", "derives", "collection"], ["std", "derives", "comparison"], ["std", "derives", "copying"], ["std", "derives", "string"], ["std", "prelude"], ["std", "reflection"], ["std", "registry"], ["std", "result"], ["std", "this"], ["std", "traits"], ["std", "traits", "callable"], ["std", "traits", "convert"], ["std", "traits", "error"], ["std", "traits", "indexing"], ["std", "traits", "ops"]]
 used_modules = [["std", "prelude"]]
@@ -123,7 +123,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_data@0.5.0#sha256:e5b057c0dfb04c5d7db275c2ebb18908b3fbcf785b72c6a5f96a3a464af309a9[]"
+identity = "incan_stdlib_data@0.5.0#sha256:54eb5a2a60077e1e128712c8a01a34b72d364bcee181ba519bc811640ceab5d0[]"
 participation = "enabled"
 namespace_claims = [["std", "collections"], ["std", "datetime"], ["std", "datetime", "civil"], ["std", "datetime", "civil", "intervals"], ["std", "datetime", "civil", "naive"], ["std", "datetime", "civil", "offset"], ["std", "datetime", "error"], ["std", "datetime", "runtime"], ["std", "graph"], ["std", "hash"], ["std", "hash", "_core"], ["std", "hash", "_streaming"], ["std", "json"], ["std", "math"], ["std", "regex"], ["std", "regex", "_core"], ["std", "regex", "_replacement"], ["std", "regex", "types"], ["std", "serde"], ["std", "serde", "json"], ["std", "uuid"]]
 used_modules = []
@@ -131,7 +131,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_interop@0.5.0#sha256:cf04d84a1ce34668d22ab58b98b13b4b0812bec57d598b5ee310c9f98b6b1260[]"
+identity = "incan_stdlib_interop@0.5.0#sha256:4d553fadfe02ed9060ee78fefefc8cf208b934cb2e9af0a579f4d58e8981dd12[]"
 participation = "enabled"
 namespace_claims = [["std", "interop"]]
 used_modules = []
@@ -139,7 +139,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_observability@0.5.0#sha256:e5669ef838b507eecb13c61007adea36eb48c5e47736da8061035dafddadf803[]"
+identity = "incan_stdlib_observability@0.5.0#sha256:471e2b076728bcd69a5cbd0f87a531857c2c6e1110d3847bb563e4153c5cbb7b[]"
 participation = "enabled"
 namespace_claims = [["std", "logging"], ["std", "telemetry"], ["std", "telemetry", "core"]]
 used_modules = []
@@ -147,7 +147,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_system@0.5.0#sha256:861c674186d3d70d8db893b5eed25d661d57b847de0c9c70b243827a47a83a40[]"
+identity = "incan_stdlib_system@0.5.0#sha256:b872dccf732ba2b183f6b0a8ffef32c38e8b038223fc6d026a51ee4b314914ad[]"
 participation = "enabled"
 namespace_claims = [["std", "environ"], ["std", "fs"], ["std", "fs", "file"], ["std", "fs", "glob"], ["std", "fs", "locking"], ["std", "fs", "metadata"], ["std", "fs", "path"], ["std", "io"], ["std", "tempfile"]]
 used_modules = []
@@ -155,7 +155,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_testing@0.5.0#sha256:16afa47caa6f297b02ee9a59968c64ddb23366197584cec87994a5d9bb198221[]"
+identity = "incan_stdlib_testing@0.5.0#sha256:057ac86b1619bf61b4007d383cbc8b2244ebb7543d4a9317c4c80b7f412bb2a9[]"
 participation = "enabled"
 namespace_claims = [["std", "testing"]]
 used_modules = []
@@ -163,7 +163,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "incan_stdlib_web@0.5.0#sha256:d42bc51676c3f17cd190b4a32c215cf87fd963b84c4bbe9021c01a1d178c274d[]"
+identity = "incan_stdlib_web@0.5.0#sha256:96a9a99fdb642aa7a100c8809b117fce3f6da19c9269f714a5479f4193b8ffae[]"
 participation = "enabled"
 namespace_claims = [["std", "web"], ["std", "web", "app"], ["std", "web", "macros"], ["std", "web", "request"], ["std", "web", "response"], ["std", "web", "routing"]]
 used_modules = []
@@ -171,7 +171,7 @@ implementation_facets = []
 backend_requirements = []
 
 [[semantic.providers]]
-identity = "studiokit_core@0.1.0#sha256:f48b5366240d74f3e1b29f8dfb86feff1135cbe550c3d0d057a39a93d2b06e7e[]"
+identity = "studiokit_core@0.1.0#sha256:7e291c8a5a8fb7537e751ad4c91dc0b99d839af157b3671f3189fadc916f0beb[]"
 participation = "enabled"
 namespace_claims = [["pub", "studiokit", "info"]]
 used_modules = []
