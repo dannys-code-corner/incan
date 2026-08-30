@@ -13,7 +13,7 @@
   </thead>
   <tbody>
     <tr data-v06-slice-target="slice-01-cutover-foundation">
-      <td><button type="button" class="inc-v06-slice-toggle">1. Cutover foundation</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">23 complete</span><span class="inc-v06-status inc-v06-status--open">6 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">1. Cutover foundation</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">27 complete</span><span class="inc-v06-status inc-v06-status--open">1 open</span></div></td>
       <td>Cutover facts, Body IR, and parity.</td>
       <td>Selected and executed routes are receipted; unavailable comparisons stay non-green.</td>
     </tr>
@@ -28,7 +28,7 @@
       <td>Aliases, imports, locals, members, and binders resolve consistently.</td>
     </tr>
     <tr data-v06-slice-target="slice-04-language-runtime-matrix">
-      <td><button type="button" class="inc-v06-slice-toggle">4. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">12 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">4. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">13 open</span></div></td>
       <td>Embedded fragments, capabilities, and package vocabulary.</td>
       <td>Accepted constructs have parity, diagnostics, inspection, and migration evidence.</td>
     </tr>
@@ -91,7 +91,6 @@ flowchart LR
   i1213["#1213<br/>lower resolved provider operations to c…"]
   i1246["#1246<br/>lower collection membership and list co…"]
   i1251["#1251<br/>carry binding-equivalence facts so reas…"]
-  i1252["#1252<br/>example corpus covers a third of the do…"]
   s1137 -- owns --> i653
   s1137 -- owns --> i986
   s1137 -- owns --> i987
@@ -119,9 +118,8 @@ flowchart LR
   s1137 -- owns --> i1213
   i1101 -- owns --> i1246
   i1101 -- owns --> i1251
-  s1137 -- owns --> i1252
   classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i1102,i1103,i1121,i1123,i1124,i1125,i1146,i1153,i1156,i1158,i1159,i1160,i1161,i1162,i1163,i1164,i1165,i1166,i1167,i1172,i1213,i1246,i1251 incv06complete
+  class i653,i986,i987,i1101,i1102,i1103,i1121,i1123,i1124,i1125,i1146,i1153,i1156,i1158,i1159,i1160,i1161,i1162,i1163,i1164,i1165,i1166,i1167,i1172,i1213,i1246,i1251 incv06complete
   click i653 href "https://github.com/encero-systems/incan/issues/653" "Open #653 on GitHub"
   click i986 href "https://github.com/encero-systems/incan/issues/986" "Open #986 on GitHub"
   click i987 href "https://github.com/encero-systems/incan/issues/987" "Open #987 on GitHub"
@@ -150,7 +148,6 @@ flowchart LR
   click i1213 href "https://github.com/encero-systems/incan/issues/1213" "Open #1213 on GitHub"
   click i1246 href "https://github.com/encero-systems/incan/issues/1246" "Open #1246 on GitHub"
   click i1251 href "https://github.com/encero-systems/incan/issues/1251" "Open #1251 on GitHub"
-  click i1252 href "https://github.com/encero-systems/incan/issues/1252" "Open #1252 on GitHub"
 ```
 [Open Slice 1 in GitHub](https://github.com/encero-systems/incan/issues/1137)
 
@@ -272,6 +269,7 @@ flowchart LR
   s1140["Slice 4<br/>#1140"]
   i1211["#1211<br/>establish RFC 104 authority-decision fa…"]
   i1212["#1212<br/>establish RFC 104 operation-receipt fac…"]
+  i1252["#1252<br/>example corpus covers a third of the do…"]
   s1140 -- owns --> i555
   s1140 -- owns --> i662
   s1140 -- owns --> i759
@@ -287,6 +285,7 @@ flowchart LR
   s1140 -- owns --> i1075
   i1029 -- owns --> i1211
   i1028 -- owns --> i1212
+  s1140 -- owns --> i1252
   i1023 -. blocks .-> i1022
   i990 -. blocks .-> i1027
   i1028 -. blocks .-> i1027
@@ -311,6 +310,7 @@ flowchart LR
   click s1140 href "https://github.com/encero-systems/incan/issues/1140" "Open #1140 on GitHub"
   click i1211 href "https://github.com/encero-systems/incan/issues/1211" "Open #1211 on GitHub"
   click i1212 href "https://github.com/encero-systems/incan/issues/1212" "Open #1212 on GitHub"
+  click i1252 href "https://github.com/encero-systems/incan/issues/1252" "Open #1252 on GitHub"
 ```
 [Open Slice 4 in GitHub](https://github.com/encero-systems/incan/issues/1140)
 

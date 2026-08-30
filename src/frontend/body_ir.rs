@@ -30,13 +30,17 @@
 //! for how patterns are lowered and their bindings scoped).
 //!
 //! Everything else lowers to an explicit `Statement::Unsupported` / `Operand::Unknown` node rather than panicking,
-//! so the model stays total over real programs. That residue is not a short tail, and #1101 tracks it as named
-//! remaining work rather than as an implied "almost everything" claim: a spread in a `model`/`class` construction,
-//! which refuses as an unresolved field layout because the typechecker records no field binding for it; a spread
-//! with no statically proven shape against a callee whose fixed signature *is* resolvable, whose arity no stage can
-//! establish; a spread to a locally held callable value; `if let`/`while let` conditions and destructuring
-//! comprehension/generator clauses; and `await` and `race for`. The sub-issues are #1158 through #1167, plus
-//! #1172 for evaluable callable defaults.
+//! so the model stays total over real programs. That residue is now short, and every entry is a decided refusal
+//! with a stated reason rather than pending work — #1101 and its sixteen children (#1158 through #1167, #1172,
+//! and the #1244/#1246 follow-ons) are closed, so nothing here awaits a named owner. What still refuses: a spread
+//! in a `model`/`class` construction, because the typechecker records no field binding for it and a construction
+//! bound to declared field order cannot admit an unresolved layout; a spread with no statically proven shape
+//! against a callee whose fixed signature *is* resolvable, whose arity no stage can establish; and a spread to a
+//! locally held callable value, whose declared slots exist only in the callable's type. All three are the same
+//! fact gap — no stage records how a spread maps onto declared slots — and closing them means representing that
+//! mapping, not adding a lowering arm. `if let`/`while let`, destructuring comprehension and generator clauses,
+//! `await`, `race for`, statement-position `loop:`, bytes literals, and range values, which earlier revisions of
+//! this paragraph listed as residue, all lower now.
 //!
 //! Vocab and scoped-DSL surface nodes are deliberately *not* on that list. They are not unmodeled language
 //! constructs awaiting a lowering; the desugar pass resolves them before this module runs, and one reaching here

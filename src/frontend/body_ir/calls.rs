@@ -294,7 +294,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         };
 
         // The typechecker records one slot per *written* argument, so a spread -- which supplies an unknown number
-        // of fields -- can never appear in a recorded binding. Refuse it by name; #1159 owns spread representation.
+        // of fields -- can never appear in a recorded binding. Refuse it by name: no stage records how a spread maps
+        // onto declared fields, and #1159's spread representation deliberately stopped short of construction layouts.
         let mut written_exprs = Vec::with_capacity(args.len());
         for arg in args {
             match arg {
