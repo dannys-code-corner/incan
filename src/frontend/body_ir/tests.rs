@@ -6486,3 +6486,222 @@ def run() -> int:
     );
     Ok(())
 }
+
+// ============================================================================
+// Statement-position `loop:` and the `unsafe:` boundary (#1162)
+// ============================================================================
+
+/// The indentation `render_block` gives a statement nested one block below a body's top-level statements.
+///
+/// A body renders its own block at depth 1, so a top-level statement carries two spaces and anything inside that
+/// statement's nested block carries four. Tests that care about *where* a statement landed compare against this
+/// rather than merely finding the text somewhere in the body, which would also pass if the statement had escaped
+/// into the enclosing block.
+const NESTED_BLOCK_INDENT: &str = "    ";
+
+#[test]
+fn a_statement_position_loop_lowers_to_the_same_loop_the_expression_spelling_produces()
+-> Result<(), Box<dyn std::error::Error>> {
+    // `bir::StatementKind::Loop` already existed and the expression spelling already emitted it; only
+    // `lower_stmt_into`'s dispatch was missing, so the plain statement form -- the more common one -- refused.
+    let source = concat!(
+        "def count_to(limit: int) -> int:\n",
+        "  mut i = 0\n",
+        "  loop:\n",
+        "    if i >= limit:\n",
+        "      break\n",
+        "    i = i + 1\n",
+        "  return i\n",
+    );
+    let module = build(source, &["m", "loop_stmt"])?;
+    let snapshot = body_named(&module, "count_to")?.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a statement-position `loop:` must lower rather than refuse: {snapshot}"
+    );
+    assert!(
+        snapshot.lines().any(|line| line.trim() == "loop:"),
+        "it must lower to Body IR's one normalized loop shape: {snapshot}"
+    );
+    // The statement spelling produces no value, so its `break` stays a plain valueless exit rather than acquiring
+    // the result place a `loop:` expression's `break value` is rewritten into.
+    assert!(
+        snapshot.lines().any(|line| line.trim() == "break"),
+        "the loop must be exited by a valueless break: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn continue_inside_a_statement_loop_behaves_as_it_does_in_while_and_for() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def odd_count(limit: int) -> int:\n",
+        "  mut i = 0\n",
+        "  mut odds = 0\n",
+        "  loop:\n",
+        "    if i >= limit:\n",
+        "      break\n",
+        "    i = i + 1\n",
+        "    if i % 2 == 0:\n",
+        "      continue\n",
+        "    odds = odds + 1\n",
+        "  return odds\n",
+    );
+    let module = build(source, &["m", "loop_stmt_continue"])?;
+    let snapshot = body_named(&module, "odd_count")?.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a statement `loop:` carrying a `continue` must lower whole: {snapshot}"
+    );
+    assert!(
+        snapshot.lines().any(|line| line.trim() == "continue"),
+        "`continue` must lower to the shared continue statement: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn nested_statement_loops_each_get_their_own_loop_block() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def grid(rows: int, cols: int) -> int:\n",
+        "  mut cells = 0\n",
+        "  mut r = 0\n",
+        "  loop:\n",
+        "    if r >= rows:\n",
+        "      break\n",
+        "    mut c = 0\n",
+        "    loop:\n",
+        "      if c >= cols:\n",
+        "        break\n",
+        "      c = c + 1\n",
+        "      cells = cells + 1\n",
+        "    r = r + 1\n",
+        "  return cells\n",
+    );
+    let module = build(source, &["m", "nested_loop_stmt"])?;
+    let snapshot = body_named(&module, "grid")?.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "nested statement loops must lower whole: {snapshot}"
+    );
+    let loop_indents: Vec<&str> = snapshot
+        .lines()
+        .filter(|line| line.trim() == "loop:")
+        .map(|line| &line[..line.len() - line.trim_start().len()])
+        .collect();
+    // Asserting only that two loops exist would also pass if the inner one had been hoisted out of the outer
+    // one's body, so require the second to be nested inside the first.
+    assert_eq!(loop_indents.len(), 2, "both loops must be represented: {snapshot}");
+    assert!(
+        loop_indents[1].len() > loop_indents[0].len(),
+        "the inner loop must stay nested inside the outer loop's body: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unsupported_statement_inside_a_statement_loop_keeps_its_own_refusal() -> Result<(), Box<dyn std::error::Error>> {
+    // The loop must not swallow a construct it happens to contain: a consumer loses only that statement, not the
+    // whole loop. The stand-in is collection membership, which #1160 deliberately left refused while giving every
+    // other operator in that position a representation -- the same stand-in
+    // `an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race` uses, and chosen for the same
+    // reason: a stand-in that later becomes representable turns its test vacuous.
+    let source = concat!(
+        "def scan(values: list[int]) -> int:\n",
+        "  mut i = 0\n",
+        "  loop:\n",
+        "    if i >= 3:\n",
+        "      break\n",
+        "    hit = i in values\n",
+        "    i = i + 1\n",
+        "  return i\n",
+    );
+    let module = build(source, &["m", "loop_stmt_partial"])?;
+    let snapshot = body_named(&module, "scan")?.render_snapshot();
+
+    assert!(
+        snapshot.lines().any(|line| line.trim() == "loop:"),
+        "the loop itself must still be represented: {snapshot}"
+    );
+    let refusal = snapshot
+        .lines()
+        .find(|line| line.contains("unsupported(binary operator In)"))
+        .ok_or("missing the refusal for the unrepresentable loop-body statement")?;
+    assert!(
+        refusal.starts_with(NESTED_BLOCK_INDENT),
+        "the refusal must stay inside the loop body rather than collapsing or escaping the loop: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_value_carrying_break_in_a_statement_loop_is_not_merged_into_an_enclosing_loop_expression()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The typechecker owns this rule and already rejects the program (`break_value_requires_loop_expression`), so
+    // lowering's job is only to not invent a second rule. A statement `loop:` pushes no break target, which is
+    // what stops the value from being rewritten into the *enclosing* `loop:` expression's result place -- an
+    // assignment the source never wrote.
+    let source = concat!(
+        "def find(limit: int) -> int:\n",
+        "  return loop:\n",
+        "    mut i = 0\n",
+        "    loop:\n",
+        "      if i >= limit:\n",
+        "        break 1\n",
+        "      i = i + 1\n",
+        "    break i\n",
+    );
+    let (module, diagnostics) = build_after_expected_typecheck_errors(source, &["m", "loop_stmt_break_value"])?;
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("`break <value>` is only valid inside `loop:` expressions")),
+        "the source checker must reject a value-carrying break in a statement loop: {diagnostics:?}"
+    );
+
+    let snapshot = body_named(&module, "find")?.render_snapshot();
+    assert!(
+        snapshot.lines().any(|line| line.trim() == "break const(1)"),
+        "the rejected value must stay on the `break` statement rather than being assigned into the outer loop's \
+         result place: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn an_unsafe_region_refuses_under_a_named_permanent_boundary() -> Result<(), Box<dyn std::error::Error>> {
+    // #1162's second half. The refusal is a decided disposition, not a missing dispatch arm: an `unsafe:` region
+    // introduces no Incan scope, so inlining its statements would be trivial -- and would erase the
+    // acknowledgement the region exists to record.
+    let source = concat!(
+        "def probe(x: int) -> int:\n",
+        "  return x\n",
+        "\n",
+        "def touch(value: int) -> int:\n",
+        "  mut total = 0\n",
+        "  unsafe:\n",
+        "    total = probe(value)\n",
+        "  return total\n",
+    );
+    let module = build(source, &["m", "unsafe_region"])?;
+    let snapshot = body_named(&module, "touch")?.render_snapshot();
+
+    assert!(
+        snapshot.contains("unsupported(`unsafe:` acknowledgement region:"),
+        "the refusal must name the construct rather than reading as a generic placeholder: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("refused by design") && snapshot.contains("#1162"),
+        "the refusal must state that it is a decided boundary and name its owner: {snapshot}"
+    );
+    // The region's own statements must not quietly become statements of the enclosing block, which is the
+    // silent-execution outcome the refusal exists to prevent.
+    assert!(
+        !snapshot.contains("probe"),
+        "an acknowledged region's statements must not be inlined into the enclosing block: {snapshot}"
+    );
+    Ok(())
+}

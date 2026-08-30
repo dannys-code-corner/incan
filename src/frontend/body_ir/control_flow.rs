@@ -171,6 +171,56 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         bir::Operand::Constant(bir::Constant::Unit)
     }
 
+    /// Push one [`bir::StatementKind::Loop`] whose body `lower_body` fills in, owning the two pieces of loop state
+    /// every unconditional-loop spelling needs: the `break` target inner `break` statements resolve against, and
+    /// the end-of-iteration drops for locals the body declared in `loop_scope`.
+    ///
+    /// `break_target` is the only thing that separates the spellings routed through here. `Some(result_local)` is
+    /// the value-producing `loop:` expression, whose `break value` statements assign into that place before exiting
+    /// (see [`Self::lower_break`]). `None` is every statement-position loop, where `break` is a plain valueless
+    /// exit. Pushing `None` is not a formality: it is what stops a `break` inside a statement-position loop that is
+    /// lexically nested in a `loop:` expression from being rewritten into an assignment to the *outer* loop's
+    /// result place (see [`Self::loop_break_targets`] for why the stack exists).
+    ///
+    /// `loop_scope` is the caller's to create rather than this helper's, because the `loop:` expression must
+    /// declare its result temporary in that scope before any body statement is lowered.
+    ///
+    /// The two `for` paths deliberately do not route through here. [`Self::lower_range_counting_loop`] drops its
+    /// scope mid-body, before the index advance it appends afterwards, and [`Self::lower_general_iteration`] leaves
+    /// the drops to its caller's body closure; both would need this helper's fixed "body, then drops" order relaxed
+    /// into a per-caller choice, which would buy nothing but an extra parameter.
+    fn push_loop(
+        &mut self,
+        loop_scope: bir::ScopeId,
+        break_target: Option<bir::LocalId>,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+        lower_body: impl FnOnce(&mut Self, bir::ScopeId, &mut Vec<bir::Statement>),
+    ) {
+        // A loop body runs zero or more times, so a range-layout fact established inside it holds on entry only if
+        // it also held before. Intersecting entry state with exit state is what keeps that conservative -- and
+        // doing it here rather than at each caller is why every loop spelling gets it, including the statement
+        // `loop:` this helper was extracted to serve (#1165 established the fact, #1162 extracted the tail).
+        let range_layouts_before = self.materialized_range_locals.clone();
+        self.loop_break_targets.push(break_target);
+        let mut body_stmts = Vec::new();
+        lower_body(self, loop_scope, &mut body_stmts);
+        self.insert_scope_drops(&mut body_stmts, loop_scope);
+        self.loop_break_targets.pop();
+        self.materialized_range_locals =
+            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
+
+        out.push(bir::Statement {
+            kind: bir::StatementKind::Loop {
+                body: bir::Block {
+                    scope: loop_scope,
+                    stmts: body_stmts,
+                },
+            },
+            span,
+        });
+    }
+
     /// Lower a value-producing `loop:` expression (`ast::Expr::Loop`) into a [`bir::StatementKind::Loop`] plus a
     /// dedicated result local that every `break value` inside the loop's *own* body (not a nested loop's --
     /// enforced by [`Self::loop_break_targets`]) assigns into before exiting. The typechecker resolves this
@@ -188,32 +238,52 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let hir_span_value = hir_span(span);
         let ty = self.resolve_ty(span);
         let loop_scope = self.new_scope(Some(scope), hir_span_value);
-        let range_layouts_before = self.materialized_range_locals.clone();
         let result_local = self.new_temp(ty.clone(), loop_scope, hir_span_value);
 
-        self.loop_break_targets.push(Some(result_local));
-        let mut body_stmts = Vec::new();
-        self.lower_block_into(&loop_expr.body, loop_scope, &mut body_stmts);
-        self.insert_scope_drops(&mut body_stmts, loop_scope);
-        self.loop_break_targets.pop();
-        self.materialized_range_locals =
-            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
-
-        out.push(bir::Statement {
-            kind: bir::StatementKind::Loop {
-                body: bir::Block {
-                    scope: loop_scope,
-                    stmts: body_stmts,
-                },
-            },
-            span: hir_span_value,
-        });
+        self.push_loop(
+            loop_scope,
+            Some(result_local),
+            hir_span_value,
+            out,
+            |builder, loop_scope, body_stmts| builder.lower_block_into(&loop_expr.body, loop_scope, body_stmts),
+        );
         self.temp_operand(result_local, &ty)
+    }
+
+    /// Lower a statement-position `loop: body` into the same [`bir::StatementKind::Loop`] the expression spelling
+    /// produces, minus the result place: the loop runs its body until a `break` exits it and yields nothing.
+    ///
+    /// The two spellings differ in exactly one fact and it is the break target. The typechecker already draws the
+    /// same line — `check_loop_stmt` pushes a `LoopContextKind::Statement` context and rejects `break value` inside
+    /// it with `break_value_requires_loop_expression`, while `check_loop_expr` pushes an `Expression` context and
+    /// unifies the break types (both in `src/frontend/typechecker/check_stmt.rs`). Passing `None` here is that same
+    /// rule read off the typechecker rather than a second one invented in lowering: a well-typed program has no
+    /// value-carrying `break` to route anywhere, and a hand-built AST that has one keeps its value on the `Break`
+    /// statement per [`bir::StatementKind::Break`]'s documented default instead of being silently merged into some
+    /// enclosing loop's result.
+    ///
+    /// Scoping mirrors [`Self::lower_while`], which the typechecker treats identically (`check_while_stmt` opens
+    /// the same `ScopeKind::Block` and pushes the same statement loop context). `continue` needs nothing here at
+    /// all: it lowers to [`bir::StatementKind::Continue`] in [`Self::lower_stmt_into`] and means the innermost
+    /// enclosing loop wherever it appears.
+    pub(super) fn lower_loop_stmt(
+        &mut self,
+        loop_stmt: &ast::LoopStmt,
+        scope: bir::ScopeId,
+        span: HirSourceSpan,
+        out: &mut Vec<bir::Statement>,
+    ) {
+        let loop_scope = self.new_scope(Some(scope), span);
+        self.push_loop(loop_scope, None, span, out, |builder, loop_scope, body_stmts| {
+            builder.lower_block_into(&loop_stmt.body, loop_scope, body_stmts)
+        });
     }
 
     /// Lower `while cond: body` into Body IR's single normalized loop shape: a [`bir::StatementKind::Loop`] whose
     /// body opens with `if not cond: break`, followed by the lowered loop body. A `while let` pattern condition —
     /// not yet modeled by v0 — lowers to an explicit unsupported placeholder instead of the real loop.
+    ///
+    /// The condition is lowered *inside* the loop body, in `loop_scope`, so it is re-evaluated every iteration.
     pub(super) fn lower_while(
         &mut self,
         while_stmt: &ast::WhileStmt,
@@ -227,45 +297,28 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         };
 
         let loop_scope = self.new_scope(Some(scope), span);
-        let range_layouts_before = self.materialized_range_locals.clone();
-        // `while` never produces a value from `break`, so push `None`: a `break` inside this loop's body must
-        // resolve to a plain valueless exit even if this `while` is lexically nested inside a value-producing
-        // `loop:` expression (see `Self::loop_break_targets`'s docs for why the stack exists).
-        self.loop_break_targets.push(None);
-        let mut body_stmts = Vec::new();
-        let cond_operand = self.lower_expr_to_operand(cond_expr, loop_scope, &mut body_stmts);
-        let negated = self.negate_operand(cond_operand, loop_scope, span, &mut body_stmts);
-        let break_scope = self.new_scope(Some(loop_scope), span);
-        let break_block = bir::Block {
-            scope: break_scope,
-            stmts: vec![bir::Statement {
-                kind: bir::StatementKind::Break { value: None },
-                span,
-            }],
-        };
-        body_stmts.push(bir::Statement {
-            kind: bir::StatementKind::If {
-                cond: negated,
-                then_block: break_block,
-                else_block: None,
-            },
-            span,
-        });
-
-        self.lower_block_into(&while_stmt.body, loop_scope, &mut body_stmts);
-        self.insert_scope_drops(&mut body_stmts, loop_scope);
-        self.loop_break_targets.pop();
-        self.materialized_range_locals =
-            intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
-
-        out.push(bir::Statement {
-            kind: bir::StatementKind::Loop {
-                body: bir::Block {
-                    scope: loop_scope,
-                    stmts: body_stmts,
+        // `while` never produces a value from `break`, so the break target is `None` -- see `Self::push_loop`.
+        self.push_loop(loop_scope, None, span, out, |builder, loop_scope, body_stmts| {
+            let cond_operand = builder.lower_expr_to_operand(cond_expr, loop_scope, body_stmts);
+            let negated = builder.negate_operand(cond_operand, loop_scope, span, body_stmts);
+            let break_scope = builder.new_scope(Some(loop_scope), span);
+            let break_block = bir::Block {
+                scope: break_scope,
+                stmts: vec![bir::Statement {
+                    kind: bir::StatementKind::Break { value: None },
+                    span,
+                }],
+            };
+            body_stmts.push(bir::Statement {
+                kind: bir::StatementKind::If {
+                    cond: negated,
+                    then_block: break_block,
+                    else_block: None,
                 },
-            },
-            span,
+                span,
+            });
+
+            builder.lower_block_into(&while_stmt.body, loop_scope, body_stmts);
         });
     }
 
