@@ -63,6 +63,12 @@ impl TypeChecker {
                 ComprehensionClause::For { pattern, iter } => {
                     let iter_ty = self.check_expr(iter);
                     let elem_ty = self.infer_iterator_element_type_from_expr(iter, &iter_ty);
+                    // Record the element type at the pattern's own span, exactly as `check_for_stmt` does for a
+                    // statement `for` (#1125). Body IR reads a clause pattern's type back through
+                    // `TypeCheckInfo::expr_type`, so without this a destructuring clause binds names typed
+                    // `Unknown` even though the element type is fully resolved right here -- and the same
+                    // source destructured by a statement `for` would bind them concretely (#1161).
+                    self.record_expr_type(pattern.span, elem_ty.clone());
                     self.define_for_pattern_bindings(pattern, &elem_ty);
                 }
                 ComprehensionClause::If(condition) => {
@@ -88,6 +94,8 @@ impl TypeChecker {
         let elem_ty = self.infer_iterator_element_type_from_expr(&comp.iter, &iter_ty);
 
         self.symbols.enter_scope(ScopeKind::Block);
+        // See `check_generator_expr` for why the element type is recorded at the pattern's span.
+        self.record_expr_type(comp.pattern.span, elem_ty.clone());
         self.define_for_pattern_bindings(&comp.pattern, &elem_ty);
 
         if let Some(filter) = &comp.filter {
@@ -110,6 +118,8 @@ impl TypeChecker {
         let elem_ty = self.infer_iterator_element_type_from_expr(&comp.iter, &iter_ty);
 
         self.symbols.enter_scope(ScopeKind::Block);
+        // See `check_generator_expr` for why the element type is recorded at the pattern's span.
+        self.record_expr_type(comp.pattern.span, elem_ty.clone());
         self.define_for_pattern_bindings(&comp.pattern, &elem_ty);
 
         if let Some(filter) = &comp.filter {

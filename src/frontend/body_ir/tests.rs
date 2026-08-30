@@ -586,17 +586,24 @@ fn lowers_division_and_assert_as_explicit_panic_facts() -> Result<(), Box<dyn st
 #[test]
 fn unsupported_constructs_lower_to_an_explicit_placeholder_instead_of_panicking()
 -> Result<(), Box<dyn std::error::Error>> {
-    // #1123 supports lazy generator expressions with simple binding clauses. A destructuring clause still needs
-    // a generator-specific binding/poll representation, so it must refuse the complete expression rather than
-    // partly lowering it as an eager list or silently dropping the pattern.
+    // This case was the refusal's own pin until #1161: a destructuring generator clause used to refuse the whole
+    // expression rather than bind its pattern. It now lowers, so the test asserts the positive behaviour instead of
+    // freezing a hole -- the clause's names become real bindings projected out of the polled item, exactly as the
+    // equivalent statement `for` produces them.
     let source = "def pick(x: int) -> int:\n  gen = (left + right for left, right in [(1, 2)])\n  return x\n";
     let module = build(source, &["m", "unsupported"])?;
     let snapshot = module.render_snapshot();
 
     assert!(
-        snapshot.contains("unsupported(generator for-clause pattern is not a simple binding)"),
-        "should record an explicit placeholder rather than panicking: {snapshot}"
+        !snapshot.contains("unsupported("),
+        "a destructuring generator clause must lower rather than refuse: {snapshot}"
     );
+    for binding in ["left", "right"] {
+        assert!(
+            snapshot.contains(&format!(" {binding} : int [binding]")),
+            "the clause must bind `{binding}` with the tuple element's resolved type: {snapshot}"
+        );
+    }
     Ok(())
 }
 
@@ -2861,10 +2868,17 @@ fn a_closure_does_not_capture_names_a_nested_destructuring_pattern_binds() -> Re
     let module = build(source, &["m", "closure_pattern_capture"])?;
     let snapshot = module.render_snapshot();
 
-    assert!(
-        !snapshot.contains(" a : ") && !snapshot.contains(" b : "),
-        "clause-bound names must not become captured locals of the enclosing closure: {snapshot}"
-    );
+    // Asserting the names are absent entirely only held while a destructuring clause was *refused*; #1161 lowers
+    // one, so `a` and `b` now exist as the clause's own bindings. The property this test is actually for is
+    // narrower and unchanged: neither may be captured from an enclosing scope where it does not exist.
+    for binding in [" a : ", " b : "] {
+        for line in snapshot.lines().filter(|line| line.contains(binding)) {
+            assert!(
+                !line.contains("[captured]"),
+                "a clause-bound name must not be captured from the enclosing closure: {line}"
+            );
+        }
+    }
     assert!(
         snapshot.contains("[captured]"),
         "the closure should still capture the one name it really reads from the enclosing scope: {snapshot}"
@@ -7110,5 +7124,54 @@ fn while_let_re_evaluates_its_subject_and_breaks_when_exhausted() -> Result<(), 
         snapshot.contains("break"),
         "an exhausted pattern must break rather than panic: {snapshot}"
     );
+    Ok(())
+}
+
+/// A destructuring comprehension binds the same facts the equivalent statement `for` does.
+///
+/// This is the parity the issue turns on: two spellings of one iteration must not differ in representability, and
+/// the earlier gap was not the binding but its *type* -- the comprehension bound `a` as `?` where the statement
+/// form bound it as `int`.
+#[test]
+fn a_destructuring_comprehension_binds_like_the_equivalent_statement_for() -> Result<(), Box<dyn std::error::Error>> {
+    let comprehension = build(
+        concat!(
+            "def run(pairs: List[Tuple[int, int]]) -> List[int]:\n",
+            "  return [a + b for a, b in pairs]\n",
+        ),
+        &["m", "comp"],
+    )?;
+    let statement_form = build(
+        concat!(
+            "def run(pairs: List[Tuple[int, int]]) -> int:\n",
+            "  mut total = 0\n",
+            "  for a, b in pairs:\n",
+            "    total = total + a + b\n",
+            "  return total\n",
+        ),
+        &["m", "stmt"],
+    )?;
+
+    let comp_snapshot = comprehension.render_snapshot();
+    assert!(
+        !comp_snapshot.contains("unsupported("),
+        "a destructuring comprehension must lower without a placeholder: {comp_snapshot}"
+    );
+
+    for (name, module) in [("comprehension", &comprehension), ("statement for", &statement_form)] {
+        let body = body_named(module, "run")?;
+        for binding in ["a", "b"] {
+            let local = sole_local_named(body, binding)?;
+            let declared = body
+                .locals
+                .get(local.index())
+                .ok_or_else(|| format!("{name}: `{binding}` is missing from the body's locals"))?;
+            assert_eq!(
+                declared.ty,
+                IncanType::Primitive(IncanPrimitiveType::Int),
+                "{name}: `{binding}` must carry the tuple element's resolved type, not `?`",
+            );
+        }
+    }
     Ok(())
 }
