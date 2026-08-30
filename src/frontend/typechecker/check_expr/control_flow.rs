@@ -416,6 +416,6 @@ impl TypeChecker {
                 .push(errors::type_mismatch("int", &end_ty.to_string(), end.span));
         }
 
-        ResolvedType::Generic("Range".to_string(), vec![ResolvedType::Int])
+        ResolvedType::Generic(surface_types::RANGE_TYPE_NAME.to_string(), vec![ResolvedType::Int])
     }
 }

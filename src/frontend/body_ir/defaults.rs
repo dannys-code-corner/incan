@@ -30,6 +30,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let next_scope = self.next_scope;
         let saved_remaining_reads = self.remaining_reads.clone();
         let saved_moved_out = self.moved_out.clone();
+        let saved_materialized_range_locals = self.materialized_range_locals.clone();
         let saved_bindings = std::mem::take(&mut self.bindings);
         let saved_external_locals = std::mem::take(&mut self.external_locals);
         let mut stmts = Vec::new();
@@ -83,9 +84,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             self.next_scope = next_scope;
             self.remaining_reads = saved_remaining_reads;
             self.moved_out = saved_moved_out;
+            self.materialized_range_locals = saved_materialized_range_locals;
             return bir::CallableParamDefault::Unsupported { span, description };
         }
 
+        self.materialized_range_locals = saved_materialized_range_locals;
         bir::CallableParamDefault::Source(bir::DefaultComputation {
             span: hir_span(default_expr.span),
             stmts,

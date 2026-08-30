@@ -1,5 +1,6 @@
 //! Lowering for `await` and `race` suspension points.
 
+use super::control_flow::intersect_range_layouts;
 use super::reads::*;
 use super::*;
 
@@ -60,8 +61,14 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
         self.record_runtime_requirement(AbiV0RuntimeRequirement::AsyncRuntime);
 
+        let range_layouts_before_arms = self.materialized_range_locals.clone();
+        let mut range_layouts_after_arms = Vec::with_capacity(race.arms.len());
         let mut arms = Vec::with_capacity(race.arms.len());
         for (arm, awaitable) in race.arms.iter().zip(awaitables) {
+            // A race resumes exactly one arm. Each arm therefore begins from the same predecessor provenance;
+            // otherwise a source-local range constructed in a prior textual arm could authorize a projection in
+            // a later arm that can execute instead.
+            self.materialized_range_locals = range_layouts_before_arms.clone();
             let arm_scope = self.new_scope(Some(scope), hir_span_value);
             // The arm binds the *awaited output* type, which only the typechecker computes: `Awaitable[T]` binds
             // `T`, `JoinHandle[T]` binds `Result[T, TaskJoinError]`. The awaitable's own type would be wrong.
@@ -98,6 +105,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             // that arm, exactly like a closure body's. Code after the race, and each later arm, must keep resolving
             // every name to whatever it meant outside.
             self.bindings = enclosing_bindings;
+            range_layouts_after_arms.push(self.materialized_range_locals.clone());
 
             arms.push(bir::RaceArm {
                 awaitable,
@@ -109,6 +117,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 result,
             });
         }
+        // Code after the race follows exactly one selected arm. A range layout is usable only if it survives
+        // every possible winner; an empty arm set conservatively carries no constructed-layout fact.
+        self.materialized_range_locals = intersect_range_layouts(range_layouts_after_arms);
 
         let ty = self.resolve_ty(span);
         let destination = self.new_temp(ty.clone(), scope, hir_span_value);

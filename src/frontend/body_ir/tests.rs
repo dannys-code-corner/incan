@@ -1274,26 +1274,30 @@ fn trait_method_default_uses_a_deferred_source_computation() -> Result<(), Box<d
 }
 
 #[test]
-fn unrepresentable_default_is_a_parameter_refusal_at_its_own_span() -> Result<(), Box<dyn std::error::Error>> {
+fn byte_string_default_is_a_deferred_body_ir_constant_at_its_own_span() -> Result<(), Box<dyn std::error::Error>> {
     let source = "def keep(payload: bytes = b\"x\") -> bytes:\n  return payload\n";
     let module = build(source, &["m", "unsupported_default"])?;
     let keep = module.bodies.first().ok_or("expected the keep function Body IR")?;
     let payload = keep.params.first().ok_or("expected the payload parameter")?;
 
-    let bir::CallableParamDefault::Unsupported { span, description } = &payload.default else {
-        return Err("bytes defaults must refuse instead of pretending to be executable".into());
+    let bir::CallableParamDefault::Source(default) = &payload.default else {
+        return Err("bytes defaults must retain their representable Body-IR constant".into());
     };
-    assert_eq!(description, "bytes literal");
     let default_start = source.find("b\"x\"").ok_or("missing bytes default spelling")?;
     assert_eq!(
-        *span,
+        default.span,
         HirSourceSpan::new(default_start, default_start + "b\"x\"".len()),
-        "the refusal must retain the unsupported default expression's exact source span"
+        "the deferred computation must retain the default expression's exact source span"
+    );
+    assert!(default.stmts.is_empty());
+    assert_eq!(
+        default.result,
+        bir::Operand::Constant(bir::Constant::Bytes(b"x".to_vec()))
     );
     assert_eq!(
         keep.locals.len(),
         1,
-        "refused speculative lowering must not leak a default temporary or external local: {keep:?}"
+        "a literal default must not allocate a speculative temporary or external local: {keep:?}"
     );
     assert!(
         !keep
@@ -1301,7 +1305,7 @@ fn unrepresentable_default_is_a_parameter_refusal_at_its_own_span() -> Result<()
             .stmts
             .iter()
             .any(|statement| matches!(&statement.kind, bir::StatementKind::Unsupported { .. })),
-        "the refusal belongs to the parameter contract, not the normal function body: {keep:?}"
+        "the deferred default belongs to parameter metadata, not the normal function body: {keep:?}"
     );
 
     Ok(())
@@ -1446,10 +1450,10 @@ fn invalid_default_is_rejected_before_body_ir_is_built() -> Result<(), Box<dyn s
 
 #[test]
 fn refused_default_restores_ownership_state_before_local_ids_are_reused() -> Result<(), Box<dyn std::error::Error>> {
-    // Lowering the partial moves one of its synthesized forwarding locals before the bytes literal refuses.
+    // Lowering the partial moves one of its synthesized forwarding locals before the unsupported binary refuses.
     // The transaction must discard that move before `second` reuses the local id in the normal body, or the
     // required root-scope drop would silently disappear.
-    let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + b\"x\") -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
+    let source = "def route(method: str) -> str:\n  return method\n\ndef choose(value: str = (partial route(method=\"GET\")) + missing) -> str:\n  first = \"first\"\n  second = \"second\"\n  return first\n";
     let (module, _diagnostics) = build_after_expected_typecheck_errors(source, &["m", "default_ownership_rollback"])?;
     let choose = module
         .bodies
@@ -1457,10 +1461,13 @@ fn refused_default_restores_ownership_state_before_local_ids_are_reused() -> Res
         .find(|body| body.name == "choose")
         .ok_or("expected the choose Body IR")?;
     let value = choose.params.first().ok_or("expected choose's value parameter")?;
-    assert!(matches!(
-        &value.default,
-        bir::CallableParamDefault::Unsupported { description, .. } if description == "bytes literal"
-    ));
+    let bir::CallableParamDefault::Unsupported { description, .. } = &value.default else {
+        return Err(format!("the unsupported default must remain a refusal: {:?}", value.default).into());
+    };
+    assert!(
+        description.contains("binary operator Add"),
+        "the refusal must name the unsupported default operation: {description}"
+    );
     let second = choose
         .locals
         .iter()
@@ -2546,10 +2553,9 @@ fn lowers_a_nested_tuple_pattern_with_field_projected_bindings() -> Result<(), B
 
 #[test]
 fn byte_string_literal_pattern_lowers_to_an_explicit_placeholder() -> Result<(), Box<dyn std::error::Error>> {
-    // `bir::Constant` has no byte-string variant (mirrors `lower_literal`'s own gap for a plain literal
-    // *expression*), so a match with an unrepresentable arm bails the whole expression to `Unsupported` before
-    // lowering the scrutinee, rather than silently mis-rendering the pattern as a catch-all wildcard the way
-    // the existing Rust-emission backend's own `lower_pattern` does.
+    // `bir::Constant::Bytes` represents a byte value, but the closed `bir::Pattern` vocabulary does not yet model
+    // byte-pattern matching semantics. Refuse before lowering the scrutinee rather than silently mis-rendering
+    // the pattern as a catch-all wildcard the existing Rust-emission backend's own `lower_pattern` would emit.
     let source = concat!(
         "def check(data: bytes) -> str:\n",
         "  match data:\n",
@@ -2610,6 +2616,17 @@ fn local_for_binding(snapshot: &str, name: &str) -> Option<String> {
         let (id, tail) = line.trim().strip_prefix("local ")?.split_once(' ')?;
         tail.starts_with(&format!("{name} : ")).then(|| format!("_{id}"))
     })
+}
+
+/// Find the last binding with `name`, used where a later same-name assignment shadows the earlier value.
+fn last_local_for_binding(snapshot: &str, name: &str) -> Option<String> {
+    snapshot
+        .lines()
+        .filter_map(|line| {
+            let (id, tail) = line.trim().strip_prefix("local ")?.split_once(' ')?;
+            tail.starts_with(&format!("{name} : ")).then(|| format!("_{id}"))
+        })
+        .next_back()
 }
 
 #[test]
@@ -5447,7 +5464,11 @@ fn a_pattern_assertion_binding_is_a_declared_local_read_by_the_statements_after_
     let bir::Pattern::Enum { variant, fields, .. } = pattern else {
         return Err(format!("expected `Some(..)` to lower to a constructor pattern: {pattern:?}").into());
     };
-    assert_eq!(variant, "Some");
+    assert_eq!(
+        variant,
+        constructors::as_str(constructors::ConstructorId::Some),
+        "the assertion must lower `Some(..)` to the registry's own constructor spelling",
+    );
     let [bir::Pattern::Var(binding)] = fields.as_slice() else {
         return Err(format!("expected one `PatternBinding` payload: {fields:?}").into());
     };
@@ -5968,6 +5989,312 @@ fn an_unresolved_raises_error_type_refuses_by_naming_the_assert_form() -> Result
         !snapshot.contains("assert pattern/raises form"),
         "the shared label that could not distinguish the two forms is gone: {snapshot}"
     );
+    Ok(())
+}
+
+// ---- Bytes literals and range values (#1165) ----
+
+#[test]
+fn bytes_literals_lower_to_their_own_constant_rather_than_a_string() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def send(payload: bytes) -> int:\n",
+        "  return 1\n",
+        "\n",
+        "def keep() -> bytes:\n",
+        "  greeting = b\"hi\"\n",
+        "  return greeting\n",
+        "\n",
+        "def run() -> int:\n",
+        "  return send(b\"\\x00\\xff\")\n",
+    );
+    let module = build(source, &["m", "bytes_literal"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a byte-string literal must lower to a real constant: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("const(b\"\\x68\\x69\")"),
+        "a bound byte-string literal must render as its own bytes constant: {snapshot}"
+    );
+    assert!(
+        !snapshot.contains("const(\"hi\")"),
+        "a byte-string literal must never be represented as the string constant it is not: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("call fn:send(const(b\"\\x00\\xff\"))"),
+        "a byte-string literal must survive as a constant in argument position: {snapshot}"
+    );
+    assert!(
+        snapshot.contains(" greeting : bytes [binding]"),
+        "the bound local must keep its checked `bytes` type: {snapshot}"
+    );
+
+    // The owned-buffer representation is what makes this read a move rather than a copy: `bytes` reports
+    // `AbiV0Ownership::Owned`, so its last read transfers ownership exactly as a `str` local's would.
+    let greeting = local_for_binding(&snapshot, "greeting").ok_or("expected a local for `greeting`")?;
+    assert!(
+        snapshot.contains(&format!("return move({greeting}, last_use)")),
+        "the last read of an owned bytes local must be a move: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_range_bound_to_a_local_lowers_to_a_range_value() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def build_ranges() -> int:\n",
+        "  half_open = 0..10\n",
+        "  closed = 1..=5\n",
+        "  return 0\n",
+    );
+    let module = build(source, &["m", "range_value"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        !snapshot.contains("unsupported("),
+        "a range in value position must lower to a real operand: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("range[const(0), const(10), const(1), const(false)]"),
+        "an exclusive range must carry its bounds, unit step, and `false` inclusivity: {snapshot}"
+    );
+    assert!(
+        snapshot.contains("range[const(1), const(5), const(1), const(true)]"),
+        "an inclusive range must differ from the exclusive one only in its inclusivity operand: {snapshot}"
+    );
+    assert!(
+        snapshot.contains(" half_open : Range[int] [binding]"),
+        "the bound local must keep the checked range type: {snapshot}"
+    );
+    Ok(())
+}
+
+/// The facts two range spellings must agree on, read out of a lowered body's single `Loop` statement.
+///
+/// Deliberately not a snapshot comparison: a bound range reads its bounds off a value while an inline header
+/// lowers them from the AST, so the two bodies cannot be textually identical. What must match is how iteration
+/// proceeds -- counting rather than polling, one conditional exit, an item bound from the index by copy, and one
+/// arithmetic advance per iteration.
+#[derive(Debug, PartialEq)]
+struct RangeIterationFacts {
+    /// Whether any iteration in the body is an iterator poll rather than a counting step.
+    polls_an_iterator: bool,
+    /// How many `if <cond>: break` exits guard the loop.
+    conditional_breaks: usize,
+    /// Declared type of the local the loop pattern binds.
+    item_binding_ty: String,
+    /// Ownership fact the per-iteration item write reads the index with.
+    item_read_fact: String,
+    /// Operator the index is advanced with at the end of each iteration.
+    advance_op: String,
+}
+
+/// Extract [`RangeIterationFacts`] from the named body's single loop, over the binding `item_name`.
+fn range_iteration_facts(
+    module: &bir::BodyIrModule,
+    body_name: &str,
+    item_name: &str,
+) -> Result<RangeIterationFacts, Box<dyn std::error::Error>> {
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == body_name)
+        .ok_or("expected the loop body")?;
+    let item_local = body
+        .locals
+        .iter()
+        .find(|local| local.name.as_deref() == Some(item_name))
+        .ok_or("expected a local for the loop binding")?;
+    let loop_stmts = body
+        .block
+        .stmts
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            bir::StatementKind::Loop { body } => Some(&body.stmts),
+            _ => None,
+        })
+        .ok_or("expected a normalized loop")?;
+
+    let polls_an_iterator = loop_stmts
+        .iter()
+        .any(|stmt| matches!(&stmt.kind, bir::StatementKind::IterNext { .. }));
+    let conditional_breaks = loop_stmts
+        .iter()
+        .filter(|stmt| match &stmt.kind {
+            bir::StatementKind::If { then_block, .. } => {
+                matches!(then_block.stmts.as_slice(), [only] if matches!(&only.kind, bir::StatementKind::Break { .. }))
+            }
+            _ => false,
+        })
+        .count();
+    let item_read_fact = loop_stmts
+        .iter()
+        .find_map(|stmt| match &stmt.kind {
+            bir::StatementKind::Assign {
+                place,
+                rvalue: bir::Rvalue::Use(bir::Operand::Place(read)),
+            } if place.local == item_local.id && place.projection.is_empty() => Some(format!("{:?}", read.fact)),
+            _ => None,
+        })
+        .ok_or("expected the per-iteration item write")?;
+    let advance = loop_stmts
+        .get(loop_stmts.len().wrapping_sub(2))
+        .ok_or("expected an index advance before the loop ends")?;
+    let bir::StatementKind::Assign {
+        rvalue: bir::Rvalue::BinaryOp(advance_op, _, _),
+        ..
+    } = &advance.kind
+    else {
+        return Err("the statement before the index write must compute the advanced index".into());
+    };
+
+    Ok(RangeIterationFacts {
+        polls_an_iterator,
+        conditional_breaks,
+        item_binding_ty: item_local.ty.to_string(),
+        item_read_fact,
+        advance_op: format!("{advance_op:?}"),
+    })
+}
+
+#[test]
+fn a_bound_range_iterates_with_the_same_facts_as_the_inline_range() -> Result<(), Box<dyn std::error::Error>> {
+    let bound_source = concat!(
+        "def total() -> int:\n",
+        "  r = 0..10\n",
+        "  mut acc = 0\n",
+        "  for i in r:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let inline_source = concat!(
+        "def total() -> int:\n",
+        "  mut acc = 0\n",
+        "  for i in 0..10:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let bound = build(bound_source, &["m", "bound_range_for"])?;
+    let inline = build(inline_source, &["m", "inline_range_for"])?;
+
+    assert!(
+        !bound.render_snapshot().contains("unsupported("),
+        "iterating a bound range must not fall back to a placeholder: {}",
+        bound.render_snapshot()
+    );
+    let bound_facts = range_iteration_facts(&bound, "total", "i")?;
+    assert!(
+        !bound_facts.polls_an_iterator,
+        "a bound range must keep the counting-loop shape rather than degrading to an iterator poll: {bound_facts:?}"
+    );
+    assert_eq!(
+        bound_facts,
+        range_iteration_facts(&inline, "total", "i")?,
+        "a bound range must iterate with the same facts as the inline range it was bound from"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_bound_range_loop_drives_itself_from_the_range_value_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def total() -> int:\n",
+        "  mut r = 0..5\n",
+        "  r = 1..=5\n",
+        "  mut acc = 0\n",
+        "  for i in r:\n",
+        "    acc = acc + i\n",
+        "  return acc\n",
+    );
+    let module = build(source, &["m", "bound_range_fields"])?;
+    let snapshot = module.render_snapshot();
+    let range = last_local_for_binding(&snapshot, "r").ok_or("expected a local for `r`")?;
+
+    for field in bir::AggregateKind::RANGE_FIELDS {
+        assert!(
+            snapshot.contains(&format!("copy({range}.{field})")),
+            "the loop must read the range's own `{field}` field rather than re-deriving it: {snapshot}"
+        );
+    }
+    assert!(
+        !snapshot.contains("iter_next("),
+        "a bound range must not be polled as a general iterable: {snapshot}"
+    );
+    for operator in [">", ">=", "not", " and ", " or "] {
+        assert!(
+            snapshot.contains(operator),
+            "the loop must derive its stop condition from the bound value's dynamic inclusivity: {snapshot}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn a_range_returned_by_a_local_callable_refuses_before_field_projection() -> Result<(), Box<dyn std::error::Error>> {
+    let source = concat!(
+        "def identity[T](value: T) -> T:\n",
+        "  return value\n",
+        "\n",
+        "def total() -> int:\n",
+        "  values = identity(0..4)\n",
+        "  for value in values:\n",
+        "    return value\n",
+        "  return 0\n",
+    );
+    let module = build(source, &["m", "opaque_range_parameter"])?;
+    let snapshot = module.render_snapshot();
+
+    assert!(
+        snapshot.contains("unsupported(range value without a source-local Body IR range aggregate)"),
+        "a type spelling alone must not invent a Range aggregate layout: {snapshot}"
+    );
+    for field in bir::AggregateKind::RANGE_FIELDS {
+        assert!(
+            !snapshot.contains(&format!("values.{field}")),
+            "a callable result with no local range aggregate must never acquire a synthetic `{field}` projection: {snapshot}"
+        );
+    }
+    Ok(())
+}
+
+/// Deferred or zero-or-more expression scopes cannot make an enclosing call result into a source-local range
+/// aggregate. Closures and comprehension elements are expression-only in the current grammar, so assignments cannot
+/// occur in those bodies; these source fixtures instead pin the reachable boundary: capturing or yielding the opaque
+/// `Range[int]` value does not authorize later range-field projections from the enclosing binding.
+#[test]
+fn nested_or_deferred_range_uses_do_not_authorize_an_outer_range_projection() -> Result<(), Box<dyn std::error::Error>>
+{
+    let prefix = concat!(
+        "def identity[T](value: T) -> T:\n",
+        "  return value\n",
+        "\n",
+        "def total() -> int:\n",
+        "  mut r = identity(0..4)\n",
+    );
+    let suffix = concat!("  for value in r:\n", "    return value\n", "  return 0\n",);
+    let nested_bodies = [
+        "  unused = () => r\n",
+        "  unused = (r for ignored in [])\n",
+        "  unused = [r for ignored in []]\n",
+    ];
+
+    for (index, nested_body) in nested_bodies.iter().enumerate() {
+        let source = format!("{prefix}{nested_body}{suffix}");
+        let module = build(&source, &["m", "nested_range_provenance"])?;
+        let snapshot = module.render_snapshot();
+        assert!(
+            snapshot.contains("unsupported(range value without a source-local Body IR range aggregate)"),
+            "nested fixture {index} must leave the outer call result unproven: {snapshot}"
+        );
+        for field in bir::AggregateKind::RANGE_FIELDS {
+            assert!(
+                !snapshot.contains(&format!("r.{field}")),
+                "nested fixture {index} must not project a range field from the outer call result: {snapshot}"
+            );
+        }
+    }
     Ok(())
 }
 

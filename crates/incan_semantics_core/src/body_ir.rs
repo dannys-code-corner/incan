@@ -662,18 +662,46 @@ pub enum Constant {
     Float(String),
     Bool(bool),
     Str(String),
+    /// A `b"..."` byte-string literal, represented as an **owned buffer** rather than a borrowed slice.
+    ///
+    /// This is deliberately its own variant instead of a reuse of [`Self::Str`]. `bytes` and `str` are distinct
+    /// source types with distinct equality, and the compiler-owned string helpers ([`HelperOp::StrConcat`] and its
+    /// siblings) assume their operands are text; a byte string arriving as a string constant would be handed to
+    /// them silently.
+    ///
+    /// The owned-versus-borrowed choice is stated rather than left implicit because it decides the
+    /// [`OwnershipFact`] every later read of a `bytes` value gets. `IncanType::Primitive(IncanPrimitiveType::Bytes)`
+    /// reports [`crate::AbiV0Ownership::Owned`], so re-reading a `bytes` local must select
+    /// [`OwnershipFact::Clone`] or [`OwnershipFact::Move`] — exactly what [`Self::Str`] already gets, and the
+    /// opposite of what a borrowed-slice representation would have claimed. Holding the literal as an owned buffer
+    /// keeps the constant and its type's own ownership fact agreeing.
+    ///
+    /// Like [`Self::Str`], this records no runtime requirement of its own: it is an immutable literal buffer, not a
+    /// helper-constructed value. Operations *on* bytes keep whatever refusal they already had.
+    Bytes(Vec<u8>),
     Unit,
     None,
 }
 
 impl Constant {
     /// Render a deterministic maintainer-facing spelling for this constant.
+    ///
+    /// A byte string renders every byte as a `\xNN` escape rather than as text, so a snapshot can never read a
+    /// `bytes` constant as the `str` constant it is not.
     fn render_snapshot(&self) -> String {
         match self {
             Self::Int(v) => format!("const({v})"),
             Self::Float(v) => format!("const({v})"),
             Self::Bool(v) => format!("const({v})"),
             Self::Str(v) => format!("const({v:?})"),
+            Self::Bytes(bytes) => {
+                let mut rendered = String::from("const(b\"");
+                for byte in bytes {
+                    let _ = write!(&mut rendered, "\\x{byte:02x}");
+                }
+                rendered.push_str("\")");
+                rendered
+            }
             Self::Unit => "const(())".to_string(),
             Self::None => "const(none)".to_string(),
         }
@@ -1710,16 +1738,56 @@ pub enum AggregateKind {
     /// `{v, ...}` set literal. Operands are the set's elements, one per entry -- the same flat shape as
     /// [`AggregateKind::List`].
     Set,
+    /// A `start..end` / `start..=end` **range value**: the same value a `for` header consumes, but usable in any
+    /// operand position.
+    ///
+    /// A range is an aggregate rather than a [`Constant`] form or a helper-constructed value, for two reasons.
+    /// Its bounds are arbitrary expressions (`lo..hi` is as legal as `0..10`), which a constant cannot hold; and
+    /// it needs no runtime service to exist -- four scalars laid out side by side, allocating nothing and calling
+    /// nothing -- so modelling it as a [`Callee::Helper`] call would invent a runtime dependency that the `for`
+    /// header's own normalization proves is not there. That is also why range construction records no
+    /// [`crate::AbiV0RuntimeRequirement`], the same as [`Self::Tuple`] and unlike [`Self::List`]/[`Self::Set`].
+    ///
+    /// Operands appear in exactly [`Self::RANGE_FIELDS`] order, and a consumer reading one back projects it by
+    /// that name (`PlaceElem::Field("start")`). Inclusivity is an *operand*, not a static property of this
+    /// variant: `..` versus `..=` is fixed per construction site, but the site that constructs a range and the
+    /// loop that later iterates it need not be the same statement, so a consumer holding only the value must be
+    /// able to read which one it is instead of having to prove where it came from.
+    Range,
     Constructor(ConstructorTarget),
 }
 
 impl AggregateKind {
+    /// Declared name of an [`Self::Range`] aggregate's lower bound.
+    pub const RANGE_FIELD_START: &'static str = "start";
+    /// Declared name of an [`Self::Range`] aggregate's upper bound, whose own inclusivity is
+    /// [`Self::RANGE_FIELD_INCLUSIVE`].
+    pub const RANGE_FIELD_END: &'static str = "end";
+    /// Declared name of an [`Self::Range`] aggregate's per-iteration increment.
+    ///
+    /// The surface has no step spelling -- `start..end` and `start..=end` are the only two forms the parser
+    /// produces -- so this is always the unit step today. It is carried as a real operand rather than left
+    /// implicit because a consumer otherwise has to *assume* the increment, and because it is the same `1` the
+    /// `for` header's normalization already adds to its index each iteration.
+    pub const RANGE_FIELD_STEP: &'static str = "step";
+    /// Declared name of an [`Self::Range`] aggregate's inclusivity flag: `true` for `start..=end`, `false` for
+    /// `start..end`.
+    pub const RANGE_FIELD_INCLUSIVE: &'static str = "inclusive";
+    /// Every [`Self::Range`] field name, in the order its operands appear in the aggregate.
+    pub const RANGE_FIELDS: [&'static str; 4] = [
+        Self::RANGE_FIELD_START,
+        Self::RANGE_FIELD_END,
+        Self::RANGE_FIELD_STEP,
+        Self::RANGE_FIELD_INCLUSIVE,
+    ];
+
     /// Compact snapshot spelling for this aggregate kind.
     fn as_str(&self) -> String {
         match self {
             Self::Tuple => "tuple".to_string(),
             Self::List => "list".to_string(),
             Self::Set => "set".to_string(),
+            Self::Range => "range".to_string(),
             Self::Constructor(target) => format!("constructor({}){}", target.name, target.binding.render_snapshot()),
         }
     }
@@ -3780,5 +3848,56 @@ mod tests {
             },
         );
         assert_eq!(body.render_snapshot(), body.render_snapshot());
+    }
+
+    #[test]
+    fn bytes_constants_and_range_aggregates_render_distinctly() {
+        let mut body = sample_body();
+        body.block.stmts.insert(
+            0,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Use(Operand::Constant(Constant::Bytes(b"hi".to_vec()))),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        body.block.stmts.insert(
+            1,
+            Statement {
+                kind: StatementKind::Assign {
+                    place: Place::from_local(LocalId(2)),
+                    rvalue: Rvalue::Aggregate(
+                        AggregateKind::Range,
+                        vec![
+                            ArgumentElement::One(Operand::Constant(Constant::Int(0))),
+                            ArgumentElement::One(Operand::Constant(Constant::Int(10))),
+                            ArgumentElement::One(Operand::Constant(Constant::Int(1))),
+                            ArgumentElement::One(Operand::Constant(Constant::Bool(true))),
+                        ],
+                    ),
+                },
+                span: HirSourceSpan::new(0, 1),
+            },
+        );
+        let snapshot = body.render_snapshot();
+
+        // A byte string escapes every byte, so it can never be mistaken for the `str` constant with the same
+        // contents -- which is exactly the conflation `Constant::Bytes` exists to prevent.
+        assert!(
+            snapshot.contains("const(b\"\\x68\\x69\")"),
+            "bytes constant: {snapshot}"
+        );
+        assert_ne!(
+            Constant::Bytes(b"hi".to_vec()).render_snapshot(),
+            Constant::Str("hi".to_string()).render_snapshot(),
+            "a bytes constant and a string constant with the same contents must not render alike"
+        );
+        assert!(
+            snapshot.contains("range[const(0), const(10), const(1), const(true)]"),
+            "range aggregate in RANGE_FIELDS order: {snapshot}"
+        );
+        assert_eq!(AggregateKind::RANGE_FIELDS.len(), 4);
     }
 }

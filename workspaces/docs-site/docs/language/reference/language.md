@@ -49,6 +49,7 @@ Reservation describes how a spelling is reserved: `Hard` keywords are always res
 | Def | `def` | `fn` | Hard | - | Definition | Statement | RFC 000 | 0.1 | Stable |
 | Async | `async` |  | Soft | `std.async` | Definition | Modifier | RFC 000 | 0.1 | Stable |
 | Await | `await` |  | Soft | `std.async` | Definition | Expression | RFC 000 | 0.1 | Stable |
+| Capability | `capability` |  | Contextual | - | Definition | Statement | RFC 104 | 0.6 | Draft |
 | Class | `class` |  | Hard | - | Definition | Statement | RFC 000 | 0.1 | Stable |
 | Model | `model` |  | Hard | - | Definition | Statement | RFC 000 | 0.1 | Stable |
 | Trait | `trait` |  | Hard | - | Definition | Statement | RFC 000 | 0.1 | Stable |
@@ -368,6 +369,7 @@ Class, model, trait, enum, newtype, field, alias, and module decorators remain l
 | ClassMethod | `@classmethod` |  | Mark a method as a class method (no implicit self receiver). | RFC 000 | 0.2 | Stable |
 | Requires | `@requires` |  | Declare required fields for trait default methods. | RFC 000 | 0.1 | Stable |
 | Describe | `@std.registry.describe` |  | Attach a compiler-checked typed registry descriptor to a declaration. | RFC 113 | 0.5 | Stable |
+| ProviderOperation | `@provider_operation` |  | Attach one checked RFC 104 capability requirement to a provider function. | RFC 104 | 0.6 | Stable |
 
 ## Derives
 

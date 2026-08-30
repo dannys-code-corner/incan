@@ -527,6 +527,47 @@ fn case_supported_call_spreads_reach_body_ir() -> ComparisonOutcome {
 }
 
 // ============================================================================
+// Cases 15 and 16 — Supported language contract: bytes literals and range values reach Body IR (#1165)
+// ============================================================================
+
+// A byte-string literal is ordinary accepted source with its own type, but `lower_literal` had no `bir::Constant`
+// for it, so every `b"..."` reached a placeholder. The row is about representation, not bytes operations: those
+// keep whatever refusal they already had.
+const CASE_15_SRC: &str = r#"
+def send(payload: bytes) -> int:
+    return 1
+
+def main() -> None:
+    greeting = b"hi"
+    println(send(greeting))
+"#;
+
+fn case_supported_bytes_literal_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_15_SRC,
+        "a byte-string literal to lower to its own bytes constant rather than a placeholder",
+    )
+}
+
+// A range is a value, not only a `for` header. `r = 0..10` has always typechecked, so refusing it in lowering left
+// Body IR non-total over accepted programs; binding one and then iterating it exercises both halves.
+const CASE_16_SRC: &str = r#"
+def main() -> None:
+    r = 0..10
+    mut total = 0
+    for i in r:
+        total = total + i
+    println(total)
+"#;
+
+fn case_supported_range_value_reaches_body_ir() -> ComparisonOutcome {
+    outcome_from_body_ir(
+        CASE_16_SRC,
+        "a range bound to a local to lower to a real range value that the loop then iterates",
+    )
+}
+
+// ============================================================================
 // Case 6 — Diagnostic behavior: dead code after `return` warns (migrated from a silent accept)
 // ============================================================================
 
@@ -1139,6 +1180,28 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_3_SRC,
             evaluate: Some(case_supported_string_membership_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0015",
+            title: "Byte-string literals are representable in Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1165; src/frontend/body_ir/tests.rs::bytes_literals_lower_to_their_own_constant_rather_than_a_string",
+            disposition: Disposition::Preserved,
+            source: CASE_15_SRC,
+            evaluate: Some(case_supported_bytes_literal_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0016",
+            title: "A range bound to a local is representable in Body IR and iterates from that value",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1165; src/frontend/body_ir/tests.rs::a_bound_range_iterates_with_the_same_facts_as_the_inline_range",
+            disposition: Disposition::Preserved,
+            source: CASE_16_SRC,
+            evaluate: Some(case_supported_range_value_reaches_body_ir),
             replacement_execution: None,
         },
         ParityCase {

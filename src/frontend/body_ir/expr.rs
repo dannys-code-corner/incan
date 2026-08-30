@@ -33,10 +33,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
                 bir::Operand::place(place, fact, last_use)
             }
-            ast::Expr::Literal(lit) => match lower_literal(lit) {
-                Some(constant) => bir::Operand::Constant(constant),
-                None => self.unsupported_operand("bytes literal".to_string(), scope, span, out),
-            },
+            ast::Expr::Literal(lit) => bir::Operand::Constant(lower_literal(lit)),
             ast::Expr::Paren(inner) => self.lower_expr_to_operand(inner, scope, out),
             ast::Expr::Field(base, name) => {
                 if let Some(target) = self.local_fieldless_enum_variant_target(base, name) {
@@ -99,6 +96,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             ast::Expr::Partial(partial) => self.lower_partial(partial, expr.span, scope, out),
             ast::Expr::Match(subject, arms) => self.lower_match(subject, arms, expr.span, scope, out),
             ast::Expr::Surface(surface) => self.lower_surface_expr(surface, expr.span, scope, out),
+            ast::Expr::Range { start, end, inclusive } => {
+                self.lower_range_value(start, end, *inclusive, expr.span, scope, out)
+            }
             other => self.unsupported_operand(unsupported_expr_label(other), scope, span, out),
         }
     }

@@ -87,6 +87,46 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         )
     }
 
+    /// Lower `start..end` / `start..=end` used as a **value** into a [`bir::AggregateKind::Range`] aggregate.
+    ///
+    /// A range is a value, not only a loop header: `r = 0..10` typechecks, so Body IR has to be able to hold one
+    /// wherever an operand goes. The four operands are laid down in [`bir::AggregateKind::RANGE_FIELDS`] order --
+    /// the two bounds first, in written source order because both are arbitrary expressions whose evaluation is
+    /// observable, then the step and the inclusivity flag, neither of which the surface can spell as an
+    /// expression. See that variant's own docs for why a range is an aggregate rather than a constant form or a
+    /// helper-constructed value, and for why inclusivity rides as an operand instead of as a static property of
+    /// the kind.
+    ///
+    /// No runtime requirement is recorded: four scalars side by side allocate nothing and call nothing, which is
+    /// [`bir::AggregateKind::Tuple`]'s treatment rather than [`Self::lower_list_literal`]'s.
+    pub(super) fn lower_range_value(
+        &mut self,
+        start: &ast::Spanned<ast::Expr>,
+        end: &ast::Spanned<ast::Expr>,
+        inclusive: bool,
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let hir_span_value = hir_span(span);
+        let start_operand = self.lower_expr_to_operand(start, scope, out);
+        let end_operand = self.lower_expr_to_operand(end, scope, out);
+        let elements = fixed_elements(vec![
+            start_operand,
+            end_operand,
+            bir::Operand::Constant(bir::Constant::Int(RANGE_UNIT_STEP)),
+            bir::Operand::Constant(bir::Constant::Bool(inclusive)),
+        ]);
+        let ty = self.resolve_ty(span);
+        self.push_assign_temp(
+            bir::Rvalue::Aggregate(bir::AggregateKind::Range, elements),
+            ty,
+            scope,
+            hir_span_value,
+            out,
+        )
+    }
+
     /// Lower a dict literal `{k: v, ...}` to a [`bir::Rvalue::Dict`], one entry per source entry, in written order.
     ///
     /// Keys and values are lowered in written order, key before value, because both are arbitrary expressions
