@@ -144,7 +144,7 @@ pub(super) fn lower_literal(lit: &ast::Literal) -> bir::Constant {
 /// helper with a local provenance check before reading [`bir::AggregateKind::Range`] fields. The `range()` builtin
 /// is deliberately *not* this type: it resolves to a plain `Named("Range")` iterator
 /// (`src/frontend/symbols.rs`) and keeps its existing iteration path.
-pub(super) const RANGE_TYPE_BASE: &str = "Range";
+pub(super) const RANGE_TYPE_BASE: &str = incan_core::lang::surface::types::RANGE_TYPE_NAME;
 /// The per-iteration increment of every range the surface can spell.
 ///
 /// There is no step spelling in the language (`start..end` and `start..=end` are the only forms the parser

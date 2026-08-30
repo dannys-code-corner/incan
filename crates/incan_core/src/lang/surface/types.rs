@@ -360,6 +360,17 @@ pub const SURFACE_TYPES: &[SurfaceTypeInfo] = &[
 /// literal string.
 pub const TASK_JOIN_ERROR_TYPE_NAME: &str = "TaskJoinError";
 
+/// Canonical Incan name of the checked range type (`"Range"`).
+///
+/// This name is compiler-synthesized rather than source-spellable: `TypeChecker::check_range_expr` is its only
+/// producer, and writing `Range` in source resolves nothing. Because no declaration can introduce it, the producer
+/// and every consumer agree only by spelling the same string -- so they share this constant rather than three
+/// literals that drift silently.
+///
+/// Distinct from the `range()` builtin's iterator return type, which is a plain `Named("Range")` and deliberately
+/// keeps its own iteration path.
+pub const RANGE_TYPE_NAME: &str = "Range";
+
 /// Canonical Incan name of the semaphore acquire error type (`"SemaphoreAcquireError"`).
 pub const SEMAPHORE_ACQUIRE_ERROR_TYPE_NAME: &str = "SemaphoreAcquireError";
 

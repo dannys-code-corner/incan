@@ -1654,7 +1654,7 @@ impl TypeChecker {
                 // resolves that expression directly; only a range *bound to a local* arrives as a `Range[T]` value.
                 // Without this arm that binding iterates with an unknown item type, which stays invisible until
                 // something downstream needs the type -- `acc + i` refusing to lower, for instance.
-                if name == "Range" && !args.is_empty() {
+                if name == incan_core::lang::surface::types::RANGE_TYPE_NAME && !args.is_empty() {
                     return args[0].clone();
                 }
                 match collection_type_id(name.as_str()) {
