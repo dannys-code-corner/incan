@@ -382,6 +382,33 @@ fn observing_a_program_entrypoint_is_outside_the_profile() {
 }
 
 #[test]
+fn an_inactive_feature_gated_function_is_unavailable_to_both_comparison_routes() {
+    let profile = ShadowComparisonProfile::new(
+        "when feature(\"beta\"):\n    def gated() -> int:\n        return 42\n",
+        "gated",
+        vec![],
+    );
+
+    let Err(replacement) = observe_replacement_route(&profile) else {
+        panic!("the replacement route must not execute a function projected out by an inactive feature");
+    };
+    assert!(
+        replacement.reason.contains("no free function named `gated`"),
+        "{replacement:?}"
+    );
+
+    let Err(legacy) = profile.legacy_program_source() else {
+        panic!("the legacy route must not synthesize an entrypoint for a projected-out function");
+    };
+    assert!(
+        legacy
+            .reason
+            .contains("absent from the manifest-free feature projection"),
+        "{legacy:?}"
+    );
+}
+
+#[test]
 fn a_non_scalar_argument_is_refused_rather_than_guessed() {
     let profile = ShadowComparisonProfile::new(
         "def echo(value: int) -> int:\n    return value\n",
