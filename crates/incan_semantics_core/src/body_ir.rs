@@ -42,6 +42,7 @@
 use std::fmt::Write as _;
 
 use incan_core::errors::ErrorKind;
+use incan_core::lang::builtins::BuiltinFnId;
 use incan_core::lang::errors;
 
 use crate::{
@@ -2038,15 +2039,6 @@ pub struct LocalCallableTarget {
 }
 
 /// One compiler-recognized named callable with an explicit direct-runtime rule.
-///
-/// This is intentionally distinct from an absent same-module declaration identity. An absent identity means the
-/// source target is unresolved, imported, or otherwise unavailable to this Body-IR module and must refuse; only a
-/// checked builtin fact may select a compiler-owned direct-runtime behavior.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NamedCallableBuiltin {
-    /// The compiler-owned `range` iterator constructor.
-    Range,
-}
 
 /// A direct call to a named function, with its resolved call-site identity.
 ///
@@ -2069,7 +2061,7 @@ pub struct NamedCallableTarget {
     /// reject an absent `direct_call_id` and absent `builtin` rather than using [`Self::name`] as a dispatch key —
     /// or resolve [`Self::canonical`] through [`BodyIrModule::body_for_canonical_target`], which is the only route
     /// that also reaches a declaration this module does not own.
-    pub builtin: Option<NamedCallableBuiltin>,
+    pub builtin: Option<BuiltinFnId>,
     /// Resolved explicit call-site type arguments, in declared type-parameter order. Empty when the call site wrote
     /// none.
     pub type_args: Vec<IncanType>,
@@ -2390,11 +2382,17 @@ impl std::fmt::Display for CallableTarget {
 /// generated Rust call shapes.
 ///
 /// Most of these mirror a helper the existing Rust-emission backend already generates for string and list operators
-/// (see `src/backend/ir/conversions.rs::determine_binop_plan`). The membership pair does not: that backend reaches
-/// containment through a `contains` method call rather than a binary-operator plan, so `str_contains` /
-/// `str_not_contains` state a runtime requirement Body IR needs and the runtime must satisfy, not a call shape read
-/// back out of emitted Rust. Each variant's [`Self::as_str`] name *is* that requirement's name; it is not a promise
-/// that a Rust function of exactly that signature already exists.
+/// (see `src/backend/ir/conversions.rs::determine_binop_plan`). The membership helpers do not: that backend reaches
+/// containment through a `contains` method call rather than a binary-operator plan, so every `*_contains` name here
+/// states a runtime requirement Body IR needs and the runtime must satisfy, not a call shape read back out of
+/// emitted Rust. Each variant's [`Self::as_str`] name *is* that requirement's name; it is not a promise that a Rust
+/// function of exactly that signature already exists.
+///
+/// Membership and concatenation are named per operand type rather than shared across collections. One `Contains`
+/// helper would oblige a consumer to re-derive string-versus-list-versus-set-versus-dict from operand types, which
+/// is the inference this data model exists to replace; and one `Concat` would conflate a string join with a list
+/// concatenation. Negation likewise gets its own variant per collection rather than a wrapper, so one source
+/// operator stays one Body IR operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HelperOp {
     StrConcat,
@@ -2424,7 +2422,58 @@ pub enum HelperOp {
     /// pair: one source operator stays one Body IR operation, so a consumer never has to recognize a negation
     /// wrapper to know which operator was written.
     StrNotContains,
+    /// `xs + ys` on two lists: concatenation producing a new list, not a machine addition.
+    ///
+    /// Lists are the one non-string builtin whose `+` the typechecker accepts through a dedicated branch rather than
+    /// through a `__add__` hook. Because that branch resolves no operator dispatch, nothing downstream would mark the
+    /// operation as a call, and a plain [`BinOp::Add`] would have contradicted the Rust-emission backend outright:
+    /// `determine_binop_plan` routes list `+` to `incan_stdlib::collections::list_concat`, so no addition is emitted
+    /// for it at all. Naming the concatenation as its own helper is what keeps the two backends stating the same
+    /// thing.
+    ///
+    /// This is specifically *not* an argument that a collection operand cannot sit under a [`BinOp`]. That same
+    /// backend emits comparisons as an infix operator, so `==` on two lists is faithfully a primitive, and refusing
+    /// it would invent a divergence rather than close one.
+    ///
+    /// Arguments are in source order, `(lhs, rhs)`: concatenation is not commutative, and unlike the membership
+    /// helpers there is no receiver convention pulling the operands apart.
     ListConcat,
+    /// `v in xs` on a list: element containment, not substring containment.
+    ///
+    /// Membership is the one operator whose meaning genuinely changes with its operand types, so each collection
+    /// names its own helper rather than sharing one `Contains`. A single variant would leave the backend to re-derive
+    /// list-versus-set-versus-dict from operand types — exactly the inference this data model exists to replace with
+    /// a represented fact.
+    ///
+    /// **Argument order is the helper's own: `(haystack, needle)`**, matching [`Self::StrContains`] and every
+    /// `contains` in Rust, while the source spelling reads needle-first. Lowering swaps the operands so all
+    /// membership helpers agree with each other and with their own signatures.
+    ListContains,
+    /// `v not in xs` on a list, with the same `(haystack, needle)` argument order as [`Self::ListContains`].
+    ///
+    /// A separate helper rather than a negated [`Self::ListContains`], following the
+    /// [`Self::StrContains`]/[`Self::StrNotContains`] pair: one source operator stays one Body IR operation, so a
+    /// consumer never has to recognize a negation wrapper to know which operator was written.
+    ListNotContains,
+    /// `v in xs` on a set: element containment, with the same `(haystack, needle)` argument order as
+    /// [`Self::ListContains`].
+    ///
+    /// Distinct from [`Self::ListContains`] despite the identical source spelling, because the containers are
+    /// different types with different lookup costs and different Rust receivers. The operation records which one the
+    /// source actually held.
+    SetContains,
+    /// `v not in xs` on a set, with the same `(haystack, needle)` argument order as [`Self::SetContains`].
+    SetNotContains,
+    /// `k in d` on a dict: **key** containment, with the same `(haystack, needle)` argument order as
+    /// [`Self::ListContains`].
+    ///
+    /// Named `ContainsKey` rather than `Contains` because dict membership tests keys while the sibling collections
+    /// test elements. Leaving that to be inferred from the receiver's type would make key-versus-value a backend
+    /// convention; naming it here makes it a represented fact, and matches the `contains_key` the operation lowers
+    /// toward.
+    DictContainsKey,
+    /// `k not in d` on a dict, with the same `(haystack, needle)` argument order as [`Self::DictContainsKey`].
+    DictNotContainsKey,
 }
 
 impl HelperOp {
@@ -2442,6 +2491,12 @@ impl HelperOp {
             Self::StrContains => "str_contains",
             Self::StrNotContains => "str_not_contains",
             Self::ListConcat => "list_concat",
+            Self::ListContains => "list_contains",
+            Self::ListNotContains => "list_not_contains",
+            Self::SetContains => "set_contains",
+            Self::SetNotContains => "set_not_contains",
+            Self::DictContainsKey => "dict_contains_key",
+            Self::DictNotContainsKey => "dict_not_contains_key",
         }
     }
 }

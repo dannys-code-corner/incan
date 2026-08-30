@@ -498,6 +498,72 @@ def run() -> None:
     assert boom() raises IndexError, "wanted an index error"
 "#;
 
+const CASE_22_SRC: &str = r#"
+def has_item(xs: List[int], v: int) -> bool:
+    return v in xs
+
+def lacks_key(d: Dict[str, int], k: str) -> bool:
+    return k not in d
+"#;
+
+const CASE_23_SRC: &str = r#"
+def joined(xs: List[int], ys: List[int]) -> List[int]:
+    return xs + ys
+"#;
+
+fn case_collection_membership_names_its_container() -> ComparisonOutcome {
+    let outcome = outcome_from_body_ir(CASE_22_SRC, "collection membership to lower without a placeholder");
+    if !matches!(outcome, ComparisonOutcome::Match) {
+        return outcome;
+    }
+    let snapshot = match body_ir_snapshot(CASE_22_SRC, "collection membership to lower") {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
+    };
+    // Absence of a placeholder is not the property. Membership means something different per container -- element
+    // lookup for a list, key lookup for a dict -- so the operation has to name which one the source held. A single
+    // shared `contains` would satisfy a no-placeholder check while leaving that distinction to be re-derived.
+    for helper in ["list_contains", "dict_not_contains_key"] {
+        if !snapshot.contains(helper) {
+            return ComparisonOutcome::Mismatch {
+                detail: format!("collection membership did not name its container as {helper}:\n{snapshot}"),
+            };
+        }
+    }
+    if snapshot.contains("str_contains") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("collection membership borrowed the string substring policy:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
+fn case_list_concatenation_is_not_a_primitive_addition() -> ComparisonOutcome {
+    let outcome = outcome_from_body_ir(CASE_23_SRC, "list concatenation to lower without a placeholder");
+    if !matches!(outcome, ComparisonOutcome::Match) {
+        return outcome;
+    }
+    let snapshot = match body_ir_snapshot(CASE_23_SRC, "list concatenation to lower") {
+        Ok(snapshot) => snapshot,
+        Err(outcome) => return outcome,
+    };
+    // This row exists for a defect a no-placeholder check could never see. List `+` lowered *cleanly*, as
+    // `BinOp::Add` -- a machine addition over two heap containers -- because the typechecker accepts list
+    // concatenation through a builtin branch that records no operator dispatch. The corpus has to assert the
+    // operation is a helper call, not merely that something was produced.
+    if !snapshot.contains("call helper:list_concat(") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("list concatenation did not lower as its own helper:\n{snapshot}"),
+        };
+    }
+    if snapshot.contains(") + ") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("list concatenation lowered as a primitive addition:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
 fn case_pattern_assertion_binding_reaches_body_ir() -> ComparisonOutcome {
     let outcome = outcome_from_body_ir(CASE_20_SRC, "a pattern assertion to lower without a placeholder");
     if !matches!(outcome, ComparisonOutcome::Match) {
@@ -1869,6 +1935,30 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_20_SRC,
             evaluate: Some(case_pattern_assertion_binding_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0022",
+            title: "Collection membership names the container it was written over",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1246; src/frontend/body_ir/tests.rs::\
+                       lowers_collection_membership_as_a_helper_call_naming_its_own_container",
+            disposition: Disposition::Preserved,
+            source: CASE_22_SRC,
+            evaluate: Some(case_collection_membership_names_its_container),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0023",
+            title: "List concatenation is a helper call rather than a primitive addition",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1246; src/frontend/body_ir/tests.rs::\
+                       lowers_list_concatenation_as_a_helper_call_rather_than_a_primitive_addition",
+            disposition: Disposition::Preserved,
+            source: CASE_23_SRC,
+            evaluate: Some(case_list_concatenation_is_not_a_primitive_addition),
             replacement_execution: None,
         },
         ParityCase {

@@ -738,6 +738,18 @@ fn observe_replacement_route(profile: &ShadowComparisonProfile) -> Result<Replac
     let plan = prepare_free_function_execution(&body_ir, profile.function(), &profile.arguments)
         .map_err(replacement_profile_unavailable)?;
     match execute_prevalidated_free_function(plan) {
+        Ok(execution) if !execution.emitted_output().is_empty() => {
+            // A program that printed cannot be compared by this profile, and saying so is the point. The compared
+            // observable is the function's *returned value*; the legacy route recovers it by requiring the process's
+            // stdout to begin and end with the result frame, which the program's own output breaks. Reporting a
+            // match on the return value alone would claim agreement over a run whose printed output nothing looked
+            // at — the exact silent divergence this comparison exists to prevent.
+            Err(ShadowUnavailable::new(format!(
+                "the replacement route emitted {} line(s) of program output, which this profile cannot compare: \
+                 the legacy route recovers its result from a stdout frame that the program's own output breaks",
+                execution.emitted_output().len()
+            )))
+        }
         Ok(execution) => {
             let observation = RouteObservation {
                 profile_kind,

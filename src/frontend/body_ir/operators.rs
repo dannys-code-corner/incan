@@ -97,18 +97,36 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// [`Self::lower_compound_assignment`], so an operator that v0 does not model never causes its operands' side
     /// effects (calls, reads) to be lowered on the way to an unsupported placeholder.
     pub(super) fn binary_op_is_supported(op: ast::BinaryOp, lhs_ty: &IncanType, rhs_ty: &IncanType) -> bool {
-        binary_operand_types_are_resolved(lhs_ty, rhs_ty)
-            && ((is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some())
-                || lower_binary_op(op).is_some())
+        if !binary_operand_types_are_resolved(lhs_ty, rhs_ty) {
+            return false;
+        }
+        if is_string_like(lhs_ty) && is_string_like(rhs_ty) && string_helper_for_binop(op).is_some() {
+            return true;
+        }
+        if collection_helper_for_binop(op, lhs_ty, rhs_ty).is_some() {
+            return true;
+        }
+        // A builtin collection with no collection helper is *not* refused here. `==` on two lists is the case that
+        // settles it: the Rust-emission backend routes list `+` to `incan_stdlib::collections::list_concat`, which
+        // is why representing it as `BinOp::Add` contradicted that backend -- but it emits comparisons as an infix
+        // operator, landing on Rust's `PartialEq` for `Vec`, which is also what Python's element-wise `==` means.
+        // A primitive is therefore the faithful representation there, and refusing it would invent a divergence
+        // between the two backends rather than close one. An operator that genuinely needs a runtime call earns a
+        // helper in `collection_helper_for_binop`, and the check above admits it.
+        lower_binary_op(op).is_some()
     }
 
-    /// Emit the result of a binary operator given already-lowered operands: an explicit [`bir::Callee::Helper`]
-    /// call (with runtime requirements recorded) when both operand types are string-like and `op` has a
-    /// compiler-owned string helper (see [`string_helper_for_binop`]) -- Body IR's compiler-owned-runtime-operation
-    /// requirement (#653 criterion 3) applied to string operators specifically -- otherwise a plain
+    /// Emit the result of a binary operator given already-lowered operands, preferring an explicit
+    /// [`bir::Callee::Helper`] call (with runtime requirements recorded) over a primitive whenever the operand types
+    /// make the operator a runtime operation -- Body IR's compiler-owned-runtime-operation requirement (#653
+    /// criterion 3). Two helper families qualify: string operands with a [`string_helper_for_binop`] mapping, and
+    /// builtin collections with a [`collection_helper_for_binop`] mapping. Everything else becomes a plain
     /// [`bir::Rvalue::BinaryOp`], with a division/modulo panic fact recorded when [`bir::BinOp::may_panic`] holds.
-    /// Callers are expected to have already checked [`Self::binary_op_is_supported`]; an operator with neither
-    /// handling still falls back to an explicit unsupported placeholder defensively rather than panicking.
+    ///
+    /// Helper families are checked before the primitive path rather than after, because several operators map to
+    /// both: `+` is a primitive on two ints and a concatenation on two lists, and only the operand types separate
+    /// them. Callers are expected to have already checked [`Self::binary_op_is_supported`]; an operator with no
+    /// handling at all still falls back to an explicit unsupported placeholder defensively rather than panicking.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_binary_from_operands(
         &mut self,
@@ -134,6 +152,27 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             // backend binding these positionally has no way to know one helper disagrees with the other eight.
             let arguments = match helper {
                 bir::HelperOp::StrContains | bir::HelperOp::StrNotContains => vec![rhs_operand, lhs_operand],
+                _ => vec![lhs_operand, rhs_operand],
+            };
+            return self.push_call_temp(
+                bir::Callee::Helper(helper),
+                fixed_elements(arguments),
+                result_ty,
+                scope,
+                span,
+                false,
+                out,
+            );
+        }
+
+        if let Some(helper) = collection_helper_for_binop(op, lhs_ty, rhs_ty) {
+            self.record_runtime_requirement(AbiV0RuntimeRequirement::RuntimeHelper(helper.as_str().to_string()));
+            self.record_runtime_requirement(AbiV0RuntimeRequirement::Allocator);
+            // Membership helpers take `(haystack, needle)` while the source reads needle-first, matching the
+            // string membership pair and every `contains` in Rust. Concatenation keeps source order, since it is
+            // not commutative and has no receiver convention pulling the operands apart.
+            let arguments = match op {
+                ast::BinaryOp::In | ast::BinaryOp::NotIn => vec![rhs_operand, lhs_operand],
                 _ => vec![lhs_operand, rhs_operand],
             };
             return self.push_call_temp(
