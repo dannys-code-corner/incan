@@ -32,18 +32,15 @@ pub(super) fn unsupported_top_level_declaration_label(declaration: &ast::Declara
 
 /// Short diagnostic label for a statement kind v0 does not lower.
 ///
-/// Statement-position `loop:` is named explicitly because it is the one entry here whose Body IR vocabulary
-/// already exists: [`BodyBuilder::lower_loop_expr`] emits [`bir::StatementKind::Loop`] for the expression
-/// spelling, and only [`BodyBuilder::lower_stmt_into`]'s dispatch is missing (#1101). Leaving it under the
-/// generic "statement" label made a five-line dispatch gap read like an unmodeled construct.
+/// Only reached from [`BodyBuilder::lower_stmt_into`]'s fallback arm, so every statement kind that arm dispatches
+/// by name is deliberately absent here -- statement-position `loop:` and `unsafe:` regions included, since #1162
+/// gave the first a lowering and the second a stated permanent refusal that carries its own reason.
 ///
 /// The raw vocabulary forms take the [`undesugared_label`] wording instead, because neither is a lowering gap:
 /// both are syntax the desugar pass owns and resolves before this module ever runs. An [`ast::Statement::Surface`]
 /// could be either, so it defers to [`surface_stmt_label`] to decide from its key.
 pub(super) fn unsupported_stmt_label(stmt: &ast::Statement) -> String {
     match stmt {
-        ast::Statement::Loop(_) => "statement-position `loop:`".to_string(),
-        ast::Statement::Unsafe(_) => "unsafe block".to_string(),
         ast::Statement::VocabExpressionItem(_) => undesugared_label("vocab expression item"),
         ast::Statement::Surface(surface) => surface_stmt_label(&surface.key),
         ast::Statement::VocabBlock(_) => undesugared_label("vocab block"),
@@ -119,7 +116,7 @@ pub(super) fn unsupported_provider_operation(
 /// Short diagnostic label for an expression kind v0 does not lower.
 ///
 /// Only reached from [`BodyBuilder::lower_expr_to_operand`]'s fallback arm, so every expression kind that arm
-/// dispatches by name -- closures and partial callables included, since #1124 gave both a real lowering -- is
+/// dispatches by name -- closures and partial callables since #1124, range values since #1165 -- is
 /// deliberately absent here. Async surface (`await`, `race for`) and vocab/scoped-DSL surface are named rather than
 /// left to the generic label, because a diagnostic reading only "expression" hides which one a program actually
 /// hit. The two are not the same kind of finding: async surface is remaining Body IR work under #1164, while a
@@ -127,7 +124,6 @@ pub(super) fn unsupported_provider_operation(
 pub(super) fn unsupported_expr_label(expr: &ast::Expr) -> String {
     match expr {
         ast::Expr::Yield(_) => "yield expression".to_string(),
-        ast::Expr::Range { .. } => "range expression outside a for-loop".to_string(),
         ast::Expr::Surface(surface) => surface_expr_label(&surface.payload),
         ast::Expr::VocabBlock(_) => undesugared_label("vocab block expression"),
         _ => "expression".to_string(),
