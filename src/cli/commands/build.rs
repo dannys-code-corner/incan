@@ -57,7 +57,7 @@ use crate::frontend::registry_metadata::{
     collect_checked_registry_metadata, materialize_registry_reexport_projections,
 };
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::frontend::{diagnostics, lexer, parser, typechecker};
+use crate::frontend::{body_ir, diagnostics, lexer, parser, typechecker};
 use crate::generated_cache::resolve_generated_cargo_target;
 #[cfg(feature = "rust_inspect")]
 use crate::library_manifest::LibraryRustAbi;
@@ -2560,18 +2560,42 @@ fn resolve_available_replacement_execution(selection: &BackendSelection) -> CliR
     }
 }
 
+/// Refuse package-feature selections the manifest-free replacement profile cannot resolve faithfully.
+///
+/// Ordinary builds derive the active closure from `CompilationSession` and the project's manifest. The bounded
+/// direct Body-IR profile deliberately does neither: it accepts one source module with no package graph. Its shared
+/// input-contract helper therefore uses the empty projection, so accepting a caller-supplied feature selection here
+/// would silently compile a different program. A future project-aware replacement profile may consume the canonical
+/// session projection; this source-only profile must refuse it until then.
+fn reject_replacement_package_feature_selection(package_features: &FeatureSelection) -> CliResult<()> {
+    if package_features != &FeatureSelection::default() {
+        return Err(CliError::failure(
+            "the source-only replacement backend supports only the default package feature selection; remove `--features`, `--no-default-features`, or `--all-features`",
+        ));
+    }
+    Ok(())
+}
+
 /// Execute the first #988 replacement-backend profile directly from typed Body IR.
 ///
 /// This intentionally has no `ProjectGenerator`, Oven, or generated-Rust path. It accepts only one source module
 /// containing free functions and executes its zero-argument `main` body through the replacement executor. A
 /// requested replacement build therefore either records a replacement receipt over a real Body-IR result or fails
 /// visibly at the original Incan span; it can never reach `IrCodegen` as an implicit compatibility fallback.
+///
+/// The pipeline is lex, parse, [`apply_body_ir_input_contract`], module-profile gate, typecheck, then
+/// [`build_body_ir_module_v0`]. The contract step is not optional sequencing: without it this path would hand
+/// lowering a program the legacy path would never have produced, which is the divergence #1166 closes.
+/// This deliberately accepts only the default package-feature selection. A non-default selection needs the
+/// project-aware `CompilationSession` projection and is refused before parsing rather than silently treated as
+/// featureless source.
 fn build_replacement_file_report(
     file_path: &str,
     options: BuildCommandOptions,
     report_options: &BuildReportOptions,
 ) -> CliResult<serde_json::Value> {
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
+    reject_replacement_package_feature_selection(&options.package_features)?;
     let start = Instant::now();
     let entrypoint = if Path::new(file_path).is_absolute() {
         PathBuf::from(file_path)
@@ -2595,6 +2619,12 @@ fn build_replacement_file_report(
     let program = parser::parse(&tokens).map_err(|errors| {
         CliError::failure(format!(
             "replacement backend could not parse {}: {errors:?}",
+            entrypoint.display()
+        ))
+    })?;
+    let program = body_ir::apply_body_ir_input_contract(program, &entrypoint).map_err(|errors| {
+        CliError::failure(format!(
+            "replacement backend could not desugar {}: {errors:?}",
             entrypoint.display()
         ))
     })?;
@@ -18635,6 +18665,190 @@ pub model Nested:
             .err()
             .ok_or("a source-free provider without a sealed package Loaf must fail closed")?;
         assert!(missing_handoff.to_string().contains("without its sealed package Loaf"));
+        Ok(())
+    }
+
+    // ---- Body IR input contract (#1166) ----
+
+    /// A raw vocab declaration whose owning library manifest this compilation never loaded.
+    ///
+    /// The parser only produces one of these when an import activates a library vocabulary, which the replacement
+    /// module profile still refuses, so building it by hand is the only way to put the desugar pass in front of a
+    /// node it must resolve.
+    fn undesugared_vocab_declaration() -> Spanned<Declaration> {
+        Spanned::new(
+            Declaration::VocabBlock(crate::frontend::ast::VocabBlockStmt {
+                keyword: "query".to_string(),
+                keyword_binding: crate::frontend::ast::VocabKeywordBinding {
+                    is_declaration_owned_clause: false,
+                    dependency_key: "demo.query".to_string(),
+                    activation_namespace: "demo".to_string(),
+                    surface_kind: incan_vocab::KeywordSurfaceKind::FunctionDecl,
+                    compound_tokens: Vec::new(),
+                    placement: incan_vocab::KeywordPlacement::TopLevel,
+                    clause_body_kind: None,
+                },
+                decorators: Vec::new(),
+                signature_head: None,
+                header_args: Vec::new(),
+                body: Vec::new(),
+                body_item_trailing_commas: Vec::new(),
+            }),
+            Span::new(0, 1),
+        )
+    }
+
+    /// Build the replacement-backend options a `--backend replacement` build resolves to.
+    fn replacement_build_options() -> BuildCommandOptions {
+        BuildCommandOptions {
+            backend: BackendSelectionOptions {
+                requested: BackendKind::Replacement,
+                explicit: true,
+                shadow: false,
+                fallback_policy: FallbackPolicy::Refuse,
+            },
+            ..BuildCommandOptions::default()
+        }
+    }
+
+    #[test]
+    fn the_contract_step_refuses_a_vocab_declaration_with_the_desugar_pass_own_diagnostic()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // The replacement path owes Body IR a desugared program. This is what "owes" means concretely: a vocab
+        // declaration whose library is unavailable stops here, with the resolution failure the desugar pass already
+        // reports, rather than travelling on to become a lowering refusal at the same span.
+        let program = crate::frontend::ast::Program {
+            declarations: vec![undesugared_vocab_declaration()],
+            ..Default::default()
+        };
+
+        let errors = body_ir::apply_body_ir_input_contract(program, Path::new("/fixture/main.incn"))
+            .err()
+            .ok_or("an undesugared vocab declaration must not pass the Body IR input contract")?;
+        let messages = errors
+            .iter()
+            .map(|error| error.message.clone())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            messages.contains("desugarer resolution failed") && messages.contains("demo.query"),
+            "the desugar pass must own this diagnostic, naming the unavailable dependency: {messages}"
+        );
+        assert!(
+            !messages.contains("input-contract violation"),
+            "one unavailable-manifest condition must not produce two divergent diagnostics: {messages}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_contract_step_projects_a_body_behind_an_inactive_feature_out_of_the_program()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Feature projection has to happen before the module-profile gate and before lowering, so this checks the
+        // program the rest of the pipeline actually receives rather than only the eventual build outcome.
+        let source =
+            "when feature(\"beta\"):\n    def gated() -> int:\n        return 7\n\ndef main() -> int:\n    return 1\n";
+        let tokens = lexer::lex(source).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        assert_eq!(
+            parsed.declarations.len(),
+            2,
+            "the fixture must carry a gated declaration, or the assertion below proves nothing"
+        );
+
+        let projected = body_ir::apply_body_ir_input_contract(parsed, Path::new("/fixture/main.incn"))
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let names = projected
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.node {
+                Declaration::Function(function) => Some(function.name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            ["main"],
+            "a declaration behind an inactive feature must not survive the contract step"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_refuses_nondefault_package_feature_selection() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(&entrypoint, "def main() -> int:\n    return 7\n")?;
+        let feature_selections = [
+            FeatureSelection::new(["beta"]),
+            FeatureSelection {
+                no_default_features: true,
+                ..FeatureSelection::default()
+            },
+        ];
+
+        for package_features in feature_selections {
+            let mut options = replacement_build_options();
+            options.package_features = package_features;
+            let error =
+                build_replacement_file_report(&entrypoint.to_string_lossy(), options, &BuildReportOptions::default())
+                    .err()
+                    .ok_or(
+                        "a non-default package feature selection must not enter the source-only replacement profile",
+                    )?;
+            assert!(
+                error
+                    .to_string()
+                    .contains("supports only the default package feature selection"),
+                "unexpected replacement feature-selection refusal: {error}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn the_replacement_build_never_executes_a_main_behind_an_inactive_feature() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The end-to-end consequence, through the real CLI entry point: with no active feature there is no `main`
+        // to lower, so the build must refuse rather than execute a body this compilation does not contain.
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(
+            &entrypoint,
+            "when feature(\"beta\"):\n    def main() -> int:\n        return 7\n",
+        )?;
+
+        let error = build_replacement_file_report(
+            &entrypoint.to_string_lossy(),
+            replacement_build_options(),
+            &BuildReportOptions::default(),
+        )
+        .err()
+        .ok_or("a `main` behind an inactive feature must not produce a successful replacement build")?;
+        assert!(
+            !error.to_string().contains("7"),
+            "no gated body may have been executed: {error}"
+        );
+
+        // Same source, same contract, through the direct API the parity corpus and unit tests use: both entry
+        // points must agree that nothing was lowered, which is the point of stating the contract at all.
+        let tokens =
+            lexer::lex(&fs::read_to_string(&entrypoint)?).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let parsed = parser::parse(&tokens).map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let program = body_ir::apply_body_ir_input_contract(parsed, &entrypoint)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let module_path = vec!["main".to_string()];
+        let mut checker = typechecker::TypeChecker::new();
+        checker.set_current_module_path(Some(module_path.clone()));
+        checker
+            .check_program(&program)
+            .map_err(|errors| CliError::failure(format!("{errors:?}")))?;
+        let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+        assert!(
+            body_ir.bodies.is_empty(),
+            "the direct API must lower the same nothing the CLI path did: {:?}",
+            body_ir.bodies.iter().map(|body| &body.name).collect::<Vec<_>>()
+        );
         Ok(())
     }
 }

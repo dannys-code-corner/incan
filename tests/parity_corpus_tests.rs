@@ -136,6 +136,16 @@ fn body_ir_snapshot(src: &str, expect_desc: &str) -> Result<String, ComparisonOu
     let program = parser::parse(&tokens).map_err(|errors| ComparisonOutcome::Incompatible {
         reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
     })?;
+    // The corpus is a caller of `build_body_ir_module_v0` like any other, so it owes that boundary the same
+    // desugared, feature-projected program the CLI path owes it (#1166). A corpus lowering raw parse output would
+    // measure a program the real pipeline never produces, and go green on the divergence it exists to surface.
+    let program = incan::frontend::body_ir::apply_body_ir_input_contract(
+        program,
+        std::path::Path::new("parity_987_body_ir.incn"),
+    )
+    .map_err(|errors| ComparisonOutcome::Incompatible {
+        reason: format!("expected {expect_desc}, but the Body IR input contract refused: {errors:?}"),
+    })?;
     let module_path = vec!["parity_987_body_ir".to_string()];
     let mut checker = typechecker::TypeChecker::new();
     checker.set_current_module_path(Some(module_path.clone()));
@@ -474,31 +484,12 @@ def run() -> None:
     assert boom() raises IndexError, "wanted an index error"
 "#;
 
-/// Render one case's Body IR snapshot, or the reason it could not be produced.
-fn body_ir_snapshot_for(src: &str, expect_desc: &str) -> Result<String, ComparisonOutcome> {
-    let tokens = lexer::lex(src).map_err(|errors| ComparisonOutcome::Incompatible {
-        reason: format!("expected {expect_desc}, but lexing failed: {errors:?}"),
-    })?;
-    let program = parser::parse(&tokens).map_err(|errors| ComparisonOutcome::Incompatible {
-        reason: format!("expected {expect_desc}, but parsing failed: {errors:?}"),
-    })?;
-    let module_path = vec!["parity_987_body_ir".to_string()];
-    let mut checker = typechecker::TypeChecker::new();
-    checker.set_current_module_path(Some(module_path.clone()));
-    checker
-        .check_program(&program)
-        .map_err(|errors| ComparisonOutcome::Mismatch {
-            detail: format!("expected {expect_desc}, but typechecking reported {errors:?}"),
-        })?;
-    Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot())
-}
-
 fn case_pattern_assertion_binding_reaches_body_ir() -> ComparisonOutcome {
     let outcome = outcome_from_body_ir(CASE_20_SRC, "a pattern assertion to lower without a placeholder");
     if !matches!(outcome, ComparisonOutcome::Match) {
         return outcome;
     }
-    let snapshot = match body_ir_snapshot_for(CASE_20_SRC, "a pattern assertion to lower") {
+    let snapshot = match body_ir_snapshot(CASE_20_SRC, "a pattern assertion to lower") {
         Ok(snapshot) => snapshot,
         Err(outcome) => return outcome,
     };
@@ -523,7 +514,7 @@ fn case_raises_assertion_reaches_body_ir() -> ComparisonOutcome {
     if !matches!(outcome, ComparisonOutcome::Match) {
         return outcome;
     }
-    let snapshot = match body_ir_snapshot_for(CASE_21_SRC, "a `raises` assertion to lower") {
+    let snapshot = match body_ir_snapshot(CASE_21_SRC, "a `raises` assertion to lower") {
         Ok(snapshot) => snapshot,
         Err(outcome) => return outcome,
     };
@@ -537,6 +528,82 @@ fn case_raises_assertion_reaches_body_ir() -> ComparisonOutcome {
     if !snapshot.contains("raises IndexError, const(\"wanted an index error\") may_panic") {
         return ComparisonOutcome::Mismatch {
             detail: format!("a `raises` assertion lost its failure message:\n{snapshot}"),
+        };
+    }
+    ComparisonOutcome::Match
+}
+
+// ============================================================================
+// Case 17 — Body IR input contract: an inactive feature's body never lowers (#1166)
+// ============================================================================
+
+// #1166 made the input contract explicit: Body IR consumes a desugared, feature-projected program, and every caller
+// owes it that. This row is the corpus holding *itself* to that contract — before #1166 both corpus entry points
+// lowered raw parse output, so a divergence between the two pipelines would have gone green here rather than being
+// surfaced.
+//
+// The row proves the feature-projection half, which is constructible in-process. The vocab half of the same
+// contract is covered by unit tests instead: a genuinely vocab-authored body needs an import-activated library
+// vocabulary with a WASM desugarer artifact, which no corpus row can stand up. Claiming this row proves both
+// halves would be the kind of overstated evidence the corpus exists to prevent.
+const CASE_17_SRC: &str = r#"
+when feature("beta"):
+    def gated() -> int:
+        return 7
+
+def main() -> int:
+    return 1
+"#;
+
+fn case_inactive_feature_body_never_reaches_body_ir() -> ComparisonOutcome {
+    let outcome = outcome_from_body_ir(
+        CASE_17_SRC,
+        "a body behind an inactive feature to be projected away before lowering",
+    );
+    if !matches!(outcome, ComparisonOutcome::Match) {
+        return outcome;
+    }
+    // `outcome_from_body_ir` only proves no placeholder survived. The contract claim is stronger and needs its own
+    // assertion: the gated function must be absent entirely, not lowered into something that merely looks clean.
+    let tokens = match lexer::lex(CASE_17_SRC) {
+        Ok(tokens) => tokens,
+        Err(errors) => {
+            return ComparisonOutcome::Incompatible {
+                reason: format!("case 17 failed to lex: {errors:?}"),
+            };
+        }
+    };
+    let program = match parser::parse(&tokens) {
+        Ok(program) => program,
+        Err(errors) => {
+            return ComparisonOutcome::Incompatible {
+                reason: format!("case 17 failed to parse: {errors:?}"),
+            };
+        }
+    };
+    let program = match incan::frontend::body_ir::apply_body_ir_input_contract(
+        program,
+        std::path::Path::new("parity_987_body_ir.incn"),
+    ) {
+        Ok(program) => program,
+        Err(errors) => {
+            return ComparisonOutcome::Incompatible {
+                reason: format!("case 17 input contract refused: {errors:?}"),
+            };
+        }
+    };
+    let module_path = vec!["parity_987_body_ir".to_string()];
+    let mut checker = typechecker::TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.clone()));
+    if let Err(errors) = checker.check_program(&program) {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("case 17 typecheck reported {errors:?}"),
+        };
+    }
+    let snapshot = build_body_ir_module_v0(&program, &module_path, checker.type_info()).render_snapshot();
+    if snapshot.contains("gated") {
+        return ComparisonOutcome::Mismatch {
+            detail: format!("a body behind an inactive feature reached Body IR:\n{snapshot}"),
         };
     }
     ComparisonOutcome::Match
@@ -1347,6 +1414,18 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: CASE_21_SRC,
             evaluate: Some(case_raises_assertion_reaches_body_ir),
+            replacement_execution: None,
+        },
+        ParityCase {
+            id: "parity-987-0017",
+            title: "A body behind an inactive feature never reaches Body IR",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectParserTypechecker,
+            evidence: "#1166; src/cli/commands/build.rs::tests::\
+                       the_replacement_build_never_executes_a_main_behind_an_inactive_feature",
+            disposition: Disposition::Preserved,
+            source: CASE_17_SRC,
+            evaluate: Some(case_inactive_feature_body_never_reaches_body_ir),
             replacement_execution: None,
         },
         ParityCase {

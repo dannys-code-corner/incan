@@ -75,7 +75,7 @@ use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackPolicy, ShadowComparisonState, digest_output,
     finalize_receipt, resolve_execution, select_backend,
 };
-use crate::frontend::body_ir::build_body_ir_module_v0;
+use crate::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use crate::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::{lexer, parser};
@@ -211,6 +211,16 @@ impl ShadowComparisonProfile {
         if self.function == "main" {
             return Err(ShadowUnavailable::new(PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON));
         }
+        let program_after_input_contract = self.program_after_input_contract()?;
+        let function_is_active = program_after_input_contract.declarations.iter().any(|declaration| {
+            matches!(&declaration.node, crate::frontend::ast::Declaration::Function(function) if function.name == self.function)
+        });
+        if !function_is_active {
+            return Err(ShadowUnavailable::new(format!(
+                "the comparison profile's function `{}` is absent from the manifest-free feature projection, so neither route may observe it",
+                self.function
+            )));
+        }
         let arguments = self.argument_literals()?.join(", ");
         let mut program = self.source.clone();
         if !program.ends_with('\n') {
@@ -223,6 +233,23 @@ impl ShadowComparisonProfile {
             self.function
         );
         Ok(program)
+    }
+
+    /// Parse and prepare the profile source through the same manifest-free Body-IR input contract as both routes.
+    ///
+    /// The profile intentionally owns no package manifest or feature selection, so its only valid feature
+    /// projection is empty. Preparing before either route observes the selected function prevents a declaration
+    /// behind `when feature(...)` from becoming comparison evidence for a compilation that does not contain it.
+    fn program_after_input_contract(&self) -> Result<crate::frontend::ast::Program, ShadowUnavailable> {
+        let tokens = lexer::lex(self.source())
+            .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not lex: {errors:?}")))?;
+        let program = parser::parse(&tokens)
+            .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not parse: {errors:?}")))?;
+        apply_body_ir_input_contract(program, Path::new("incan_shadow_comparison.incn")).map_err(|errors| {
+            ShadowUnavailable::new(format!(
+                "comparison source did not satisfy the Body IR input contract: {errors:?}"
+            ))
+        })
     }
 
     /// Render every argument as the Incan source literal the legacy entrypoint passes.
@@ -696,10 +723,7 @@ pub(crate) struct LegacyRouteResult {
 /// [`ShadowUnavailable`].
 fn observe_replacement_route(profile: &ShadowComparisonProfile) -> Result<ReplacementRouteResult, ShadowUnavailable> {
     let body_ir = {
-        let tokens = lexer::lex(profile.source())
-            .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not lex: {errors:?}")))?;
-        let program = parser::parse(&tokens)
-            .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not parse: {errors:?}")))?;
+        let program = profile.program_after_input_contract()?;
         let module_path = vec!["incan_shadow_comparison".to_string()];
         let mut checker = TypeChecker::new();
         checker.set_current_module_path(Some(module_path.clone()));
