@@ -2302,9 +2302,28 @@ impl TypeChecker {
         }
     }
 
-    /// Look up a variable binding by name **in the current scope only** and return its [`VariableInfo`].
+    /// Look up a variable by walking the whole enclosing scope chain, not just the innermost scope.
     ///
-    /// Returns `None` if the symbol is missing, not local, or isn't a variable.
+    /// This is what plain assignment resolves against. `scopes_and_name_resolution.md` states the contract
+    /// directly: "if `x` already exists in any enclosing scope, it is a **reassignment** (so `x` must be mutable)",
+    /// and only `let`/`mut` introduce a binding that may shadow an outer one.
+    ///
+    /// [`Self::lookup_local_variable_info`] answers a different question — "is this name bound *here*" — and is
+    /// still the right lookup for checks that are genuinely about the innermost scope. Using it for assignment is
+    /// what let a plain assignment inside any block silently create a fresh immutable binding instead of
+    /// reassigning the outer one, with no diagnostic even when the types disagreed (#1072).
+    pub(crate) fn lookup_variable_info_in_scope_chain(&self, name: &str) -> Option<&VariableInfo> {
+        let id = self.symbols.lookup(name)?;
+        let sym = self.symbols.get(id)?;
+        match &sym.kind {
+            SymbolKind::Variable(info) => Some(info),
+            _ => None,
+        }
+    }
+
+    /// Look up a variable binding by name in the current scope only.
+    ///
+    /// Returns `None` if the symbol is missing, is only present in an enclosing scope, or is not a variable.
     pub(crate) fn lookup_local_variable_info(&self, name: &str) -> Option<&VariableInfo> {
         let id = self.symbols.lookup_local(name)?;
         let sym = self.symbols.get(id)?;

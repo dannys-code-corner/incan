@@ -1058,11 +1058,13 @@ def main() -> int:
 /// Every directly dispatched sibling body passes the same fail-closed profile gate as the selected entrypoint.
 #[test]
 fn replacement_refuses_an_unsupported_sibling_body_at_its_original_span() -> Result<(), Box<dyn std::error::Error>> {
+    // The stand-in is `unsafe:`, refused by design rather than pending work. This test previously used
+    // scalar-list iteration, which stopped being unsupported once that gate was widened — the sixth time a
+    // stand-in chosen from the "not yet" pile has decayed underneath a test that only needed *some* refusal.
     let source = r#"
 def unsupported_sibling() -> int:
-  values: list[int] = []
-  for value in values:
-    return value
+  unsafe:
+    pass
   return 42
 
 def main() -> int:
@@ -1080,13 +1082,13 @@ def main() -> int:
         Err(error) => error,
     };
     let expected_start = source
-        .find("for value in values")
-        .ok_or("fixture must contain the unsupported scalar-list iteration")?;
+        .find("unsafe:")
+        .ok_or("fixture must contain the by-design refusal")?;
     let span = error
         .primary_span()
         .ok_or("sibling refusal must retain a source span")?;
     assert_eq!(span.start, expected_start);
-    assert!(error.to_string().contains("builtin collection iteration destination"));
+    assert!(error.to_string().contains("`unsafe:` acknowledgement region"));
     Ok(())
 }
 
@@ -1926,9 +1928,9 @@ def main() -> int:
     Ok(())
 }
 
-/// Refuse same-scope reassignment until Body IR carries an explicit binding-equivalence fact.
+/// Execute same-scope reassignment through the original local rather than declaring a duplicate binding.
 #[test]
-fn replacement_refuses_reassignment_with_a_repeated_user_binding_name() -> Result<(), Box<dyn std::error::Error>> {
+fn replacement_executes_reassignment_without_a_repeated_user_binding_name() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> int:
   mut x = 1
@@ -1936,20 +1938,8 @@ def main() -> int:
   return x
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = match execute_free_function(&module, "main", &[]) {
-        Ok(execution) => {
-            return Err(format!("reassignment must refuse directly, got {:?}", execution.value).into());
-        }
-        Err(error) => error,
-    };
-    let expected_start = source
-        .rfind("x = 2")
-        .ok_or("reassignment fixture must contain the second binding")?;
-    let span = error
-        .primary_span()
-        .ok_or("reassignment refusal must retain the second binding span")?;
-    assert_eq!(span.start, expected_start);
-    assert!(error.to_string().contains("repeated user binding"));
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(2));
     Ok(())
 }
 
@@ -2183,7 +2173,10 @@ fn replacement_cli_executes_typed_empty_scalar_tuple_list_with_a_replacement_rec
 fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
     let entrypoint = temporary.path().join("main.incn");
-    fs::write(&entrypoint, "def main() -> int:\n  return 42\n")?;
+    fs::write(
+        &entrypoint,
+        "def main() -> int:\n  println(\"answer follows\")\n  return 42\n",
+    )?;
 
     let output = Command::new(incan_binary())
         .args([
@@ -2209,6 +2202,15 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
     assert_eq!(report["mode"], "executable");
     assert_eq!(report["backend"]["executed_backend"], "replacement");
     assert_eq!(report["replacement_execution"]["result"], "42");
+    assert_eq!(
+        report["replacement_execution"]["emitted_output"],
+        serde_json::json!(["answer follows"])
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("answer follows"),
+        "replacement CLI must relay source output when stdout is reserved for JSON: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         report["replacement_execution"]["output_identity"]
             .as_str()
@@ -2593,9 +2595,8 @@ fn replacement_cli_refuses_an_unsupported_sibling_without_a_receipt() -> Result<
     fs::write(
         &entrypoint,
         r#"def unsupported_sibling() -> int:
-  values: list[int] = []
-  for value in values:
-    return value
+  unsafe:
+    pass
   return 42
 
 def main() -> int:
@@ -2620,8 +2621,7 @@ def main() -> int:
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("builtin collection iteration destination")
-            && combined.contains("original Incan source span"),
+        combined.contains("`unsafe:` acknowledgement region") && combined.contains("original Incan source span"),
         "the sibling refusal must preserve its direct profile boundary: {combined}"
     );
     assert!(
@@ -2841,18 +2841,27 @@ def main() -> int:
 
 /// Refuse a typed empty scalar list before replacement can publish a success receipt.
 #[test]
-fn replacement_cli_refuses_typed_empty_scalar_list_without_a_receipt() -> Result<(), Box<dyn std::error::Error>> {
+fn replacement_cli_refuses_iteration_over_an_unrepresentable_element_without_a_receipt()
+-> Result<(), Box<dyn std::error::Error>> {
+    // Renamed and re-aimed. This test was written when iterating *any* list of scalars refused, so an empty
+    // `list[int]` was its subject. That restriction is gone — the executor always could iterate any element, and
+    // only the preflight said otherwise — so the subject is now an element the runtime genuinely has no value for.
+    // The refusal now lands on the list literal rather than the loop, because the runtime has no value for a model
+    // instance and says so when the aggregate is built. The properties worth keeping are unchanged: the refusal
+    // reaches the CLI naming the type it cannot hold, retains source authority, and publishes neither legacy output
+    // nor a receipt.
     let temporary = tempfile::tempdir()?;
     let entrypoint = temporary.path().join("main.incn");
-    fs::write(
-        &entrypoint,
-        r#"def main() -> int:
-  values: list[int] = []
-  for value in values:
-    return value
-  return 42
-"#,
-    )?;
+    let source = r#"model Point:
+  x: int
+
+def main() -> int:
+  mut seen = 0
+  for value in [Point(x=1)]:
+    seen += 1
+  return seen
+"#;
+    fs::write(&entrypoint, source)?;
 
     let output = Command::new(incan_binary())
         .args([
@@ -2866,7 +2875,7 @@ fn replacement_cli_refuses_typed_empty_scalar_list_without_a_receipt() -> Result
         .output()?;
     assert!(
         !output.status.success(),
-        "typed empty scalar list must refuse instead of executing directly"
+        "an unrepresentable iteration element must refuse instead of executing directly"
     );
     let combined = format!(
         "{}\n{}",
@@ -2874,17 +2883,28 @@ fn replacement_cli_refuses_typed_empty_scalar_list_without_a_receipt() -> Result
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        combined.contains("builtin collection iteration destination"),
-        "refusal must name the unsupported scalar-list iteration profile: {combined}"
+        combined.contains("unsupported Body-IR type `List[Point]`"),
+        "refusal must name the element type the runtime has no value for: {combined}"
     );
     assert!(
         combined.contains("original Incan source span"),
         "refusal must retain source authority: {combined}"
     );
+    let aggregate_start = source
+        .find("[Point(x=1)]")
+        .ok_or("fixture must contain the list literal")?;
+    let aggregate_end = aggregate_start + "[Point(x=1)]".len();
+    assert!(
+        combined.contains(&format!(
+            "primary Incan source location: {}:{aggregate_start}..{aggregate_end}",
+            entrypoint.display()
+        )),
+        "CLI refusal must retain the exact aggregate source span: {combined}"
+    );
     assert!(
         !temporary.path().join("target/incan").exists()
             && !temporary.path().join(".incan/backend/receipt.json").exists(),
-        "typed empty scalar-list refusal must not create legacy output or a replacement receipt"
+        "an iteration-profile refusal must not create legacy output or a replacement receipt"
     );
     Ok(())
 }
@@ -3732,6 +3752,348 @@ def main() -> int:
             && !temporary.path().join("target/incan").exists()
             && !temporary.path().join(".incan/backend/receipt.json").exists(),
         "an unavailable nominal default must not fall back or publish a receipt"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_executes_list_concatenation_and_membership() -> Result<(), Box<dyn std::error::Error>> {
+    // #1246 gave these operators a Body IR representation; folding in the runtime half is what keeps the executor
+    // from refusing calls the compiler had just started emitting.
+    let source = r#"
+def main() -> int:
+  xs = [1, 2]
+  ys = [3, 4]
+  joined = xs + ys
+  if 3 in joined:
+    if 9 not in joined:
+      return joined[3]
+  return 0
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(4));
+    for helper in ["list_concat", "list_contains", "list_not_contains"] {
+        assert!(
+            execution.body_snapshot.contains(&format!("call helper:{helper}(")),
+            "{helper} must execute through its own helper: {}",
+            execution.body_snapshot
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn replacement_concatenation_leaves_both_operands_usable() -> Result<(), Box<dyn std::error::Error>> {
+    // `xs + ys` produces a new list in both Python and the Rust-emission backend, whose `list_concat` borrows both
+    // sides. The executor must not consume either operand, and the result must not inherit either one's cursor.
+    let source = r#"
+def main() -> int:
+  xs = [1, 2]
+  ys = [30]
+  joined = xs + ys
+  return xs[0] + ys[0] + joined[2]
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(61));
+    Ok(())
+}
+
+#[test]
+fn replacement_cannot_reach_dict_membership_because_it_has_no_dict_value() -> Result<(), Box<dyn std::error::Error>> {
+    // The honest boundary of the folded-in runtime work. `set_contains` and `dict_contains_key` exist in
+    // `incan_stdlib`, and Body IR emits calls to them, but this executor has no set or dict value at all -- only
+    // lists. The refusal therefore lands on the *aggregate*, before membership is ever reached, which is the
+    // accurate report: the blocker is the missing value kind, not a missing helper. Whoever adds those values
+    // inherits the membership arms alongside them.
+    let source = r#"
+def main() -> bool:
+  d = {"a": 1}
+  return "a" in d
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let Err(error) = execute_free_function(&module, "main", &[]) else {
+        return Err("dict membership must refuse until the executor has a dict value".into());
+    };
+
+    let reported = format!("{error:?}");
+    assert!(
+        reported.contains("dict aggregate"),
+        "the refusal must name the value kind it lacks: {reported}"
+    );
+    assert!(
+        module.render_snapshot().contains("call helper:dict_contains_key("),
+        "Body IR must still represent the membership the executor cannot run: {}",
+        module.render_snapshot()
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_concatenation_result_iterates_from_the_start() -> Result<(), Box<dyn std::error::Error>> {
+    // Indexing the result does not read its cursor, so it cannot catch a concatenation that inherited a
+    // partially-advanced iterator position from an operand. Iterating it does: a non-zero starting cursor drops the
+    // leading elements and the sum comes out short.
+    let source = r#"
+def main() -> int:
+  xs = [(1, 2)]
+  ys = [(4, 8)]
+  mut total = 0
+  for left, right in xs + ys:
+    total += left + right
+  return total
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(15));
+    Ok(())
+}
+
+#[test]
+fn replacement_refuses_list_membership_it_cannot_compare() -> Result<(), Box<dyn std::error::Error>> {
+    // The executor compares only scalars. An element outside that set must refuse rather than be skipped: skipping
+    // would let `false` mean "not present" and "could not tell" at the same time, which is exactly the silent wrong
+    // answer this operator's representation exists to prevent.
+    let source = r#"
+def main() -> bool:
+  xs = [[1], [2]]
+  return [1] in xs
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let Err(error) = execute_free_function(&module, "main", &[]) else {
+        return Err("membership over non-scalar elements must refuse rather than answer".into());
+    };
+
+    assert!(
+        format!("{error:?}").contains("non-scalar"),
+        "the refusal must say it could not compare the elements: {error:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_iterates_any_list_of_representable_elements() -> Result<(), Box<dyn std::error::Error>> {
+    // `for value in [1, 2, 3]` — the most ordinary loop in the language — used to refuse, while `range` and
+    // `list[tuple[scalar, scalar]]` both ran. Nothing in execution required the tuple shape: `poll_iterator` clones
+    // the element at the cursor and `execute_builtin_next` assigns it, whatever it is. The restriction lived only in
+    // the preflight gate, which asked for the one element type the first collection-loop vertical happened to need.
+    for (label, source, expected) in [
+        (
+            "list of ints",
+            "def main() -> int:\n  mut total = 0\n  for value in [1, 2, 3]:\n    total += value\n  return total\n",
+            6,
+        ),
+        (
+            "list of strings",
+            "def main() -> int:\n  mut seen = 0\n  for value in [\"a\", \"b\"]:\n    seen += 1\n  return seen\n",
+            2,
+        ),
+        (
+            "list of bools",
+            "def main() -> int:\n  mut seen = 0\n  for value in [true, false]:\n    seen += 1\n  return seen\n",
+            2,
+        ),
+        (
+            "nested lists",
+            "def main() -> int:\n  mut seen = 0\n  for value in [[1], [2, 3]]:\n    seen += 1\n  return seen\n",
+            2,
+        ),
+        (
+            "scalar pairs, the shape that already worked",
+            "def main() -> int:\n  mut total = 0\n  for left, right in [(1, 2)]:\n    total += left + right\n  return total\n",
+            3,
+        ),
+    ] {
+        let module = lower_typed_body_ir(source)?;
+        let execution = execute_free_function(&module, "main", &[])?;
+        assert_eq!(
+            execution.value,
+            ReplacementValue::Int(expected),
+            "iterating a {label} must execute"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn replacement_still_refuses_iteration_over_an_unrepresentable_element() -> Result<(), Box<dyn std::error::Error>> {
+    // Widening the gate to "any representable element" is not the same as removing it. A list this runtime has no
+    // value for must still refuse at the source span rather than reaching the poll and failing deeper.
+    let source = r#"
+model Point:
+  x: int
+
+def main() -> int:
+  mut seen = 0
+  for value in [Point(x=1)]:
+    seen += 1
+  return seen
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let Err(error) = execute_free_function(&module, "main", &[]) else {
+        return Err("iterating a list of model instances must refuse".into());
+    };
+
+    let aggregate_start = source
+        .find("[Point(x=1)]")
+        .ok_or("fixture must contain the list literal")?;
+    let span = error
+        .primary_span()
+        .ok_or("an unrepresentable aggregate refusal must retain its source span")?;
+    assert_eq!(span.start, aggregate_start);
+    assert_eq!(span.end, aggregate_start + "[Point(x=1)]".len());
+
+    assert!(
+        format!("{error:?}").contains("unsupported Body-IR type")
+            || format!("{error:?}").contains("not a list of representable elements"),
+        "the refusal must name the element type it cannot hold: {error:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_executes_f_string_interpolation() -> Result<(), Box<dyn std::error::Error>> {
+    // Body IR gives an f-string its own structured node rather than a desugared concatenation, and the executor
+    // simply never evaluated it -- the same "represented but not executed" shape as list iteration. Interpolation
+    // is restricted to the scalars whose rendering provably matches the Rust-emission backend's `{}` / `{:?}`.
+    let source = r#"
+def main() -> str:
+  count = 3
+  name = "rows"
+  ok = true
+  return f"{count} {name} ok={ok} quoted={name:?}"
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(
+        execution.value,
+        ReplacementValue::Str("3 rows ok=true quoted=\"rows\"".to_string())
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_refuses_f_string_interpolation_it_cannot_render_identically() -> Result<(), Box<dyn std::error::Error>> {
+    // Interpolation is deliberately narrow. A value renders only when this runtime and the Rust-emission backend
+    // provably agree on the spelling; a list does not, and neither does `float`, where this runtime keeps the source
+    // literal while the other formats an `f64` and turns `1.0` into `1`. A divergence there would be invisible in
+    // the value itself, which is exactly what the parity corpus exists to catch, so refusing is the honest answer.
+    let source = r#"
+def main() -> str:
+  values = [1, 2]
+  return f"{values}"
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let Err(error) = execute_free_function(&module, "main", &[]) else {
+        return Err("list interpolation must refuse until both backends render it the same".into());
+    };
+
+    assert!(
+        format!("{error:?}").contains("f-string interpolation of list"),
+        "the refusal must name the value kind it will not render: {error:?}"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_executes_print_by_recording_its_output() -> Result<(), Box<dyn std::error::Error>> {
+    // `println` was the single largest blocker in the example corpus: 25 of 68 examples reached Body IR and stopped
+    // at their first call. It is now resolved through `incan_core`'s builtin registry rather than by name, and the
+    // line is *recorded* rather than written -- output a caller can read back is output a comparison can check.
+    let source = r#"
+def main() -> None:
+  println("hello")
+  println("count", 3, true)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.emitted_output(), ["hello", "count 3 true"]);
+    assert_eq!(execution.value, ReplacementValue::Unit);
+    Ok(())
+}
+
+#[test]
+fn both_backends_render_a_multi_argument_print_the_same_way() -> Result<(), Box<dyn std::error::Error>> {
+    // Both backends used to emit `args.first()` and discard the rest, so `println("count", 3, true)` printed
+    // `count`. Nothing reported the loss: `check_expr::calls::builtins` gives `Print` no arity check, unlike `Len`
+    // beside it, so the dropped arguments were invisible from source, from diagnostics, and from the generated Rust
+    // unless read line by line.
+    //
+    // This asserts the two renderings together rather than separately. Either one alone could drift back to a
+    // single argument while still passing its own test; what matters is that they agree.
+    let source = "def main() -> None:\n  println(\"count\", 3, true)\n";
+
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(
+        execution.emitted_output(),
+        ["count 3 true"],
+        "the replacement executor must render every argument, space-separated"
+    );
+
+    let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let rust = incan::backend::IrCodegen::new()
+        .try_generate(&program)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+    let printed = rust
+        .lines()
+        .find(|line| line.contains("println!(\"{}"))
+        .ok_or("generated Rust must contain the print call")?;
+    assert!(
+        printed.contains("{} {} {}"),
+        "generated Rust must carry one placeholder per argument, got: {printed}"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_print_respects_a_source_declaration_that_shadows_the_builtin() -> Result<(), Box<dyn std::error::Error>>
+{
+    // Resolving the builtin from a registry must not steal a name the source declared. A module defining its own
+    // `print` means that declaration, and lowering only marks the builtin when nothing in source took the spelling.
+    let source = r#"
+def print(value: int) -> int:
+  return value + 1
+
+def main() -> int:
+  return print(41)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(42));
+    assert!(
+        execution.emitted_output().is_empty(),
+        "a shadowing declaration must not emit builtin output: {:?}",
+        execution.emitted_output()
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_refuses_to_print_a_value_it_cannot_render_identically() -> Result<(), Box<dyn std::error::Error>> {
+    // Printing shares one rendering rule with f-string interpolation, so it inherits the same boundary: a value
+    // whose spelling this runtime and the Rust-emission backend do not provably agree on refuses instead of
+    // guessing.
+    let source = r#"
+def main() -> None:
+  println([1, 2])
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let Err(error) = execute_free_function(&module, "main", &[]) else {
+        return Err("printing a list must refuse until both backends render it the same".into());
+    };
+
+    assert!(
+        format!("{error:?}").contains("f-string interpolation of list"),
+        "the refusal must name the value kind it will not render: {error:?}"
     );
     Ok(())
 }

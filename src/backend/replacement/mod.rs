@@ -30,6 +30,7 @@ use std::{
     rc::Rc,
 };
 
+use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_core::{
     lang::surface::constructors::{ConstructorId, as_str as constructor_name},
     lang::types::collections::{self, CollectionTypeId},
@@ -38,8 +39,8 @@ use incan_core::{
 use incan_semantics_core::body_ir::{
     AggregateKind, ArgumentBinding, ArgumentElement, AssertionKind, BinOp, Body, BodyIrModule, CallableParam,
     CallableParamDefault, CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation,
-    FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, GeneratorBody, HelperOp,
-    IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableBuiltin, NamedCallableTarget,
+    FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, FormatPart, FormatStyle,
+    GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableTarget,
     NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem,
     ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue, ScopeId, Statement,
     StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration,
@@ -463,14 +464,16 @@ pub struct ReplacementExecution {
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     /// Every direct task-frame transition observed during this successful execution, in source execution order.
     task_lifecycle: Vec<TaskLifecycleEvent>,
+    /// Lines the program emitted through `print`/`println`, in emission order.
+    emitted_output: Vec<String>,
     /// Every provider operation this execution ran, each referencing its own RFC 104 operation receipt.
     ///
     /// Empty for a run that executed no provider operation. A run that was *refused* by a governed denial or a
     /// provider failure never produces a [`ReplacementExecution`] at all, so its receipts are read from the
     /// [`provider::ProviderRuntime`] the caller supplied rather than from here.
     provider_executions: Vec<ProviderExecutionRecord>,
-    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, provider executions, and
-    /// observed result.
+    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, provider executions,
+    /// observed result, and emitted program output.
     pub output_identity: String,
 }
 
@@ -501,6 +504,15 @@ impl ReplacementExecution {
     #[must_use]
     pub fn runtime_requirement_evidence(&self) -> Vec<RuntimeRequirementProjection> {
         runtime_requirement_projection(&self.runtime_requirements)
+    }
+
+    /// The lines this execution emitted through `print`/`println`, in emission order.
+    ///
+    /// Empty for a program that printed nothing. A caller running the program is expected to write these; a caller
+    /// comparing two backends is expected to compare them, because a program's output is part of what it did.
+    #[must_use]
+    pub fn emitted_output(&self) -> &[String] {
+        &self.emitted_output
     }
 
     /// Return the stable direct-task lifecycle evidence bound into this execution's output identity and CLI report.
@@ -958,6 +970,7 @@ pub fn execute_prevalidated_free_function(
         .map(|runtime| runtime.provider_executions())
         .unwrap_or_default();
     let provider_summary = canonical_provider_execution_summary(&provider_executions);
+    let emitted_output_summary = canonical_emitted_output_summary(&executor.emitted_output);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
@@ -965,6 +978,7 @@ pub fn execute_prevalidated_free_function(
         requirements_summary.as_str(),
         task_summary.as_str(),
         provider_summary.as_str(),
+        emitted_output_summary.as_str(),
     ]);
     Ok(ReplacementExecution {
         value,
@@ -972,6 +986,7 @@ pub fn execute_prevalidated_free_function(
         ownership_reads: executor.ownership_reads,
         runtime_requirements: executor.runtime_requirements,
         task_lifecycle: executor.task_lifecycle,
+        emitted_output: executor.emitted_output,
         provider_executions,
         output_identity,
     })
@@ -1101,13 +1116,13 @@ fn validate_collection_local_types(
                 if range_iterator_locals.contains(&iterator_local) {
                     validate_range_iteration_local_types(body, destination, iterator_local, statement.span)?;
                 } else {
-                    validate_scalar_pair_tuple_local_type(
+                    validate_structural_iteration_local_type(
                         body,
                         bare_local(destination, statement.span)?,
                         statement.span,
                         "builtin collection iteration destination",
                     )?;
-                    validate_scalar_pair_list_local_type(
+                    validate_structural_list_local_type(
                         body,
                         iterator_local,
                         statement.span,
@@ -1283,7 +1298,7 @@ fn validate_structural_aggregate_local_type(
 /// Collect builtin `range` iterator locals from explicit Body-IR builtin targets.
 ///
 /// A same-module declaration named `range` now carries a [`NamedCallableTarget::direct_call_id`] and dispatches to
-/// that declaration, while the compiler-recognized builtin carries [`NamedCallableBuiltin::Range`]. This keeps the
+/// that declaration, while the compiler-recognized builtin carries [`BuiltinFnId::Range`]. This keeps the
 /// existing bounded builtin rule without guessing from a source spelling or treating an imported callable as range.
 fn range_iterator_locals(block: &incan_semantics_core::body_ir::Block) -> BTreeSet<LocalId> {
     let mut locals = BTreeSet::new();
@@ -1364,37 +1379,41 @@ fn validate_range_iteration_local_types(
     }
 }
 
-/// Validate that a Body-IR local has the only tuple type admitted as a replacement collection element.
-fn validate_scalar_pair_tuple_local_type(
+/// Validate that a builtin collection loop binds an item this runtime can hold.
+///
+/// The bound item is whatever [`BodyExecutor::poll_iterator`] hands back — an element cloned out of the list — so
+/// the question is only whether that value is representable, which is the same question
+/// [`validate_structural_aggregate_local_type`] asks of a list literal. Iterating `list[int]` was previously refused
+/// here for want of a two-element tuple, even though execution never depended on the shape: the poll clones the
+/// element at the cursor and assigns it, whatever it is. Ranges already iterated scalars through their own gate, so
+/// the narrower rule made the most ordinary loop in the language the one shape that could not run.
+fn validate_structural_iteration_local_type(
     body: &Body,
     local: LocalId,
     span: HirSourceSpan,
     role: &str,
 ) -> Result<(), ReplacementExecutionError> {
     let ty = declared_local_type(body, local, span)?;
-    if is_scalar_pair_tuple_type(ty) {
+    if is_direct_structural_type(ty) {
         Ok(())
     } else {
-        Err(unsupported(
-            format!("{role} has Body-IR type `{ty}`, not tuple[scalar, scalar]"),
-            span,
-        ))
+        Err(unsupported(format!("{role} has unsupported Body-IR type `{ty}`"), span))
     }
 }
 
 /// Validate that a Body-IR local has the only list type admitted by the replacement collection profile.
-fn validate_scalar_pair_list_local_type(
+fn validate_structural_list_local_type(
     body: &Body,
     local: LocalId,
     span: HirSourceSpan,
     role: &str,
 ) -> Result<(), ReplacementExecutionError> {
     let ty = declared_local_type(body, local, span)?;
-    if is_scalar_pair_list_type(ty) {
+    if is_structural_list_type(ty) {
         Ok(())
     } else {
         Err(unsupported(
-            format!("{role} has Body-IR type `{ty}`, not list[tuple[scalar, scalar]]"),
+            format!("{role} has Body-IR type `{ty}`, not a list of representable elements"),
             span,
         ))
     }
@@ -1413,26 +1432,62 @@ fn declared_local_type(
         .ok_or_else(|| unsupported("Body-IR local without a declared type", span))
 }
 
-/// Return whether a type is a two-element tuple of scalar shapes the replacement runtime already supports.
-fn is_scalar_pair_tuple_type(ty: &IncanType) -> bool {
-    match ty {
-        IncanType::Tuple(elements) => {
-            matches!(elements.as_slice(), [left, right] if is_collection_scalar_type(left) && is_collection_scalar_type(right))
-        }
-        IncanType::Generic { base, args } if collections::from_str(base) == Some(CollectionTypeId::Tuple) => {
-            matches!(args.as_slice(), [left, right] if is_collection_scalar_type(left) && is_collection_scalar_type(right))
-        }
-        _ => false,
+/// Render one interpolated value the way the Rust-emission backend's `{}` / `{:?}` would.
+///
+/// Restricted to the scalars whose two renderings provably agree. `Debug` on a string quotes it, matching Rust's
+/// `{:?}`; every other supported scalar renders identically under both styles. Anything outside this set refuses,
+/// because an interpolation that renders differently per backend is exactly the silent divergence the parity
+/// corpus exists to catch, and it would be invisible in the value itself.
+fn format_interpolation(
+    value: &ReplacementValue,
+    style: FormatStyle,
+    span: HirSourceSpan,
+) -> Result<String, ReplacementExecutionError> {
+    match (value, style) {
+        (ReplacementValue::Int(value), _) => Ok(value.to_string()),
+        (ReplacementValue::Bool(value), _) => Ok(value.to_string()),
+        (ReplacementValue::Str(text), FormatStyle::Display) => Ok(text.clone()),
+        (ReplacementValue::Str(text), FormatStyle::Debug) => Ok(format!("{text:?}")),
+        (other, _) => Err(unsupported(
+            format!("f-string interpolation of {}", value_kind(other)),
+            span,
+        )),
     }
 }
 
-/// Return whether a type is `list[tuple[scalar, scalar]]` according to the canonical collection registry.
-fn is_scalar_pair_list_type(ty: &IncanType) -> bool {
+/// The integer elements of a list-shaped value, with booleans counted as 1/0.
+///
+/// `sum`, `min` and `max` all emit `iter()`-based Rust over a list, and the emitted `sum` maps `bool` to `1i64`/
+/// `0i64` explicitly. Mirroring that here keeps the two backends' answers identical for the same source rather than
+/// leaving this runtime to invent a numeric interpretation of its own.
+fn integer_elements(
+    value: &ReplacementValue,
+    builtin: &str,
+    span: HirSourceSpan,
+) -> Result<Vec<i64>, ReplacementExecutionError> {
+    let elements = match value {
+        ReplacementValue::List { elements, .. } | ReplacementValue::CollectedGenerator { elements, .. } => elements,
+        other => {
+            return Err(unsupported(format!("`{builtin}` of {}", value_kind(other)), span));
+        }
+    };
+    elements
+        .iter()
+        .map(|element| match element {
+            ReplacementValue::Int(value) => Ok(*value),
+            ReplacementValue::Bool(value) => Ok(i64::from(*value)),
+            other => Err(unsupported(format!("`{builtin}` over {}", value_kind(other)), span)),
+        })
+        .collect()
+}
+
+/// Return whether a type is a list whose elements this runtime can materialize, per the collection registry.
+fn is_structural_list_type(ty: &IncanType) -> bool {
     matches!(
         ty,
         IncanType::Generic { base, args }
             if collections::from_str(base) == Some(CollectionTypeId::List)
-                && matches!(args.as_slice(), [element] if is_scalar_pair_tuple_type(element))
+                && matches!(args.as_slice(), [element] if is_direct_structural_type(element))
     )
 }
 
@@ -1485,8 +1540,31 @@ fn is_direct_structural_type(ty: &IncanType) -> bool {
 /// A source spelling or absent same-module declaration identity is not enough: imported and unresolved callables
 /// retain the latter too, and must refuse rather than borrowing the builtin's execution rule.
 fn is_explicit_range_builtin(target: &NamedCallableTarget) -> bool {
-    target.direct_call_id.is_none() && target.builtin == Some(NamedCallableBuiltin::Range)
+    explicit_builtin(target) == Some(BuiltinFnId::Range)
 }
+
+/// The compiler-owned builtin this target names, if it names one and source did not take the spelling.
+///
+/// A same-module declaration carries a [`NamedCallableTarget::direct_call_id`] and dispatches to itself, so a
+/// module defining its own `print` or `len` keeps meaning its own. One accessor rather than a predicate per
+/// builtin, so admission and execution read the same answer instead of drifting apart as the set grows.
+fn explicit_builtin(target: &NamedCallableTarget) -> Option<BuiltinFnId> {
+    target.direct_call_id.is_none().then_some(target.builtin).flatten()
+}
+
+/// The builtins this runtime executes, as opposed to those it merely recognizes.
+///
+/// Deliberately a subset. A builtin belongs here only when this runtime's answer provably matches the one the
+/// Rust-emission backend generates for the same call; anything else refuses by name rather than producing a second
+/// opinion. `len` over a `str` is the instructive exclusion — see [`BodyExecutor::execute_builtin`].
+const EXECUTABLE_BUILTINS: &[BuiltinFnId] = &[
+    BuiltinFnId::Print,
+    BuiltinFnId::Len,
+    BuiltinFnId::Abs,
+    BuiltinFnId::Sum,
+    BuiltinFnId::Min,
+    BuiltinFnId::Max,
+];
 
 /// Collect the local identities written by builtin collection polling across one normalized body.
 ///
@@ -1789,10 +1867,17 @@ fn validate_call_profile(
         ));
     };
     let supported = match callee {
-        Callee::Helper(HelperOp::StrConcat) => true,
+        Callee::Helper(
+            HelperOp::StrConcat | HelperOp::ListConcat | HelperOp::ListContains | HelperOp::ListNotContains,
+        ) => true,
         // Named calls remain direct module dispatches. Their target/binding facts are Body-IR values, not a source
         // lookup reconstructed by this executor.
         Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => true,
+        Callee::Function(CallableTarget::Named(target))
+            if explicit_builtin(target).is_some_and(|id| EXECUTABLE_BUILTINS.contains(&id)) =>
+        {
+            true
+        }
         Callee::Function(CallableTarget::Named(target)) => {
             target.direct_call_id.is_some()
                 && target.builtin.is_none()
@@ -1902,6 +1987,10 @@ fn validate_rvalue_profile(
         Rvalue::Use(operand) | Rvalue::UnaryOp(_, operand) => {
             validate_operand_profile(operand, span, tuple_iteration_locals)
         }
+        Rvalue::Format(parts) => parts.iter().try_for_each(|part| match part {
+            FormatPart::Literal(_) => Ok(()),
+            FormatPart::Expr { operand, .. } => validate_operand_profile(operand, span, tuple_iteration_locals),
+        }),
         Rvalue::BinaryOp(_, left, right) => {
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
@@ -1918,7 +2007,6 @@ fn validate_rvalue_profile(
         Rvalue::FieldlessEnumVariant(target) => validate_fieldless_enum_variant_target(target, span),
         Rvalue::ValueEnumVariant(target) => validate_value_enum_variant_target(target, span),
         Rvalue::ResultVariant(variant) => validate_result_variant_profile(variant, span, tuple_iteration_locals),
-        Rvalue::Format(_) => Err(unsupported("f-string", span)),
         Rvalue::Closure {
             params,
             captured_operands,
@@ -2287,6 +2375,13 @@ struct BodyExecutor {
     next_task_id: usize,
     /// Direct task transitions observed in execution order and bound into the output identity.
     task_lifecycle: Vec<TaskLifecycleEvent>,
+    /// Lines the executed program emitted, in emission order.
+    ///
+    /// Recorded rather than written. Writing straight to the host's stdout would make the program's output an
+    /// effect nothing could observe, compare, or test — and the shadow comparison reads a *returned value*, so a
+    /// divergence in what two backends printed would not show up in any verdict. Holding the output as a value
+    /// keeps it comparable; whether it reaches a terminal is the caller's decision, not this executor's.
+    emitted_output: Vec<String>,
     /// The task whose Body IR this executor is currently polling, if any.
     active_task: Option<usize>,
     /// The authority source, provider host, and receipt log admitted provider operations run against.
@@ -2318,6 +2413,7 @@ impl BodyExecutor {
             steps: 0,
             next_task_id: 0,
             task_lifecycle: Vec::new(),
+            emitted_output: Vec::new(),
             active_task: None,
             providers,
             pending_flow: None,
@@ -2338,6 +2434,7 @@ impl BodyExecutor {
             steps,
             next_task_id: 0,
             task_lifecycle: Vec::new(),
+            emitted_output: Vec::new(),
             active_task: None,
             providers: None,
             pending_flow: None,
@@ -2397,6 +2494,7 @@ impl BodyExecutor {
         self.steps = child.steps;
         self.next_task_id = self.next_task_id.max(child.next_task_id);
         self.task_lifecycle.extend(child.task_lifecycle);
+        self.emitted_output.extend(child.emitted_output);
     }
 
     /// Construct one unpolled task directly from an identity-selected async Body-IR body.
@@ -2825,8 +2923,43 @@ impl BodyExecutor {
                 let right = self.evaluate_operand(right, span)?.into_string(span)?;
                 ReplacementValue::Str(format!("{left}{right}"))
             }
+            Callee::Helper(HelperOp::ListConcat) => {
+                let [left, right] = args else {
+                    return Err(unsupported("list-concatenation call arity", span));
+                };
+                let mut elements = self.evaluate_list_elements(left, span)?;
+                elements.extend(self.evaluate_list_elements(right, span)?);
+                // A fresh cursor, not either operand's: concatenation produces a new list, and inheriting a
+                // partially-advanced iterator position would hand the result someone else's traversal state.
+                ReplacementValue::List { elements, next: 0 }
+            }
+            Callee::Helper(helper @ (HelperOp::ListContains | HelperOp::ListNotContains)) => {
+                let [haystack, needle] = args else {
+                    return Err(unsupported("list-membership call arity", span));
+                };
+                // Operands arrive haystack-first, matching the helper's own signature rather than the source
+                // spelling -- see `HelperOp::ListContains`.
+                let elements = self.evaluate_list_elements(haystack, span)?;
+                let needle = self.evaluate_operand(needle, span)?;
+                // Every element must be comparable, not just the ones that happen to be. Skipping an element this
+                // profile cannot compare would let a `false` mean "not present" and "could not tell" at once, which
+                // is the silent-wrong-answer shape this operator's representation exists to avoid.
+                if !needle.is_collection_scalar() || !elements.iter().all(ReplacementValue::is_collection_scalar) {
+                    return Err(unsupported("list membership over a non-scalar element", span));
+                }
+                let found = elements.contains(&needle);
+                ReplacementValue::Bool(matches!(helper, HelperOp::ListContains) == found)
+            }
             Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => {
                 self.evaluate_range(args, span)?
+            }
+            Callee::Function(CallableTarget::Named(target))
+                if explicit_builtin(target).is_some_and(|id| EXECUTABLE_BUILTINS.contains(&id)) =>
+            {
+                let Some(builtin) = explicit_builtin(target) else {
+                    return Err(unsupported("builtin call without a resolved identity", span));
+                };
+                self.execute_builtin(builtin, args, span)?
             }
             Callee::Function(CallableTarget::Named(target)) => self.execute_named_callable(target, args, span)?,
             Callee::Function(CallableTarget::Local(target)) => self.execute_local_callable(target, args, span)?,
@@ -3266,6 +3399,123 @@ impl BodyExecutor {
         }
     }
 
+    /// Execute one compiler-owned builtin whose answer provably matches the Rust-emission backend's.
+    ///
+    /// Each arm mirrors what `emit_builtin_call` generates rather than what the name suggests in Python, because a
+    /// second opinion is worse than a refusal: the two backends are meant to agree, and the shadow comparison would
+    /// have no way to notice if they quietly did not.
+    ///
+    /// `len` over a `str` is the exclusion worth naming. The Rust backend emits `.len()`, which on a `String` counts
+    /// **bytes**; Python's `len` counts characters. They agree only for ASCII, so this refuses rather than picking a
+    /// side — the underlying disagreement is a language-semantics question, not something an executor should settle.
+    fn execute_builtin(
+        &mut self,
+        builtin: BuiltinFnId,
+        args: &[&Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        if matches!(builtin, BuiltinFnId::Print) {
+            return self.execute_print(args, span);
+        }
+
+        let [argument] = args else {
+            return Err(unsupported(format!("`{}` call arity", builtins::as_str(builtin)), span));
+        };
+        let value = self.evaluate_operand(argument, span)?;
+
+        match builtin {
+            // `.len() as i64` on a `Vec` counts elements, which both backends agree on. A `str` does not agree,
+            // and a value with no length at all is not a `len` this profile can answer.
+            BuiltinFnId::Len => match value {
+                ReplacementValue::List { elements, .. }
+                | ReplacementValue::CollectedGenerator { elements, .. }
+                | ReplacementValue::Tuple(elements) => Ok(ReplacementValue::Int(elements.len() as i64)),
+                ReplacementValue::Str(_) => Err(unsupported(
+                    "`len` of a string, whose byte-versus-character meaning the two backends do not agree on",
+                    span,
+                )),
+                other => Err(unsupported(format!("`len` of {}", value_kind(&other)), span)),
+            },
+            BuiltinFnId::Abs => match value {
+                ReplacementValue::Int(value) => Ok(ReplacementValue::Int(value.abs())),
+                other => Err(unsupported(format!("`abs` of {}", value_kind(&other)), span)),
+            },
+            // `iter().sum::<i64>()`, with bools counted as 1/0 exactly as the emitted Rust does.
+            BuiltinFnId::Sum => {
+                let elements = integer_elements(&value, "sum", span)?;
+                Ok(ReplacementValue::Int(elements.iter().sum()))
+            }
+            BuiltinFnId::Min => {
+                let elements = integer_elements(&value, "min", span)?;
+                elements
+                    .iter()
+                    .min()
+                    .copied()
+                    .map(ReplacementValue::Int)
+                    .ok_or_else(|| unsupported("`min` of an empty collection", span))
+            }
+            BuiltinFnId::Max => {
+                let elements = integer_elements(&value, "max", span)?;
+                elements
+                    .iter()
+                    .max()
+                    .copied()
+                    .map(ReplacementValue::Int)
+                    .ok_or_else(|| unsupported("`max` of an empty collection", span))
+            }
+            other => Err(unsupported(format!("builtin `{}`", builtins::as_str(other)), span)),
+        }
+    }
+
+    /// Execute a `print`/`println` call by recording its line rather than writing it.
+    ///
+    /// Every argument renders, space-separated, matching Python's `print` and the Rust-emission backend's
+    /// `emit_print_call`. That agreement is recent: both backends previously emitted only the first argument and
+    /// discarded the rest, so `println("count", 3)` printed `count` with nothing reporting the loss.
+    ///
+    /// The line is appended to [`BodyExecutor::emitted_output`] rather than printed. That keeps the effect a value
+    /// this runtime can hand back, compare, and test; a direct write would leave the program's output invisible to
+    /// every one of those.
+    fn execute_print(
+        &mut self,
+        args: &[&Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut parts = Vec::with_capacity(args.len());
+        for argument in args {
+            let value = self.evaluate_operand(argument, span)?;
+            parts.push(format_interpolation(&value, FormatStyle::Display, span)?);
+        }
+        let rendered = parts.join(" ");
+        self.emitted_output.push(rendered);
+        Ok(ReplacementValue::Unit)
+    }
+
+    /// Evaluate an f-string into a single string value.
+    ///
+    /// Body IR represents an f-string as its own structured node rather than a desugared concatenation, so this
+    /// walks the parts directly. Only the scalar kinds whose rendering provably matches the Rust-emission backend
+    /// are interpolated; anything else refuses by name rather than inventing a spelling the two backends would
+    /// disagree on. `float` is deliberately among the refusals: this runtime retains the source literal while the
+    /// other backend formats an `f64`, so `1.0` would render differently on each side.
+    fn evaluate_format(
+        &mut self,
+        parts: &[FormatPart],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut rendered = String::new();
+        for part in parts {
+            match part {
+                FormatPart::Literal(text) => rendered.push_str(text),
+                FormatPart::Expr { operand, style } => {
+                    let value = self.evaluate_operand(operand, span)?;
+                    rendered.push_str(&format_interpolation(&value, *style, span)?);
+                }
+            }
+        }
+        Ok(ReplacementValue::Str(rendered))
+    }
+
     /// Evaluate an assignment rvalue supported by the initial profile.
     fn evaluate_rvalue(
         &mut self,
@@ -3276,12 +3526,12 @@ impl BodyExecutor {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
+            Rvalue::Format(parts) => self.evaluate_format(parts, span),
             Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::FieldlessEnumVariant(target) => self.evaluate_fieldless_enum_variant(target, span),
             Rvalue::ValueEnumVariant(target) => self.evaluate_value_enum_variant(target, span),
             Rvalue::ResultVariant(variant) => self.evaluate_result_variant(variant, span),
-            Rvalue::Format(_) => Err(unsupported("f-string", span)),
             Rvalue::Closure {
                 params,
                 captured_operands,
@@ -4635,6 +4885,23 @@ impl BodyExecutor {
     }
 
     /// Read one constant or local place while applying its recorded ownership decision.
+    /// Evaluate an operand that must be a list, returning its elements.
+    ///
+    /// Accepts a collected generator alongside a list because both carry the same materialized element vector, and
+    /// the cursor each holds is traversal state that a concatenation or membership test has no business reading.
+    fn evaluate_list_elements(
+        &mut self,
+        operand: &Operand,
+        span: HirSourceSpan,
+    ) -> Result<Vec<ReplacementValue>, ReplacementExecutionError> {
+        match self.evaluate_operand(operand, span)? {
+            ReplacementValue::List { elements, .. } | ReplacementValue::CollectedGenerator { elements, .. } => {
+                Ok(elements)
+            }
+            other => Err(unsupported(format!("list operation over {}", value_kind(&other)), span)),
+        }
+    }
+
     fn evaluate_operand(
         &mut self,
         operand: &Operand,
@@ -5077,6 +5344,41 @@ fn canonical_task_lifecycle_summary(events: &[TaskLifecycleEvent]) -> String {
         .join("|")
 }
 
+/// Render emitted source output as an unambiguous output-identity component.
+///
+/// Each line is length-prefixed so embedded separators or newlines cannot make two distinct output streams share a
+/// digest input. This deliberately records the observable source effect rather than treating a successful return
+/// value as the whole program result.
+fn canonical_emitted_output_summary(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| format!("{}:{line}", line.len()))
+        .collect::<String>()
+}
+
+#[cfg(test)]
+mod output_identity_tests {
+    use super::canonical_emitted_output_summary;
+
+    #[test]
+    fn emitted_output_summary_is_unambiguous() {
+        let split_after_two = vec!["ab".to_string(), "c".to_string()];
+        let split_after_one = vec!["a".to_string(), "bc".to_string()];
+        let one_empty_line = vec![String::new()];
+
+        assert_ne!(
+            canonical_emitted_output_summary(&split_after_two),
+            canonical_emitted_output_summary(&split_after_one),
+            "different source-output boundaries must not share an output-identity component"
+        );
+        assert_ne!(
+            canonical_emitted_output_summary(&[]),
+            canonical_emitted_output_summary(&one_empty_line),
+            "no output and one blank output line are different source-observable outcomes"
+        );
+    }
+}
+
 /// Render one runtime requirement with the semantic labels used in replacement evidence.
 fn runtime_requirement_label(requirement: &AbiV0RuntimeRequirement) -> String {
     match requirement {
@@ -5128,6 +5430,12 @@ const fn helper_label(helper: HelperOp) -> &'static str {
         HelperOp::StrContains => "str_contains",
         HelperOp::StrNotContains => "str_not_contains",
         HelperOp::ListConcat => "list_concat",
+        HelperOp::ListContains => "list_contains",
+        HelperOp::ListNotContains => "list_not_contains",
+        HelperOp::SetContains => "set_contains",
+        HelperOp::SetNotContains => "set_not_contains",
+        HelperOp::DictContainsKey => "dict_contains_key",
+        HelperOp::DictNotContainsKey => "dict_not_contains_key",
     }
 }
 

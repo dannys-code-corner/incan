@@ -101,8 +101,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// A direct executable target must be physically represented by this Body-IR module. Imports and unresolved
     /// names deliberately retain their existing call representation with no direct declaration identity, so this
     /// frontend does not turn a source-representation gap into a new source diagnostic. The replacement executor
-    /// then refuses those targets at the original call span; only compiler-recognized `range` has a separate
-    /// explicit Body-IR builtin target fact.
+    /// then refuses those targets at the original call span. Every unshadowed core builtin has a registry identity;
+    /// individual consumers still admit only their documented subset, such as `range` for counting-loop lowering.
     ///
     /// Overloads are why this is resolved per call site rather than per name. `function_bindings` is keyed by bare
     /// source name, so for two same-name declarations it holds only one of them; binding a call against the wrong
@@ -124,11 +124,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                     .get(name)
                     .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect()),
                 direct_call_id: None,
-                builtin: (name == "range"
-                    && self.type_info.source_target(span).is_none()
-                    && !declarations.function_bindings.contains_key(name)
-                    && !declarations.function_overloads.contains_key(name))
-                .then_some(bir::NamedCallableBuiltin::Range),
+                builtin: resolved_builtin(
+                    name,
+                    self.type_info.source_target(span).is_none()
+                        && !declarations.function_bindings.contains_key(name)
+                        && !declarations.function_overloads.contains_key(name),
+                ),
                 canonical: self.imported_callable_identity(name),
             });
         };
@@ -747,4 +748,19 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             out,
         )
     }
+}
+
+/// Resolve a called name to the canonical builtin it names, when nothing in source has taken that spelling.
+///
+/// The spelling comes from `incan_core`'s builtin registry rather than a literal, so a builtin added there is
+/// recognized here without a second edit — the same single-source rule the collection and constructor registries
+/// already carry. Body IR previously recognized exactly one builtin, `range`, by comparing the name against the
+/// string `"range"`. That both duplicated the registry and left every other builtin arriving as an ordinary named
+/// call, indistinguishable to a consumer from a user-declared function of the same name.
+///
+/// `unshadowed` carries the caller's proof that the name is not a declared, imported, or overloaded function. A
+/// module that declares its own `print` means that declaration, and resolving the builtin there would silently
+/// redirect the call to something the source never named.
+fn resolved_builtin(name: &str, unshadowed: bool) -> Option<incan_core::lang::builtins::BuiltinFnId> {
+    unshadowed.then(|| incan_core::lang::builtins::from_str(name)).flatten()
 }

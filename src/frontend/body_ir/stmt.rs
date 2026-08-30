@@ -122,10 +122,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         );
     }
 
-    /// Lower an inferred/`let`/`mutable`/reassignment statement. A `Reassign` binding reuses the existing local for
-    /// `assignment.name` when one is already bound (falling back to declaring a new one if reassignment targets an
-    /// unbound name), while every other binding kind always declares a fresh local — matching source-level shadowing
-    /// semantics, where a repeated `let x = ...` introduces a new binding rather than mutating the old one.
+    /// Lower an assignment statement while preserving its checked lexical binding decision.
+    ///
+    /// A plain inferred assignment and the internal `Reassign` spelling reuse the nearest active local when one is
+    /// bound, falling back to a declaration for an otherwise unbound name. `let` and `mut` always declare a fresh
+    /// local: those are the two source declaration forms that deliberately shadow an enclosing binding.
     pub(super) fn lower_assignment(
         &mut self,
         assignment: &ast::AssignmentStmt,
@@ -144,12 +145,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let materializes_range = self.expr_has_materialized_range_layout(&assignment.value);
         let value = self.lower_expr_to_operand(&assignment.value, scope, out);
         let local = match assignment.binding {
-            ast::BindingKind::Reassign => self
+            ast::BindingKind::Inferred | ast::BindingKind::Reassign => self
                 .bindings
                 .get(&assignment.name)
                 .copied()
                 .unwrap_or_else(|| self.declare_new_local(assignment.name.clone(), ty, scope, span, remaining)),
-            ast::BindingKind::Inferred | ast::BindingKind::Let | ast::BindingKind::Mutable => {
+            ast::BindingKind::Let | ast::BindingKind::Mutable => {
                 self.declare_new_local(assignment.name.clone(), ty, scope, span, remaining)
             }
         };
@@ -304,9 +305,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     }
 
     /// Resolve or declare the local for one name bound by a multi-target assignment (tuple unpack or chained
-    /// assignment). A `Reassign` binding reuses an existing local exactly like [`Self::lower_assignment`] does for
-    /// a plain single-target reassignment; every other binding kind always declares a fresh local, matching
-    /// source-level shadowing semantics.
+    /// assignment). A plain inferred assignment and the internal `Reassign` spelling reuse an active local exactly
+    /// like [`Self::lower_assignment`] does for a single target; `let` and `mut` always declare a fresh local,
+    /// matching source-level shadowing semantics.
     pub(super) fn bind_multi_target_name(
         &mut self,
         name: &str,
@@ -317,12 +318,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         remaining: &[ast::Spanned<ast::Statement>],
     ) -> bir::LocalId {
         match binding {
-            ast::BindingKind::Reassign => self
+            ast::BindingKind::Inferred | ast::BindingKind::Reassign => self
                 .bindings
                 .get(name)
                 .copied()
                 .unwrap_or_else(|| self.declare_new_local(name.to_string(), ty, scope, span, remaining)),
-            ast::BindingKind::Inferred | ast::BindingKind::Let | ast::BindingKind::Mutable => {
+            ast::BindingKind::Let | ast::BindingKind::Mutable => {
                 self.declare_new_local(name.to_string(), ty, scope, span, remaining)
             }
         }

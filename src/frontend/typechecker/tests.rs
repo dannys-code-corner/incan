@@ -22756,3 +22756,141 @@ fn a_rejected_description_never_leaves_a_capability_looking_documented() -> Resu
     );
     Ok(())
 }
+
+// ---- #1072: plain assignment resolves outward; `let`/`mut` introduce bindings ----
+
+#[test]
+fn plain_assignment_in_a_block_reassigns_the_nearest_enclosing_binding() {
+    // `reassigns_outer` from `scopes_and_name_resolution.md`, promoted to an executable fixture as RFC 120 requires.
+    // Assignment checking used to look up only the innermost scope, so this silently created a fresh block-local
+    // and the outer `x` never moved -- with no diagnostic, and no way for a reader to tell.
+    let source = "def reassigns_outer() -> int:\n  mut x = 1\n  if true:\n    x = 2\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "a plain assignment to an enclosing `mut` binding must be accepted as a reassignment"
+    );
+}
+
+#[test]
+fn plain_assignment_to_an_enclosing_immutable_binding_is_rejected() {
+    // The mutability half of the same contract: reassignment requires `mut`, and the old innermost-only lookup
+    // could not enforce it across a block boundary because it never saw the outer binding at all.
+    let source = "def reassign_immutable() -> int:\n  let x = 1\n  if true:\n    x = 2\n  return x\n";
+    let errors = check_str_err(source, "reassigning an immutable enclosing binding must be rejected");
+
+    assert!(
+        errors.iter().any(|error| error.message.contains("Cannot mutate 'x'")),
+        "expected a mutability diagnostic, got: {errors:?}"
+    );
+}
+
+#[test]
+fn plain_assignment_across_a_block_is_type_checked_against_the_outer_binding() {
+    // The first repro in #1072. This typechecked cleanly before: the block-local shadow meant the `str` was never
+    // compared against the outer `int`, so a whole-type mismatch produced no diagnostic whatsoever.
+    let source = "def probe() -> None:\n  mut x: int = 1\n  if true:\n    x = \"hello\"\n";
+    let errors = check_str_err(
+        source,
+        "assigning a `str` to an enclosing `int` binding must be rejected",
+    );
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("type mismatch") && error.message.contains("'x'")),
+        "expected a type mismatch against the outer binding, got: {errors:?}"
+    );
+}
+
+#[test]
+fn let_in_a_block_introduces_a_new_binding_rather_than_reassigning() {
+    // `shadows_in_block` from the same document. This is the half that has to move with the outward lookup: a
+    // lookup that walks outward *without* honoring the declaration forms would turn this into a reassignment of
+    // an immutable outer binding, and reject a program the language documents as valid.
+    let source = "def shadows_in_block() -> int:\n  let x = 1\n  if true:\n    let x = 2\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "`let` in a nested block must introduce a new binding, not reassign the immutable outer one"
+    );
+}
+
+#[test]
+fn mut_declares_a_new_binding_rather_than_making_an_active_one_mutable() {
+    // RFC 120 is explicit that `mut name = value` is "not 'make the existing `name` mutable'", and that reading it
+    // as a modifier "inverts what it does to identity". The checker did read it that way: shadowing a parameter
+    // with `mut` was rejected as a mutation of an immutable binding, so the documented shadowing form could not be
+    // written at all over an active name.
+    let source = "def f(imported: str) -> str:\n  mut imported = imported\n  imported = \"bla\"\n  return imported\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "`mut` must declare a new binding that may shadow an active one"
+    );
+}
+
+#[test]
+fn shadowing_and_reassignment_compose_within_one_block() {
+    // `shadow_vs_reassign`, the demanding case: a reassignment of the outer binding, then a `mut` shadow, then a
+    // reassignment of the *inner* one -- all in the same block. It only typechecks if both halves of the contract
+    // hold at once, which is why the two fixes could not land separately.
+    let source = "def shadow_vs_reassign() -> int:\n  mut x = 10\n  if true:\n    x = 11\n    mut x = 12\n    x = 13\n  return x\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "reassignment followed by a `mut` shadow and an inner reassignment must all be accepted"
+    );
+}
+
+#[test]
+fn reassigning_a_const_still_suggests_static_rather_than_mut() {
+    // A `const` is registered as a module-scope variable, so walking the scope chain now finds it. Without
+    // answering the more specific question first, this regressed to the generic "variable is immutable" hint,
+    // which points the reader at `mut` when what they need is a `static`.
+    let source = "const COUNTER: int = 0\n\ndef bump() -> None:\n  COUNTER = 1\n";
+    let errors = check_str_err(source, "reassigning a const must be rejected");
+
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Cannot reassign const 'COUNTER'")),
+        "expected the const-specific diagnostic rather than a generic mutability error, got: {errors:?}"
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.hints.iter().any(|hint| hint.contains("static"))),
+        "expected the hint to point at `static` rather than `mut`, got: {errors:?}"
+    );
+}
+
+#[test]
+fn a_mutable_local_can_shadow_a_const_and_be_reassigned() {
+    let source = "const VALUE: int = 1\n\ndef use_local() -> int:\n  mut VALUE = 2\n  VALUE = 3\n  return VALUE\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "a local `mut` shadow must not be mistaken for the module const of the same spelling"
+    );
+}
+
+#[test]
+fn plain_tuple_unpack_reassigns_enclosing_mutable_bindings() {
+    let source = "def unpack() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left, right = (1, 2)\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain tuple unpack must resolve its targets through the enclosing scope chain"
+    );
+}
+
+#[test]
+fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
+    let source = "def assign() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left = right = 3\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain chained assignment must resolve every target through the enclosing scope chain"
+    );
+}

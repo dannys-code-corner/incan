@@ -63,6 +63,70 @@ pub(super) fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp
         _ => None,
     }
 }
+/// Which builtin collection a checked type names, or `None` when it is not one of the three whose operators Body IR
+/// represents.
+///
+/// Reads the collection registry rather than comparing base names against literals, so adding a collection to
+/// `incan_core` cannot silently leave this mapping stale.
+fn builtin_collection_id(ty: &IncanType) -> Option<CollectionTypeId> {
+    let IncanType::Generic { base, args } = ty else {
+        return None;
+    };
+    if args.is_empty() {
+        return None;
+    }
+    match collections::from_str(base) {
+        Some(id @ (CollectionTypeId::List | CollectionTypeId::Set | CollectionTypeId::Dict)) => Some(id),
+        _ => None,
+    }
+}
+/// Map a binary operator over a builtin collection to its compiler-owned helper operation, or `None` when the
+/// operator has no collection meaning.
+///
+/// The collection is taken from the operand that *holds* it — the right side for membership, the left for
+/// concatenation — because the helper names the container, not the element. `Dict` supports membership but not
+/// concatenation, which is why the `Add` arm admits only `List`: this follows the surface the typechecker already
+/// accepts rather than widening it. `str + str` never reaches here, because [`string_helper_for_binop`] is checked
+/// first and a `str` is not a generic collection type.
+///
+/// This is the collection counterpart to [`string_helper_for_binop`], and exists for the same reason. `in` between
+/// two strings asks for substring containment while `in` over a collection asks for element lookup, so neither can
+/// be a [`bir::BinOp`] without silently applying one meaning to the other.
+///
+/// All seven helpers named here have a runtime function in `incan_stdlib::collections`, and the executor runs the
+/// three list forms. Set and dict membership still refuse — not for want of a helper, but because the replacement
+/// executor has no set or dict value at all, so their aggregates refuse before membership is reached. #1247 owns
+/// that value gap and inherits the membership arms with it.
+///
+/// `+` earns a helper on a narrower ground, and the distinction matters because it is what keeps this table from
+/// swallowing comparisons too. The test is not that a heap container cannot sit under a primitive -- `==` on two
+/// lists does exactly that, faithfully -- but that `determine_binop_plan` routes list `+` to
+/// `incan_stdlib::collections::list_concat` while emitting comparisons as an infix operator. A helper here is
+/// therefore agreement with the Rust-emission backend, not a judgement about the operand's representation.
+pub(super) fn collection_helper_for_binop(
+    op: ast::BinaryOp,
+    lhs_ty: &IncanType,
+    rhs_ty: &IncanType,
+) -> Option<bir::HelperOp> {
+    // The container is whichever operand holds the collection: membership reads `needle in haystack`, so the
+    // haystack is on the right, while concatenation joins two collections and takes the left. Selecting it here
+    // keeps that rule in one place instead of at each call site.
+    let container_ty = match op {
+        ast::BinaryOp::In | ast::BinaryOp::NotIn => rhs_ty,
+        _ => lhs_ty,
+    };
+    let collection = builtin_collection_id(container_ty)?;
+    match (op, collection) {
+        (ast::BinaryOp::In, CollectionTypeId::List) => Some(bir::HelperOp::ListContains),
+        (ast::BinaryOp::NotIn, CollectionTypeId::List) => Some(bir::HelperOp::ListNotContains),
+        (ast::BinaryOp::In, CollectionTypeId::Set) => Some(bir::HelperOp::SetContains),
+        (ast::BinaryOp::NotIn, CollectionTypeId::Set) => Some(bir::HelperOp::SetNotContains),
+        (ast::BinaryOp::In, CollectionTypeId::Dict) => Some(bir::HelperOp::DictContainsKey),
+        (ast::BinaryOp::NotIn, CollectionTypeId::Dict) => Some(bir::HelperOp::DictNotContainsKey),
+        (ast::BinaryOp::Add, CollectionTypeId::List) => Some(bir::HelperOp::ListConcat),
+        _ => None,
+    }
+}
 /// Map a surface binary operator to Body IR's primitive operator set — one machine-level combination of two
 /// already-evaluated operands — or `None` for operators whose meaning is not a primitive.
 ///
@@ -75,10 +139,9 @@ pub(super) fn string_helper_for_binop(op: ast::BinaryOp) -> Option<bir::HelperOp
 /// Two groups deliberately return `None`, each for a different reason:
 ///
 /// - **Membership** (`in` / `not in`) has no single primitive meaning — substring between strings, element lookup over
-///   a collection — so it is a runtime call, mapped by [`string_helper_for_binop`] for the string operand types Body IR
-///   represents today. Collection membership is still refused; it needs a receiver-shaped `contains` call rather than a
-///   two-operand helper, which is the same missing collection-helper path that leaves [`bir::HelperOp::ListConcat`]
-///   unproduced. Owner: #1101's collection-operation lowering, not this table.
+///   a collection — so it is always a runtime call, never a [`bir::BinOp`]. String operands map through
+///   [`string_helper_for_binop`] and builtin collections through [`collection_helper_for_binop`]; membership over a
+///   user-defined type is a resolved `__contains__` dispatch and never reaches this table.
 /// - **`MatMul` and both pipes** are protocol hooks, never primitives. The typechecker resolves `@`, `|>`, and `<|`
 ///   through `__matmul__` / `__pipe_forward__` / `__pipe_backward__` and rejects the expression outright when no hook
 ///   resolves, so a well-typed program always reaches `lower_binary` with a recorded operator dispatch and is lowered

@@ -2672,6 +2672,9 @@ fn build_replacement_file_report(
     .map_err(|error| CliError::failure(error.to_string()))?;
     let project_root = resolve_project_root(&entrypoint);
     write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
+    for line in execution.emitted_output() {
+        print_build_progress(report_options, line);
+    }
     print_build_progress(report_options, "✓ replacement backend executed typed Body IR directly");
     print_build_progress(
         report_options,
@@ -2693,6 +2696,7 @@ fn build_replacement_file_report(
         "replacement_execution": {
             "result": execution.value.observable_text(),
             "output_identity": execution.output_identity,
+            "emitted_output": execution.emitted_output(),
             "body_snapshot": execution.body_snapshot,
             "ownership_reads": execution.ownership_evidence(),
             "runtime_requirements": execution.runtime_requirement_evidence(),

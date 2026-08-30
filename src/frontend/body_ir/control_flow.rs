@@ -128,10 +128,15 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         parent_scope: bir::ScopeId,
         span: HirSourceSpan,
     ) -> bir::Block {
+        // Body IR retains every branch local for the backend to lower, but its name lookup must return to the
+        // enclosing lexical environment afterwards. Without this snapshot a `let x` in one branch becomes the
+        // binding read after the `if`, even though source resolution scopes it to the branch alone.
+        let enclosing_bindings = self.bindings.clone();
         let branch_scope = self.new_scope(Some(parent_scope), span);
         let mut stmts = Vec::new();
         self.lower_block_into(body, branch_scope, &mut stmts);
         self.insert_scope_drops(&mut stmts, branch_scope);
+        self.bindings = enclosing_bindings;
         bir::Block {
             scope: branch_scope,
             stmts,
@@ -205,6 +210,10 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // doing it here rather than at each caller is why every loop spelling gets it, including the statement
         // `loop:` this helper was extracted to serve (#1165 established the fact, #1162 extracted the tail).
         let range_layouts_before = self.materialized_range_locals.clone();
+        // A loop body's locals are real Body-IR locals, but the lexical names they introduce are not visible after
+        // the loop. `for` manages its header binding separately; every loop lowered through this helper needs the
+        // same restoration for names declared in its body.
+        let enclosing_bindings = self.bindings.clone();
         self.loop_break_targets.push(break_target);
         let mut body_stmts = Vec::new();
         lower_body(self, loop_scope, &mut body_stmts);
@@ -212,6 +221,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         self.loop_break_targets.pop();
         self.materialized_range_locals =
             intersect_range_layouts(vec![range_layouts_before, self.materialized_range_locals.clone()]);
+        self.bindings = enclosing_bindings;
 
         out.push(bir::Statement {
             kind: bir::StatementKind::Loop {

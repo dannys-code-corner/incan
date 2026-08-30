@@ -382,24 +382,161 @@ fn lowers_negated_string_membership_as_its_own_helper_rather_than_a_wrapped_nega
 }
 
 #[test]
-fn collection_membership_is_refused_rather_than_lowered_as_a_primitive() -> Result<(), Box<dyn std::error::Error>> {
-    // Membership over a collection is `haystack.contains(needle)` -- a receiver-shaped call, not a two-operand
-    // helper -- so it needs the collection-operation path that also leaves `HelperOp::ListConcat` unproduced.
-    // Until that exists the honest answer is a placeholder: representing it with a primitive comparison, or
-    // reusing the string substring helper, would both silently answer a different question.
-    for (spelling, module_leaf, label) in [("in", "list_in", "In"), ("not in", "list_not_in", "NotIn")] {
-        let source = format!("def f(xs: List[int], v: int) -> bool:\n  return v {spelling} xs\n");
+fn lowers_collection_membership_as_a_helper_call_naming_its_own_container() -> Result<(), Box<dyn std::error::Error>> {
+    // Each collection names its own helper rather than sharing one `contains`. A single variant would leave a
+    // consumer to re-derive list-versus-set-versus-dict from operand types, which is the inference Body IR exists
+    // to replace with a represented fact -- and it is why `str in str` keeps its own helper too.
+    //
+    // The call is emitted haystack-first to match `str_contains` and every `contains` in Rust, while the source
+    // spelling reads needle-first, so a backend can bind every membership helper positionally.
+    for (container, module_leaf, helper) in [
+        ("xs: List[int], v: int", "list_in", "list_contains"),
+        ("xs: Set[int], v: int", "set_in", "set_contains"),
+        ("xs: Dict[int, str], v: int", "dict_in", "dict_contains_key"),
+    ] {
+        let source = format!("def f({container}) -> bool:\n  return v in xs\n");
         let rendered = rendered_f(&source, module_leaf)?;
 
         assert!(
-            rendered.contains(&format!("unsupported(binary operator {label})")),
-            "collection `{spelling}` must refuse explicitly: {rendered}"
+            rendered.contains(&format!("call helper:{helper}(move(_0, last_use)")),
+            "`in` over {container} must lower to {helper} with the container first: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("runtime_helper({helper})")),
+            "{helper} must record its runtime requirement: {rendered}"
+        );
+        assert!(
+            !rendered.contains("unsupported("),
+            "collection membership must not fall back to a placeholder: {rendered}"
         );
         assert!(
             !rendered.contains("str_contains"),
-            "collection `{spelling}` must not borrow the string substring policy: {rendered}"
+            "collection membership must not borrow the string substring policy: {rendered}"
         );
     }
+    Ok(())
+}
+
+#[test]
+fn lowers_negated_collection_membership_as_its_own_helper_per_container() -> Result<(), Box<dyn std::error::Error>> {
+    // One source operator stays one Body IR operation, following the `str_contains`/`str_not_contains` pair: a
+    // consumer reading this call knows the source wrote `not in` without recognizing a negation wrapper.
+    for (container, module_leaf, helper) in [
+        ("xs: List[int], v: int", "list_not_in", "list_not_contains"),
+        ("xs: Set[int], v: int", "set_not_in", "set_not_contains"),
+        ("xs: Dict[int, str], v: int", "dict_not_in", "dict_not_contains_key"),
+    ] {
+        let source = format!("def f({container}) -> bool:\n  return v not in xs\n");
+        let rendered = rendered_f(&source, module_leaf)?;
+
+        assert!(
+            rendered.contains(&format!("call helper:{helper}(move(_0, last_use)")),
+            "`not in` over {container} must lower to {helper}, container first: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!("runtime_helper({helper})")),
+            "{helper} must record its own runtime requirement: {rendered}"
+        );
+        assert!(
+            !rendered.contains("un_op") && !rendered.contains("Not("),
+            "`not in` must be its own operation, not a negation wrapped around `in`: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn dict_membership_names_key_lookup_rather_than_element_lookup() -> Result<(), Box<dyn std::error::Error>> {
+    // Dict membership tests keys while its sibling collections test elements. Leaving that to be inferred from the
+    // receiver type would make key-versus-value a backend convention; naming it in the operation makes it a fact.
+    let rendered = rendered_f(
+        "def f(d: Dict[str, int], k: str) -> bool:\n  return k in d\n",
+        "dict_key_in",
+    )?;
+
+    assert!(
+        rendered.contains("call helper:dict_contains_key("),
+        "dict `in` must name key lookup: {rendered}"
+    );
+    assert!(
+        !rendered.contains("helper:dict_contains("),
+        "dict membership must not use an element-lookup spelling: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn lowers_list_concatenation_as_a_helper_call_rather_than_a_primitive_addition()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The regression this test exists for: `+` on two lists used to satisfy `binary_op_is_supported` through the
+    // numeric mapping and lower to `BinOp::Add`, a machine addition over two heap containers, with no
+    // `Unsupported` marker for a consumer to notice. The typechecker accepts list `+` through a builtin branch
+    // that records no operator dispatch, so nothing downstream marked it as a call -- which is exactly the
+    // wrong-representation failure `lower_operator_dispatch` guards user-defined `__add__` against.
+    let rendered = rendered_f(
+        "def f(xs: List[int], ys: List[int]) -> List[int]:\n  return xs + ys\n",
+        "list_concat",
+    )?;
+
+    assert!(
+        rendered.contains("call helper:list_concat(move(_0, last_use), move(_1, last_use))"),
+        "list `+` must lower to the concatenation helper in source order: {rendered}"
+    );
+    assert!(
+        rendered.contains("runtime_helper(list_concat)"),
+        "list concatenation must record its runtime requirement: {rendered}"
+    );
+    assert!(
+        !rendered.contains(") + "),
+        "list `+` must not lower to a primitive addition: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn compound_list_assignment_routes_through_the_same_concatenation_helper() -> Result<(), Box<dyn std::error::Error>> {
+    // `lower_compound_assignment` shares both the admission gate and the emission path with `lower_binary`, so
+    // giving list `+` a helper silently changed `xs += ys` too. That is the behaviour the Rust-emission backend
+    // already has -- `determine_binop_plan` sees `Add` over two lists whichever spelling produced it -- but a
+    // shared path that changed without coverage is exactly where a later divergence would hide.
+    let rendered = rendered_f(
+        "def f(ys: List[int]) -> List[int]:\n  mut xs = [1, 2]\n  xs += ys\n  return xs\n",
+        "list_concat_assign",
+    )?;
+
+    assert!(
+        rendered.contains("call helper:list_concat("),
+        "`+=` on lists must reuse the concatenation helper rather than a primitive addition: {rendered}"
+    );
+    assert!(
+        rendered.contains("runtime_helper(list_concat)"),
+        "the compound form must record the same runtime requirement as the binary form: {rendered}"
+    );
+    Ok(())
+}
+
+#[test]
+fn list_equality_stays_a_primitive_because_that_is_what_the_other_backend_emits()
+-> Result<(), Box<dyn std::error::Error>> {
+    // The counterweight to the concatenation test above, and the reason closing the admission hole is not "refuse
+    // every primitive over a collection". `determine_binop_plan` in the Rust-emission backend routes list `+` to
+    // `incan_stdlib::collections::list_concat` -- so calling it `BinOp::Add` contradicted that backend -- but it
+    // emits comparisons as an infix operator, which on two `Vec`s resolves to Rust's `PartialEq` and matches
+    // Python's element-wise `==`. Both backends therefore agree that this one *is* an operator, and refusing it
+    // here would manufacture a divergence instead of closing one.
+    let rendered = rendered_f(
+        "def f(xs: List[int], ys: List[int]) -> bool:\n  return xs == ys\n",
+        "list_eq",
+    )?;
+
+    assert!(
+        !rendered.contains("unsupported("),
+        "list equality must keep lowering, matching the Rust-emission backend: {rendered}"
+    );
+    assert!(
+        rendered.contains(" == "),
+        "list equality must stay a primitive comparison rather than becoming a helper call: {rendered}"
+    );
     Ok(())
 }
 
@@ -556,7 +693,7 @@ fn lowers_a_clone_when_a_non_copy_binding_is_read_more_than_once() -> Result<(),
 
 #[test]
 fn lowers_if_while_and_for_into_normalized_control_flow() -> Result<(), Box<dyn std::error::Error>> {
-    let source = "def run(n: int) -> int:\n  total = 0\n  for i in 0..n:\n    if i > 2:\n      total = total + i\n  while total > 100:\n    total = total - 1\n  return total\n";
+    let source = "def run(n: int) -> int:\n  mut total = 0\n  for i in 0..n:\n    if i > 2:\n      total = total + i\n  while total > 100:\n    total = total - 1\n  return total\n";
     let module = build(source, &["m", "control"])?;
     let snapshot = module.render_snapshot();
 
@@ -3745,7 +3882,7 @@ fn sequential_awaits_keep_their_effect_ordering_across_suspension() -> Result<()
 #[test]
 fn await_inside_a_branch_stays_inside_that_branch() -> Result<(), Box<dyn std::error::Error>> {
     let source = format!(
-        "{ASYNC_PRELUDE}async def f(flag: bool) -> int:\n  total = 0\n  if flag:\n    total = await fast()\n  else:\n    total = 7\n  return total\n"
+        "{ASYNC_PRELUDE}async def f(flag: bool) -> int:\n  mut total = 0\n  if flag:\n    total = await fast()\n  else:\n    total = 7\n  return total\n"
     );
     let module = build(&source, &["m", "await_branch"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();
@@ -3768,7 +3905,7 @@ fn await_inside_a_branch_stays_inside_that_branch() -> Result<(), Box<dyn std::e
 #[test]
 fn await_inside_a_loop_stays_inside_the_loop_body() -> Result<(), Box<dyn std::error::Error>> {
     let source = format!(
-        "{ASYNC_PRELUDE}async def f() -> int:\n  total = 0\n  i = 0\n  while i < 3:\n    total = total + await fast()\n    i = i + 1\n  return total\n"
+        "{ASYNC_PRELUDE}async def f() -> int:\n  mut total = 0\n  mut i = 0\n  while i < 3:\n    total = total + await fast()\n    i = i + 1\n  return total\n"
     );
     let module = build(&source, &["m", "await_loop"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();
@@ -3913,8 +4050,13 @@ fn a_race_arm_block_body_lowers_its_statements_and_trailing_value() -> Result<()
 fn an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race() -> Result<(), Box<dyn std::error::Error>> {
     // The issue's explicit requirement: a construct Body IR cannot represent keeps its own node *inside* a
     // represented race, so a consumer loses only that construct rather than the entire expression.
+    //
+    // The arm takes its block form so it can hold the shared by-design stand-in refusal. Its previous stand-in was
+    // collection membership, which #1246 represented -- see STAND_IN_REFUSAL_LABEL for why a gap is never a safe
+    // choice here.
     let source = format!(
-        "{ASYNC_PRELUDE}async def f() -> bool:\n  race for value:\n    await fast() => value == 1\n    await slow() => value in [1, 2]\n"
+        "{ASYNC_PRELUDE}async def f() -> bool:\n  race for value:\n    await fast() => value == 1\n    await slow() =>\n{}      value == 2\n",
+        stand_in_refusal_stmt("      ")
     );
     let module = build(&source, &["m", "race_partial"])?;
     let rendered = body_named(&module, "f")?.render_snapshot();
@@ -6512,6 +6654,41 @@ def run() -> int:
 /// statement's nested block carries four. Tests that care about *where* a statement landed compare against this
 /// rather than merely finding the text somewhere in the body, which would also pass if the statement had escaped
 /// into the enclosing block.
+/// The label fragment every by-design refusal used as a test stand-in renders with.
+///
+/// Tests that need *some* refusal in a given position -- to prove a refusal stays nested inside the construct
+/// containing it, say -- must not reach for whichever construct happens to be unrepresentable that week. Four have
+/// now gone vacuous exactly that way: `value ** 2` (#1160), a byte-string literal (#1165), a callable default
+/// (#1240), and collection membership (#1246, twice over). Each was a *gap*, and #1101 exists to close gaps, so
+/// every such choice decays the moment its owning sibling lands.
+///
+/// `unsafe:` is categorically different. It is refused because Body IR v0 cannot carry the acknowledgement a
+/// consumer would need to admit the region deliberately -- a stated disposition, not pending work. Reversing it
+/// means designing the acknowledgement fact first, so it will not quietly become representable underneath a test.
+///
+/// If [`the_shared_stand_in_refusal_is_still_refused_by_design`] ever fails, every test below that uses this has
+/// gone vacuous: pick another *by-design* refusal, update these two items, and do not substitute a gap.
+const STAND_IN_REFUSAL_LABEL: &str = "`unsafe:` acknowledgement region";
+
+/// Source lines for the shared stand-in refusal, indented to sit inside an enclosing block.
+fn stand_in_refusal_stmt(indent: &str) -> String {
+    format!("{indent}unsafe:\n{indent}  pass\n")
+}
+
+#[test]
+fn the_shared_stand_in_refusal_is_still_refused_by_design() -> Result<(), Box<dyn std::error::Error>> {
+    let source = format!("def f() -> int:\n{}  return 1\n", stand_in_refusal_stmt("  "));
+    let rendered = rendered_f(&source, "stand_in_guard")?;
+
+    assert!(
+        rendered.contains(STAND_IN_REFUSAL_LABEL),
+        "the shared stand-in refusal is no longer refused, so every test using it now asserts nothing. Pick \
+         another refusal that is refused *by design* rather than merely unimplemented, and update \
+         STAND_IN_REFUSAL_LABEL and stand_in_refusal_stmt together: {rendered}"
+    );
+    Ok(())
+}
+
 const NESTED_BLOCK_INDENT: &str = "    ";
 
 #[test]
@@ -6821,21 +6998,25 @@ fn nested_statement_loops_each_get_their_own_loop_block() -> Result<(), Box<dyn 
 #[test]
 fn an_unsupported_statement_inside_a_statement_loop_keeps_its_own_refusal() -> Result<(), Box<dyn std::error::Error>> {
     // The loop must not swallow a construct it happens to contain: a consumer loses only that statement, not the
-    // whole loop. The stand-in is collection membership, which #1160 deliberately left refused while giving every
-    // other operator in that position a representation -- the same stand-in
-    // `an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race` uses, and chosen for the same
-    // reason: a stand-in that later becomes representable turns its test vacuous.
-    let source = concat!(
-        "def scan(values: list[int]) -> int:\n",
-        "  mut i = 0\n",
-        "  loop:\n",
-        "    if i >= 3:\n",
-        "      break\n",
-        "    hit = i in values\n",
-        "    i = i + 1\n",
-        "  return i\n",
+    // whole loop. The original stand-in was collection membership, chosen because #1160 deliberately left it
+    // refused, and with the explicit note that "a stand-in that later becomes representable turns its test
+    // vacuous" -- which is exactly what #1246 then did to it. Both this test and
+    // `an_unsupported_construct_in_a_race_arm_does_not_collapse_the_whole_race` now share one by-design refusal
+    // instead, so the next representation cannot quietly hollow them out. See STAND_IN_REFUSAL_LABEL.
+    let source = format!(
+        concat!(
+            "def scan(values: list[int]) -> int:\n",
+            "  mut i = 0\n",
+            "  loop:\n",
+            "    if i >= 3:\n",
+            "      break\n",
+            "{}",
+            "    i = i + 1\n",
+            "  return i\n",
+        ),
+        stand_in_refusal_stmt("    ")
     );
-    let module = build(source, &["m", "loop_stmt_partial"])?;
+    let module = build(&source, &["m", "loop_stmt_partial"])?;
     let snapshot = body_named(&module, "scan")?.render_snapshot();
 
     assert!(
@@ -6844,7 +7025,7 @@ fn an_unsupported_statement_inside_a_statement_loop_keeps_its_own_refusal() -> R
     );
     let refusal = snapshot
         .lines()
-        .find(|line| line.contains("unsupported(binary operator In)"))
+        .find(|line| line.contains(STAND_IN_REFUSAL_LABEL))
         .ok_or("missing the refusal for the unrepresentable loop-body statement")?;
     assert!(
         refusal.starts_with(NESTED_BLOCK_INDENT),
@@ -7211,5 +7392,85 @@ fn if_let_lowers_an_alternated_pattern() -> Result<(), Box<dyn std::error::Error
     // reuses `lower_match_pattern` rather than reimplementing it, so it inherits that gap rather than widening it.
     // Narrowing the generic constructor path's field types belongs with the same #1101 work that leaves
     // `assert o is Some(v)` typed `?`.
+    Ok(())
+}
+
+// ---- #1072: preserve the typechecker's lexical assignment decision in Body IR ----
+
+#[test]
+fn plain_assignment_reuses_its_active_body_ir_local() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  mut x = 1\n  x = 2\n  return x\n",
+        &["m", "plain_reassign"],
+    )?;
+    let body = body_named(&module, "run")?;
+    let names: Vec<_> = body
+        .locals
+        .iter()
+        .filter(|local| local.name.as_deref() == Some("x"))
+        .collect();
+
+    assert_eq!(
+        names.len(),
+        1,
+        "plain reassignment must write the original local rather than declare a duplicate: {}",
+        module.render_snapshot()
+    );
+    Ok(())
+}
+
+#[test]
+fn branch_shadowing_does_not_leak_into_following_body_ir_reads() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  let x = 1\n  if true:\n    let x = 2\n  return x\n",
+        &["m", "branch_shadow"],
+    )?;
+    let body = body_named(&module, "run")?;
+    let x_locals: Vec<_> = body
+        .locals
+        .iter()
+        .filter(|local| local.name.as_deref() == Some("x"))
+        .collect();
+    let outer = x_locals.first().ok_or("fixture must declare an outer `x`")?.id;
+    assert_eq!(x_locals.len(), 2, "the explicit `let` shadow must retain both locals");
+
+    let returned_local = body
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| match &statement.kind {
+            bir::StatementKind::Return {
+                value: Some(bir::Operand::Place(operand)),
+            } => Some(operand.place.local),
+            _ => None,
+        })
+        .ok_or("fixture must return a local place")?;
+    assert_eq!(
+        returned_local, outer,
+        "a read after the branch must resolve to the enclosing local, not the branch-only shadow"
+    );
+    Ok(())
+}
+
+#[test]
+fn plain_multi_target_assignment_reuses_active_body_ir_locals() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  mut left = 0\n  mut right = 0\n  left, right = (1, 2)\n  return left + right\n",
+        &["m", "plain_multi_reassign"],
+    )?;
+    let body = body_named(&module, "run")?;
+    for name in ["left", "right"] {
+        let count = body
+            .locals
+            .iter()
+            .filter(|local| local.name.as_deref() == Some(name))
+            .count();
+        assert_eq!(
+            count,
+            1,
+            "plain multi-target assignment must reuse `{name}` rather than create a duplicate: {}",
+            module.render_snapshot()
+        );
+    }
     Ok(())
 }
