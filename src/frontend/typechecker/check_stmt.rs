@@ -383,23 +383,11 @@ impl TypeChecker {
 
                 let element_types = self.destructured_element_types(&value_ty, unpack.names.len(), stmt.span);
 
-                // Define each variable with its corresponding type
-                let is_mutable = matches!(unpack.binding, BindingKind::Mutable);
+                // A tuple-unpack source assignment follows the same lexical rule as `x = value`: a plain spelling
+                // reassigns the nearest active binding, while `let`/`mut` introduce names in this scope.
                 for (i, name) in unpack.names.iter().enumerate() {
                     let ty = element_types.get(i).cloned().unwrap_or(ResolvedType::Unknown);
-                    self.symbols.define(Symbol {
-                        name: name.clone(),
-                        kind: SymbolKind::Variable(VariableInfo {
-                            ty,
-                            is_mutable,
-                            is_used: false,
-                        }),
-                        span: stmt.span,
-                        scope: 0,
-                    });
-                    if is_mutable {
-                        self.mutable_bindings.insert(name.clone());
-                    }
+                    self.check_unannotated_assignment_target(name, unpack.binding, ty, stmt.span, unpack.value.span);
                 }
             }
             Statement::TupleAssign(assign) => {
@@ -454,22 +442,15 @@ impl TypeChecker {
                 // Check the value expression
                 let value_ty = self.check_expr(&ca.value);
 
-                // Define all target variables with the same type
-                let is_mutable = matches!(ca.binding, BindingKind::Mutable);
+                // Chained source assignment has the same declaration/reassignment distinction as a single target.
                 for target in &ca.targets {
-                    self.symbols.define(Symbol {
-                        name: target.clone(),
-                        kind: SymbolKind::Variable(VariableInfo {
-                            ty: value_ty.clone(),
-                            is_mutable,
-                            is_used: false,
-                        }),
-                        span: stmt.span,
-                        scope: 0,
-                    });
-                    if is_mutable {
-                        self.mutable_bindings.insert(target.clone());
-                    }
+                    self.check_unannotated_assignment_target(
+                        target,
+                        ca.binding,
+                        value_ty.clone(),
+                        stmt.span,
+                        ca.value.span,
+                    );
                 }
             }
         }
@@ -664,7 +645,7 @@ impl TypeChecker {
         // outer one, so they never resolve against the scope chain. Only a bare `x = value` asks "does this name
         // already exist somewhere out there", and the two halves have to move together — walking outward without
         // this branch would turn every in-block `let` into a reassignment of the outer binding (#1072).
-        let introduces_binding = matches!(assign.binding, BindingKind::Let | BindingKind::Mutable);
+        let introduces_binding = Self::binding_introduces_name(assign.binding);
         let reassignment_ty = (!introduces_binding)
             .then(|| {
                 self.lookup_variable_info_in_scope_chain(&assign.name)
@@ -681,7 +662,7 @@ impl TypeChecker {
         // more specific question first: reassigning a const is not a mutability mistake to be fixed with `mut`, it
         // is a request for a `static`, and the generic "variable is immutable" error would send the reader the
         // wrong way. A `let`/`mut` declaration that shadows a const is a new binding and never reaches here.
-        if !introduces_binding && self.const_decls.contains_key(&assign.name) {
+        if !introduces_binding && self.active_binding_is_const(&assign.name) {
             self.errors
                 .push(errors::const_reassignment_suggests_static(&assign.name, span));
             return;
@@ -781,6 +762,98 @@ impl TypeChecker {
         self.bind_c_abi_raw_result_assignment(&assign.name, assign.value.span);
         self.consumed_iterator_bindings.remove(&assign.name);
         self.transferred_c_resource_bindings.remove(&assign.name);
+    }
+
+    /// Whether this spelling deliberately declares a new source binding instead of resolving an active one.
+    const fn binding_introduces_name(binding: BindingKind) -> bool {
+        matches!(binding, BindingKind::Let | BindingKind::Mutable)
+    }
+
+    /// Whether the binding currently selected by lexical lookup is the collected module `const`.
+    ///
+    /// `const_decls` is keyed by spelling for constant evaluation, so consulting it alone mistakes an inner
+    /// `mut NAME` for the outer `const NAME`. Pairing it with the active symbol's declaration span preserves normal
+    /// lexical shadowing while retaining the dedicated const-reassignment diagnostic for the const itself.
+    fn active_binding_is_const(&self, name: &str) -> bool {
+        let Some((_, const_span)) = self.const_decls.get(name) else {
+            return false;
+        };
+        self.symbols
+            .lookup(name)
+            .and_then(|symbol_id| self.symbols.get(symbol_id))
+            .is_some_and(|symbol| symbol.span == *const_span)
+    }
+
+    /// Check or introduce one target from a tuple-unpack or chained source assignment.
+    ///
+    /// This is intentionally the unannotated half of [`Self::check_assignment`]: all three spellings share the
+    /// binding-form decision, but only a single assignment owns a local type annotation and C-ABI constructor facts.
+    fn check_unannotated_assignment_target(
+        &mut self,
+        name: &str,
+        binding: BindingKind,
+        value_ty: ResolvedType,
+        statement_span: Span,
+        value_span: Span,
+    ) {
+        if !Self::binding_introduces_name(binding) {
+            if self.active_binding_is_const(name) {
+                self.errors
+                    .push(errors::const_reassignment_suggests_static(name, statement_span));
+                return;
+            }
+            if let Some(var_info) = self.lookup_variable_info_in_scope_chain(name) {
+                let is_mutable = var_info.is_mutable;
+                let declared_ty = var_info.ty.clone();
+                if !is_mutable {
+                    self.errors.push(errors::mutation_without_mut(name, statement_span));
+                }
+                if !self.types_compatible(&value_ty, &declared_ty) {
+                    self.errors.push(errors::assignment_type_mismatch(
+                        name,
+                        &declared_ty.to_string(),
+                        &value_ty.to_string(),
+                        value_span,
+                    ));
+                }
+                self.consumed_iterator_bindings.remove(name);
+                self.transferred_c_resource_bindings.remove(name);
+                return;
+            }
+            if let Some(static_info) = self.lookup_static_info(name) {
+                if static_info.is_imported {
+                    self.errors
+                        .push(errors::imported_static_reassignment_not_allowed(name, statement_span));
+                    return;
+                }
+                let static_ty = static_info.ty.clone();
+                if !self.types_compatible(&value_ty, &static_ty) {
+                    self.errors.push(errors::type_mismatch(
+                        &static_ty.to_string(),
+                        &value_ty.to_string(),
+                        value_span,
+                    ));
+                }
+                return;
+            }
+        }
+
+        let is_mutable = matches!(binding, BindingKind::Mutable);
+        self.symbols.define(Symbol {
+            name: name.to_string(),
+            kind: SymbolKind::Variable(VariableInfo {
+                ty: value_ty,
+                is_mutable,
+                is_used: false,
+            }),
+            span: statement_span,
+            scope: 0,
+        });
+        if is_mutable {
+            self.mutable_bindings.insert(name.to_string());
+        }
+        self.consumed_iterator_bindings.remove(name);
+        self.transferred_c_resource_bindings.remove(name);
     }
 
     /// Give a compiler-managed C output constructor the ordinary local name supplied by its enclosing assignment.

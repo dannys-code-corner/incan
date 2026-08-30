@@ -463,8 +463,11 @@ struct BodyBuilder<'type_info, 'source> {
     owner_return_type: IncanType,
     locals: Vec<bir::LocalDecl>,
     scopes: Vec<bir::ScopeInfo>,
-    /// Current source-name -> local binding. Later bindings of the same name (new `let`/`mut` assignments) shadow
-    /// earlier ones, matching the source-level scoping `BindingKind::Inferred`/`Let`/`Mutable` produce.
+    /// Current source-name -> local binding.
+    ///
+    /// A plain inferred assignment reuses an active binding; `let` and `mut` replace this map entry with an explicit
+    /// shadow. Nested lowering paths snapshot and restore the map at their lexical boundary, so branch/loop/arm
+    /// names remain available to their Body-IR statements without leaking into following source.
     bindings: HashMap<String, bir::LocalId>,
     /// Names lowering could not resolve to a tracked local (e.g. module-level `const`/`static`), reused across
     /// repeated reads instead of allocating a fresh external local per read.

@@ -472,8 +472,8 @@ pub struct ReplacementExecution {
     /// provider failure never produces a [`ReplacementExecution`] at all, so its receipts are read from the
     /// [`provider::ProviderRuntime`] the caller supplied rather than from here.
     provider_executions: Vec<ProviderExecutionRecord>,
-    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, provider executions, and
-    /// observed result.
+    /// Content identity of the actual Body-IR snapshot, ownership facts, requirements, provider executions,
+    /// observed result, and emitted program output.
     pub output_identity: String,
 }
 
@@ -970,6 +970,7 @@ pub fn execute_prevalidated_free_function(
         .map(|runtime| runtime.provider_executions())
         .unwrap_or_default();
     let provider_summary = canonical_provider_execution_summary(&provider_executions);
+    let emitted_output_summary = canonical_emitted_output_summary(&executor.emitted_output);
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
@@ -977,6 +978,7 @@ pub fn execute_prevalidated_free_function(
         requirements_summary.as_str(),
         task_summary.as_str(),
         provider_summary.as_str(),
+        emitted_output_summary.as_str(),
     ]);
     Ok(ReplacementExecution {
         value,
@@ -2945,7 +2947,7 @@ impl BodyExecutor {
                 if !needle.is_collection_scalar() || !elements.iter().all(ReplacementValue::is_collection_scalar) {
                     return Err(unsupported("list membership over a non-scalar element", span));
                 }
-                let found = elements.iter().any(|element| *element == needle);
+                let found = elements.contains(&needle);
                 ReplacementValue::Bool(matches!(helper, HelperOp::ListContains) == found)
             }
             Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => {
@@ -3467,9 +3469,9 @@ impl BodyExecutor {
 
     /// Execute a `print`/`println` call by recording its line rather than writing it.
     ///
-    /// Arguments render exactly as an f-string interpolation does, through [`format_interpolation`], so one rule
-    /// governs how a value becomes text no matter which surface asked for it. Multiple arguments join with a single
-    /// space, matching what the Rust-emission backend generates.
+    /// Every argument renders, space-separated, matching Python's `print` and the Rust-emission backend's
+    /// `emit_print_call`. That agreement is recent: both backends previously emitted only the first argument and
+    /// discarded the rest, so `println("count", 3)` printed `count` with nothing reporting the loss.
     ///
     /// The line is appended to [`BodyExecutor::emitted_output`] rather than printed. That keeps the effect a value
     /// this runtime can hand back, compare, and test; a direct write would leave the program's output invisible to
@@ -3479,12 +3481,13 @@ impl BodyExecutor {
         args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let mut rendered = Vec::with_capacity(args.len());
+        let mut parts = Vec::with_capacity(args.len());
         for argument in args {
             let value = self.evaluate_operand(argument, span)?;
-            rendered.push(format_interpolation(&value, FormatStyle::Display, span)?);
+            parts.push(format_interpolation(&value, FormatStyle::Display, span)?);
         }
-        self.emitted_output.push(rendered.join(" "));
+        let rendered = parts.join(" ");
+        self.emitted_output.push(rendered);
         Ok(ReplacementValue::Unit)
     }
 
@@ -5339,6 +5342,41 @@ fn canonical_task_lifecycle_summary(events: &[TaskLifecycleEvent]) -> String {
         })
         .collect::<Vec<_>>()
         .join("|")
+}
+
+/// Render emitted source output as an unambiguous output-identity component.
+///
+/// Each line is length-prefixed so embedded separators or newlines cannot make two distinct output streams share a
+/// digest input. This deliberately records the observable source effect rather than treating a successful return
+/// value as the whole program result.
+fn canonical_emitted_output_summary(lines: &[String]) -> String {
+    lines
+        .iter()
+        .map(|line| format!("{}:{line}", line.len()))
+        .collect::<String>()
+}
+
+#[cfg(test)]
+mod output_identity_tests {
+    use super::canonical_emitted_output_summary;
+
+    #[test]
+    fn emitted_output_summary_is_unambiguous() {
+        let split_after_two = vec!["ab".to_string(), "c".to_string()];
+        let split_after_one = vec!["a".to_string(), "bc".to_string()];
+        let one_empty_line = vec![String::new()];
+
+        assert_ne!(
+            canonical_emitted_output_summary(&split_after_two),
+            canonical_emitted_output_summary(&split_after_one),
+            "different source-output boundaries must not share an output-identity component"
+        );
+        assert_ne!(
+            canonical_emitted_output_summary(&[]),
+            canonical_emitted_output_summary(&one_empty_line),
+            "no output and one blank output line are different source-observable outcomes"
+        );
+    }
 }
 
 /// Render one runtime requirement with the semantic labels used in replacement evidence.

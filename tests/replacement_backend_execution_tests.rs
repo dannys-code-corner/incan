@@ -1928,9 +1928,9 @@ def main() -> int:
     Ok(())
 }
 
-/// Refuse same-scope reassignment until Body IR carries an explicit binding-equivalence fact.
+/// Execute same-scope reassignment through the original local rather than declaring a duplicate binding.
 #[test]
-fn replacement_refuses_reassignment_with_a_repeated_user_binding_name() -> Result<(), Box<dyn std::error::Error>> {
+fn replacement_executes_reassignment_without_a_repeated_user_binding_name() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> int:
   mut x = 1
@@ -1938,20 +1938,8 @@ def main() -> int:
   return x
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = match execute_free_function(&module, "main", &[]) {
-        Ok(execution) => {
-            return Err(format!("reassignment must refuse directly, got {:?}", execution.value).into());
-        }
-        Err(error) => error,
-    };
-    let expected_start = source
-        .rfind("x = 2")
-        .ok_or("reassignment fixture must contain the second binding")?;
-    let span = error
-        .primary_span()
-        .ok_or("reassignment refusal must retain the second binding span")?;
-    assert_eq!(span.start, expected_start);
-    assert!(error.to_string().contains("repeated user binding"));
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(execution.value, ReplacementValue::Int(2));
     Ok(())
 }
 
@@ -2185,7 +2173,10 @@ fn replacement_cli_executes_typed_empty_scalar_tuple_list_with_a_replacement_rec
 fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result<(), Box<dyn std::error::Error>> {
     let temporary = tempfile::tempdir()?;
     let entrypoint = temporary.path().join("main.incn");
-    fs::write(&entrypoint, "def main() -> int:\n  return 42\n")?;
+    fs::write(
+        &entrypoint,
+        "def main() -> int:\n  println(\"answer follows\")\n  return 42\n",
+    )?;
 
     let output = Command::new(incan_binary())
         .args([
@@ -2211,6 +2202,15 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
     assert_eq!(report["mode"], "executable");
     assert_eq!(report["backend"]["executed_backend"], "replacement");
     assert_eq!(report["replacement_execution"]["result"], "42");
+    assert_eq!(
+        report["replacement_execution"]["emitted_output"],
+        serde_json::json!(["answer follows"])
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("answer follows"),
+        "replacement CLI must relay source output when stdout is reserved for JSON: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         report["replacement_execution"]["output_identity"]
             .as_str()
@@ -2852,9 +2852,7 @@ fn replacement_cli_refuses_iteration_over_an_unrepresentable_element_without_a_r
     // nor a receipt.
     let temporary = tempfile::tempdir()?;
     let entrypoint = temporary.path().join("main.incn");
-    fs::write(
-        &entrypoint,
-        r#"model Point:
+    let source = r#"model Point:
   x: int
 
 def main() -> int:
@@ -2862,8 +2860,8 @@ def main() -> int:
   for value in [Point(x=1)]:
     seen += 1
   return seen
-"#,
-    )?;
+"#;
+    fs::write(&entrypoint, source)?;
 
     let output = Command::new(incan_binary())
         .args([
@@ -2891,6 +2889,17 @@ def main() -> int:
     assert!(
         combined.contains("original Incan source span"),
         "refusal must retain source authority: {combined}"
+    );
+    let aggregate_start = source
+        .find("[Point(x=1)]")
+        .ok_or("fixture must contain the list literal")?;
+    let aggregate_end = aggregate_start + "[Point(x=1)]".len();
+    assert!(
+        combined.contains(&format!(
+            "primary Incan source location: {}:{aggregate_start}..{aggregate_end}",
+            entrypoint.display()
+        )),
+        "CLI refusal must retain the exact aggregate source span: {combined}"
     );
     assert!(
         !temporary.path().join("target/incan").exists()
@@ -3929,6 +3938,15 @@ def main() -> int:
         return Err("iterating a list of model instances must refuse".into());
     };
 
+    let aggregate_start = source
+        .find("[Point(x=1)]")
+        .ok_or("fixture must contain the list literal")?;
+    let span = error
+        .primary_span()
+        .ok_or("an unrepresentable aggregate refusal must retain its source span")?;
+    assert_eq!(span.start, aggregate_start);
+    assert_eq!(span.end, aggregate_start + "[Point(x=1)]".len());
+
     assert!(
         format!("{error:?}").contains("unsupported Body-IR type")
             || format!("{error:?}").contains("not a list of representable elements"),
@@ -3997,6 +4015,41 @@ def main() -> None:
 
     assert_eq!(execution.emitted_output(), ["hello", "count 3 true"]);
     assert_eq!(execution.value, ReplacementValue::Unit);
+    Ok(())
+}
+
+#[test]
+fn both_backends_render_a_multi_argument_print_the_same_way() -> Result<(), Box<dyn std::error::Error>> {
+    // Both backends used to emit `args.first()` and discard the rest, so `println("count", 3, true)` printed
+    // `count`. Nothing reported the loss: `check_expr::calls::builtins` gives `Print` no arity check, unlike `Len`
+    // beside it, so the dropped arguments were invisible from source, from diagnostics, and from the generated Rust
+    // unless read line by line.
+    //
+    // This asserts the two renderings together rather than separately. Either one alone could drift back to a
+    // single argument while still passing its own test; what matters is that they agree.
+    let source = "def main() -> None:\n  println(\"count\", 3, true)\n";
+
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+    assert_eq!(
+        execution.emitted_output(),
+        ["count 3 true"],
+        "the replacement executor must render every argument, space-separated"
+    );
+
+    let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let rust = incan::backend::IrCodegen::new()
+        .try_generate(&program)
+        .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+    let printed = rust
+        .lines()
+        .find(|line| line.contains("println!(\"{}"))
+        .ok_or("generated Rust must contain the print call")?;
+    assert!(
+        printed.contains("{} {} {}"),
+        "generated Rust must carry one placeholder per argument, got: {printed}"
+    );
     Ok(())
 }
 

@@ -2302,9 +2302,6 @@ impl TypeChecker {
         }
     }
 
-    /// Look up a variable binding by name **in the current scope only** and return its [`VariableInfo`].
-    ///
-    /// Returns `None` if the symbol is missing, not local, or isn't a variable.
     /// Look up a variable by walking the whole enclosing scope chain, not just the innermost scope.
     ///
     /// This is what plain assignment resolves against. `scopes_and_name_resolution.md` states the contract
@@ -2324,6 +2321,9 @@ impl TypeChecker {
         }
     }
 
+    /// Look up a variable binding by name in the current scope only.
+    ///
+    /// Returns `None` if the symbol is missing, is only present in an enclosing scope, or is not a variable.
     pub(crate) fn lookup_local_variable_info(&self, name: &str) -> Option<&VariableInfo> {
         let id = self.symbols.lookup_local(name)?;
         let sym = self.symbols.get(id)?;

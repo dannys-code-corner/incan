@@ -1160,8 +1160,8 @@ impl DefaultComputation {
 /// folded directly into the owning [`Body`]'s own accumulated facts by lowering rather than tracked separately per
 /// closure. It also reuses the *same* [`LocalId`] numbering as its owning [`Body`] rather than starting a fresh
 /// local space at zero: the frontend lowering that builds this model (`src/frontend/body_ir.rs`) already keeps one
-/// flat, function-wide local/binding namespace with no scope push/pop machinery (nested blocks shadow by simple
-/// overwrite, restored explicitly around closure bodies specifically -- see `BodyBuilder::lower_closure`), so
+/// flat, function-wide local-ID namespace. The frontend snapshots and restores its active name-to-local map at
+/// lexical boundaries (including closures), so
 /// giving each closure a separate zero-based local space would mean inventing a parallel indexing scheme just for
 /// this one construct. Reusing the owning body's monotonic counter keeps every [`LocalId`] in a function globally
 /// unique and lets [`Rvalue::Closure`]'s [`CallableParam::local`] values and [`Self::capture_locals`] simply index
@@ -2037,8 +2037,6 @@ pub struct LocalCallableTarget {
     /// Resolved binding of the surrounding [`StatementKind::Call::args`] to this callable's declared parameters.
     pub binding: ArgumentBinding,
 }
-
-/// One compiler-recognized named callable with an explicit direct-runtime rule.
 
 /// A direct call to a named function, with its resolved call-site identity.
 ///

@@ -22864,3 +22864,33 @@ fn reassigning_a_const_still_suggests_static_rather_than_mut() {
         "expected the hint to point at `static` rather than `mut`, got: {errors:?}"
     );
 }
+
+#[test]
+fn a_mutable_local_can_shadow_a_const_and_be_reassigned() {
+    let source = "const VALUE: int = 1\n\ndef use_local() -> int:\n  mut VALUE = 2\n  VALUE = 3\n  return VALUE\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "a local `mut` shadow must not be mistaken for the module const of the same spelling"
+    );
+}
+
+#[test]
+fn plain_tuple_unpack_reassigns_enclosing_mutable_bindings() {
+    let source = "def unpack() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left, right = (1, 2)\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain tuple unpack must resolve its targets through the enclosing scope chain"
+    );
+}
+
+#[test]
+fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
+    let source = "def assign() -> int:\n  mut left = 0\n  mut right = 0\n  if true:\n    left = right = 3\n  return left + right\n";
+
+    assert!(
+        check_str(source).is_ok(),
+        "plain chained assignment must resolve every target through the enclosing scope chain"
+    );
+}

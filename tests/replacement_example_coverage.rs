@@ -7,7 +7,8 @@
 //!
 //! Two numbers, because they fail for different reasons and have different owners:
 //!
-//! - **Represented**: the example lowers to Body IR. A shortfall here is source-representation work (#1101).
+//! - **Represented**: the example lowers without a Body-IR `Unsupported` placeholder. A shortfall here is
+//!   source-representation work (#1101).
 //! - **Executed**: the example's `main` runs to a value. A shortfall here is executor work (#988 and its slice).
 //!
 //! Both are recorded as exact baselines rather than floors. A floor would have let the executed count sit at zero
@@ -18,13 +19,23 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use incan::backend::replacement::execute_free_function;
-use incan::frontend::body_ir::build_body_ir_module_v0;
+use incan::backend::replacement::{ReplacementExecutionError, execute_free_function};
+use incan::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use incan::frontend::typechecker::TypeChecker;
 use incan::frontend::{lexer, parser};
 
-/// Examples that lower to Body IR today. Update this in the same change that moves it.
-const REPRESENTED_BASELINE: usize = 61;
+/// Examples that lower to fully supported Body IR today. Update this in the same change that moves it.
+///
+/// The prior 61 count treated two modules containing explicit `Unsupported` placeholders as represented. They are
+/// intentionally excluded: a placeholder is the compiler's proof that the source was *not* represented for a
+/// consumer, not a successful lowering result.
+const REPRESENTED_BASELINE: usize = 59;
+
+/// Number of committed example sources included in this fixed corpus.
+///
+/// Keeping the denominator explicit makes additions/removals reviewed coverage events rather than silently changing
+/// the percentage while the representation and execution baselines happen to stay the same.
+const EXAMPLE_SOURCE_BASELINE: usize = 68;
 
 /// Examples whose `main` executes today. Update this in the same change that moves it.
 ///
@@ -48,7 +59,7 @@ const EXECUTED_BASELINE: usize = 4;
 enum Outcome {
     /// Ran to a value.
     Executed,
-    /// Lowered to Body IR but refused during execution, with the refusal's own wording.
+    /// Lowered to fully supported Body IR but refused during direct execution, with a typed refusal category.
     RepresentedNotExecuted(String),
     /// Did not reach Body IR. Covers imports and other multi-module shapes a single file cannot resolve.
     NotRepresented(String),
@@ -89,6 +100,9 @@ fn classify(source_path: &Path) -> Result<Outcome, Box<dyn std::error::Error>> {
     let Ok(program) = parser::parse(&tokens) else {
         return Ok(Outcome::NotRepresented("parse".to_string()));
     };
+    let Ok(program) = apply_body_ir_input_contract(program, source_path) else {
+        return Ok(Outcome::NotRepresented("input contract".to_string()));
+    };
 
     let module_path = vec!["example_coverage".to_string()];
     let mut checker = TypeChecker::new();
@@ -98,42 +112,39 @@ fn classify(source_path: &Path) -> Result<Outcome, Box<dyn std::error::Error>> {
     }
 
     let module = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+    if module.render_snapshot().contains("unsupported(") {
+        return Ok(Outcome::NotRepresented("Body IR refusal".to_string()));
+    }
     match execute_free_function(&module, "main", &[]) {
         Ok(_) => Ok(Outcome::Executed),
-        Err(error) => Ok(Outcome::RepresentedNotExecuted(refusal_bucket(&format!("{error:?}")))),
+        Err(error) => Ok(Outcome::RepresentedNotExecuted(refusal_bucket(&error))),
     }
 }
 
-/// Reduce a refusal to a stable bucket so the report groups by cause rather than by span.
-fn refusal_bucket(reported: &str) -> String {
-    // `MissingFunction` is not a defect: a library module has no entrypoint to run, and this path requires one.
-    // It is bucketed rather than dropped so the denominator stays honest about what was actually attempted.
-    if reported.contains("MissingFunction") {
-        return "no `main` (library module, not a defect)".to_string();
+/// Reduce a typed refusal to a stable category without parsing `Debug` output or source-span text.
+fn refusal_bucket(error: &ReplacementExecutionError) -> String {
+    match error {
+        // A library module has no entrypoint to run. Keep it in the denominator, but do not call its absence an
+        // executor defect.
+        ReplacementExecutionError::MissingFunction { .. } => "no `main` (library module, not a defect)",
+        ReplacementExecutionError::ArgumentCount { .. } => "entrypoint argument contract",
+        ReplacementExecutionError::Unsupported { .. } => "unsupported direct replacement profile",
+        ReplacementExecutionError::RuntimeFailure { .. } => "direct replacement runtime failure",
+        ReplacementExecutionError::ProviderAuthorityDenied { .. } => "provider authority denied",
+        ReplacementExecutionError::ProviderOperationFailed { .. } => "provider operation failed",
     }
-    for marker in [
-        "import declaration",
-        "non-function top-level declaration",
-        "repeated user binding",
-        "constructor",
-        "call to function",
-        "call to method",
-        "f-string",
-        "dict aggregate",
-        "collection iteration",
-        "unsupported Body-IR type",
-    ] {
-        if reported.contains(marker) {
-            return marker.to_string();
-        }
-    }
-    "other".to_string()
+    .to_string()
 }
 
 #[test]
 fn replacement_example_corpus_coverage_does_not_regress() -> Result<(), Box<dyn std::error::Error>> {
     let sources = example_sources()?;
     assert!(!sources.is_empty(), "the example corpus must not be empty");
+    assert_eq!(
+        sources.len(),
+        EXAMPLE_SOURCE_BASELINE,
+        "the committed example denominator moved from {EXAMPLE_SOURCE_BASELINE}; record that intentional corpus change"
+    );
 
     let mut executed = 0usize;
     let mut represented = 0usize;
@@ -156,7 +167,7 @@ fn replacement_example_corpus_coverage_does_not_regress() -> Result<(), Box<dyn 
     }
 
     println!("replacement backend coverage over {} committed examples", sources.len());
-    println!("  represented (lowers to Body IR): {represented}");
+    println!("  represented (lowers without a Body-IR refusal): {represented}");
     println!("  executed (main runs to a value): {executed}");
     for (bucket, count) in &buckets {
         println!("  blocked by {bucket}: {count}");

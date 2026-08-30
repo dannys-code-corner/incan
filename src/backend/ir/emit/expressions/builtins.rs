@@ -131,6 +131,29 @@ fn is_frozen_bytes_iterable_type(ty: &IrType) -> bool {
 }
 
 impl<'a> IrEmitter<'a> {
+    /// Emit a `print`/`println` call, rendering **every** argument space-separated.
+    ///
+    /// Both call paths funnel here because both previously emitted `args.first()` and discarded the rest: a program
+    /// writing `println("count", 3)` typechecked, compiled, and printed `count`. Nothing reported the loss --
+    /// `check_expr::calls::builtins` gives `Print` no arity check, unlike `Len` beside it -- so the missing output
+    /// was invisible from source, from diagnostics, and from the generated Rust unless read line by line.
+    ///
+    /// The separator is a single space, matching Python's `print` and the replacement executor's own rendering, so
+    /// the two backends agree on what a multi-argument print produces rather than one of them dropping arguments.
+    fn emit_print_call(&self, args: &[TypedExpr]) -> Result<TokenStream, EmitError> {
+        if args.is_empty() {
+            return Ok(quote! { println!() });
+        }
+        let rendered = args
+            .iter()
+            .map(|arg| self.emit_expr(arg))
+            .collect::<Result<Vec<_>, _>>()?;
+        // One `{}` per argument, joined by the separator. Built here rather than in `quote!` because the format
+        // string must reach the macro as a literal, not as a runtime `&str`.
+        let format = proc_macro2::Literal::string(&vec!["{}"; rendered.len()].join(" "));
+        Ok(quote! { println!(#format, #(#rendered),*) })
+    }
+
     /// Emit the iterator expression for `enumerate(arg)`.
     ///
     /// The frontend models `str` iteration as one-character `str` values and `bytes` iteration as Incan `int`
@@ -170,14 +193,7 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         match func {
-            BuiltinFn::Print => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { println!("{}", #a) })
-                } else {
-                    Ok(quote! { println!() })
-                }
-            }
+            BuiltinFn::Print => self.emit_print_call(args),
             BuiltinFn::Len => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;
@@ -448,14 +464,7 @@ impl<'a> IrEmitter<'a> {
 
         match id {
             BuiltinFnId::IsInstance => Ok(None),
-            BuiltinFnId::Print => {
-                if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(Some(quote! { println!("{}", #a) }))
-                } else {
-                    Ok(Some(quote! { println!() }))
-                }
-            }
+            BuiltinFnId::Print => self.emit_print_call(args).map(Some),
             BuiltinFnId::Len => {
                 if let Some(arg) = args.first() {
                     let a = self.emit_expr(arg)?;

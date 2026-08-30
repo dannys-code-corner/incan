@@ -7394,3 +7394,83 @@ fn if_let_lowers_an_alternated_pattern() -> Result<(), Box<dyn std::error::Error
     // `assert o is Some(v)` typed `?`.
     Ok(())
 }
+
+// ---- #1072: preserve the typechecker's lexical assignment decision in Body IR ----
+
+#[test]
+fn plain_assignment_reuses_its_active_body_ir_local() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  mut x = 1\n  x = 2\n  return x\n",
+        &["m", "plain_reassign"],
+    )?;
+    let body = body_named(&module, "run")?;
+    let names: Vec<_> = body
+        .locals
+        .iter()
+        .filter(|local| local.name.as_deref() == Some("x"))
+        .collect();
+
+    assert_eq!(
+        names.len(),
+        1,
+        "plain reassignment must write the original local rather than declare a duplicate: {}",
+        module.render_snapshot()
+    );
+    Ok(())
+}
+
+#[test]
+fn branch_shadowing_does_not_leak_into_following_body_ir_reads() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  let x = 1\n  if true:\n    let x = 2\n  return x\n",
+        &["m", "branch_shadow"],
+    )?;
+    let body = body_named(&module, "run")?;
+    let x_locals: Vec<_> = body
+        .locals
+        .iter()
+        .filter(|local| local.name.as_deref() == Some("x"))
+        .collect();
+    let outer = x_locals.first().ok_or("fixture must declare an outer `x`")?.id;
+    assert_eq!(x_locals.len(), 2, "the explicit `let` shadow must retain both locals");
+
+    let returned_local = body
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| match &statement.kind {
+            bir::StatementKind::Return {
+                value: Some(bir::Operand::Place(operand)),
+            } => Some(operand.place.local),
+            _ => None,
+        })
+        .ok_or("fixture must return a local place")?;
+    assert_eq!(
+        returned_local, outer,
+        "a read after the branch must resolve to the enclosing local, not the branch-only shadow"
+    );
+    Ok(())
+}
+
+#[test]
+fn plain_multi_target_assignment_reuses_active_body_ir_locals() -> Result<(), Box<dyn std::error::Error>> {
+    let module = build(
+        "def run() -> int:\n  mut left = 0\n  mut right = 0\n  left, right = (1, 2)\n  return left + right\n",
+        &["m", "plain_multi_reassign"],
+    )?;
+    let body = body_named(&module, "run")?;
+    for name in ["left", "right"] {
+        let count = body
+            .locals
+            .iter()
+            .filter(|local| local.name.as_deref() == Some(name))
+            .count();
+        assert_eq!(
+            count,
+            1,
+            "plain multi-target assignment must reuse `{name}` rather than create a duplicate: {}",
+            module.render_snapshot()
+        );
+    }
+    Ok(())
+}

@@ -101,8 +101,8 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// A direct executable target must be physically represented by this Body-IR module. Imports and unresolved
     /// names deliberately retain their existing call representation with no direct declaration identity, so this
     /// frontend does not turn a source-representation gap into a new source diagnostic. The replacement executor
-    /// then refuses those targets at the original call span; only compiler-recognized `range` has a separate
-    /// explicit Body-IR builtin target fact.
+    /// then refuses those targets at the original call span. Every unshadowed core builtin has a registry identity;
+    /// individual consumers still admit only their documented subset, such as `range` for counting-loop lowering.
     ///
     /// Overloads are why this is resolved per call site rather than per name. `function_bindings` is keyed by bare
     /// source name, so for two same-name declarations it holds only one of them; binding a call against the wrong
