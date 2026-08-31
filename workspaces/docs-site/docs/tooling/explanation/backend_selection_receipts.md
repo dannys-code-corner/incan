@@ -30,6 +30,10 @@ A `--shadow` request on a build remains `{"unavailable": {"reason": "..."}}`, ne
 
 Any explicit backend request, fallback policy, or shadow request bypasses completed-output reuse and takes the source-based path appropriate to the declared backend. This prevents a cached default result from being presented as the outcome of a different declared selection.
 
+### Abs and Sum overflow behavior
+
+Compiler-selected integer `abs` and builtin `sum` use checked arithmetic in every build profile. An unrepresentable result is a runtime failure rather than a wrapped value. Replacement execution retains the original builtin call span and any program output accepted before the failure; generated Rust uses explicit checked operations so Rust's debug/release overflow settings cannot change the result. This bounded contract does not yet define overflow for ordinary integer operators. Native and direct failure diagnostics can still differ on stderr, so a shadow comparison reports that diagnostic difference rather than calling it parity.
+
 ## Source-observable shadow comparison
 
 The source-observable comparator in `src/backend/shadow/` observes one named free function in a source-only module, called with concrete scalar arguments. Its current profile is `incan.shadow_comparison.direct_scalar_free_function.v1`: the checked result must be `int`, `bool`, `str`, or `None`, and the source must fit the admitted direct-execution profile. A module containing `main` is outside this harness profile because the comparator supplies its own entrypoint. Direct `rust::std::process` imports are also outside the profile, keeping source exit behavior distinct from the harness's private transport-failure statuses. Printing is supported; it is not a reason to exclude a comparison.

@@ -370,13 +370,13 @@ impl ShadowComparisonProfile {
         digest_output(&[self.source.as_str()])
     }
 
-    /// Content identity of this profile instance: the profile kind, the source, the observed function, and the
+    /// Content identity of this source input: the profile kind, the source, the observed function, and the
     /// exact arguments.
     ///
-    /// Two comparisons over the same module but different arguments are different claims, so they must not share
-    /// an identity, and [`classify_observations`] refuses to pair observations whose identities disagree. An
-    /// argument that has no source spelling makes the profile unrepresentable, and the identity falls back to a
-    /// stable marker rather than silently colliding with a representable argument list.
+    /// Two comparisons over the same module but different arguments are different claims, so they must not share an
+    /// identity, and [`classify_observations`] refuses to pair observations whose identities disagree. An argument
+    /// that has no source spelling makes the profile unrepresentable, and the identity falls back to a stable marker
+    /// rather than silently colliding with a representable argument list.
     #[must_use]
     pub fn profile_identity(&self) -> String {
         let arguments = match self.argument_literals() {
@@ -802,11 +802,21 @@ pub fn compare_source_observable(
     let prepared = match PreparedShadowProfile::new(profile) {
         Ok(prepared) => prepared,
         Err(unavailable) => {
-            return assemble_comparison(profile, Err(unavailable.clone()), Err(unavailable));
+            return assemble_comparison(
+                profile,
+                profile.profile_identity(),
+                Err(unavailable.clone()),
+                Err(unavailable),
+            );
         }
     };
     if let Err(unavailable) = preflight_result_transport(profile, &prepared, workspace) {
-        return assemble_comparison(profile, Err(unavailable.clone()), Err(unavailable));
+        return assemble_comparison(
+            profile,
+            profile.profile_identity(),
+            Err(unavailable.clone()),
+            Err(unavailable),
+        );
     }
 
     // ---- Route 1: direct Body IR, no generation and no subprocess ----
@@ -815,7 +825,7 @@ pub fn compare_source_observable(
     // ---- Route 2: emitted Rust, Oven-authorized native build, executed as a process ----
     let legacy = legacy_oven::observe_legacy_route(profile, &prepared, capability, workspace);
 
-    assemble_comparison(profile, replacement, legacy)
+    assemble_comparison(profile, profile.profile_identity(), replacement, legacy)
 }
 
 /// Fold both routes' results into one comparison, retaining every route that actually executed.
@@ -824,11 +834,11 @@ pub fn compare_source_observable(
 /// partial-evidence retention — stay testable without staging an Oven capability.
 fn assemble_comparison(
     profile: &ShadowComparisonProfile,
+    profile_identity: String,
     replacement: Result<ReplacementRouteResult, ShadowUnavailable>,
     legacy: Result<LegacyRouteResult, ShadowUnavailable>,
 ) -> ShadowComparison {
     let profile_kind = profile.profile_kind().to_string();
-    let profile_identity = profile.profile_identity();
     let source_identity = profile.source_identity();
 
     let (replacement_observation, replacement_execution, replacement_output, replacement_unavailable) =
@@ -1387,3 +1397,6 @@ fn route_receipt(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod abs_sum_profile_tests;

@@ -130,6 +130,34 @@ fn is_frozen_bytes_iterable_type(ty: &IrType) -> bool {
     }
 }
 
+/// Emit integer `abs` with one checked language behavior in every Rust build profile.
+fn emit_abs(emitter: &IrEmitter<'_>, arg: &TypedExpr) -> Result<TokenStream, EmitError> {
+    let value = emitter.emit_expr(arg)?;
+    Ok(quote! {
+        ::std::convert::identity::<i64>(#value).checked_abs().unwrap_or_else(|| {
+            incan_stdlib::errors::raise_value_error("integer overflow in builtin `abs`")
+        })
+    })
+}
+
+/// Emit builtin integer `sum` with checked accumulation independent of Rust overflow-check settings.
+fn emit_sum(emitter: &IrEmitter<'_>, arg: &TypedExpr) -> Result<TokenStream, EmitError> {
+    let value = emitter.emit_expr(arg)?;
+    let element = if matches!(list_elem_type(&arg.ty), IrType::Bool) {
+        quote! { if *value { 1_i64 } else { 0_i64 } }
+    } else {
+        quote! { *value }
+    };
+    Ok(quote! {
+        (#value)
+            .iter()
+            .try_fold(0_i64, |total, value| total.checked_add(#element))
+            .unwrap_or_else(|| {
+                incan_stdlib::errors::raise_value_error("integer overflow in builtin `sum`")
+            })
+    })
+}
+
 impl<'a> IrEmitter<'a> {
     /// Emit a `print`/`println` call, rendering **every** argument space-separated.
     ///
@@ -204,14 +232,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFn::Sum => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    let elem_type = list_elem_type(&arg.ty);
-                    let sum_tokens = if matches!(elem_type, IrType::Bool) {
-                        quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
-                    } else {
-                        quote! { #a.iter().sum::<i64>() }
-                    };
-                    Ok(sum_tokens)
+                    emit_sum(self, arg)
                 } else {
                     Ok(quote! { 0i64 })
                 }
@@ -307,8 +328,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFn::Abs => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { #a.abs() })
+                    emit_abs(self, arg)
                 } else {
                     Ok(quote! { 0 })
                 }
@@ -475,15 +495,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFnId::Sum => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    let elem_type = list_elem_type(&arg.ty);
-
-                    let sum_tokens = if matches!(elem_type, IrType::Bool) {
-                        quote! { #a.iter().map(|v| if *v { 1i64 } else { 0i64 }).sum::<i64>() }
-                    } else {
-                        quote! { #a.iter().sum::<i64>() }
-                    };
-                    Ok(Some(sum_tokens))
+                    emit_sum(self, arg).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -579,8 +591,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFnId::Abs => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(Some(quote! { #a.abs() }))
+                    emit_abs(self, arg).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -720,6 +731,8 @@ impl<'a> IrEmitter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backend::ir::FunctionRegistry;
+    use crate::backend::ir::expr::{VarAccess, VarRefKind};
 
     #[test]
     fn legacy_file_result_stringifies_rust_io_errors_issue874() {
@@ -739,5 +752,54 @@ mod tests {
             IrType::Int,
         ])));
         assert!(!enumerate_elem_can_copy(&IrType::Option(Box::new(IrType::Int))));
+    }
+
+    /// Both retained builtin dispatch paths must emit explicit checks, never profile-sensitive Rust arithmetic.
+    #[test]
+    fn canonical_and_legacy_abs_sum_emit_one_checked_contract() -> Result<(), Box<dyn std::error::Error>> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let integer = TypedExpr::new(
+            IrExprKind::Var {
+                name: "integer".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::Int,
+        );
+        let integers = TypedExpr::new(
+            IrExprKind::Var {
+                name: "integers".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::List(Box::new(IrType::Int)),
+        );
+
+        for emitted in [
+            emitter.emit_builtin_call(&BuiltinFn::Abs, std::slice::from_ref(&integer))?,
+            emitter
+                .try_emit_builtin_call("abs", std::slice::from_ref(&integer))?
+                .ok_or("legacy abs identity must emit")?,
+        ] {
+            let rendered = emitted.to_string().split_whitespace().collect::<String>();
+            assert!(rendered.contains("checked_abs()"), "{rendered}");
+            assert!(rendered.contains("raise_value_error"), "{rendered}");
+            assert!(!rendered.contains("wrapping_abs"), "{rendered}");
+        }
+
+        for emitted in [
+            emitter.emit_builtin_call(&BuiltinFn::Sum, std::slice::from_ref(&integers))?,
+            emitter
+                .try_emit_builtin_call("sum", std::slice::from_ref(&integers))?
+                .ok_or("legacy sum identity must emit")?,
+        ] {
+            let rendered = emitted.to_string().split_whitespace().collect::<String>();
+            assert!(rendered.contains("try_fold(0_i64"), "{rendered}");
+            assert!(rendered.contains("checked_add"), "{rendered}");
+            assert!(rendered.contains("raise_value_error"), "{rendered}");
+            assert!(!rendered.contains("wrapping_add"), "{rendered}");
+        }
+        Ok(())
     }
 }

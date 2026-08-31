@@ -332,7 +332,12 @@ fn partial_direct_output_survives_unclassifiable_failure() -> Result<(), Box<dyn
     assert!(observed.observation.is_none());
     assert!(observed.execution.is_none());
     assert_eq!(observed.output.stdout(), b"before invalid index\n");
-    let comparison = assemble_comparison(&profile, Ok(observed), Err(ShadowUnavailable::new("legacy unstaged")));
+    let comparison = assemble_comparison(
+        &profile,
+        profile.profile_identity(),
+        Ok(observed),
+        Err(ShadowUnavailable::new("legacy unstaged")),
+    );
     assert!(!comparison.matched());
     assert!(comparison.replacement.is_none());
     let output = comparison
@@ -561,6 +566,7 @@ fn an_executed_replacement_route_survives_an_unavailable_legacy_route() -> Resul
     let replacement = observe_replacement_route(&profile, &prepared)?;
     let comparison = assemble_comparison(
         &profile,
+        profile.profile_identity(),
         Ok(replacement),
         Err(ShadowUnavailable::new("no Oven plan is staged")),
     );
@@ -617,6 +623,7 @@ fn an_executed_route_without_a_receipt_reports_that_rather_than_vanishing() {
 fn a_comparison_with_no_executed_route_keeps_no_receipts() {
     let comparison = assemble_comparison(
         &profile(),
+        profile().profile_identity(),
         Err(ShadowUnavailable::new("replacement refused")),
         Err(ShadowUnavailable::new("legacy unstaged")),
     );
