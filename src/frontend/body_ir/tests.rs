@@ -4129,7 +4129,6 @@ fn a_prefix_surface_keyword_that_is_not_await_is_refused_rather_than_treated_as_
     let local_fieldless_enum_declarations = LocalFieldlessEnumDeclarations::new();
     let local_value_enum_declarations = LocalValueEnumDeclarations::new();
     let provider_operations = ProviderOperationCatalog::new();
-    let module_path = vec!["m".to_string()];
     let lowering_facts = BodyIrLoweringFacts {
         type_info: &type_info,
         function_default_sources: &function_default_sources,
@@ -4138,7 +4137,6 @@ fn a_prefix_surface_keyword_that_is_not_await_is_refused_rather_than_treated_as_
         local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
         local_value_enum_declarations: &local_value_enum_declarations,
         module_identity: "m",
-        module_path: &module_path,
         provider_operations: &provider_operations,
     };
     let mut builder = BodyBuilder::new(&lowering_facts, IncanType::Unknown);

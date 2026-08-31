@@ -70,6 +70,8 @@ pub use type_info::{
 };
 pub(crate) use type_info::{ClassFieldDefaultInfo, semantic_type_from_resolved};
 #[cfg(test)]
+mod canonical_identity_tests;
+#[cfg(test)]
 mod tests;
 
 use std::cell::Cell;
@@ -2114,7 +2116,12 @@ impl TypeChecker {
         self.set_provider_plan(Arc::new(plan));
     }
 
+    /// Record the module path owning this checker's declarations.
+    ///
+    /// Also forwarded to the symbol table, whose RFC 120 identity minting uses it as the [`SymbolOrigin`] of every
+    /// locally-declared symbol; `None` resets to the anonymous-module origin.
     pub fn set_current_module_path(&mut self, path: Option<Vec<String>>) {
+        self.symbols.set_module_path(path.clone().unwrap_or_default());
         self.current_module_path = path;
     }
 
@@ -2162,6 +2169,21 @@ impl TypeChecker {
                 kind: kind.into(),
             },
         );
+    }
+
+    /// Export the RFC 120 identities minted for this module's own declarations into the lowering-facing artifacts.
+    ///
+    /// Runs once at the end of checking, when every declaration has been defined. The span-keyed map lets
+    /// declaration-level HIR attach each top-level declaration's identity without re-deriving it from module path
+    /// plus spelling; import/alias bindings are excluded here because they carry a target's identity and are already
+    /// exported by local name in `resolved_import_identities`.
+    fn export_declaration_identities(&mut self) {
+        for (span, identity) in self.symbols.local_declaration_identities() {
+            self.type_info
+                .declarations
+                .declaration_identities
+                .insert((span.start, span.end), identity.clone());
+        }
     }
 
     /// Retain one compiler-proven ordinary function call for checked C bridge/facade projection.
@@ -5386,6 +5408,9 @@ impl TypeChecker {
         self.validate_rust_module_and_extern(program);
         self.validate_source_type_names = false;
 
+        // ---- RFC 120: export the minted declaration identities for later stages ----
+        self.export_declaration_identities();
+
         // Split fatal errors from non-fatal diagnostics.
         let all = std::mem::take(&mut self.errors);
         let (fatal, non_fatal): (Vec<_>, Vec<_>) = all
@@ -6236,114 +6261,132 @@ impl TypeChecker {
     fn predeclare_dependency_decl(&mut self, decl: &Spanned<Declaration>) {
         match &decl.node {
             Declaration::Model(model) if self.lookup_symbol(model.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: model.name.clone(),
-                    kind: SymbolKind::Type(TypeInfo::Model(ModelInfo {
-                        type_params: model.type_params.iter().map(|tp| tp.name.clone()).collect(),
-                        traits: Vec::new(),
-                        trait_adoptions: Vec::new(),
-                        derives: Vec::new(),
-                        fields: HashMap::new(),
-                        field_order: Vec::new(),
-                        properties: HashMap::new(),
-                        methods: HashMap::new(),
-                        method_overloads: HashMap::new(),
-                        method_aliases: HashMap::new(),
-                    })),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: model.name.clone(),
+                        kind: SymbolKind::Type(TypeInfo::Model(ModelInfo {
+                            type_params: model.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                            traits: Vec::new(),
+                            trait_adoptions: Vec::new(),
+                            derives: Vec::new(),
+                            fields: HashMap::new(),
+                            field_order: Vec::new(),
+                            properties: HashMap::new(),
+                            methods: HashMap::new(),
+                            method_overloads: HashMap::new(),
+                            method_aliases: HashMap::new(),
+                        })),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             Declaration::Class(class) if self.lookup_symbol(class.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: class.name.clone(),
-                    kind: SymbolKind::Type(TypeInfo::Class(ClassInfo {
-                        type_params: class.type_params.iter().map(|tp| tp.name.clone()).collect(),
-                        extends: class.extends.clone(),
-                        traits: Vec::new(),
-                        trait_adoptions: Vec::new(),
-                        derives: Vec::new(),
-                        fields: HashMap::new(),
-                        field_defaults: Box::new(HashMap::new()),
-                        field_default_metadata: Box::new(HashMap::new()),
-                        field_provider_libraries: Box::new(HashMap::new()),
-                        field_order: Vec::new(),
-                        properties: HashMap::new(),
-                        methods: HashMap::new(),
-                        method_overloads: HashMap::new(),
-                        method_aliases: HashMap::new(),
-                    })),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: class.name.clone(),
+                        kind: SymbolKind::Type(TypeInfo::Class(ClassInfo {
+                            type_params: class.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                            extends: class.extends.clone(),
+                            traits: Vec::new(),
+                            trait_adoptions: Vec::new(),
+                            derives: Vec::new(),
+                            fields: HashMap::new(),
+                            field_defaults: Box::new(HashMap::new()),
+                            field_default_metadata: Box::new(HashMap::new()),
+                            field_provider_libraries: Box::new(HashMap::new()),
+                            field_order: Vec::new(),
+                            properties: HashMap::new(),
+                            methods: HashMap::new(),
+                            method_overloads: HashMap::new(),
+                            method_aliases: HashMap::new(),
+                        })),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             Declaration::Trait(tr) if self.lookup_symbol(tr.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: tr.name.clone(),
-                    kind: SymbolKind::Trait(TraitInfo {
-                        type_params: tr.type_params.iter().map(|tp| tp.name.clone()).collect(),
-                        methods: HashMap::new(),
-                        method_aliases: HashMap::new(),
-                        properties: HashMap::new(),
-                        requires: Vec::new(),
-                        supertraits: Vec::new(),
-                    }),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: tr.name.clone(),
+                        kind: SymbolKind::Trait(TraitInfo {
+                            type_params: tr.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                            methods: HashMap::new(),
+                            method_aliases: HashMap::new(),
+                            properties: HashMap::new(),
+                            requires: Vec::new(),
+                            supertraits: Vec::new(),
+                        }),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             Declaration::TypeAlias(alias) if self.lookup_symbol(alias.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: alias.name.clone(),
-                    kind: SymbolKind::Type(TypeInfo::TypeAlias),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: alias.name.clone(),
+                        kind: SymbolKind::Type(TypeInfo::TypeAlias),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             Declaration::Newtype(nt) if self.lookup_symbol(nt.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: nt.name.clone(),
-                    kind: SymbolKind::Type(TypeInfo::Newtype(NewtypeInfo {
-                        type_params: nt.type_params.iter().map(|tp| tp.name.clone()).collect(),
-                        is_rusttype: nt.is_rusttype,
-                        has_interop: !nt.interop_edges.is_empty(),
-                        underlying: ResolvedType::Unknown,
-                        constraints: Vec::new(),
-                        implicit_coercion_enabled: true,
-                        method_rebindings: HashMap::new(),
-                        traits: nt.traits.iter().map(|trait_ref| trait_ref.node.name.clone()).collect(),
-                        trait_adoptions: Vec::new(),
-                        derives: Vec::new(),
-                        method_aliases: HashMap::new(),
-                        methods: HashMap::new(),
-                        method_overloads: HashMap::new(),
-                    })),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: nt.name.clone(),
+                        kind: SymbolKind::Type(TypeInfo::Newtype(NewtypeInfo {
+                            type_params: nt.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                            is_rusttype: nt.is_rusttype,
+                            has_interop: !nt.interop_edges.is_empty(),
+                            underlying: ResolvedType::Unknown,
+                            constraints: Vec::new(),
+                            implicit_coercion_enabled: true,
+                            method_rebindings: HashMap::new(),
+                            traits: nt.traits.iter().map(|trait_ref| trait_ref.node.name.clone()).collect(),
+                            trait_adoptions: Vec::new(),
+                            derives: Vec::new(),
+                            method_aliases: HashMap::new(),
+                            methods: HashMap::new(),
+                            method_overloads: HashMap::new(),
+                        })),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             Declaration::Enum(en) if self.lookup_symbol(en.name.as_str()).is_none() => {
-                self.symbols.define(Symbol {
-                    name: en.name.clone(),
-                    kind: SymbolKind::Type(TypeInfo::Enum(EnumInfo {
-                        type_params: en.type_params.iter().map(|tp| tp.name.clone()).collect(),
-                        traits: en.traits.iter().map(|t| t.node.name.clone()).collect(),
-                        trait_adoptions: Vec::new(),
-                        variants: en.variants.iter().map(|v| v.node.name.clone()).collect(),
-                        variant_fields: HashMap::new(),
-                        variant_aliases: en
-                            .variant_aliases
-                            .iter()
-                            .map(|alias| (alias.node.name.clone(), alias.node.target.clone()))
-                            .collect(),
-                        value_enum: None,
-                        derives: Vec::new(),
-                        methods: HashMap::new(),
-                        method_overloads: HashMap::new(),
-                    })),
-                    span: decl.span,
-                    scope: 0,
-                });
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: en.name.clone(),
+                        kind: SymbolKind::Type(TypeInfo::Enum(EnumInfo {
+                            type_params: en.type_params.iter().map(|tp| tp.name.clone()).collect(),
+                            traits: en.traits.iter().map(|t| t.node.name.clone()).collect(),
+                            trait_adoptions: Vec::new(),
+                            variants: en.variants.iter().map(|v| v.node.name.clone()).collect(),
+                            variant_fields: HashMap::new(),
+                            variant_aliases: en
+                                .variant_aliases
+                                .iter()
+                                .map(|alias| (alias.node.name.clone(), alias.node.target.clone()))
+                                .collect(),
+                            value_enum: None,
+                            derives: Vec::new(),
+                            methods: HashMap::new(),
+                            method_overloads: HashMap::new(),
+                        })),
+                        span: decl.span,
+                        scope: 0,
+                    },
+                    None,
+                );
             }
             _ => {}
         }

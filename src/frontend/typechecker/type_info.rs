@@ -684,6 +684,14 @@ pub struct ExpressionArtifacts {
     /// The codegraph exporter consumes this instead of re-resolving names from syntax. Absence means the target is
     /// unsupported, ambiguous, degraded, or outside the current conservative source target set.
     pub source_targets: HashMap<(usize, usize), SourceTargetInfo>,
+    /// RFC 120 canonical identities of resolved references, keyed by reference expression span.
+    ///
+    /// This is the reference-side identity fact: a local, an import, an alias, and a re-export of one declaration
+    /// all record the *same* value here, so a consumer can decide "do these two references mean the same thing"
+    /// structurally, without comparing spellings. [`Self::source_targets`] stays the string-shaped codegraph
+    /// projection; it is never the identity. Absence means resolution did not prove an identity for that reference —
+    /// consumers fail closed rather than reconstruct one.
+    pub resolved_identities: HashMap<(usize, usize), CanonicalSymbolId>,
 }
 
 /// Const evaluation facts needed by runtime and emission boundaries.
@@ -824,6 +832,13 @@ pub struct DeclarationArtifacts {
     /// written path, so the proven identity is recorded here and is simply absent when resolution did not prove one.
     /// A re-export resolves to the identity of the module that *declares* the member, never to the facade.
     pub resolved_import_identities: HashMap<String, CanonicalSymbolId>,
+    /// RFC 120 identities of this module's own top-level declarations, keyed by declaration span.
+    ///
+    /// Exported from the symbol table's minting after checking so later stages (declaration-level HIR, semantic
+    /// snapshots) consume the minted identity instead of re-deriving one from module path plus spelling. Only
+    /// module-scope declaration kinds are exported; bindings that carry a *target's* identity (imports, aliases) are
+    /// found in [`Self::resolved_import_identities`] under their local name instead.
+    pub declaration_identities: HashMap<(usize, usize), CanonicalSymbolId>,
     /// Checked provider-operation declarations, keyed by their provider function's canonical identity.
     ///
     /// This is the producer-side fact that package publication persists. Body-IR lowering consumes the resulting
@@ -1449,6 +1464,13 @@ pub struct FunctionBindingInfo {
     pub params: Vec<CallableParam>,
     /// Typechecker-resolved source return type.
     pub return_type: ResolvedType,
+    /// RFC 120 canonical identity of this declaration, minted once when the binding is recorded.
+    ///
+    /// This is the declaration-side fact Body IR lowering consumes for `NamedCallableTarget::canonical` instead of
+    /// re-deriving an identity from module path plus spelling. Span-keyed entries always carry it for local
+    /// declarations (each overload keeps its own); name-keyed *imported* entries carry the declaring module's proven
+    /// identity or `None` when import resolution could not prove one — absent is never permission to reconstruct.
+    pub identity: Option<CanonicalSymbolId>,
 }
 
 /// Typechecker-resolved binding of one `model`/`class` construction's arguments to the declared field layout.
@@ -1669,6 +1691,14 @@ impl TypeCheckInfo {
     /// Return a compiler-proven source target for the expression at `span`, if one was recorded.
     pub fn source_target(&self, span: Span) -> Option<&SourceTargetInfo> {
         self.expressions.source_targets.get(&(span.start, span.end))
+    }
+
+    /// Return the RFC 120 canonical identity resolved for the reference at `span`, if resolution proved one.
+    ///
+    /// Absent means unproven — never permission to rebuild an identity from the reference's spelling or from
+    /// [`Self::source_target`], which is a string-shaped codegraph projection rather than an identity.
+    pub fn resolved_identity(&self, span: Span) -> Option<&CanonicalSymbolId> {
+        self.expressions.resolved_identities.get(&(span.start, span.end))
     }
 
     /// Return whether the identifier at `span` resolved to the ambient `std.logging` logger binding.

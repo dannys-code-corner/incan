@@ -940,12 +940,21 @@ impl TypeChecker {
                         crate::frontend::typechecker::StaticBindingInfo { is_imported: true },
                     );
                 }
-                self.symbols.define(Symbol {
-                    name: alias.clone(),
-                    kind: imported_kind,
-                    span,
-                    scope: 0,
-                });
+                // RFC 120: the alias is a second binding to the already-materialized symbol, so it carries that
+                // symbol's identity rather than minting one of its own.
+                let target_identity = self
+                    .symbols
+                    .lookup(&item.name)
+                    .and_then(|id| self.symbols.identity_of(id).cloned());
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: alias.clone(),
+                        kind: imported_kind,
+                        span,
+                        scope: 0,
+                    },
+                    target_identity,
+                );
                 self.mark_static_binding_imported(&item.name);
                 return true;
             }
@@ -1079,14 +1088,28 @@ impl TypeChecker {
     }
 
     /// Define one already named imported symbol after root namespace validation.
+    ///
+    /// The binding carries the RFC 120 identity import resolution proved for this local name (see
+    /// [`Self::record_resolved_import_owner`]), or none at all — an import binding must never mint an identity from
+    /// the importing module. Reference-side recording also falls back to `resolved_import_identities` for
+    /// module-scope bindings, so a proof recorded after this definition still reaches consumers.
     fn define_named_import_symbol(&mut self, name: Ident, kind: SymbolKind, span: Span) -> SymbolId {
         self.validate_root_namespace(&name, span);
-        self.symbols.define(Symbol {
-            name,
-            kind,
-            span,
-            scope: 0,
-        })
+        let target_identity = self
+            .type_info
+            .declarations
+            .resolved_import_identities
+            .get(&name)
+            .cloned();
+        self.symbols.define_import_binding(
+            Symbol {
+                name,
+                kind,
+                span,
+                scope: 0,
+            },
+            target_identity,
+        )
     }
 
     /// Return all derived public module namespace paths carried by the checked API artifact.
@@ -1450,12 +1473,17 @@ impl TypeChecker {
             if let Some(mut kind) = flat_function {
                 self.remap_symbol_kind_with_import_aliases(&mut kind, &imported_type_aliases);
                 self.record_imported_function_binding(&local_name, &kind);
-                self.symbols.define(Symbol {
-                    name: local_name,
-                    kind,
-                    span,
-                    scope: 0,
-                });
+                // RFC 120: a compiled-library binding must not mint a consumer-module identity. Its declaring
+                // identity is unproven until the library manifest carries one (#1042 follow-up), so record none.
+                self.symbols.define_import_binding(
+                    Symbol {
+                        name: local_name,
+                        kind,
+                        span,
+                        scope: 0,
+                    },
+                    None,
+                );
                 continue;
             }
 
@@ -1538,12 +1566,17 @@ impl TypeChecker {
             );
         }
         Self::mark_compiled_class_field_provider(&mut kind, library);
-        self.symbols.define(Symbol {
-            name: local_name,
-            kind,
-            span,
-            scope: 0,
-        });
+        // RFC 120: a compiled-library binding must not mint a consumer-module identity. Its declaring identity is
+        // unproven until the library manifest carries one (#1042 follow-up), so record none.
+        self.symbols.define_import_binding(
+            Symbol {
+                name: local_name,
+                kind,
+                span,
+                scope: 0,
+            },
+            None,
+        );
     }
 
     /// Build the provider-aware type remapping shared by every import statement for one compiled library.
@@ -2466,12 +2499,17 @@ impl TypeChecker {
             );
         }
 
-        self.symbols.define(Symbol {
-            name: local_name,
-            kind,
-            span,
-            scope: 0,
-        });
+        // RFC 120: a compiled-library binding must not mint a consumer-module identity. Its declaring identity is
+        // unproven until the library manifest carries one (#1042 follow-up), so record none.
+        self.symbols.define_import_binding(
+            Symbol {
+                name: local_name,
+                kind,
+                span,
+                scope: 0,
+            },
+            None,
+        );
     }
 
     /// Attach the importing dependency key to every field reconstructed from one compiled class manifest.

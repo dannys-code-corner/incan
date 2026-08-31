@@ -8,7 +8,7 @@ use std::fmt::Write;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{CompilerNodeId, SemanticFactStore};
+use crate::{CanonicalSymbolId, CompilerNodeId, SemanticFactStore};
 
 /// A source byte range attached to a HIR node.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -51,6 +51,9 @@ impl HirModule {
             if let Some(type_fact_subject) = &decl.type_fact_subject {
                 let _ = write!(&mut out, " type_fact={type_fact_subject}");
             }
+            if let Some(canonical) = &decl.canonical {
+                let _ = write!(&mut out, " identity={}", canonical.render_compact());
+            }
             out.push('\n');
         }
         out
@@ -83,6 +86,14 @@ pub struct HirDeclaration {
     pub span: HirSourceSpan,
     /// Subject ID to query for a [`crate::SemanticFactKind::Type`] fact, when this declaration has one.
     pub type_fact_subject: Option<CompilerNodeId>,
+    /// RFC 120 canonical identity of this declaration, when the frontend proved one.
+    ///
+    /// For a local declaration this is the identity minted at its definition; for a single-binding import it is the
+    /// *declaring* module's identity, so an aliased import and its target declaration visibly share one identity in
+    /// the HIR handoff. `None` means unproven (multi-item imports, docstrings, declarations whose identity the
+    /// frontend does not yet export) — a consumer must not reconstruct one from [`Self::id`] or [`Self::name`],
+    /// which remain spelling-derived v0 surfaces.
+    pub canonical: Option<CanonicalSymbolId>,
 }
 
 /// Top-level declaration categories represented by HIR v0.
@@ -148,6 +159,7 @@ mod tests {
                 name: Some("run".to_string()),
                 span: HirSourceSpan::new(1, 24),
                 type_fact_subject: Some(decl_id),
+                canonical: None,
             }],
         };
 
@@ -177,6 +189,7 @@ mod tests {
                     name: Some("run".to_string()),
                     span: HirSourceSpan::new(1, 24),
                     type_fact_subject: Some(decl_id),
+                    canonical: None,
                 }],
             },
             facts,

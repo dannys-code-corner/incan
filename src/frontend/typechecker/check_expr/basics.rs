@@ -45,7 +45,7 @@ impl TypeChecker {
             ));
         }
 
-        let Some(sym) = self.lookup_symbol(name) else {
+        let Some(sym_id) = self.symbols.lookup(name) else {
             if name == "log" {
                 self.type_info
                     .expressions
@@ -54,6 +54,31 @@ impl TypeChecker {
                 self.type_info.record_ambient_logger_binding(span);
                 return ResolvedType::Named("Logger".to_string());
             }
+            self.errors.push(errors::unknown_symbol(name, span));
+            return ResolvedType::Unknown;
+        };
+        // ---- RFC 120: record which canonical identity this reference resolved to ----
+        //
+        // The binding's minted identity wins. A module-scope binding without one falls back to the identity import
+        // resolution proved for this local name, covering import bindings materialized before their proof was
+        // recorded. The fallback is module-scope-only so an identity-less nested placeholder can never pick up an
+        // unrelated import's identity.
+        let resolved_identity = self.symbols.identity_of(sym_id).cloned().or_else(|| {
+            self.symbols.get(sym_id).filter(|sym| sym.scope == 0).and_then(|_| {
+                self.type_info
+                    .declarations
+                    .resolved_import_identities
+                    .get(name)
+                    .cloned()
+            })
+        });
+        if let Some(identity) = resolved_identity {
+            self.type_info
+                .expressions
+                .resolved_identities
+                .insert((span.start, span.end), identity);
+        }
+        let Some(sym) = self.symbols.get(sym_id) else {
             self.errors.push(errors::unknown_symbol(name, span));
             return ResolvedType::Unknown;
         };
