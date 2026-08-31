@@ -22,6 +22,7 @@
 //! this module supplies it with evaluated operands and refuses an unresolved, inactive, or unauthorized operation
 //! at the original source span.
 
+pub mod hashed;
 pub mod program_io;
 pub mod provider;
 
@@ -42,12 +43,12 @@ use incan_core::{
 use incan_semantics_core::body_ir::{
     AggregateKind, ArgumentBinding, ArgumentElement, AssertionKind, BinOp, Body, BodyIrModule, CallableParam,
     CallableParamDefault, CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation,
-    FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, FormatPart, FormatStyle,
-    GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm, NamedCallableTarget,
-    NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem,
-    ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue, ScopeId, Statement,
-    StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration,
-    ValueEnumVariantTarget,
+    DictEntry, FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, FormatPart,
+    FormatStyle, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm,
+    NamedCallableTarget, NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding,
+    Place, PlaceElem, ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue,
+    ScopeId, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration,
+    ValueEnumVariantDeclaration, ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
@@ -55,6 +56,7 @@ use incan_semantics_core::{
 };
 
 use crate::backend::selection::digest_output;
+use hashed::{ReplacementDict, ReplacementSet};
 use provider::{ProviderExecutionRecord, ProviderInputValue, ProviderRuntime, canonical_provider_execution_summary};
 
 /// Bounded instruction count for one replacement execution.
@@ -86,6 +88,10 @@ pub enum ReplacementValue {
     },
     /// A source-local structural tuple whose elements remain direct replacement values.
     Tuple(Vec<ReplacementValue>),
+    /// An immutable hashed set; operand reads share its table rather than copying it before every probe.
+    Set(Rc<ReplacementSet>),
+    /// An immutable hashed dict; values are retained, while membership consults only scalar keys.
+    Dict(Rc<ReplacementDict>),
     /// A source-local plain-model instance whose declaration identity and canonical field layout were verified.
     ///
     /// This is neither a generic object nor a name-based map. Construction resolves `direct_declaration_id` against
@@ -359,6 +365,8 @@ impl ReplacementValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+            Self::Set(values) => values.observable_text(),
+            Self::Dict(values) => values.observable_text(),
             Self::Nominal {
                 direct_declaration_id,
                 fields,
@@ -1149,6 +1157,16 @@ fn validate_collection_local_types(
         match &statement.kind {
             StatementKind::Assign {
                 place,
+                rvalue: Rvalue::Aggregate(AggregateKind::Set, _),
+            } => validate_hashed_aggregate_local_type(body, place, statement.span, CollectionTypeId::Set)?,
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Dict(_),
+            } => {
+                validate_hashed_aggregate_local_type(body, place, statement.span, CollectionTypeId::Dict)?;
+            }
+            StatementKind::Assign {
+                place,
                 rvalue: Rvalue::Aggregate(AggregateKind::Tuple, _),
             }
             | StatementKind::Assign {
@@ -1300,6 +1318,16 @@ fn validate_structural_aggregate_types_in_statements(
         match &statement.kind {
             StatementKind::Assign {
                 place,
+                rvalue: Rvalue::Aggregate(AggregateKind::Set, _),
+            } => validate_hashed_aggregate_local_type(body, place, statement.span, CollectionTypeId::Set)?,
+            StatementKind::Assign {
+                place,
+                rvalue: Rvalue::Dict(_),
+            } => {
+                validate_hashed_aggregate_local_type(body, place, statement.span, CollectionTypeId::Dict)?;
+            }
+            StatementKind::Assign {
+                place,
                 rvalue: Rvalue::Aggregate(AggregateKind::Tuple | AggregateKind::List, _),
             } => validate_structural_aggregate_local_type(
                 body,
@@ -1345,6 +1373,35 @@ fn validate_structural_aggregate_local_type(
         Ok(())
     } else {
         Err(unsupported(format!("{role} has unsupported Body-IR type `{ty}`"), span))
+    }
+}
+
+/// Validate the retained key type even when an empty hashed aggregate provides no runtime element to inspect.
+fn validate_hashed_aggregate_local_type(
+    body: &Body,
+    place: &Place,
+    span: HirSourceSpan,
+    collection: CollectionTypeId,
+) -> Result<(), ReplacementExecutionError> {
+    let ty = declared_local_type(body, bare_local(place, span)?, span)?;
+    let valid = match ty {
+        IncanType::Generic { base, args } if collections::from_str(base) == Some(collection) => {
+            match (collection, args.as_slice()) {
+                (CollectionTypeId::Set, [element]) | (CollectionTypeId::Dict, [element, _]) => {
+                    is_collection_scalar_type(element)
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("hashed aggregate has unsupported key type in `{ty}`"),
+            span,
+        ))
     }
 }
 
@@ -1921,7 +1978,14 @@ fn validate_call_profile(
     };
     let supported = match callee {
         Callee::Helper(
-            HelperOp::StrConcat | HelperOp::ListConcat | HelperOp::ListContains | HelperOp::ListNotContains,
+            HelperOp::StrConcat
+            | HelperOp::ListConcat
+            | HelperOp::ListContains
+            | HelperOp::ListNotContains
+            | HelperOp::SetContains
+            | HelperOp::SetNotContains
+            | HelperOp::DictContainsKey
+            | HelperOp::DictNotContainsKey,
         ) => true,
         // Named calls remain direct module dispatches. Their target/binding facts are Body-IR values, not a source
         // lookup reconstructed by this executor.
@@ -2048,7 +2112,16 @@ fn validate_rvalue_profile(
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
         }
-        Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
+        Rvalue::Dict(entries) => {
+            for entry in entries {
+                let DictEntry::Pair(key, value) = entry else {
+                    return Err(unsupported("dict aggregate with a spread entry", span));
+                };
+                validate_operand_profile(key, span, tuple_iteration_locals)?;
+                validate_operand_profile(value, span, tuple_iteration_locals)?;
+            }
+            Ok(())
+        }
         Rvalue::Aggregate(kind, operands) => validate_aggregate_profile(
             kind,
             operands,
@@ -2287,10 +2360,11 @@ fn validate_generator_statements_profile(
     Ok(())
 }
 
-/// Validate source-local tuple/list aggregates plus the constrained plain-model constructor vocabulary.
+/// Validate source-local tuple/list/set aggregates plus the constrained plain-model constructor vocabulary.
 ///
-/// Dict and set semantics remain unavailable. Constructor admission is limited further by retained declaration
-/// identity, complete checked bindings, and structural field values before the executor materializes a model value.
+/// Set elements must satisfy the hashed scalar-key profile during materialization. Constructor admission requires
+/// declaration identity, complete checked bindings, and structural field values before the executor materializes a
+/// model value.
 fn validate_aggregate_profile(
     kind: &AggregateKind,
     operands: &[ArgumentElement],
@@ -2309,7 +2383,7 @@ fn validate_aggregate_profile(
     };
     let operands = operands.as_slice();
     match kind {
-        AggregateKind::Tuple | AggregateKind::List => {
+        AggregateKind::Tuple | AggregateKind::List | AggregateKind::Set => {
             for operand in operands {
                 validate_operand_profile(operand, span, tuple_iteration_locals)?;
             }
@@ -3013,6 +3087,34 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 let found = elements.contains(&needle);
                 ReplacementValue::Bool(matches!(helper, HelperOp::ListContains) == found)
             }
+            Callee::Helper(helper @ (HelperOp::SetContains | HelperOp::SetNotContains)) => {
+                let [haystack, needle] = args else {
+                    return Err(unsupported("set-membership call arity", span));
+                };
+                let haystack = self.evaluate_operand(haystack, span)?;
+                let needle = self.evaluate_operand(needle, span)?;
+                let ReplacementValue::Set(values) = haystack else {
+                    return Err(unsupported("set membership using a non-set carrier", span));
+                };
+                let found = values.contains(needle).map_err(|error| {
+                    unsupported(format!("set membership with a non-scalar {} needle", error.kind), span)
+                })?;
+                ReplacementValue::Bool(matches!(helper, HelperOp::SetContains) == found)
+            }
+            Callee::Helper(helper @ (HelperOp::DictContainsKey | HelperOp::DictNotContainsKey)) => {
+                let [haystack, needle] = args else {
+                    return Err(unsupported("dict-membership call arity", span));
+                };
+                let haystack = self.evaluate_operand(haystack, span)?;
+                let needle = self.evaluate_operand(needle, span)?;
+                let ReplacementValue::Dict(values) = haystack else {
+                    return Err(unsupported("dict membership using a non-dict carrier", span));
+                };
+                let found = values.contains_key(needle).map_err(|error| {
+                    unsupported(format!("dict membership with a non-scalar {} needle", error.kind), span)
+                })?;
+                ReplacementValue::Bool(matches!(helper, HelperOp::DictContainsKey) == found)
+            }
             Callee::Function(CallableTarget::Named(target)) if is_explicit_range_builtin(target) => {
                 self.evaluate_range(args, span)?
             }
@@ -3594,7 +3696,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
             Rvalue::Format(parts) => self.evaluate_format(parts, span),
-            Rvalue::Dict(_) => Err(unsupported("dict aggregate", span)),
+            Rvalue::Dict(entries) => self.evaluate_dict(entries, span),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
             Rvalue::FieldlessEnumVariant(target) => self.evaluate_fieldless_enum_variant(target, span),
             Rvalue::ValueEnumVariant(target) => self.evaluate_value_enum_variant(target, span),
@@ -3611,6 +3713,26 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             } => self.construct_generator(source, captured_operands, body, span),
             Rvalue::Match { scrutinee, arms } => self.evaluate_match(scrutinee, arms, span),
         }
+    }
+
+    /// Materialize a dict in written key-then-value order, preserving the later-entry-wins construction rule.
+    fn evaluate_dict(
+        &mut self,
+        entries: &[DictEntry],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let mut values = Vec::with_capacity(entries.len());
+        for entry in entries {
+            let DictEntry::Pair(key, value) = entry else {
+                return Err(unsupported("dict aggregate with a spread entry", span));
+            };
+            let key = self.evaluate_operand(key, span)?;
+            let value = self.evaluate_operand(value, span)?;
+            values.push((key, value));
+        }
+        let dict = ReplacementDict::from_entries(values)
+            .map_err(|error| unsupported(format!("dict aggregate with a non-scalar {} key", error.kind), span))?;
+        Ok(ReplacementValue::Dict(Rc::new(dict)))
     }
 
     /// Capture a closure or partial environment exactly once at its construction point.
@@ -4003,6 +4125,12 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 })
             }
             AggregateKind::List => Err(unsupported("list aggregate with a non-structural element", span)),
+            AggregateKind::Set => {
+                let set = ReplacementSet::from_elements(values).map_err(|error| {
+                    unsupported(format!("set aggregate with a non-scalar {} element", error.kind), span)
+                })?;
+                Ok(ReplacementValue::Set(Rc::new(set)))
+            }
             _ => Err(unsupported(format!("{} aggregate", aggregate_label(kind)), span)),
         }
     }
@@ -5657,6 +5785,8 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Range { .. } => "range",
         ReplacementValue::List { .. } => "list",
         ReplacementValue::Tuple(_) => "tuple",
+        ReplacementValue::Set(_) => "set",
+        ReplacementValue::Dict(_) => "dict",
         ReplacementValue::Nominal { .. } => "nominal",
         ReplacementValue::FieldlessEnum { .. } => "fieldless enum",
         ReplacementValue::ValueEnum { .. } => "value enum",

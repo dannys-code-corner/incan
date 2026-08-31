@@ -138,6 +138,33 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
     Ok(())
 }
 
+/// Plain hashed membership evidence must not claim the frozen specialized-collection capability.
+#[test]
+fn hashed_membership_evidence_does_not_invent_a_frozen_capability() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = replacement_compatibility_registry();
+    assert!(
+        registry
+            .feature_links
+            .iter()
+            .all(|link| link.feature_id != "language.hashed-membership"),
+        "the frozen StdCollections capability describes imported specialized containers, not plain set/dict membership"
+    );
+    let aggregates = registry
+        .features
+        .iter()
+        .find(|feature| feature.id == "language.aggregates-and-projections")
+        .ok_or("missing broad aggregate feature")?;
+    assert!(!aggregates.evidence.is_parity_green());
+    assert!(aggregates.evidence.surfaces.scoped_comparisons.is_empty());
+    assert!(
+        aggregates
+            .migration_or_blocker
+            .as_deref()
+            .is_some_and(|note| note.contains("replacement-body-v0-020"))
+    );
+    Ok(())
+}
+
 #[test]
 fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Result<(), Box<dyn std::error::Error>> {
     let baseline = checked_v0_5_public_capability_baseline()?;
