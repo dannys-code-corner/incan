@@ -172,3 +172,61 @@ fn parse_embedded_brace_hole(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<
         cursor.span_from(start),
     ))
 }
+
+/// Parse one delimited comment (`open` ... `close`) as an `EmbeddedNode::Comment`, capturing everything between
+/// the delimiters verbatim.
+///
+/// Shared across submodes with a delimited-comment form (`Markup`'s `<!-- ... -->`, `Style`'s `/* ... */`) — the
+/// two forms differ only in their delimiter spellings, not in how the scan itself works. Assumes `cursor` is
+/// currently positioned at the start of `open`.
+///
+/// ## Errors
+/// Returns a [`CompileError`] if `close` is never found before the fragment ends.
+fn scan_delimited_comment(
+    cursor: &mut EmbeddedCursor<'_>,
+    open: &str,
+    close: &str,
+) -> Result<Spanned<EmbeddedNode>, CompileError> {
+    let start = cursor.pos;
+    cursor.eat_str(open);
+    let content_start = cursor.pos;
+    while !cursor.starts_with(close) {
+        if cursor.is_eof() {
+            return Err(CompileError::syntax(
+                format!("Unterminated comment: expected `{close}`"),
+                cursor.span_from(start),
+            ));
+        }
+        cursor.advance();
+    }
+    let content = cursor.text[content_start..cursor.pos].to_string();
+    cursor.eat_str(close);
+    Ok(Spanned::new(EmbeddedNode::Comment(content), cursor.span_from(start)))
+}
+
+/// Parse a quote-delimited literal body, given that `cursor` is positioned exactly at the confirmed opening quote
+/// character.
+///
+/// Shared across submodes with a quoted-literal form (`Markup` attribute values, `SelectorDeclarationValue` string
+/// literals) — callers keep their own opening-quote validation (since the accepted quote characters and the
+/// missing-opening-quote error message differ per call site) and their own choice of which `EmbeddedNode` variant
+/// wraps the result; this only scans the shared "consume quote, capture body, consume matching closing quote"
+/// shape. Returns the body's local start offset and text.
+///
+/// ## Errors
+/// Returns a [`CompileError`] if the closing quote is missing before the fragment ends.
+fn scan_quoted_body<'src>(
+    cursor: &mut EmbeddedCursor<'src>,
+    unterminated_message: &str,
+) -> Result<(usize, &'src str), CompileError> {
+    let start = cursor.pos;
+    let Some(quote) = cursor.advance() else {
+        return Err(CompileError::syntax(unterminated_message.to_string(), cursor.span_from(start)));
+    };
+    let text_start = cursor.pos;
+    let text = cursor.eat_while(|c| c != quote);
+    if !cursor.eat_if(|c| c == quote) {
+        return Err(CompileError::syntax(unterminated_message.to_string(), cursor.span_from(start)));
+    }
+    Ok((text_start, text))
+}

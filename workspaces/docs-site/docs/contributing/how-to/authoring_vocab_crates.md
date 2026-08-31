@@ -376,7 +376,7 @@ pub fn library_vocab() -> VocabRegistration {
 }
 ```
 
-`EmbeddedFragmentDescriptor::new(key, submode, artifact_key)` takes the same stable `key` convention as scoped surfaces, the fixed `EmbeddedFragmentSubmode` variant it claims, and an `artifact_key` naming the typed-artifact contribution your desugarer or lowering hook should expect. Eligibility (`in_declaration_body`, `in_clause_body`, `in_call_argument`) reuses the exact same positional model scoped surfaces use. If two same-depth descriptors claim the same submode for the same position, the compiler rejects the combination as ambiguous rather than guessing which one wins.
+`EmbeddedFragmentDescriptor::new(key, submode, artifact_key)` takes the same stable `key` convention as scoped surfaces, the fixed `EmbeddedFragmentSubmode` variant it claims, and an `artifact_key` naming the typed-artifact contribution your desugarer or lowering hook should expect. Eligibility (`in_declaration_body`, `in_clause_body`, `in_call_argument`) reuses the same `ScopedSurfaceEligibility` builder methods scoped surfaces use, but only `in_declaration_body` is currently wired into embedded-fragment parsing -- registering `in_clause_body`/`in_call_argument` on an embedded-fragment descriptor compiles but never activates today. If two same-depth descriptors claim the same submode for the same position, the compiler rejects the combination as ambiguous rather than guessing which one wins.
 
 ### What the compiler hands back
 
@@ -400,7 +400,7 @@ EmbeddedFragmentDescriptor::new("html.fragment", EmbeddedFragmentSubmode::Markup
     .layout_sensitive()
 ```
 
-The formatter has exactly two states for an embedded fragment: format it structurally from the typed artifact, or preserve its original source layout verbatim. `layout_sensitive()` requests the second.
+The formatter has exactly two states for an embedded fragment: format it structurally from the typed artifact, or preserve its original source layout verbatim. `layout_sensitive()` requests the second -- this is a stable, load-bearing signal for that future formatter work, but the formatter itself does not consume it yet. Today the formatter always writes an embedded fragment's verbatim source text regardless of this flag; `layout_sensitive()` has no observable effect until the structural-formatting path lands.
 
 ## 7. Add an optional desugarer
 

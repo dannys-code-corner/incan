@@ -158,22 +158,17 @@ fn parse_markup_attr(cursor: &mut EmbeddedCursor<'_>) -> Result<EmbeddedAttr, Co
 /// Parse a quoted attribute value (`"literal"` or `'literal'`) as a verbatim `Text` node.
 fn parse_markup_attr_string(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<EmbeddedNode>, CompileError> {
     let start = cursor.pos;
-    let Some(quote) = cursor.peek().filter(|c| *c == '"' || *c == '\'') else {
+    if !matches!(cursor.peek(), Some('"' | '\'')) {
         return Err(CompileError::syntax(
             "Expected a quoted attribute value or `{expr}`".to_string(),
             cursor.span_from(start),
         ));
-    };
-    cursor.advance();
-    let text_start = cursor.pos;
-    let text = cursor.eat_while(|c| c != quote).to_string();
-    if !cursor.eat_if(|c| c == quote) {
-        return Err(CompileError::syntax(
-            "Unterminated attribute value".to_string(),
-            cursor.span_from(start),
-        ));
     }
-    Ok(Spanned::new(EmbeddedNode::Text(text), cursor.span_from(text_start)))
+    let (text_start, text) = scan_quoted_body(cursor, "Unterminated attribute value")?;
+    Ok(Spanned::new(
+        EmbeddedNode::Text(text.to_string()),
+        cursor.span_from(text_start),
+    ))
 }
 
 /// Parse an `&name;` entity reference.
@@ -192,21 +187,7 @@ fn parse_markup_entity_ref(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<Em
 
 /// Parse a `<!-- ... -->` comment, preserving its content verbatim.
 fn parse_markup_comment(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<EmbeddedNode>, CompileError> {
-    let start = cursor.pos;
-    cursor.eat_str("<!--");
-    let content_start = cursor.pos;
-    while !cursor.starts_with("-->") {
-        if cursor.is_eof() {
-            return Err(CompileError::syntax(
-                "Unterminated comment: expected `-->`".to_string(),
-                cursor.span_from(start),
-            ));
-        }
-        cursor.advance();
-    }
-    let content = cursor.text[content_start..cursor.pos].to_string();
-    cursor.eat_str("-->");
-    Ok(Spanned::new(EmbeddedNode::Comment(content), cursor.span_from(start)))
+    scan_delimited_comment(cursor, "<!--", "-->")
 }
 
 /// Parse a run of plain text up to the next `<`, `{`, or `&`.

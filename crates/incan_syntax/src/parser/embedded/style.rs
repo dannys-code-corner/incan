@@ -141,19 +141,5 @@ fn parse_style_declaration(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<Em
 
 /// Parse a `/* ... */` comment, preserving its content verbatim.
 fn parse_style_comment(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<EmbeddedNode>, CompileError> {
-    let start = cursor.pos;
-    cursor.eat_str("/*");
-    let content_start = cursor.pos;
-    while !cursor.starts_with("*/") {
-        if cursor.is_eof() {
-            return Err(CompileError::syntax(
-                "Unterminated comment: expected `*/`".to_string(),
-                cursor.span_from(start),
-            ));
-        }
-        cursor.advance();
-    }
-    let content = cursor.text[content_start..cursor.pos].to_string();
-    cursor.eat_str("*/");
-    Ok(Spanned::new(EmbeddedNode::Comment(content), cursor.span_from(start)))
+    scan_delimited_comment(cursor, "/*", "*/")
 }

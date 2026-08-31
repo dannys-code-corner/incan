@@ -3463,4 +3463,57 @@ note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
         assert!(generated.contains("__incan_run_teardown"));
         assert!(generated.contains("__incan_async_block_on(super::__incan_fixture_teardown_resource())"));
     }
+
+    /// Build a minimal `Expr::Embedded` fragment (RFC 081, `#1023`) whose sole node is a `Hole` referencing
+    /// `hole_name` as a bare identifier, for `embedded_node_references_name` coverage below.
+    fn embedded_fragment_expr_with_hole(hole_name: &str) -> Expr {
+        use crate::frontend::ast::{EmbeddedFragmentExpr, EmbeddedNode};
+        use incan_semantics_core::SurfaceFeatureKey;
+        Expr::Embedded(Box::new(EmbeddedFragmentExpr {
+            key: SurfaceFeatureKey::ScopedDslSurface {
+                dependency_key: "webkit".to_string(),
+                descriptor_key: "html.fragment".to_string(),
+            },
+            submode: incan_vocab::EmbeddedFragmentSubmode::Markup,
+            nodes: vec![Spanned::new(
+                EmbeddedNode::Hole(Box::new(Spanned::new(
+                    Expr::Ident(hole_name.to_string()),
+                    Span::default(),
+                ))),
+                Span::default(),
+            )],
+            source_text: format!("{{{hole_name}}}"),
+        }))
+    }
+
+    #[test]
+    fn expr_references_name_recurses_into_an_embedded_fragment_hole() {
+        // Regression coverage for the RFC 081 (`#1023`) `Expr::Embedded` arm added to `expr_references_name`: a
+        // yield-fixture setup binding referenced only inside an embedded fragment's hole (e.g. `html:\n
+        // <h1>{title}</h1>`) must still be detected, or the test runner could tear down that binding before the
+        // fragment's own hole reads it.
+        let fragment = embedded_fragment_expr_with_hole("title");
+        assert!(expr_references_name(&fragment, "title"));
+        assert!(!expr_references_name(&fragment, "unrelated_name"));
+    }
+
+    #[test]
+    fn embedded_node_references_name_does_not_search_opaque_leaf_nodes() {
+        use crate::frontend::ast::EmbeddedNode;
+        // Leaf node kinds carry no nested Incan expressions to search -- confirms the opaque-leaf arm of
+        // `embedded_node_references_name` (RFC 081, `#1023`) genuinely returns `false` rather than accidentally
+        // matching on the node's own text content.
+        assert!(!embedded_node_references_name(
+            &EmbeddedNode::Text("title".to_string()),
+            "title"
+        ));
+        assert!(!embedded_node_references_name(
+            &EmbeddedNode::EntityRef("title".to_string()),
+            "title"
+        ));
+        assert!(!embedded_node_references_name(
+            &EmbeddedNode::Comment("references title".to_string()),
+            "title"
+        ));
+    }
 }

@@ -2226,19 +2226,45 @@ impl CompilationSession {
 
     /// Lex and parse one source file using the project-aware vocabulary surfaces, without running desugarers or
     /// compile-time materialization passes.
+    ///
+    /// Always parses with the original `source` text available (RFC 081, `#1023`), so a descriptor-gated embedded
+    /// fragment (`crates/incan_syntax/src/parser/embedded/`) can claim eligible positions in every real
+    /// compilation, not only in the parser's own unit tests. The ordinary strict lexer (`lexer::lex`) still runs
+    /// first, unchanged, for the overwhelming majority of files that tokenize cleanly. It only fails outright for
+    /// source containing bytes that are not valid ordinary-Incan token starts at all (`;`, `` ` ``, `$`, and
+    /// similar) -- exactly the kind of content realistic embedded-fragment submodes (style rules, template
+    /// literals, ...) routinely contain. Only in that fallback case does this retry with the tolerant lexer
+    /// (`lexer::lex_tolerant`), which never discards its token stream on error, and hand its collected lex errors
+    /// to the parser for reconciliation (`parser::parse_with_source_and_lex_errors`) rather than dropping or
+    /// unconditionally surfacing them: an error inside a fragment this parse actually claims is expected noise
+    /// from the ordinary lexer's honest confusion about foreign submode syntax, while every other error is a real
+    /// mistake and still reaches the caller.
     pub(crate) fn parse_source_for_collection(
         &self,
         file_path: &Path,
         source: &str,
     ) -> Result<Program, Vec<diagnostics::CompileError>> {
-        let tokens = lexer::lex(source)?;
         let file_path_display = file_path.to_string_lossy();
-        parser::parse_with_context_and_surfaces(
-            &tokens,
-            Some(file_path_display.as_ref()),
-            Some(&self.library_imported_vocab),
-            Some(&self.library_imported_dsl_surfaces),
-        )
+        match lexer::lex(source) {
+            Ok(tokens) => parser::parse_with_source(
+                &tokens,
+                Some(file_path_display.as_ref()),
+                Some(&self.library_imported_vocab),
+                Some(&self.library_imported_dsl_surfaces),
+                source,
+            ),
+            Err(_) => {
+                let (tokens, lex_errors) = lexer::lex_tolerant(source);
+                parser::parse_with_source_and_lex_errors(
+                    &tokens,
+                    Some(file_path_display.as_ref()),
+                    Some(&self.library_imported_vocab),
+                    Some(&self.library_imported_dsl_surfaces),
+                    source,
+                    lex_errors,
+                )
+            }
+        }
     }
 
     /// Lex, parse, vocab-desugar, and optionally materialize checked contract models for one source file.

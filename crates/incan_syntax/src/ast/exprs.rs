@@ -268,7 +268,9 @@ pub struct EmbeddedElement {
 /// One markup attribute: a name and an optional value (`Text` for a quoted literal, `Hole` for `{expr}`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmbeddedAttr {
+    /// Attribute name, exactly as written (for example `class`, `src`).
     pub name: String,
+    /// Attribute value, or `None` for a bare boolean-style attribute (`name` with no `=value`).
     pub value: Option<Spanned<EmbeddedNode>>,
 }
 

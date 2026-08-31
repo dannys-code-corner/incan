@@ -196,7 +196,8 @@ mod embedded_fragment_tests {
     }
 
     #[test]
-    fn markup_descriptor_does_not_apply_outside_the_imported_namespace() -> Result<(), Box<dyn std::error::Error>> {
+    fn markup_shaped_content_is_rejected_as_ordinary_incan_when_the_vocab_is_never_imported()
+    -> Result<(), Box<dyn std::error::Error>> {
         // No import at all: the same `html:`-block spelling with markup-shaped content must not silently become an
         // embedded fragment. It falls back to ordinary RFC 040/045 statement-list parsing, which fails as ordinary
         // Incan syntax because `<section>` is not a valid Incan expression.
@@ -211,8 +212,8 @@ mod embedded_fragment_tests {
     }
 
     #[test]
-    fn type_position_descriptor_does_not_apply_outside_the_imported_namespace() -> Result<(), Box<dyn std::error::Error>>
-    {
+    fn type_position_shaped_content_is_rejected_as_ordinary_incan_when_the_vocab_is_never_imported()
+    -> Result<(), Box<dyn std::error::Error>> {
         // No import at all: `Foo<Bar>` is not silently reinterpreted as a type shape. Without an active
         // `TypePosition` descriptor, and with no `typeof` vocab keyword registered either, `Foo<Bar>` alone falls
         // back to ordinary Incan expression parsing -- a chained less-than/greater-than comparison missing its
@@ -228,7 +229,8 @@ mod embedded_fragment_tests {
     }
 
     #[test]
-    fn style_descriptor_does_not_apply_outside_the_imported_namespace() -> Result<(), Box<dyn std::error::Error>> {
+    fn style_shaped_content_is_rejected_as_ordinary_incan_when_the_vocab_is_never_imported()
+    -> Result<(), Box<dyn std::error::Error>> {
         // No import at all: the same `css:`-block spelling with style-shaped content must not silently become an
         // embedded fragment. `.card { color: red; }` is not valid ordinary Incan syntax -- `;` is not even an
         // ordinary Incan token -- so it is rejected either at lexing or parsing, never silently reinterpreted as a
@@ -241,6 +243,55 @@ mod embedded_fragment_tests {
         assert!(
             is_rejected,
             "expected style-shaped content to be rejected by ordinary lexing/parsing when no descriptor claims it"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn embedded_fragment_descriptor_does_not_activate_for_a_position_it_was_never_registered_for()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Unlike the three `_is_rejected_as_ordinary_incan_when_the_vocab_is_never_imported` tests above, this
+        // registers the `html` vocab keyword AND an embedded-fragment descriptor for the same provider -- the
+        // import is active and the keyword is recognized -- but the descriptor's own `in_declaration_body(...)`
+        // eligibility names a *different* declaration ("card", not "html"). This exercises the actual empty-match
+        // branch of `Parser::active_embedded_fragment_descriptor_for_declaration_body` (`expr.rs`), proving a
+        // descriptor that is active but not eligible *here* correctly falls back to ordinary RFC 040/045
+        // statement-list parsing rather than silently claiming a position it was never registered for.
+        let namespace = "webkit.html";
+        let mut keyword_map = KeywordMap::new();
+        keyword_map.insert(
+            "webkit".to_string(),
+            vec![incan_vocab::KeywordRegistration {
+                activation: incan_vocab::KeywordActivation::OnImport {
+                    namespace: namespace.to_string(),
+                },
+                keywords: vec![incan_vocab::KeywordSpec::block("html")],
+                valid_decorators: Vec::new(),
+            }],
+        );
+        let mut surface_map = SurfaceMap::new();
+        surface_map.insert(
+            "webkit".to_string(),
+            vec![
+                incan_vocab::DslSurface::on_import(namespace)
+                    .with_declaration(incan_vocab::DeclarationSurface::named("html"))
+                    .with_embedded_fragment(
+                        incan_vocab::EmbeddedFragmentDescriptor::new(
+                            "html.fragment",
+                            incan_vocab::EmbeddedFragmentSubmode::Markup,
+                            "fragment",
+                        )
+                        .in_declaration_body("card"),
+                    ),
+            ],
+        );
+        let source = "import pub::webkit\n\ndef render() -> None:\n  html:\n    <section></section>\n";
+        let errors = parse_embedded_fixture(source, &keyword_map, &surface_map)
+            .err()
+            .ok_or("expected markup-shaped content to still be rejected as ordinary Incan when the only active descriptor is eligible for a different position")?;
+        assert!(
+            !errors.iter().any(|error| error.message.contains("Ambiguous")),
+            "expected an ordinary-parsing rejection, not an ambiguity diagnostic: {errors:?}"
         );
         Ok(())
     }
@@ -287,6 +338,45 @@ mod embedded_fragment_tests {
     }
 
     #[test]
+    fn style_fragment_accepts_a_comment_between_declarations() -> Result<(), Box<dyn std::error::Error>> {
+        let (keyword_map, surface_map) =
+            embedded_fixture_maps("css", "webkit", incan_vocab::EmbeddedFragmentSubmode::Style);
+        let source = "import pub::webkit\n\ndef render() -> None:\n  css:\n    .card {\n      /* keep in sync with the theme tokens */\n      color: red;\n    }\n";
+        let program = parse_embedded_fixture(source, &keyword_map, &surface_map)
+            .map_err(|errs| format!("parse errors: {errs:?}"))?;
+        let fragment = embedded_fragment_from_program(&program)?;
+        let EmbeddedNode::StyleRule(rule) = &fragment.nodes[0].node else {
+            return Err("expected a top-level style rule".into());
+        };
+        // Comments are structural siblings within the declaration block, in source order, not filtered out.
+        assert_eq!(rule.declarations.len(), 2);
+        assert!(matches!(
+            &rule.declarations[0].node,
+            EmbeddedNode::Comment(text) if text.contains("keep in sync")
+        ));
+        let EmbeddedNode::Declaration(color_decl) = &rule.declarations[1].node else {
+            return Err("expected the color declaration".into());
+        };
+        assert_eq!(color_decl.property, "color");
+        Ok(())
+    }
+
+    #[test]
+    fn style_fragment_rejects_an_unterminated_comment() -> Result<(), Box<dyn std::error::Error>> {
+        let (keyword_map, surface_map) =
+            embedded_fixture_maps("css", "webkit", incan_vocab::EmbeddedFragmentSubmode::Style);
+        let source = "import pub::webkit\n\ndef render() -> None:\n  css:\n    .card {\n      /* never closed\n      color: red;\n    }\n";
+        let errors = parse_embedded_fixture(source, &keyword_map, &surface_map)
+            .err()
+            .ok_or("expected an unterminated-comment parse error")?;
+        assert!(
+            errors.iter().any(|error| error.message.contains("Unterminated comment")),
+            "expected an unterminated-comment diagnostic, got {errors:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn style_fragment_rejects_unterminated_declaration_block() -> Result<(), Box<dyn std::error::Error>> {
         let (keyword_map, surface_map) =
             embedded_fixture_maps("css", "webkit", incan_vocab::EmbeddedFragmentSubmode::Style);
@@ -300,6 +390,51 @@ mod embedded_fragment_tests {
                 .any(|error| error.message.contains("Expected `}`") || error.message.contains("declaration")),
             "expected an unterminated-block diagnostic, got {errors:?}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn style_fragment_boundary_desync_from_an_unmatched_bracket_in_a_comment_is_refused_not_silently_swallowed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression test: an unmatched `(` inside a `/* ... */` comment -- valid, documented `Style`-submode
+        // syntax -- is not a comment to the *ordinary* Incan lexer at all (Incan's own comments are `#`-prefixed).
+        // The ordinary lexer reads it as a real, permanently-unbalanced bracket token, which silences its own
+        // `Indent`/`Dedent`/`Newline` emission for the rest of the file. Before this test's corresponding fix,
+        // `find_matching_dedent_index` (which trusts that ordinary token stream) ran all the way to EOF, and the
+        // fragment silently swallowed `def after_fragment()` into its own raw text -- dropping a real declaration
+        // from the AST with no error at all. It must now refuse loudly instead.
+        let (keyword_map, surface_map) =
+            embedded_fixture_maps("css", "webkit", incan_vocab::EmbeddedFragmentSubmode::Style);
+        let source = "import pub::webkit\n\ndef card_theme() -> None:\n  css:\n    .card {\n      /* ( */\n      color: red;\n    }\n\ndef after_fragment() -> None:\n  let x = 1\n  print(x)\n";
+        let errors = parse_embedded_fixture(source, &keyword_map, &surface_map).err().ok_or(
+            "expected the boundary-desync diagnostic, not a successful parse that silently dropped \
+             `after_fragment`",
+        )?;
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.message.contains("boundary could not be determined reliably")),
+            "expected the boundary-desync diagnostic, got {errors:?}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn style_fragment_starting_with_a_declaration_keyword_word_is_not_a_false_positive_boundary_desync()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // Regression test for the boundary-desync check itself: a fragment's raw slice starts right after the
+        // block's `Indent` token, so unlike every later line, its *first* line alone carries no leading
+        // indentation in that string -- even when the fragment is correctly bounded. A naive check that also
+        // scanned the first line would false-positive here, since `.def-card` starts with the literal text
+        // `"def "`-adjacent bytes... use a declaration keyword outright to make the risk concrete: a `RawText`
+        // fragment whose entire, correctly-bounded content is the single word `"class"` on its own first line.
+        let (keyword_map, surface_map) =
+            embedded_fixture_maps("note", "webkit", incan_vocab::EmbeddedFragmentSubmode::RawText);
+        let source = "import pub::webkit\n\ndef render() -> None:\n  note:\n    class assignment\n\ndef after_fragment() -> None:\n  let x = 1\n";
+        let program = parse_embedded_fixture(source, &keyword_map, &surface_map)
+            .map_err(|errs| format!("expected no false-positive boundary-desync error, got: {errs:?}"))?;
+        let fragment = embedded_fragment_from_program(&program)?;
+        assert!(matches!(&fragment.nodes[0].node, EmbeddedNode::Text(t) if t.contains("class assignment")));
         Ok(())
     }
 
@@ -366,6 +501,63 @@ mod embedded_fragment_tests {
                 .iter()
                 .any(|error| error.message.contains("regex literal") || error.message.contains("template")),
             "expected a form-mismatch diagnostic, got {errors:?}"
+        );
+        Ok(())
+    }
+
+    // ---- Production-entrypoint tolerant-lex reconciliation (RFC 081, `#1023`) ----
+    //
+    // The parser-level fixtures above all call `parse_embedded_fixture`, which unconditionally lexes with
+    // `lex_tolerant` and discards its collected errors. That mirrors the parser's own unit-test convenience, not
+    // the real production entrypoint (`CompilationSession::parse_source_for_collection` in
+    // `src/cli/commands/common.rs`), which only falls back to `lex_tolerant` after the strict `lex()` fails, and
+    // then reconciles the tolerant lexer's errors through `parse_with_source_and_lex_errors` rather than
+    // dropping them outright. The test below exercises that exact reconciliation path directly.
+
+    #[test]
+    fn tolerant_lex_errors_inside_a_claimed_fragment_are_reconciled_away_but_real_errors_elsewhere_survive()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (keyword_map, surface_map) =
+            embedded_fixture_maps("script", "webkit", incan_vocab::EmbeddedFragmentSubmode::RegexTemplate);
+        // The `script:` fragment's template-string content (backtick, `$`, `{`) is exactly the kind of byte the
+        // ordinary Incan lexer cannot tokenize on its own -- this is why the production entrypoint needs the
+        // tolerant-lex fallback at all. The stray backtick in `broken()`, well outside the fragment, is a genuine
+        // mistake and must still surface as a real error after reconciliation, not get silently dropped along
+        // with the fragment's expected noise.
+        let source = "import pub::webkit\n\ndef render(name: str) -> None:\n  script:\n    `hello ${name}!`\n\ndef broken() -> None:\n    let x = `oops\n";
+
+        // Confirm the premise: the strict lexer really does fail outright on this file, so production would
+        // actually take the tolerant-lex fallback branch for it (see `parse_source_for_collection`).
+        assert!(
+            lexer::lex(source).is_err(),
+            "expected the strict lexer to fail outright on the fragment's template-string bytes"
+        );
+
+        let (tokens, lex_errors) = lexer::lex_tolerant(source);
+        assert!(
+            !lex_errors.is_empty(),
+            "expected the tolerant lexer to still record errors for the exotic bytes"
+        );
+
+        let errors = parse_with_source_and_lex_errors(
+            &tokens,
+            None,
+            Some(&keyword_map),
+            Some(&surface_map),
+            source,
+            lex_errors,
+        )
+        .err()
+        .ok_or("expected the stray backtick in `broken()` to still surface as a real error")?;
+
+        // Reconciliation must drop every error whose span falls inside the successfully-claimed `script:`
+        // fragment (the template string's own backtick/`$`/`{` bytes) while keeping the one real mistake in
+        // `broken()`.
+        let broken_offset = source.find("`oops").ok_or("fixture source must contain the stray backtick")?;
+        assert!(!errors.is_empty(), "expected at least one surviving real error");
+        assert!(
+            errors.iter().all(|error| error.span.start >= broken_offset),
+            "expected only the real error in `broken()` to survive reconciliation, got: {errors:?}"
         );
         Ok(())
     }

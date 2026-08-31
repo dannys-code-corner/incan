@@ -79,21 +79,9 @@ fn parse_embedded_color(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<Embed
 /// Parse a quoted string literal value.
 fn parse_embedded_string_lit(cursor: &mut EmbeddedCursor<'_>) -> Result<Spanned<EmbeddedNode>, CompileError> {
     let start = cursor.pos;
-    let Some(quote) = cursor.advance() else {
-        return Err(CompileError::syntax(
-            "Expected a quoted string literal".to_string(),
-            cursor.span_from(start),
-        ));
-    };
-    let text = cursor.eat_while(|c| c != quote).to_string();
-    if !cursor.eat_if(|c| c == quote) {
-        return Err(CompileError::syntax(
-            "Unterminated string literal".to_string(),
-            cursor.span_from(start),
-        ));
-    }
+    let (_, text) = scan_quoted_body(cursor, "Unterminated string literal")?;
     Ok(Spanned::new(
-        EmbeddedNode::Value(EmbeddedValue::StringLit(text)),
+        EmbeddedNode::Value(EmbeddedValue::StringLit(text.to_string())),
         cursor.span_from(start),
     ))
 }

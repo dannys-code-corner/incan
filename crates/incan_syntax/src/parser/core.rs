@@ -83,6 +83,22 @@ pub struct Parser<'a> {
     errors: Vec<CompileError>,
     /// Non-fatal warnings accumulated during parsing (e.g. style nudges that don't block compilation).
     warnings: Vec<CompileError>,
+    /// Byte spans of every embedded fragment (RFC 081, `#1023`) successfully claimed during this parse.
+    ///
+    /// Populated by `Parser::try_embedded_fragment_body` on each successful claim. `parse()` uses this to decide
+    /// which of `pending_lex_errors` are expected noise (the ordinary lexer's honest confusion about foreign
+    /// submode syntax it was never meant to understand) versus real user mistakes elsewhere in the file.
+    claimed_embedded_fragment_spans: Vec<Span>,
+    /// Lex errors collected by a tolerant pre-lex pass, reconciled against `claimed_embedded_fragment_spans` at
+    /// the end of `parse()` rather than surfaced unconditionally.
+    ///
+    /// Only ever non-empty via [`Parser::with_pending_lex_errors`], used by the RFC 081 (`#1023`) production
+    /// parsing entrypoint (`parser::parse_with_source_and_lex_errors`) for source that the ordinary strict lexer
+    /// could not tokenize outright. A lex error whose span falls inside a fragment this parse actually claimed is
+    /// expected -- the fragment's own submode tokenizer re-scans that byte range independently and never consults
+    /// the ordinary lexer's output for it. A lex error outside every claimed fragment is a real mistake and must
+    /// still reach the user.
+    pending_lex_errors: Vec<CompileError>,
     active_soft_keywords: std::collections::HashSet<KeywordId>,
     active_imported_keyword_specs: std::collections::HashMap<String, Vec<ActiveImportedKeywordSpec>>,
     vocab_block_stack: Vec<String>,
@@ -101,6 +117,14 @@ pub struct Parser<'a> {
     /// The next outer statement should receive this as `leading_blank_lines`; otherwise a readable gap after a nested
     /// suite is lost before the outer block can see it.
     pending_dedent_blank_lines: u8,
+}
+
+/// Whether `inner` lies entirely within `outer` (RFC 081, `#1023` tolerant-lex-error reconciliation).
+///
+/// Used to decide whether a tolerant-lexer error falls inside a successfully-claimed embedded fragment. Byte
+/// ranges are compared, not source positions, so this is exact regardless of line/column rendering.
+fn span_contains(outer: Span, inner: Span) -> bool {
+    inner.start >= outer.start && inner.end <= outer.end
 }
 
 /// Compares a path segment to an expected spelling for parser path-context checks.
@@ -145,6 +169,8 @@ impl<'a> Parser<'a> {
             pos: 0,
             errors: Vec::new(),
             warnings: Vec::new(),
+            claimed_embedded_fragment_spans: Vec::new(),
+            pending_lex_errors: Vec::new(),
             active_soft_keywords: std::collections::HashSet::new(),
             active_imported_keyword_specs: std::collections::HashMap::new(),
             vocab_block_stack: Vec::new(),
@@ -182,6 +208,20 @@ impl<'a> Parser<'a> {
             Self::new_with_context(tokens, module_path, library_imported_vocab, library_imported_dsl_surfaces);
         parser.source = Some(source);
         parser
+    }
+
+    /// Attach lex errors from a tolerant pre-lex pass (RFC 081, `#1023`) to be reconciled at the end of `parse()`.
+    ///
+    /// Use this only when `tokens` came from [`crate::lexer::lex_tolerant`] rather than the ordinary
+    /// [`crate::lexer::lex`] -- for example after the strict lexer failed outright on source containing embedded
+    /// fragment content the ordinary Incan lexer was never meant to tokenize (`;`, `` ` ``, `$`, and similar).
+    /// `parse()` drops every error here whose span falls inside a fragment this parse successfully claims, since
+    /// that fragment's own submode tokenizer re-scans the byte range independently; every remaining error still
+    /// surfaces as a real diagnostic.
+    #[must_use]
+    pub fn with_pending_lex_errors(mut self, lex_errors: Vec<CompileError>) -> Self {
+        self.pending_lex_errors = lex_errors;
+        self
     }
 
     /// Parse the entire token stream into a [`Program`].
@@ -284,6 +324,21 @@ impl<'a> Parser<'a> {
             // Same rationale as above: at the module level we should not see DEDENT tokens,
             // but the lexer may emit them and recovery may leave us positioned on them.
             self.skip_dedents();
+        }
+
+        // ---- Reconcile tolerant-lex errors against claimed embedded fragments (RFC 081, #1023) ----
+        // Any `pending_lex_errors` entry whose span falls inside a fragment this parse actually claimed is
+        // expected noise: that byte range was re-tokenized independently by the fragment's own submode grammar,
+        // so the ordinary lexer's confusion about it never reflects a real user mistake. Everything else is real
+        // and must still reach the user, exactly as if the strict lexer had produced it directly.
+        for lex_error in self.pending_lex_errors.drain(..) {
+            let is_expected_fragment_noise = self
+                .claimed_embedded_fragment_spans
+                .iter()
+                .any(|fragment_span| span_contains(*fragment_span, lex_error.span));
+            if !is_expected_fragment_noise {
+                self.errors.push(lex_error);
+            }
         }
 
         if self.errors.is_empty() {

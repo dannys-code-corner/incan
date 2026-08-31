@@ -108,9 +108,21 @@ impl<'a> Parser<'a> {
                 fragment_span,
             )
         })?;
+        if let Some(swallowed_offset) = find_swallowed_top_level_declaration(raw, body_start) {
+            return Err(CompileError::syntax(
+                "This embedded fragment's boundary could not be determined reliably: its content appears to \
+                 contain an unmatched bracket-like character (`(`, `[`, or `{`) inside a comment or string that \
+                 the ordinary Incan tokenizer misread as real punctuation, which made the fragment boundary \
+                 extend past its real end and swallow unrelated subsequent source. Rewrite the fragment to avoid \
+                 an unmatched bracket character, even inside a comment or string literal."
+                    .to_string(),
+                Span::new(swallowed_offset, swallowed_offset),
+            ));
+        }
 
         let nodes = parse_embedded_fragment_body(submode, raw, body_start)?;
         self.pos = dedent_idx;
+        self.claimed_embedded_fragment_spans.push(fragment_span);
 
         let fragment = EmbeddedFragmentExpr {
             key: SurfaceFeatureKey::ScopedDslSurface {
@@ -165,6 +177,53 @@ impl<'a> Parser<'a> {
             }
         }
     }
+}
+
+/// Column-0 line prefixes this scan treats as unambiguous proof a fragment's computed body range swallowed a
+/// real subsequent top-level declaration (see [`find_swallowed_top_level_declaration`]'s rustdoc for why).
+const TOP_LEVEL_DECLARATION_STARTS: [&str; 9] = [
+    "def ", "class ", "model ", "trait ", "import ", "from ", "enum ", "type ", "pub ",
+];
+
+/// Detect whether a fragment's computed body range swallowed a real subsequent top-level declaration (RFC 081,
+/// `#1023`).
+///
+/// `find_matching_dedent_index` trusts the ordinary lexer's `Indent`/`Dedent` token stream, which can desync when
+/// a fragment's own content confuses the ordinary lexer's bracket-depth tracking -- for example an unmatched
+/// `(`/`[`/`{`-like character inside a `Style` submode's `/* ... */` comment, which the ordinary lexer does not
+/// understand as a comment at all and instead scans as a real, permanently-unbalanced bracket token. When that
+/// happens, `Indent`/`Dedent`/`Newline` emission can stop entirely for the rest of the file, and the fragment's
+/// computed end can silently extend past its real boundary, swallowing unrelated subsequent declarations into the
+/// fragment's raw text rather than letting the ordinary parser see them.
+///
+/// An embedded fragment is always the indented body of a `keyword:` block, so legitimate fragment content is
+/// never itself at column 0 -- a column-0 line starting a real declaration keyword inside the computed range is
+/// therefore decisive proof of a swallowed declaration, not a false positive from ordinary multi-line content
+/// inside the fragment (for example a balanced, multi-line bracket pair in a template literal, which does not
+/// trigger this check).
+///
+/// Returns the byte offset of the first such line, for use as the resulting diagnostic's span.
+///
+/// Deliberately starts scanning *after* `raw`'s own first line, never at `offset == 0`: `raw` is sliced starting
+/// right after the block's `Indent` token, so its first line alone -- unlike every subsequent line -- never
+/// carries the block's leading indentation in this string, even when the fragment is correctly bounded. Checking
+/// it here would false-positive on any legitimate fragment whose very first line happens to start with one of
+/// `TOP_LEVEL_DECLARATION_STARTS`'s words (for example `RawText` content that begins with the literal text
+/// `"def "`).
+fn find_swallowed_top_level_declaration(raw: &str, body_start: usize) -> Option<usize> {
+    let mut offset = raw.find('\n')? + 1;
+    while offset < raw.len() {
+        let rest = &raw[offset..];
+        let line_len = rest.find('\n').map_or(rest.len(), |i| i + 1);
+        if TOP_LEVEL_DECLARATION_STARTS
+            .iter()
+            .any(|keyword| rest[..line_len].starts_with(keyword))
+        {
+            return Some(body_start + offset);
+        }
+        offset += line_len;
+    }
+    None
 }
 
 /// Parse one expression hole's contents as ordinary Incan, re-entering the main expression grammar.
