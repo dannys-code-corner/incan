@@ -59,20 +59,10 @@ impl TypeChecker {
         };
         // ---- RFC 120: record which canonical identity this reference resolved to ----
         //
-        // The binding's minted identity wins. A module-scope binding without one falls back to the identity import
-        // resolution proved for this local name, covering import bindings materialized before their proof was
-        // recorded. The fallback is module-scope-only so an identity-less nested placeholder can never pick up an
-        // unrelated import's identity.
-        let resolved_identity = self.symbols.identity_of(sym_id).cloned().or_else(|| {
-            self.symbols.get(sym_id).filter(|sym| sym.scope == 0).and_then(|_| {
-                self.type_info
-                    .declarations
-                    .resolved_import_identities
-                    .get(name)
-                    .cloned()
-            })
-        });
-        if let Some(identity) = resolved_identity {
+        // Strictly the resolved binding's own identity: import bindings carry their proven target identity (attached
+        // at definition or back-filled when the proof lands — see `SymbolTable::backfill_import_identity`), so no
+        // name-keyed fallback exists here that a shadowing definition could make stale.
+        if let Some(identity) = self.symbols.identity_of(sym_id).cloned() {
             self.type_info
                 .expressions
                 .resolved_identities

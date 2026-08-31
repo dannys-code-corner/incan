@@ -534,3 +534,39 @@ def read() -> None:
     assert_eq!(observed.kind, SemanticSourceTargetKind::Function);
     Ok(())
 }
+
+/// A reference that resolves to a local overload set must not inherit a shadowed import's identity.
+///
+/// Overload sets deliberately carry no set-level identity. When such a set shadows an earlier import of the same
+/// spelling, the reference-side recording must stay empty rather than reach past the actual binding to the import
+/// proof recorded for that local name — an identity fact for the wrong binding is worse than none.
+#[test]
+fn overload_set_shadowing_an_import_records_no_identity() -> Result<(), String> {
+    let provider = parse("pub def helper() -> int:\n  return 1\n", "overload-shadow provider");
+    let consumer_source = r#"
+from lib import helper
+
+def helper(value: int) -> int:
+  return value
+
+def helper(value: str) -> str:
+  return value
+
+def read() -> None:
+  observed = helper
+"#;
+    let consumer = parse(consumer_source, "overload-shadow consumer");
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["consumer".to_string()]));
+    // The reference errors ("cannot use overloaded function as a value"), which is expected and not the subject
+    // here; the recorded identity map must still be inspectable and must not carry the import's identity.
+    let _ = checker.check_with_imports(&consumer, &[("lib", &provider)]);
+
+    let reference_span = nth_span(consumer_source, "helper", 3)?;
+    assert_eq!(
+        checker.type_info().resolved_identity(reference_span),
+        None,
+        "an overload-set reference has no set-level identity and must not borrow the shadowed import's"
+    );
+    Ok(())
+}

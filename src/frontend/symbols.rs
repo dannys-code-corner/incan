@@ -2,7 +2,7 @@
 //!
 //! Tracks all named entities (types, functions, variables, traits) and their scopes.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::frontend::ast::{ParamKind, Receiver, Span, Type, TypeConstraintKey};
 use incan_core::interop::RustItemMetadata;
@@ -157,6 +157,10 @@ pub struct SymbolTable {
     /// registry identities that loop attaches (builtin aliases must carry the canonical registry spelling, which the
     /// generic mint cannot know).
     minting_builtins: bool,
+    /// Symbols defined through [`Self::define_import_binding`], marked so a later-arriving import-resolution proof
+    /// can be attached to exactly the binding it proves (see [`Self::backfill_import_identity`]) and never to an
+    /// unrelated same-spelled definition.
+    import_bindings: HashSet<SymbolId>,
 }
 
 impl SymbolTable {
@@ -170,6 +174,7 @@ impl SymbolTable {
             identities: HashMap::new(),
             module_path: Vec::new(),
             minting_builtins: false,
+            import_bindings: HashSet::new(),
         };
 
         // Add builtin types
@@ -413,6 +418,7 @@ impl SymbolTable {
     /// unproven rather than inventing a consumer-module identity for it.
     pub fn define_import_binding(&mut self, symbol: Symbol, target_identity: Option<CanonicalSymbolId>) -> SymbolId {
         let id = self.define(symbol);
+        self.import_bindings.insert(id);
         match target_identity {
             Some(identity) => {
                 self.identities.insert(id, identity);
@@ -431,6 +437,22 @@ impl SymbolTable {
     /// keep their own span-keyed identities on `FunctionBindingInfo`.
     pub fn clear_identity(&mut self, id: SymbolId) {
         self.identities.remove(&id);
+    }
+
+    /// Attach a later-proven import-resolution identity to the import binding it proves.
+    ///
+    /// Import materialization and identity proof do not always happen in one order, so a binding defined before its
+    /// proof was recorded starts identity-less. This attaches the proof to the *current* binding for `name` only
+    /// when that binding was defined as an import binding and still has no identity — a local declaration or
+    /// overload set that has since shadowed the import keeps its own facts, and a binding that already carries an
+    /// identity is never overwritten.
+    pub fn backfill_import_identity(&mut self, name: &str, identity: &CanonicalSymbolId) {
+        let Some(id) = self.lookup(name) else {
+            return;
+        };
+        if self.import_bindings.contains(&id) && !self.identities.contains_key(&id) {
+            self.identities.insert(id, identity.clone());
+        }
     }
 
     /// Define a symbol without replacing an existing same-scope lookup binding.
@@ -510,9 +532,12 @@ impl SymbolTable {
 
     /// Iterate the identities of module-scope declarations this module owns, paired with their declaration spans.
     ///
-    /// Yields only definitions whose identity origin is the current module and whose declaration span is real —
-    /// builtins carry the registry origin and zero spans, and import/alias bindings carry another module's origin,
-    /// so none of those can masquerade as a local declaration here.
+    /// Yields only definitions whose identity origin is the current module and whose declaration span is real:
+    /// builtins carry the registry origin and zero spans, and cross-module import bindings carry the declaring
+    /// module's origin, so neither can masquerade as a local declaration. A binding to a *same-module* declaration
+    /// (an `alias` targeting a local symbol) does pass the filter and yields its binding site paired with the
+    /// target declaration's identity — which is the RFC 120 answer for that site: the alias is a second binding to
+    /// the existing declaration, not a second declaration.
     pub fn local_declaration_identities(&self) -> impl Iterator<Item = (Span, &CanonicalSymbolId)> + '_ {
         self.symbols.iter().enumerate().filter_map(|(id, symbol)| {
             if symbol.scope != 0 || symbol.span == Span::default() {

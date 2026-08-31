@@ -973,6 +973,10 @@ impl TypeChecker {
     /// keeps its existing meaning of the path as written at the import.
     fn record_resolved_import_owner(&mut self, module: &ImportPath, item: &ImportItem, local_name: &str) {
         if let Some(identity) = self.dependency_member_identity(module, &item.name) {
+            // A binding materialized before this proof starts identity-less; attach the proof to that binding —
+            // and only to an import binding — so reference-side recording never has to reach past the symbol
+            // table to a name-keyed map that a shadowing definition may have made stale.
+            self.symbols.backfill_import_identity(local_name, &identity);
             self.type_info
                 .declarations
                 .resolved_import_identities
