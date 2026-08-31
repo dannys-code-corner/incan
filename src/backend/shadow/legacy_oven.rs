@@ -22,6 +22,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::oven::rustc::{
     OvenStoredDirectRustcRunRequest, bake_stored_direct_rustc_run, select_direct_rustc_plan_for_execution,
@@ -33,8 +34,8 @@ use crate::oven::{
 };
 
 use super::{
-    LegacyExecutionAuthority, LegacyRouteResult, ShadowComparisonProfile, ShadowUnavailable, emit_legacy_rust,
-    observe_legacy_process,
+    LegacyExecutionAuthority, LegacyProcessEvidence, LegacyRouteResult, PreparedShadowProfile, ShadowComparisonProfile,
+    ShadowUnavailable, emit_legacy_rust, observe_legacy_process,
 };
 
 /// Receipt evidence key under which the comparison's emitted Rust is authorized.
@@ -48,6 +49,12 @@ const LEGACY_PROJECT_NAME: &str = "incan-shadow-comparison";
 
 /// Rust crate name for the produced legacy program.
 const LEGACY_CRATE_NAME: &str = "incan_shadow_comparison";
+
+/// Per-process suffix for caller-owned staged result-report directories.
+///
+/// The directory lease is host lifecycle only; the produced report remains entirely source-authored Incan. Atomic
+/// creation below means a stale or concurrently created directory can never be reused as result evidence.
+static NEXT_RESULT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
 /// Everything needed to run one legacy route under Oven authority.
 ///
@@ -165,10 +172,34 @@ impl LegacyOvenCapability {
 /// build failure must never be promoted into a claim about program meaning.
 pub(crate) fn observe_legacy_route(
     profile: &ShadowComparisonProfile,
+    prepared: &PreparedShadowProfile,
     capability: &LegacyOvenCapability,
     workspace: &Path,
 ) -> Result<LegacyRouteResult, ShadowUnavailable> {
-    let program = profile.legacy_program_source()?;
+    observe_legacy_route_with_result_report_setup(profile, prepared, capability, workspace, |_| Ok(()))
+}
+
+/// Run the legacy route after the host has leased, but before generated source uses, its private report paths.
+///
+/// Production supplies an empty setup. Keeping this lifecycle seam private lets module tests deterministically make
+/// the source-authored `write` or `rename` fail without introducing a Rust result transport or a public option.
+fn observe_legacy_route_with_result_report_setup<F>(
+    profile: &ShadowComparisonProfile,
+    prepared: &PreparedShadowProfile,
+    capability: &LegacyOvenCapability,
+    workspace: &Path,
+    setup_result_report: F,
+) -> Result<LegacyRouteResult, ShadowUnavailable>
+where
+    F: FnOnce(&ResultReportLease) -> Result<(), ShadowUnavailable>,
+{
+    // The host only leases a unique caller-owned directory. The transport itself remains source-authored: the
+    // generated Incan entrypoint writes `result.next` and atomically replaces `result` after calling the observed
+    // function. The directory is removed after the report bytes have been copied into process evidence.
+    let result_directory = ResultReportLease::new(workspace)?;
+    setup_result_report(&result_directory)?;
+    let result_path = result_directory.result_path();
+    let program = profile.legacy_program_source(prepared.result_kind, result_path, &prepared.wrapper_identifiers)?;
     let rust_source = emit_legacy_rust(&program)?;
 
     let project_root = workspace.join("oven-project");
@@ -232,16 +263,143 @@ pub(crate) fn observe_legacy_route(
             bake.output.display()
         ))
     })?;
-    let stderr = String::from_utf8_lossy(&run.stderr).trim().to_string();
-    let observation = observe_legacy_process(
-        profile.profile_kind(),
-        &profile.profile_identity(),
-        &authority,
-        run.status.code(),
-        &run.stdout,
-        &stderr,
-    )?;
-    Ok(LegacyRouteResult { observation, authority })
+    let mut process = LegacyProcessEvidence {
+        exit_code: run.status.code(),
+        stdout: run.stdout,
+        stderr: run.stderr,
+        result_report: None,
+    };
+    let observed = if process.exit_code == Some(0) {
+        match std::fs::read(result_path) {
+            Ok(report) => {
+                process.result_report = Some(report);
+                observe_legacy_process(
+                    profile.profile_kind(),
+                    &profile.profile_identity(),
+                    &authority,
+                    &process,
+                    prepared.result_kind,
+                )
+            }
+            Err(error) => Err(ShadowUnavailable::new(format!(
+                "the legacy process exited successfully but its source-authored result report {} was unavailable: \
+                 {error}",
+                result_path.display()
+            ))),
+        }
+    } else {
+        observe_legacy_process(
+            profile.profile_kind(),
+            &profile.profile_identity(),
+            &authority,
+            &process,
+            prepared.result_kind,
+        )
+    };
+    let (observation, unavailable_reason) = match observed {
+        Ok(observation) => (Some(observation), None),
+        Err(unavailable) => (None, Some(unavailable.reason)),
+    };
+    Ok(LegacyRouteResult {
+        observation,
+        authority,
+        process,
+        unavailable_reason,
+    })
+}
+
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+/// The source-authored publication step a deterministic test prevents from completing.
+pub(super) enum ForcedResultTransportFailure {
+    Write,
+    Rename,
+}
+
+#[cfg(test)]
+/// Execute the real authored transport after making exactly one leased publication path unusable.
+pub(super) fn observe_legacy_route_with_forced_transport_failure(
+    profile: &ShadowComparisonProfile,
+    prepared: &PreparedShadowProfile,
+    capability: &LegacyOvenCapability,
+    workspace: &Path,
+    failure: ForcedResultTransportFailure,
+) -> Result<LegacyRouteResult, ShadowUnavailable> {
+    observe_legacy_route_with_result_report_setup(profile, prepared, capability, workspace, |lease| {
+        lease.force_transport_failure(failure)
+    })
+}
+
+/// Lease one unique caller-owned directory for an atomic source-authored result report.
+///
+/// `create_dir` is the uniqueness authority: no existing directory is reused, and cleanup removes only the exact
+/// directory this lease created after the report bytes have been retained in [`LegacyProcessEvidence`].
+struct ResultReportLease {
+    directory: PathBuf,
+    result_path: PathBuf,
+}
+
+impl ResultReportLease {
+    /// Reserve a fresh directory below the caller workspace, never adopting a pre-existing candidate.
+    fn new(workspace: &Path) -> Result<Self, ShadowUnavailable> {
+        let parent = workspace.join("incan-shadow-result-reports-v1");
+        std::fs::create_dir_all(&parent).map_err(|error| {
+            ShadowUnavailable::new(format!(
+                "the legacy route could not create its caller-owned result-report parent {}: {error}",
+                parent.display()
+            ))
+        })?;
+        for _ in 0..1024 {
+            let sequence = NEXT_RESULT_DIRECTORY.fetch_add(1, Ordering::Relaxed);
+            let directory = parent.join(format!("{}-{sequence}", std::process::id()));
+            match std::fs::create_dir(&directory) {
+                Ok(()) => {
+                    let result_path = directory.join("result");
+                    return Ok(Self { directory, result_path });
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => {
+                    return Err(ShadowUnavailable::new(format!(
+                        "the legacy route could not reserve its result-report directory {}: {error}",
+                        directory.display()
+                    )));
+                }
+            }
+        }
+        Err(ShadowUnavailable::new(format!(
+            "the legacy route could not reserve a unique result-report directory under {} after 1024 attempts",
+            parent.display()
+        )))
+    }
+
+    /// Return the final path the source-authored wrapper publishes after its write succeeds.
+    fn result_path(&self) -> &Path {
+        &self.result_path
+    }
+
+    #[cfg(test)]
+    /// Create a directory where the selected source operation requires a file, without touching other leases.
+    fn force_transport_failure(&self, failure: ForcedResultTransportFailure) -> Result<(), ShadowUnavailable> {
+        let path = match failure {
+            ForcedResultTransportFailure::Write => self.result_path.with_extension("next"),
+            ForcedResultTransportFailure::Rename => self.result_path.clone(),
+        };
+        std::fs::create_dir(&path).map_err(|error| {
+            ShadowUnavailable::new(format!(
+                "the shadow test could not force the source-authored result transport failure at {}: {error}",
+                path.display()
+            ))
+        })
+    }
+}
+
+impl Drop for ResultReportLease {
+    /// Remove only this lease's generated directory after its process evidence has been copied.
+    fn drop(&mut self) {
+        // This path was atomically created by `new`; ignore cleanup failure because the process evidence was already
+        // copied and must not be replaced by a post-execution filesystem error.
+        let _ = std::fs::remove_dir_all(&self.directory);
+    }
 }
 
 /// Write the emitted Rust into the comparison's caller-owned project tree.

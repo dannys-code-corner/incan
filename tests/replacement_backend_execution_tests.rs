@@ -2081,6 +2081,16 @@ fn replacement_cli_executes_typed_body_ir_and_persists_a_replacement_receipt() -
             "--backend-fallback",
             "refuse",
         ])
+        .args([
+            "--report",
+            "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
+        ])
         .output()?;
     assert!(
         output.status.success(),
@@ -2088,15 +2098,13 @@ fn replacement_cli_executes_typed_body_ir_and_persists_a_replacement_receipt() -
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout)?;
     assert!(
-        stdout.contains("replacement backend executed `main`: 42"),
-        "unexpected replacement output: {stdout}"
+        output.stdout.is_empty(),
+        "non-printing programs must leave stdout empty"
     );
-    assert!(
-        !stdout.contains("Generated Rust project"),
-        "replacement path must not enter Rust generation: {stdout}"
-    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
+    assert_eq!(report["replacement_execution"]["result"], "42");
     assert!(
         !temporary.path().join("target/incan").exists(),
         "direct replacement execution must not create a legacy generated-project directory"
@@ -2144,6 +2152,16 @@ fn replacement_cli_executes_typed_empty_scalar_tuple_list_with_a_replacement_rec
             "--backend-fallback",
             "refuse",
         ])
+        .args([
+            "--report",
+            "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
+        ])
         .output()?;
     assert!(
         output.status.success(),
@@ -2151,11 +2169,13 @@ fn replacement_cli_executes_typed_empty_scalar_tuple_list_with_a_replacement_rec
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout)?;
     assert!(
-        stdout.contains("replacement backend executed `main`: 42"),
-        "unexpected typed empty pair-list output: {stdout}"
+        output.stdout.is_empty(),
+        "non-printing programs must leave stdout empty"
     );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
+    assert_eq!(report["replacement_execution"]["result"], "42");
     assert!(
         !temporary.path().join("target/incan").exists(),
         "direct replacement execution must not create a legacy generated-project directory"
@@ -2188,6 +2208,12 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -2196,7 +2222,8 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["schema_version"], "incan.replacement_execution.v0");
     assert_eq!(report["status"], "success");
     assert_eq!(report["mode"], "executable");
@@ -2206,10 +2233,15 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
         report["replacement_execution"]["emitted_output"],
         serde_json::json!(["answer follows"])
     );
+    assert_eq!(output.stdout, b"answer follows\n");
+    assert_eq!(
+        report["replacement_execution"]["stdout_bytes"],
+        serde_json::json!(output.stdout)
+    );
+    assert_eq!(report["replacement_execution"]["stderr_bytes"], serde_json::json!([]));
     assert!(
-        String::from_utf8_lossy(&output.stderr).contains("answer follows"),
-        "replacement CLI must relay source output when stdout is reserved for JSON: {}",
-        String::from_utf8_lossy(&output.stderr)
+        output.stderr.is_empty(),
+        "report metadata must not displace program output"
     );
     assert!(
         report["replacement_execution"]["output_identity"]
@@ -2283,6 +2315,12 @@ fn replacement_cli_uses_session_feature_projection_and_persists_semantic_module_
             "beta",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -2291,7 +2329,8 @@ fn replacement_cli_uses_session_feature_projection_and_persists_semantic_module_
         String::from_utf8_lossy(&enabled.stdout),
         String::from_utf8_lossy(&enabled.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&enabled.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     let provenance = &report["semantic_module"];
     assert_eq!(report["replacement_execution"]["result"], "42");
     assert_eq!(provenance["module_id"], "module:main");
@@ -2354,6 +2393,12 @@ async def main() -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -2362,7 +2407,8 @@ async def main() -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["backend"]["executed_backend"], "replacement");
     assert_eq!(report["backend"]["fallback_outcome"], "not_needed");
     assert_eq!(report["replacement_execution"]["result"], "7");
@@ -3066,13 +3112,25 @@ fn a_shadow_request_does_not_alter_replacement_execution() -> Result<(), Box<dyn
             "refuse",
             "--shadow",
         ])
+        .args([
+            "--report",
+            "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
+        ])
         .output()?;
     assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout)?;
     assert!(
-        stdout.contains("replacement backend executed `main`: 42"),
-        "unexpected shadowed replacement output: {stdout}"
+        output.stdout.is_empty(),
+        "non-printing programs must leave stdout empty"
     );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
+    assert_eq!(report["replacement_execution"]["result"], "42");
 
     let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(
         temporary.path().join(".incan/backend/receipt.json"),
@@ -3226,6 +3284,16 @@ def main() -> int:
             "--backend-fallback",
             "refuse",
         ])
+        .args([
+            "--report",
+            "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
+        ])
         .output()?;
     assert!(
         output.status.success(),
@@ -3234,9 +3302,12 @@ def main() -> int:
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&output.stdout).contains("replacement backend executed `main`: 143"),
-        "the receipt-producing direct path must observe the callable result"
+        output.stdout.is_empty(),
+        "non-printing programs must leave stdout empty"
     );
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
+    assert_eq!(report["replacement_execution"]["result"], "143");
     let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(
         temporary.path().join(".incan/backend/receipt.json"),
     )?)?;
@@ -3287,6 +3358,12 @@ def main() -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -3295,7 +3372,8 @@ def main() -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert!(
         report["replacement_execution"]["result"] == "42",
         "the direct result must be source-observable in the replacement report: {report}"
@@ -3362,6 +3440,12 @@ def main() -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -3370,7 +3454,8 @@ def main() -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["replacement_execution"]["result"], "404");
     assert!(
         report["replacement_execution"]["body_snapshot"]
@@ -3437,6 +3522,12 @@ def main() -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -3445,7 +3536,8 @@ def main() -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["replacement_execution"]["result"], "42");
     assert!(
         report["replacement_execution"]["body_snapshot"]
@@ -3511,6 +3603,12 @@ def classify(signal: Signal) -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -3519,7 +3617,8 @@ def classify(signal: Signal) -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["replacement_execution"]["result"], "42");
     assert!(
         report["replacement_execution"]["body_snapshot"]
@@ -3588,6 +3687,12 @@ def main() -> int:
             "refuse",
             "--report",
             "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
         ])
         .output()?;
     assert!(
@@ -3596,7 +3701,8 @@ def main() -> int:
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
     assert_eq!(report["replacement_execution"]["result"], "2");
     assert!(
         report["replacement_execution"]["body_snapshot"]

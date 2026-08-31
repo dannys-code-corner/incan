@@ -22,7 +22,10 @@
 //! this module supplies it with evaluated operands and refuses an unresolved, inactive, or unauthorized operation
 //! at the original source span.
 
+pub mod program_io;
 pub mod provider;
+
+pub use program_io::{ProgramIo, ProgramIoError, ProgramOutput};
 
 use std::{
     cell::RefCell,
@@ -464,8 +467,8 @@ pub struct ReplacementExecution {
     pub runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     /// Every direct task-frame transition observed during this successful execution, in source execution order.
     task_lifecycle: Vec<TaskLifecycleEvent>,
-    /// Lines the program emitted through `print`/`println`, in emission order.
-    emitted_output: Vec<String>,
+    /// Accepted program-stream bytes and completed print calls, independent of receipt publication.
+    pub output: ProgramOutput,
     /// Every provider operation this execution ran, each referencing its own RFC 104 operation receipt.
     ///
     /// Empty for a run that executed no provider operation. A run that was *refused* by a governed denial or a
@@ -508,11 +511,11 @@ impl ReplacementExecution {
 
     /// The lines this execution emitted through `print`/`println`, in emission order.
     ///
-    /// Empty for a program that printed nothing. A caller running the program is expected to write these; a caller
-    /// comparing two backends is expected to compare them, because a program's output is part of what it did.
+    /// These lines have already been delivered to the supplied program writer; callers must not replay them.
+    /// They remain a compatibility projection for reports. Compare exact bytes in [`Self::output`] for stream parity.
     #[must_use]
     pub fn emitted_output(&self) -> &[String] {
-        &self.emitted_output
+        &self.output.printed_lines
     }
 
     /// Return the stable direct-task lifecycle evidence bound into this execution's output identity and CLI report.
@@ -579,6 +582,19 @@ pub enum ReplacementExecutionError {
         /// End byte offset duplicated for typed error formatting.
         span_end: usize,
     },
+    /// A program-stream write or flush failed after any earlier accepted bytes were already delivered.
+    #[error("replacement backend {error} at original Incan source span {span_start}..{span_end}")]
+    ProgramIo {
+        /// Typed host failure; partial output stays in the caller-owned [`ProgramIo`].
+        #[source]
+        error: ProgramIoError,
+        /// Original print or stream-operation span carried by Body IR.
+        span: HirSourceSpan,
+        /// Start byte offset duplicated for typed diagnostic formatting.
+        span_start: usize,
+        /// End byte offset duplicated for typed diagnostic formatting.
+        span_end: usize,
+    },
     /// An RFC 104 authority decision refused an admitted provider operation, so it never ran.
     ///
     /// Deliberately distinct from [`Self::RuntimeFailure`]: nothing executed, and the remedy is a grant rather than
@@ -638,7 +654,7 @@ impl ReplacementExecutionError {
         match self {
             Self::MissingFunction { .. } | Self::ArgumentCount { .. } => "INCAN-R988-ENTRYPOINT",
             Self::Unsupported { .. } => "INCAN-R988-UNSUPPORTED",
-            Self::RuntimeFailure { .. } => "INCAN-R988-RUNTIME",
+            Self::RuntimeFailure { .. } | Self::ProgramIo { .. } => "INCAN-R988-RUNTIME",
             Self::ProviderAuthorityDenied { .. } => "INCAN-R1156-DENIED",
             Self::ProviderOperationFailed { .. } => "INCAN-R1156-PROVIDER",
         }
@@ -649,6 +665,7 @@ impl ReplacementExecutionError {
         match self {
             Self::Unsupported { span, .. }
             | Self::RuntimeFailure { span, .. }
+            | Self::ProgramIo { span, .. }
             | Self::ProviderAuthorityDenied { span, .. }
             | Self::ProviderOperationFailed { span, .. } => Some(*span),
             Self::MissingFunction { .. } | Self::ArgumentCount { .. } => None,
@@ -673,7 +690,8 @@ impl ReplacementExecutionError {
             Self::MissingFunction { .. }
             | Self::ArgumentCount { .. }
             | Self::Unsupported { .. }
-            | Self::RuntimeFailure { .. } => None,
+            | Self::RuntimeFailure { .. }
+            | Self::ProgramIo { .. } => None,
         }
     }
 }
@@ -918,6 +936,20 @@ pub fn execute_free_function(
     execute_prevalidated_free_function(execution)
 }
 
+/// Execute checked Body IR using caller-supplied program writers and retain observations on failure as well as success.
+///
+/// Profile validation runs before any program write. The caller owns `io` after return, including accepted prefixes
+/// when a runtime error, broken pipe, or flush failure prevented a successful execution result.
+pub fn execute_free_function_with_io(
+    module: &BodyIrModule,
+    name: &str,
+    args: &[ReplacementValue],
+    io: &mut ProgramIo<'_>,
+) -> Result<ReplacementExecution, ReplacementExecutionError> {
+    let execution = prepare_free_function_execution(module, name, args)?;
+    execute_prevalidated_free_function_with_io(execution, io)
+}
+
 /// Execute one named free function that may invoke admitted provider operations against `providers`.
 ///
 /// The runtime is the caller's, and stays the caller's: a governed denial and a provider failure both stop this
@@ -940,9 +972,23 @@ pub fn execute_free_function_with_providers(
 pub fn execute_prevalidated_free_function(
     execution: ValidatedFreeFunctionExecution<'_, '_>,
 ) -> Result<ReplacementExecution, ReplacementExecutionError> {
-    let body = named_free_function(execution.module, &execution.name)?;
+    let mut stdout = std::io::stdout().lock();
+    let mut stderr = std::io::stderr().lock();
+    let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+    execute_prevalidated_free_function_with_io(execution, &mut io)
+}
 
-    let mut executor = BodyExecutor::new(execution.module, body, execution.args, execution.providers.clone())?;
+/// Execute a validated capability with ordinary program delivery and independently caller-owned observation.
+///
+/// Nested frames reborrow the same writers. Printing writes and flushes during execution, never after a receipt
+/// succeeds; a failed execution still leaves accepted bytes available through `io.output()`.
+pub fn execute_prevalidated_free_function_with_io(
+    execution: ValidatedFreeFunctionExecution<'_, '_>,
+    io: &mut ProgramIo<'_>,
+) -> Result<ReplacementExecution, ReplacementExecutionError> {
+    let body = named_free_function(execution.module, &execution.name)?;
+    let checkpoint = io.checkpoint();
+    let mut executor = BodyExecutor::new(execution.module, body, execution.args, execution.providers.clone(), io)?;
     let value = if body.is_async {
         let task = executor.construct_task(body.clone(), executor.locals.clone(), body.span)?;
         executor.drive_task(&task, body.span)?
@@ -970,7 +1016,13 @@ pub fn execute_prevalidated_free_function(
         .map(|runtime| runtime.provider_executions())
         .unwrap_or_default();
     let provider_summary = canonical_provider_execution_summary(&provider_executions);
-    let emitted_output_summary = canonical_emitted_output_summary(&executor.emitted_output);
+    let output = executor.io.output_since(checkpoint);
+    let emitted_output_summary = canonical_emitted_output_summary(&output.printed_lines);
+    let stream_summary = format!(
+        "program-streams-v1;stdout={};stderr={}",
+        hex::encode(output.stdout()),
+        hex::encode(output.stderr())
+    );
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
         value.observable_text().as_str(),
@@ -979,6 +1031,7 @@ pub fn execute_prevalidated_free_function(
         task_summary.as_str(),
         provider_summary.as_str(),
         emitted_output_summary.as_str(),
+        stream_summary.as_str(),
     ]);
     Ok(ReplacementExecution {
         value,
@@ -986,7 +1039,7 @@ pub fn execute_prevalidated_free_function(
         ownership_reads: executor.ownership_reads,
         runtime_requirements: executor.runtime_requirements,
         task_lifecycle: executor.task_lifecycle,
-        emitted_output: executor.emitted_output,
+        output,
         provider_executions,
         output_identity,
     })
@@ -2363,7 +2416,7 @@ fn validate_write_place(
 }
 
 /// Mutable interpreter state for one Body-IR execution.
-struct BodyExecutor {
+struct BodyExecutor<'run, 'writer> {
     module: BodyIrModule,
     locals: BTreeMap<LocalId, ReplacementValue>,
     ownership_reads: Vec<OwnershipRead>,
@@ -2375,13 +2428,8 @@ struct BodyExecutor {
     next_task_id: usize,
     /// Direct task transitions observed in execution order and bound into the output identity.
     task_lifecycle: Vec<TaskLifecycleEvent>,
-    /// Lines the executed program emitted, in emission order.
-    ///
-    /// Recorded rather than written. Writing straight to the host's stdout would make the program's output an
-    /// effect nothing could observe, compare, or test — and the shadow comparison reads a *returned value*, so a
-    /// divergence in what two backends printed would not show up in any verdict. Holding the output as a value
-    /// keeps it comparable; whether it reaches a terminal is the caller's decision, not this executor's.
-    emitted_output: Vec<String>,
+    /// Caller-owned streams reborrowed by nested frames; delivery and observation outlive a failed frame.
+    io: &'run mut ProgramIo<'writer>,
     /// The task whose Body IR this executor is currently polling, if any.
     active_task: Option<usize>,
     /// The authority source, provider host, and receipt log admitted provider operations run against.
@@ -2396,13 +2444,14 @@ struct BodyExecutor {
     pending_flow: Option<Flow>,
 }
 
-impl BodyExecutor {
+impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     /// Bind the already-typechecked call arguments to their Body-IR parameter locals.
     fn new(
         module: &BodyIrModule,
         body: &Body,
         args: &[ReplacementValue],
         providers: Option<Rc<ProviderRuntime>>,
+        io: &'run mut ProgramIo<'writer>,
     ) -> Result<Self, ReplacementExecutionError> {
         let mut executor = Self {
             module: module.clone(),
@@ -2413,7 +2462,7 @@ impl BodyExecutor {
             steps: 0,
             next_task_id: 0,
             task_lifecycle: Vec::new(),
-            emitted_output: Vec::new(),
+            io,
             active_task: None,
             providers,
             pending_flow: None,
@@ -2424,7 +2473,12 @@ impl BodyExecutor {
     }
 
     /// Build an isolated executor for a nested callable, default computation, or suspended generator frame.
-    fn with_locals(module: &BodyIrModule, locals: BTreeMap<LocalId, ReplacementValue>, steps: usize) -> Self {
+    fn with_locals(
+        module: &BodyIrModule,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        steps: usize,
+        io: &'run mut ProgramIo<'writer>,
+    ) -> Self {
         Self {
             module: module.clone(),
             locals,
@@ -2434,23 +2488,11 @@ impl BodyExecutor {
             steps,
             next_task_id: 0,
             task_lifecycle: Vec::new(),
-            emitted_output: Vec::new(),
+            io,
             active_task: None,
             providers: None,
             pending_flow: None,
         }
-    }
-
-    /// Build one isolated child frame while preserving execution-wide task identity allocation.
-    ///
-    /// The provider runtime is shared with the child rather than withheld, so a provider operation invoked inside a
-    /// nested callable is decided, receipted, and sequenced by the same run that would have decided it at the top
-    /// level. Withholding it would have turned a nested invocation into a silent refusal.
-    fn child_with_locals(&self, locals: BTreeMap<LocalId, ReplacementValue>, steps: usize) -> Self {
-        let mut child = Self::with_locals(&self.module, locals, steps);
-        child.next_task_id = self.next_task_id;
-        child.providers = self.providers.clone();
-        child
     }
 
     /// Record a directly consumed declaration body as evidence and preserve its runtime requirements in first-seen
@@ -2482,19 +2524,40 @@ impl BodyExecutor {
         self.body_snapshots.join("\n-- direct execution frame --\n")
     }
 
-    /// Merge an isolated nested frame's runtime evidence into its caller after that frame actually executed.
-    fn merge_child(&mut self, child: Self) {
-        self.ownership_reads.extend(child.ownership_reads);
-        for requirement in child.runtime_requirements {
+    /// Execute an isolated frame while reborrowing the caller's streams, then merge its execution evidence.
+    ///
+    /// The closure cannot outlive the reborrow. This keeps one mutable stream owner without shared interior
+    /// mutability, and preserves accepted output even if the child exits with an error before returning a value.
+    fn execute_child<T>(
+        &mut self,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        steps: usize,
+        execute: impl FnOnce(&mut BodyExecutor<'_, 'writer>) -> Result<T, ReplacementExecutionError>,
+    ) -> Result<T, ReplacementExecutionError> {
+        let mut child = BodyExecutor::with_locals(&self.module, locals, steps, self.io);
+        child.next_task_id = self.next_task_id;
+        child.providers = self.providers.clone();
+        let result = execute(&mut child);
+        let BodyExecutor {
+            ownership_reads,
+            runtime_requirements,
+            body_snapshots,
+            steps,
+            next_task_id,
+            task_lifecycle,
+            ..
+        } = child;
+        self.ownership_reads.extend(ownership_reads);
+        for requirement in runtime_requirements {
             if !self.runtime_requirements.contains(&requirement) {
                 self.runtime_requirements.push(requirement);
             }
         }
-        self.body_snapshots.extend(child.body_snapshots);
-        self.steps = child.steps;
-        self.next_task_id = self.next_task_id.max(child.next_task_id);
-        self.task_lifecycle.extend(child.task_lifecycle);
-        self.emitted_output.extend(child.emitted_output);
+        self.body_snapshots.extend(body_snapshots);
+        self.steps = steps;
+        self.next_task_id = self.next_task_id.max(next_task_id);
+        self.task_lifecycle.extend(task_lifecycle);
+        result
     }
 
     /// Construct one unpolled task directly from an identity-selected async Body-IR body.
@@ -2552,15 +2615,15 @@ impl BodyExecutor {
             (task.id, task.body.clone(), task.locals.clone())
         };
         self.record_task_event(id, "polled", span);
-        let mut child = self.child_with_locals(locals, self.steps);
-        child.active_task = Some(id);
-        child.record_body(&body);
-        let result = child.execute_block(&body.block).and_then(|flow| match flow {
-            Flow::Return(Some(value)) => Ok(value),
-            Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
-            Flow::Break | Flow::Continue => Err(unsupported("loop control outside a direct task loop", body.span)),
+        let result = self.execute_child(locals, self.steps, |child| {
+            child.active_task = Some(id);
+            child.record_body(&body);
+            child.execute_block(&body.block).and_then(|flow| match flow {
+                Flow::Return(Some(value)) => Ok(value),
+                Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
+                Flow::Break | Flow::Continue => Err(unsupported("loop control outside a direct task loop", body.span)),
+            })
         });
-        self.merge_child(child);
         let value = match result {
             Ok(value) => value,
             Err(error) => {
@@ -2756,20 +2819,20 @@ impl BodyExecutor {
         &mut self,
         computation: &DefaultComputation,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let mut default_executor = self.child_with_locals(BTreeMap::new(), self.steps);
-        for statement in &computation.stmts {
-            match default_executor.execute_statement(statement)? {
-                Flow::Next => {}
-                Flow::Return(_) | Flow::Break | Flow::Continue => {
-                    return Err(unsupported(
-                        "control flow in a callable default computation",
-                        statement.span,
-                    ));
+        let result = self.execute_child(BTreeMap::new(), self.steps, |default_executor| {
+            for statement in &computation.stmts {
+                match default_executor.execute_statement(statement)? {
+                    Flow::Next => {}
+                    Flow::Return(_) | Flow::Break | Flow::Continue => {
+                        return Err(unsupported(
+                            "control flow in a callable default computation",
+                            statement.span,
+                        ));
+                    }
                 }
             }
-        }
-        let result = default_executor.evaluate_operand(&computation.result, computation.span)?;
-        self.merge_child(default_executor);
+            default_executor.evaluate_operand(&computation.result, computation.span)
+        })?;
         self.record_frame_evidence(format!(
             "executed source default frame span={}..{} statements={}",
             computation.span.start,
@@ -3158,20 +3221,20 @@ impl BodyExecutor {
         span: HirSourceSpan,
         frame_kind: &str,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let mut child = self.child_with_locals(locals, self.steps);
-        for statement in &callable.body.stmts {
-            match child.execute_statement(statement)? {
-                Flow::Next => {}
-                Flow::Return(_) | Flow::Break | Flow::Continue => {
-                    return Err(unsupported(
-                        "control flow in a callable expression body",
-                        statement.span,
-                    ));
+        let result = self.execute_child(locals, self.steps, |child| {
+            for statement in &callable.body.stmts {
+                match child.execute_statement(statement)? {
+                    Flow::Next => {}
+                    Flow::Return(_) | Flow::Break | Flow::Continue => {
+                        return Err(unsupported(
+                            "control flow in a callable expression body",
+                            statement.span,
+                        ));
+                    }
                 }
             }
-        }
-        let result = child.evaluate_operand(&callable.body.result, span)?;
-        self.merge_child(child);
+            child.evaluate_operand(&callable.body.result, span)
+        })?;
         self.record_frame_evidence(format!(
             "executed {frame_kind} frame call_span={}..{} params={} captures={} statements={}",
             span.start,
@@ -3268,18 +3331,16 @@ impl BodyExecutor {
                 )),
             })));
         }
-        let mut child = self.child_with_locals(locals, self.steps);
-        child.record_body(&body);
-        let flow = child.execute_block(&body.block)?;
-        let value = match flow {
-            Flow::Return(Some(value)) => value,
-            Flow::Return(None) | Flow::Next => ReplacementValue::Unit,
-            Flow::Break | Flow::Continue => {
-                return Err(unsupported("loop control outside a nested callable loop", body.span));
+        self.execute_child(locals, self.steps, |child| {
+            child.record_body(&body);
+            match child.execute_block(&body.block)? {
+                Flow::Return(Some(value)) => Ok(value),
+                Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
+                Flow::Break | Flow::Continue => {
+                    Err(unsupported("loop control outside a nested callable loop", body.span))
+                }
             }
-        };
-        self.merge_child(child);
-        Ok(value)
+        })
     }
 
     /// Capture one admitted map or filter adapter without polling its source or callback.
@@ -3467,15 +3528,14 @@ impl BodyExecutor {
         }
     }
 
-    /// Execute a `print`/`println` call by recording its line rather than writing it.
+    /// Deliver a `print`/`println` line through the caller's stdout writer and flush before continuing.
     ///
     /// Every argument renders, space-separated, matching Python's `print` and the Rust-emission backend's
     /// `emit_print_call`. That agreement is recent: both backends previously emitted only the first argument and
     /// discarded the rest, so `println("count", 3)` printed `count` with nothing reporting the loss.
     ///
-    /// The line is appended to [`BodyExecutor::emitted_output`] rather than printed. That keeps the effect a value
-    /// this runtime can hand back, compare, and test; a direct write would leave the program's output invisible to
-    /// every one of those.
+    /// Accepted bytes are observed independently of delivery. A later runtime or receipt failure cannot hide the
+    /// line, and a partial write or flush failure is reported at this original call span.
     fn execute_print(
         &mut self,
         args: &[&Operand],
@@ -3487,7 +3547,14 @@ impl BodyExecutor {
             parts.push(format_interpolation(&value, FormatStyle::Display, span)?);
         }
         let rendered = parts.join(" ");
-        self.emitted_output.push(rendered);
+        self.io
+            .print_line(rendered)
+            .map_err(|error| ReplacementExecutionError::ProgramIo {
+                error,
+                span,
+                span_start: span.start,
+                span_end: span.end,
+            })?;
         Ok(ReplacementValue::Unit)
     }
 
@@ -3720,18 +3787,18 @@ impl BodyExecutor {
         let frame_evidence = generator.frame_evidence.take();
         let locals = std::mem::take(&mut generator.frame.locals);
         let resume_steps = generator.frame.resume_step_budget(self.steps);
-        let mut deferred = self.child_with_locals(locals, resume_steps);
-        if let Some(body) = &named_body {
-            deferred.record_body(body);
-        }
-        if let Some(evidence) = frame_evidence {
-            deferred.record_frame_evidence(evidence);
-        }
-        let value = deferred.resume_generator_frame(&mut generator.frame, span)?;
-        generator.frame.locals = std::mem::take(&mut deferred.locals);
-        generator.frame.steps = deferred.steps;
-        self.merge_child(deferred);
-        Ok(value)
+        self.execute_child(locals, resume_steps, |deferred| {
+            if let Some(body) = &named_body {
+                deferred.record_body(body);
+            }
+            if let Some(evidence) = frame_evidence {
+                deferred.record_frame_evidence(evidence);
+            }
+            let result = deferred.resume_generator_frame(&mut generator.frame, span);
+            generator.frame.locals = std::mem::take(&mut deferred.locals);
+            generator.frame.steps = deferred.steps;
+            result
+        })
     }
 
     /// Poll an iterator value once. This single surface is shared by normalized `for` lowering and lazy adapters.
@@ -5643,7 +5710,7 @@ mod tests {
 
     use super::{
         Body, BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, LocalId, MAX_EXECUTION_STEPS,
-        Operand, OwnershipFact, Place, ReplacementExecutionError, ReplacementGenerator, ReplacementTask,
+        Operand, OwnershipFact, Place, ProgramIo, ReplacementExecutionError, ReplacementGenerator, ReplacementTask,
         ReplacementTaskState, ReplacementValue, ScopeId, Statement, StatementKind,
     };
 
@@ -5658,7 +5725,10 @@ mod tests {
             value_enum_declarations: Vec::new(),
             bodies: Vec::new(),
         };
-        let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS);
+        let mut stdout = std::io::sink();
+        let mut stderr = std::io::sink();
+        let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+        let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS, &mut io);
         let mut generator = ReplacementGenerator {
             frame: GeneratorFrame::new(
                 BTreeMap::new(),
@@ -5739,7 +5809,10 @@ mod tests {
         locals.insert(winner_local, ReplacementValue::Task(winner.clone()));
         locals.insert(loser_local, ReplacementValue::Task(loser.clone()));
         locals.insert(later_loser_local, ReplacementValue::Task(later_loser.clone()));
-        let mut executor = BodyExecutor::with_locals(&module, locals, 0);
+        let mut stdout = std::io::sink();
+        let mut stderr = std::io::sink();
+        let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+        let mut executor = BodyExecutor::with_locals(&module, locals, 0, &mut io);
         let arms = [
             RaceArm {
                 awaitable: Operand::place(Place::from_local(winner_local), OwnershipFact::Borrow, false),

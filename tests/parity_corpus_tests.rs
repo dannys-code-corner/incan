@@ -45,10 +45,7 @@ mod parity_corpus;
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
 
-/// The one corpus row that declares the bounded #1146 source-observable comparison profile.
-///
-/// Named once so the "exactly one green row" contract is stated in a single place; widening it is a deliberate
-/// edit here, not a side effect of adding another direct-execution row.
+/// The original scalar case that exercises the reusable paired-comparison route.
 const SHADOW_COMPARED_CASE_ID: &str = "replacement-body-v0-001";
 
 use parity_corpus::{
@@ -1999,8 +1996,7 @@ fn seed_corpus() -> Vec<ParityCase> {
                 function: "add",
                 arguments: replacement_body_v0_001_arguments,
                 expected: replacement_body_v0_001_expected,
-                // The one row #1146 proves end to end: its module holds a single named free function with scalar
-                // parameters, so the legacy route can call it from a generated entrypoint and print the result.
+                // The original #1146 scalar case now uses the separate typed-result report, never a program stream.
                 shadow_comparison: true,
             }),
         },
@@ -2674,7 +2670,13 @@ fn the_compared_row_carries_two_route_receipts_and_its_oven_authority() -> Resul
     // #1153 links on the stable kind and cites the instance identity; a receipt must carry both.
     assert_eq!(profile_kind, incan::backend::shadow::SHADOW_COMPARISON_PROFILE_ID);
     assert!(profile_identity.starts_with("sha256:"));
-    assert_eq!(observable, "completed(\"42\")");
+    let empty_stream_digest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Int, \"42\"); stdout=0 bytes ({empty_stream_digest}); stderr=0 bytes ({empty_stream_digest})"
+        )
+    );
     assert!(legacy_receipt_identity.starts_with("sha256:"));
     assert!(replacement_receipt_identity.starts_with("sha256:"));
     assert_ne!(
