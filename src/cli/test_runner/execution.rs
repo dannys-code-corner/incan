@@ -861,7 +861,53 @@ fn expr_references_name(expr: &Expr, name: &str) -> bool {
                 .any(|arg| expr_references_name(&arg.node, name))
                 || body_references_name(&block.body, name)
         }
+        // Unlike `Surface` (DSL-owned syntax with no real Incan bindings reachable from this analysis), an
+        // embedded fragment's holes are genuine Incan expressions (RFC 081, `#1023`) that can legitimately
+        // reference a yield-fixture setup binding, so they must be recursed into rather than treated as opaque.
+        Expr::Embedded(fragment) => fragment
+            .nodes
+            .iter()
+            .any(|node| embedded_node_references_name(&node.node, name)),
         Expr::Literal(_) | Expr::SelfExpr | Expr::Yield(None) | Expr::Partial(_) | Expr::Surface(_) => false,
+    }
+}
+
+/// Return whether an expression hole nested inside one embedded-fragment node references `name`.
+///
+/// Mirrors `expr_references_name`'s traversal shape for `EmbeddedNode`.
+fn embedded_node_references_name(node: &crate::frontend::ast::EmbeddedNode, name: &str) -> bool {
+    use crate::frontend::ast::EmbeddedNode;
+    match node {
+        EmbeddedNode::Text(_)
+        | EmbeddedNode::EntityRef(_)
+        | EmbeddedNode::Comment(_)
+        | EmbeddedNode::Value(_)
+        | EmbeddedNode::Regex { .. }
+        | EmbeddedNode::TypeShape(_) => false,
+        EmbeddedNode::Hole(expr) => expr_references_name(&expr.node, name),
+        EmbeddedNode::Element(element) => {
+            element.attrs.iter().any(|attr| {
+                attr.value
+                    .as_ref()
+                    .is_some_and(|value| embedded_node_references_name(&value.node, name))
+            }) || element
+                .children
+                .iter()
+                .any(|child| embedded_node_references_name(&child.node, name))
+        }
+        EmbeddedNode::StyleRule(rule) => {
+            rule.selectors
+                .iter()
+                .any(|selector| embedded_node_references_name(&selector.node, name))
+                || rule
+                    .declarations
+                    .iter()
+                    .any(|declaration| embedded_node_references_name(&declaration.node, name))
+        }
+        EmbeddedNode::Declaration(declaration) => declaration
+            .value
+            .iter()
+            .any(|value| embedded_node_references_name(&value.node, name)),
     }
 }
 

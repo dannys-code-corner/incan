@@ -909,6 +909,11 @@ impl<'program> GeneratedUseAnalyzer<'program> {
             }
             IrExprKind::SerdeFromJson(type_name) => self.mark_reachable_item(type_name),
             IrExprKind::TypeToken { ty } => self.scan_type(ty),
+            IrExprKind::EmbeddedFragment { holes, .. } => {
+                for hole in holes {
+                    self.scan_expr(hole);
+                }
+            }
             IrExprKind::Unit
             | IrExprKind::None
             | IrExprKind::Bool(_)
@@ -3215,6 +3220,11 @@ impl<'a> IrEmitter<'a> {
                         IrGeneratorClause::For { iterable, .. } => Self::collect_union_types_from_expr(iterable, out),
                         IrGeneratorClause::If(condition) => Self::collect_union_types_from_expr(condition, out),
                     }
+                }
+            }
+            IrExprKind::EmbeddedFragment { holes, .. } => {
+                for hole in holes {
+                    Self::collect_union_types_from_expr(hole, out);
                 }
             }
             IrExprKind::Unit

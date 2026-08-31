@@ -2875,6 +2875,11 @@ fn local_signature_in_expr(
             .iter()
             .find_map(|arg| local_signature_in_expr(arg, ast, source, offset))
             .or_else(|| local_signature_in_statements(&block.body, ast, source, offset)),
+        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are not recursed into here: hover/signature-help
+        // for content nested inside a fragment's expression holes is `#1022`'s LSP-ownership territory, not part
+        // of what this issue delivers. Treating the fragment as opaque (no signature found inside it) is the
+        // correct conservative default rather than guessing at a traversal shape LSP tooling hasn't settled yet.
+        Expr::Embedded(_) => None,
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr => None,
     }
 }
@@ -5731,6 +5736,9 @@ fn scoped_symbol_in_expr<'a>(
         }
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr | Expr::Yield(None) => {}
         Expr::Field(inner, _) => scoped_symbol_in_expr(inner, ident, symbol_span, surfaces, found),
+        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are opaque to scoped-symbol LSP lookups here:
+        // resolving scoped-DSL identifiers inside a fragment's expression holes is `#1022`'s territory.
+        Expr::Embedded(_) => {}
     }
 }
 
@@ -6272,6 +6280,9 @@ fn scoped_symbol_context_in_expr(expr: &Spanned<Expr>, offset: usize, context: &
         }
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr | Expr::Yield(None) => {}
         Expr::Field(inner, _) => scoped_symbol_context_in_expr(inner, offset, context),
+        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are opaque to scoped-symbol LSP context tracking
+        // here: this belongs to `#1022`'s LSP-ownership territory, not this issue's parser-to-lowering scope.
+        Expr::Embedded(_) => {}
     }
 }
 

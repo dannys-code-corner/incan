@@ -60,3 +60,36 @@ pub fn parse_with_context_and_surfaces(
     )
     .parse()
 }
+
+/// Parse a token stream with full contextual information plus the original source text.
+///
+/// This is the only public entrypoint that enables RFC 081 (`#1023`) descriptor-gated embedded fragments: the
+/// parser needs `source` to slice a claimed submode fragment's raw byte range directly out of the original file
+/// rather than reinterpreting whatever the ordinary lexer already did to that range (see
+/// [`crate::parser::Parser::new_with_source`] for why). Every other `parse*` entrypoint above is unaffected and
+/// keeps parsing embedded-fragment-eligible vocab-block bodies as an ordinary RFC 040/045 statement list, since
+/// they never supply `source`.
+///
+/// ## Parameters
+/// - `tokens`: Token stream produced by `incan_syntax::lexer::lex(source)`.
+/// - `source`: The exact source string that `tokens` was lexed from.
+///
+/// ## Errors
+/// Returns `Err(Vec<CompileError>)` if parsing fails.
+#[tracing::instrument(skip_all, fields(token_count = tokens.len(), has_module_path = module_path.is_some(), has_library_keywords = library_imported_vocab.is_some(), has_library_surfaces = library_imported_dsl_surfaces.is_some()))]
+pub fn parse_with_source(
+    tokens: &[Token],
+    module_path: Option<&str>,
+    library_imported_vocab: Option<&ImportedLibraryVocab>,
+    library_imported_dsl_surfaces: Option<&ImportedLibraryDslSurfaces>,
+    source: &str,
+) -> Result<Program, Vec<CompileError>> {
+    Parser::new_with_source(
+        tokens,
+        module_path.map(str::to_owned),
+        library_imported_vocab,
+        library_imported_dsl_surfaces,
+        source,
+    )
+    .parse()
+}

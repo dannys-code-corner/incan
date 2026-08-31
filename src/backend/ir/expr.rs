@@ -401,6 +401,24 @@ pub enum IrExprKind {
 
     // serde_json::from_str(s) - contains the target type name
     SerdeFromJson(String),
+
+    /// Descriptor-gated embedded-fragment artifact (RFC 081, `#1023`).
+    ///
+    /// Carries the fragment's identity (`submode`, verbatim `source_text`) opaquely as data, plus every expression
+    /// hole it contained, already fully lowered in source order. Per RFC 081 §Semantics ("their runtime meaning is
+    /// supplied by the owning DSL's desugarer or lowering hook, not by core Incan evaluation"), the DSL-owned
+    /// structural content (tags, selectors, declarations, regex/type shapes, ...) deliberately does **not** get a
+    /// mirrored IR node tree here — Body IR's job is Rust code generation, and there is no code to generate for
+    /// content with no runtime meaning yet. Only the holes, which are genuine Incan expressions, need real IR
+    /// representation. Emission (`src/backend/ir/emit/expressions/mod.rs`) refuses to emit Rust code for this node
+    /// with a clear `EmitError` rather than guessing at semantics, exactly as `VocabBlock`/`Surface` refuse at
+    /// lowering when they reach it unexpectedly — the difference is where in the pipeline the refusal happens,
+    /// because this node's holes genuinely do need to reach lowering, unlike those DSL-erased nodes.
+    EmbeddedFragment {
+        submode: incan_vocab::EmbeddedFragmentSubmode,
+        source_text: String,
+        holes: Vec<IrExpr>,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

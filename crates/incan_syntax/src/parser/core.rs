@@ -48,6 +48,13 @@ struct ActiveScopedSymbolDescriptor {
     descriptor: incan_vocab::ScopedSymbolDescriptor,
 }
 
+/// One embedded-fragment descriptor (RFC 081) activated by an import in the current file.
+#[derive(Debug, Clone)]
+struct ActiveEmbeddedFragmentDescriptor {
+    dependency_key: String,
+    descriptor: incan_vocab::EmbeddedFragmentDescriptor,
+}
+
 #[derive(Debug, Clone)]
 struct ScopedCallArgumentContext {
     call: String,
@@ -62,6 +69,17 @@ struct ScopedCallArgumentContext {
 pub struct Parser<'a> {
     tokens: &'a [Token],
     pos: usize,
+    /// Original source text, when available.
+    ///
+    /// This is `None` for every existing parser entrypoint (`new`, `new_with_module_path`, `new_with_context`) —
+    /// they only ever received a token stream, and this field is purely additive so none of their behavior
+    /// changes. It is `Some` only via [`Parser::new_with_source`], used by the RFC 081 (`#1023`) embedded-fragment
+    /// mechanism: a descriptor-gated lexical submode re-tokenizes the fragment body's *raw source slice* directly
+    /// (see `parser/embedded/mod.rs`), because token forms like `#1166ff`, `16px`, or `<section>` cannot be
+    /// faithfully reconstructed from whatever the ordinary lexer already did to that byte range (for example, `#`
+    /// silently starts a line comment in ordinary Incan lexing). The byte range itself is still recovered purely
+    /// from existing `Indent`/`Dedent` token spans — no lexer change is needed to compute it.
+    source: Option<&'a str>,
     errors: Vec<CompileError>,
     /// Non-fatal warnings accumulated during parsing (e.g. style nudges that don't block compilation).
     warnings: Vec<CompileError>,
@@ -76,6 +94,7 @@ pub struct Parser<'a> {
     std_async_vocab_active: bool,
     active_scoped_surface_descriptors: Vec<ActiveScopedSurfaceDescriptor>,
     active_scoped_symbol_descriptors: Vec<ActiveScopedSymbolDescriptor>,
+    active_embedded_fragment_descriptors: Vec<ActiveEmbeddedFragmentDescriptor>,
     scoped_call_argument_stack: Vec<ScopedCallArgumentContext>,
     /// Blank-line intent consumed by an inner block immediately before its `Dedent`.
     ///
@@ -122,6 +141,7 @@ impl<'a> Parser<'a> {
     ) -> Self {
         Self {
             tokens,
+            source: None,
             pos: 0,
             errors: Vec::new(),
             warnings: Vec::new(),
@@ -136,9 +156,32 @@ impl<'a> Parser<'a> {
             std_async_vocab_active: false,
             active_scoped_surface_descriptors: Vec::new(),
             active_scoped_symbol_descriptors: Vec::new(),
+            active_embedded_fragment_descriptors: Vec::new(),
             scoped_call_argument_stack: Vec::new(),
             pending_dedent_blank_lines: 0,
         }
+    }
+
+    /// Create a new parser with full contextual information plus the original source text.
+    ///
+    /// This is purely additive relative to [`Parser::new_with_context`]: every other constructor keeps `source`
+    /// unset and is completely unaffected. `source` is required for RFC 081 (`#1023`) descriptor-gated embedded
+    /// fragments — when a descriptor claims a lexical submode for a vocab-block position, the parser slices the
+    /// fragment's raw byte range directly out of `source` (using the enclosing `Indent`/`Dedent` token spans) and
+    /// re-tokenizes it with a dedicated submode tokenizer, rather than trying to reinterpret whatever the ordinary
+    /// lexer already produced for that range. Without `source`, embedded-fragment descriptors are inert: their
+    /// vocab-block body still parses exactly as an ordinary RFC 040/045 statement-list body.
+    pub fn new_with_source(
+        tokens: &'a [Token],
+        module_path: Option<String>,
+        library_imported_vocab: Option<&ImportedLibraryVocab>,
+        library_imported_dsl_surfaces: Option<&ImportedLibraryDslSurfaces>,
+        source: &'a str,
+    ) -> Self {
+        let mut parser =
+            Self::new_with_context(tokens, module_path, library_imported_vocab, library_imported_dsl_surfaces);
+        parser.source = Some(source);
+        parser
     }
 
     /// Parse the entire token stream into a [`Program`].
@@ -400,6 +443,16 @@ impl<'a> Parser<'a> {
                                 descriptor,
                             }),
                     );
+                self.active_embedded_fragment_descriptors.extend(
+                    surface
+                        .embedded_fragments
+                        .iter()
+                        .cloned()
+                        .map(|descriptor| ActiveEmbeddedFragmentDescriptor {
+                            dependency_key: provider_key.to_string(),
+                            descriptor,
+                        }),
+                );
             }
         }
 
