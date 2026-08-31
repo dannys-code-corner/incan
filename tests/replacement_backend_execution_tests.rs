@@ -1036,19 +1036,19 @@ def main() -> int:
     Ok(())
 }
 
-/// Refuse an unimplemented dict aggregate at its original source span.
+/// Refuse a dict spread outside the membership profile at its original source span.
 #[test]
 fn replacement_refuses_unsupported_body_ir_with_the_original_source_span() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> int:
-  values = {"first": 1}
+  values = {**{"first": 1}}
   return 0
 "#;
     let module = lower_typed_body_ir(source)?;
     let error = match execute_free_function(&module, "main", &[]) {
         Ok(execution) => {
             return Err(format!(
-                "dict aggregates must remain outside the source-local structural profile but executed as {:?}",
+                "dict spreads must remain outside the hashed membership profile but executed as {:?}",
                 execution.value
             )
             .into());
@@ -1061,9 +1061,9 @@ def main() -> int:
         "unsupported execution must retain an Incan source span: {error}"
     );
     let expected_start = source
-        .find("{\"first\": 1}")
+        .find("{**{\"first\": 1}}")
         .ok_or("aggregate fixture must contain its dict assignment")?;
-    let expected_end = expected_start + "{\"first\": 1}".len();
+    let expected_end = expected_start + "{**{\"first\": 1}}".len();
     let span = error
         .primary_span()
         .ok_or("aggregate refusal must retain its original source span")?;
@@ -2755,7 +2755,7 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
     fs::write(
         &entrypoint,
         r#"def main() -> int:
-  values = {"first": 1}
+  values = {**{"first": 1}}
   return 0
 "#,
     )?;
@@ -2788,12 +2788,12 @@ fn replacement_cli_refuses_unsupported_source_without_legacy_generation() -> Res
         "refusal must retain source authority: {combined}"
     );
     let expected_start = r#"def main() -> int:
-  values = {"first": 1}
+  values = {**{"first": 1}}
   return 0
 "#
-    .find("{\"first\": 1}")
+    .find("{**{\"first\": 1}}")
     .ok_or("aggregate fixture must contain its dict literal")?;
-    let expected_end = expected_start + "{\"first\": 1}".len();
+    let expected_end = expected_start + "{**{\"first\": 1}}".len();
     assert!(
         combined.contains(&format!(
             "primary Incan source location: {}:{expected_start}..{expected_end}",
@@ -4155,31 +4155,22 @@ def main() -> int:
     Ok(())
 }
 
+/// Dict membership now reaches its retained helper through an actual hashed carrier.
 #[test]
-fn replacement_cannot_reach_dict_membership_because_it_has_no_dict_value() -> Result<(), Box<dyn std::error::Error>> {
-    // The honest boundary of the folded-in runtime work. `set_contains` and `dict_contains_key` exist in
-    // `incan_stdlib`, and Body IR emits calls to them, but this executor has no set or dict value at all -- only
-    // lists. The refusal therefore lands on the *aggregate*, before membership is ever reached, which is the
-    // accurate report: the blocker is the missing value kind, not a missing helper. Whoever adds those values
-    // inherits the membership arms alongside them.
+fn replacement_executes_dict_membership_with_a_hashed_value() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> bool:
   d = {"a": 1}
   return "a" in d
 "#;
     let module = lower_typed_body_ir(source)?;
-    let Err(error) = execute_free_function(&module, "main", &[]) else {
-        return Err("dict membership must refuse until the executor has a dict value".into());
-    };
-
-    let reported = format!("{error:?}");
-    assert!(
-        reported.contains("dict aggregate"),
-        "the refusal must name the value kind it lacks: {reported}"
+    assert_eq!(
+        execute_free_function(&module, "main", &[])?.value,
+        ReplacementValue::Bool(true)
     );
     assert!(
         module.render_snapshot().contains("call helper:dict_contains_key("),
-        "Body IR must still represent the membership the executor cannot run: {}",
+        "Body IR must retain the exact membership helper that executes: {}",
         module.render_snapshot()
     );
     Ok(())

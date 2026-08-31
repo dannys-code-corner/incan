@@ -352,7 +352,7 @@ Tuple, list, dict, set, slice, projection, mutation, equality, and ordering reta
 - Body IR: Planned `src/frontend/body_ir.rs::fn lower_aggregate`; owner #1154
 - Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_aggregate`; owner #1154
 - Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
-- Blocker/migration: Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation.
+- Blocker/migration: Source-local scalar-key set/dict membership executes directly, with standalone replacement-body-v0-020 proving exact streams and a typed result across independent routes. This bounded proof does not establish the full aggregate contract; #1154 owns remaining direct value storage, projection and mutation behavior.
 
 ### `language.control-flow`
 

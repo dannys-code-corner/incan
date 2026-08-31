@@ -513,6 +513,22 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         };
         let name = name.clone();
 
+        // A retained zero-argument constructor fact distinguishes builtin construction from a same-spelled source
+        // callable. Only empty Set/Dict construction is admitted here; iterable conversions stay on their existing
+        // path.
+        if args.is_empty()
+            && type_args.is_empty()
+            && let Some(constructor) = self.type_info.resolved_collection_constructor(span)
+        {
+            match constructor {
+                CollectionTypeId::Set => {
+                    return self.lower_aggregate(bir::AggregateKind::Set, &[], span, scope, out);
+                }
+                CollectionTypeId::Dict => return self.lower_dict(&[], span, scope, out),
+                _ => {}
+            }
+        }
+
         // A recorded constructor field binding is the typechecker's own statement that this spelling constructs a
         // nominal value, which is what distinguishes `P(x=1)` from a call to a function that happens to be named
         // `P`. A construction may carry call-site type arguments (`Box[int]()` is accepted), but the typechecker

@@ -4572,7 +4572,7 @@
         },
         "disposition": "Planned",
         "owner_issue": 1154,
-        "migration_or_blocker": "Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation."
+        "migration_or_blocker": "Source-local scalar-key set/dict membership executes directly, with standalone replacement-body-v0-020 proving exact streams and a typed result across independent routes. This bounded proof does not establish the full aggregate contract; #1154 owns remaining direct value storage, projection and mutation behavior."
       },
       {
         "id": "language.control-flow-complete",

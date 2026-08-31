@@ -1799,6 +1799,7 @@ fn registered_parity_corpus_case_id(case_id: &str) -> bool {
             | "replacement-body-v0-007"
             | "replacement-body-v0-018"
             | "replacement-body-v0-019"
+            | "replacement-body-v0-020"
     )
 }
 
@@ -2410,7 +2411,7 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
             "language.aggregates-and-projections",
             "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
             1154,
-            "Depends on #1101 for complete aggregate/place vocabulary; #1154 owns direct value storage and mutation.",
+            "Source-local scalar-key set/dict membership executes directly, with standalone replacement-body-v0-020 proving exact streams and a typed result across independent routes. This bounded proof does not establish the full aggregate contract; #1154 owns remaining direct value storage, projection and mutation behavior.",
         ),
         planned_feature(
             "language.control-flow-complete",
