@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use incan::backend::replacement::{ReplacementExecutionError, execute_free_function};
+use incan::backend::replacement::{ProgramIo, ReplacementExecutionError, execute_free_function_with_io};
 use incan::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use incan::frontend::typechecker::TypeChecker;
 use incan::frontend::{lexer, parser};
@@ -115,7 +115,10 @@ fn classify(source_path: &Path) -> Result<Outcome, Box<dyn std::error::Error>> {
     if module.render_snapshot().contains("unsupported(") {
         return Ok(Outcome::NotRepresented("Body IR refusal".to_string()));
     }
-    match execute_free_function(&module, "main", &[]) {
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+    match execute_free_function_with_io(&module, "main", &[], &mut io) {
         Ok(_) => Ok(Outcome::Executed),
         Err(error) => Ok(Outcome::RepresentedNotExecuted(refusal_bucket(&error))),
     }
@@ -130,6 +133,7 @@ fn refusal_bucket(error: &ReplacementExecutionError) -> String {
         ReplacementExecutionError::ArgumentCount { .. } => "entrypoint argument contract",
         ReplacementExecutionError::Unsupported { .. } => "unsupported direct replacement profile",
         ReplacementExecutionError::RuntimeFailure { .. } => "direct replacement runtime failure",
+        ReplacementExecutionError::ProgramIo { .. } => "program stream failure",
         ReplacementExecutionError::ProviderAuthorityDenied { .. } => "provider authority denied",
         ReplacementExecutionError::ProviderOperationFailed { .. } => "provider operation failed",
     }

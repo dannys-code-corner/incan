@@ -2646,6 +2646,11 @@ fn build_replacement_file_report(
     options: BuildCommandOptions,
     report_options: &BuildReportOptions,
 ) -> CliResult<serde_json::Value> {
+    if report_options.enabled() && report_options.output_path.is_none() {
+        return Err(CliError::failure(
+            "replacement execution keeps stdout and stderr for the program; use --report-output <file> with --report json",
+        ));
+    }
     reject_normal_cargo_controls(&options.cargo_policy, options.generated_cargo_target_dir.as_ref())?;
     let start = Instant::now();
     let entrypoint = if Path::new(file_path).is_absolute() {
@@ -2695,20 +2700,6 @@ fn build_replacement_file_report(
     .map_err(|error| CliError::failure(error.to_string()))?;
     let project_root = resolve_project_root(&entrypoint);
     write_backend_receipt(&backend_receipt, &default_backend_receipt_path(&project_root))?;
-    for line in execution.emitted_output() {
-        print_build_progress(report_options, line);
-    }
-    print_build_progress(report_options, "✓ replacement backend executed typed Body IR directly");
-    print_build_progress(
-        report_options,
-        format!("Replacement result: {}", execution.value.observable_text()),
-    );
-    if !report_options.enabled() {
-        println!(
-            "✓ replacement backend executed `main`: {}",
-            execution.value.observable_text()
-        );
-    }
     Ok(serde_json::json!({
         "schema_version": REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION,
         "compiler_version": crate::version::INCAN_VERSION,
@@ -2721,6 +2712,8 @@ fn build_replacement_file_report(
             "result": execution.value.observable_text(),
             "output_identity": execution.output_identity,
             "emitted_output": execution.emitted_output(),
+            "stdout_bytes": execution.output.stdout(),
+            "stderr_bytes": execution.output.stderr(),
             "body_snapshot": execution.body_snapshot,
             "ownership_reads": execution.ownership_evidence(),
             "runtime_requirements": execution.runtime_requirement_evidence(),

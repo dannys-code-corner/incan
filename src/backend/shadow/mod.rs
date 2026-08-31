@@ -6,38 +6,44 @@
 //!
 //! ## What is compared
 //!
-//! The profile is [`SHADOW_COMPARISON_PROFILE_ID`]: one source-only Incan module holding exactly one free
-//! function, whose name is not `main`, called with concrete scalar arguments. Both routes observe the *same*
-//! source, independently:
+//! The profile is [`SHADOW_COMPARISON_PROFILE_ID`]: one named free function in a source-only Incan module,
+//! called with concrete scalar arguments. A module containing `main` is outside this harness profile. Both routes
+//! observe the *same* source, independently:
 //!
 //! - **Replacement route.** The module is typechecked, lowered to Body IR, and executed directly by
 //!   [`crate::backend::replacement`]. Nothing is generated, compiled, or spawned.
 //! - **Legacy route.** The module plus a generated Incan entrypoint that calls the observed function with the profile's
-//!   arguments and prints the result is run through Oven, the adopted build and execution authority: [`IrCodegen`]
-//!   emits Rust, an Oven receipt authorizes those exact bytes, an immutable store-selected direct-`rustc` plan compiles
-//!   them, and the produced program is executed as a process. See [`legacy_oven`] for that boundary.
+//!   arguments and atomically stages a typed result report is run through Oven, the adopted build and execution
+//!   authority: [`IrCodegen`] emits Rust, an Oven receipt authorizes those exact bytes, an immutable store-selected
+//!   direct-`rustc` plan compiles them, and the produced program is executed as a process. See [`legacy_oven`] for that
+//!   boundary.
 //!
 //! The observed function must not be named `main`, because the legacy route can only observe a scalar by calling
-//! the function from an entrypoint and printing the result; a function that *is* the entrypoint has no
+//! the function from a separate entrypoint and staging its result; a function that *is* the entrypoint has no
 //! source-observable return value at all. This is why the CLI's `--backend replacement` build path, which
 //! executes the module's `main`, is outside this profile — see [`PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON`].
 //!
 //! ## The observable is transported losslessly
 //!
-//! The legacy route reads its result out of a real process's standard output, so the transport has to be exact.
-//! Trimming whitespace would silently equate `"x"` with `"x\n"` and `""` with `"\n"`, turning a genuine
-//! divergence into a match. The generated entrypoint therefore frames the result between two marker lines, and
-//! [`decode_framed_result`] recovers the payload by anchoring on the exact leading and trailing byte sequences —
-//! never by searching, trimming, or lossy UTF-8 conversion. Output that does not carry the frame exactly is
-//! [`ShadowUnavailable`], because a result that cannot be read back byte-for-byte has not been observed.
+//! Normal program output must remain program output. The legacy process therefore retains its stdout and stderr as
+//! independent raw byte streams in [`LegacyProcessEvidence`], while a source-authored entrypoint writes its typed
+//! function result to a staged file and atomically replaces the final report. [`decode_result_report`] reads that
+//! report exactly: no result marker shares either program stream, no whitespace is trimmed, and no failed process
+//! can contribute a partial report. The replacement route uses explicit capture writers. Comparison includes each
+//! stream's exact bytes and order together with the typed result or classified failure; there is no cross-stream
+//! ordering claim.
 //!
 //! ## What "matched" is allowed to mean
 //!
-//! [`SourceObservable`] is the whole comparison surface, and it is deliberately small: either the observed
-//! function returned normally (and the routes must agree on the canonical spelling of that scalar), or it stopped
+//! [`RouteObservation`] combines exact per-stream bytes with the outcome in [`SourceObservable`]: either the observed
+//! function returned normally (and the routes must agree on the typed scalar), or it stopped
 //! on a runtime failure this profile can classify identically on both routes ([`RuntimeFailureClass`]). A failure
 //! neither route can classify is [`ShadowUnavailable`], not agreement: "both stopped somehow" is not proof that
 //! they stopped the same way, and an arithmetic overflow is not a division by zero.
+//!
+//! The generated wrapper uses two private exit statuses for result-file publication failures without writing a
+//! control diagnostic into either program stream. Source imports of `rust::std::process` are outside this bounded
+//! profile so user code cannot impersonate those private transport statuses.
 //!
 //! Three things are deliberately *not* comparators, because none of them observes program meaning:
 //! generated Rust text, whether that Rust compiled, and the produced artifact's shape. A legacy program that
@@ -68,15 +74,18 @@ use std::path::Path;
 
 use crate::backend::IrCodegen;
 use crate::backend::replacement::{
-    ReplacementExecution, ReplacementExecutionError, ReplacementValue, execute_prevalidated_free_function,
-    prepare_free_function_execution,
+    ProgramIo, ProgramOutput, ReplacementExecution, ReplacementExecutionError, ReplacementValue,
+    execute_prevalidated_free_function_with_io, prepare_free_function_execution,
 };
 use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackPolicy, ShadowComparisonState, digest_output,
     finalize_receipt, resolve_execution, select_backend,
 };
+use incan_semantics_core::body_ir::BodyIrModule;
+
 use crate::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use crate::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
+use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::{lexer, parser};
 
@@ -85,7 +94,7 @@ use crate::frontend::{lexer, parser};
 /// Recorded inside [`ShadowComparisonState::Matched`] and [`ShadowComparisonState::Diverged`] so a later reader
 /// can tell *which* comparison a receipt is claiming, and so widening the profile forces a new identity rather
 /// than silently reinterpreting old evidence.
-pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_scalar_free_function.v0";
+pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_scalar_free_function.v1";
 
 /// Reason a shadow request over a program entrypoint falls outside this profile.
 ///
@@ -93,14 +102,72 @@ pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_s
 /// from the produced legacy process, so there is nothing for the two routes to agree or disagree about; that is a
 /// property of the profile, not a missing implementation, and it must not read as "no comparator exists".
 pub const PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON: &str = "the bounded source-observable comparison profile observes a named free function's returned scalar, and a \
-     program entrypoint's return value is not observable from the produced legacy process; generated Rust is not \
+     program entrypoint's return value is not observable through a separate source-authored report entrypoint; generated Rust is not \
      semantic proof";
 
-/// Marker line printed immediately before the observed result.
-const RESULT_BEGIN_MARKER: &str = "<<<incan-shadow-result-begin>>>";
+/// Exact first token in a source-authored typed result report.
+const RESULT_REPORT_VERSION: &str = "incan-shadow-result-v1";
 
-/// Marker line printed immediately after the observed result.
-const RESULT_END_MARKER: &str = "<<<incan-shadow-result-end>>>";
+/// Fresh root bindings for one generated legacy result-report wrapper.
+///
+/// These aliases never borrow an ordinary source spelling. A checked profile chooses one versioned stem that is
+/// absent from all source root bindings, so the appended wrapper cannot shadow a transport primitive or local and
+/// valid source using an older generated-looking spelling remains observable.
+#[derive(Debug, Clone)]
+struct GeneratedWrapperIdentifiers {
+    fs_rename: String,
+    fs_write: String,
+    rust_path: String,
+    process_exit: String,
+    result_value: String,
+}
+
+impl GeneratedWrapperIdentifiers {
+    /// Construct one candidate alias set without assuming any spelling is free in source.
+    fn for_version(version: u64) -> Self {
+        Self {
+            fs_rename: format!("__incan_shadow_fs_rename_v{version}"),
+            fs_write: format!("__incan_shadow_fs_write_v{version}"),
+            rust_path: format!("__incan_shadow_rust_path_v{version}"),
+            process_exit: format!("__incan_shadow_process_exit_v{version}"),
+            result_value: format!("__incan_shadow_result_value_v{version}"),
+        }
+    }
+
+    /// Enumerate every generated binding that must avoid a source root declaration.
+    fn all(&self) -> [&str; 5] {
+        [
+            &self.fs_rename,
+            &self.fs_write,
+            &self.rust_path,
+            &self.process_exit,
+            &self.result_value,
+        ]
+    }
+
+    /// Select the first complete alias set absent from the checked source root scope.
+    fn fresh_from_checked_source(checker: &TypeChecker) -> Result<Self, ShadowUnavailable> {
+        for version in 1..=u64::MAX {
+            let identifiers = Self::for_version(version);
+            if identifiers
+                .all()
+                .into_iter()
+                .all(|identifier| checker.lookup_symbol(identifier).is_none())
+            {
+                return Ok(identifiers);
+            }
+        }
+        Err(ShadowUnavailable::new(
+            "the bounded source-observable comparison profile exhausted its generated wrapper identifier space",
+        ))
+    }
+}
+
+/// Private process status when source-authored result staging fails at the write step.
+const RESULT_TRANSPORT_WRITE_EXIT_STATUS: i32 = 86;
+
+/// Private process status when source-authored result staging fails at the atomic rename step.
+const RESULT_TRANSPORT_RENAME_EXIT_STATUS: i32 = 87;
 
 /// Domain tag folded into the legacy route's output identity.
 ///
@@ -110,6 +177,130 @@ const LEGACY_OUTPUT_IDENTITY_TAG: &str = "incan.shadow_comparison.legacy_process
 
 /// Domain tag folded into a failed direct execution's output identity.
 const REPLACEMENT_FAILURE_IDENTITY_TAG: &str = "incan.shadow_comparison.replacement_failure.v0";
+
+/// The checked scalar kind carried by the dedicated function-result channel.
+///
+/// The kind comes from the source function's type-check facts before either route executes. It is part of the
+/// report grammar, so `str` containing `"true"` is never silently recast as `bool` merely because the rendered
+/// payload looks similar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FunctionResultKind {
+    /// An Incan `int` result.
+    Int,
+    /// An Incan `bool` result.
+    Bool,
+    /// An owned Incan `str` result.
+    Str,
+    /// An Incan `None`/unit result.
+    Unit,
+}
+
+impl FunctionResultKind {
+    /// The stable report label for this checked scalar kind.
+    fn report_label(self) -> &'static str {
+        match self {
+            Self::Int => "int",
+            Self::Bool => "bool",
+            Self::Str => "str",
+            Self::Unit => "none",
+        }
+    }
+
+    /// Return the exact source expression that appends this result's report payload.
+    fn report_expression(self, result_local: &str) -> String {
+        let header = result_report_header(self);
+        match self {
+            Self::Int | Self::Bool => format!("{header:?} + str({result_local})"),
+            Self::Str => format!("{header:?} + {result_local}"),
+            Self::Unit => format!("{header:?}"),
+        }
+    }
+
+    /// Decode the report's payload as this scalar kind without relying on an untyped display spelling.
+    fn decode_payload(self, payload: &[u8]) -> Result<TypedFunctionResult, ShadowUnavailable> {
+        let value = match self {
+            Self::Int => {
+                let text = std::str::from_utf8(payload).map_err(|error| {
+                    ShadowUnavailable::new(format!(
+                        "the legacy `int` result payload is not UTF-8, so it cannot be compared: {error}"
+                    ))
+                })?;
+                let parsed = text.parse::<i64>().map_err(|error| {
+                    ShadowUnavailable::new(format!(
+                        "the legacy `int` result payload is not a canonical i64 spelling: {error}"
+                    ))
+                })?;
+                if parsed.to_string() != text {
+                    return Err(ShadowUnavailable::new(
+                        "the legacy `int` result payload is not its canonical i64 spelling",
+                    ));
+                }
+                text.to_string()
+            }
+            Self::Bool => match payload {
+                b"true" => "true".to_string(),
+                b"false" => "false".to_string(),
+                _ => {
+                    return Err(ShadowUnavailable::new(
+                        "the legacy `bool` result payload was not exactly `true` or `false`",
+                    ));
+                }
+            },
+            Self::Str => String::from_utf8(payload.to_vec()).map_err(|error| {
+                ShadowUnavailable::new(format!(
+                    "the legacy `str` result payload is not valid UTF-8, so it cannot be compared: {error}"
+                ))
+            })?,
+            Self::Unit => {
+                if !payload.is_empty() {
+                    return Err(ShadowUnavailable::new(
+                        "the legacy `None` result report carried an unexpected payload",
+                    ));
+                }
+                "None".to_string()
+            }
+        };
+        Ok(TypedFunctionResult { kind: self, value })
+    }
+
+    /// Build one typed observable from a successful direct replacement result.
+    fn observe_replacement_value(self, value: &ReplacementValue) -> Result<TypedFunctionResult, ShadowUnavailable> {
+        let rendered = match (self, value) {
+            (Self::Int, ReplacementValue::Int(value)) => value.to_string(),
+            (Self::Bool, ReplacementValue::Bool(value)) => value.to_string(),
+            (Self::Str, ReplacementValue::Str(value)) => value.clone(),
+            (Self::Unit, ReplacementValue::Unit) => "None".to_string(),
+            (expected, actual) => {
+                return Err(ShadowUnavailable::new(format!(
+                    "the direct route returned {actual:?}, which contradicts its checked {} result kind",
+                    expected.report_label()
+                )));
+            }
+        };
+        Ok(TypedFunctionResult {
+            kind: self,
+            value: rendered,
+        })
+    }
+}
+
+/// Return the exact fixed ASCII header for one typed result report.
+///
+/// The delimiter is a literal colon byte, not a line ending or source escape. The payload begins immediately after
+/// this header and is otherwise preserved verbatim.
+fn result_report_header(kind: FunctionResultKind) -> String {
+    format!("{RESULT_REPORT_VERSION}:{}:", kind.report_label())
+}
+
+/// One typed result recovered through the separate source-authored report channel.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TypedFunctionResult {
+    /// Checked source-level kind carried by the report grammar.
+    pub kind: FunctionResultKind,
+    /// Exact canonical scalar payload, preserving all `str` bytes after UTF-8 validation.
+    pub value: String,
+}
 
 // ============================================================================
 // Profile
@@ -201,36 +392,58 @@ impl ShadowComparisonProfile {
     }
 
     /// Build the Incan program the legacy route runs: this profile's module plus a generated entrypoint that
-    /// calls the observed function with the profile's arguments and prints the result between frame markers.
+    /// calls the observed function and atomically publishes a typed result report.
     ///
-    /// The generated entrypoint is Incan source, not hand-written Rust, so the legacy route still observes the
-    /// observed function through the compiler's own pipeline rather than through a Rust-level harness. The
-    /// markers exist so [`decode_framed_result`] can recover the printed value byte-for-byte; see the module
-    /// docs on lossless transport.
-    pub fn legacy_program_source(&self) -> Result<String, ShadowUnavailable> {
-        if self.function == "main" {
-            return Err(ShadowUnavailable::new(PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON));
-        }
-        let program_after_input_contract = self.program_after_input_contract()?;
-        let function_is_active = program_after_input_contract.declarations.iter().any(|declaration| {
-            matches!(&declaration.node, crate::frontend::ast::Declaration::Function(function) if function.name == self.function)
-        });
-        if !function_is_active {
-            return Err(ShadowUnavailable::new(format!(
-                "the comparison profile's function `{}` is absent from the manifest-free feature projection, so neither route may observe it",
-                self.function
-            )));
-        }
+    /// The generated entrypoint is Incan source, not hand-written Rust. It imports existing `rust::std::fs`
+    /// `write` and `rename` primitives, avoiding the ordinary project's `__incan_std` facade that a bare legacy
+    /// compilation cannot materialize. Program stdout and stderr are untouched by the result transport.
+    fn legacy_program_source(
+        &self,
+        result_kind: FunctionResultKind,
+        report_path: &Path,
+        identifiers: &GeneratedWrapperIdentifiers,
+    ) -> Result<String, ShadowUnavailable> {
+        let report_path = report_path.to_str().ok_or_else(|| {
+            ShadowUnavailable::new(format!(
+                "the source-authored result report path {} is not valid UTF-8",
+                report_path.display()
+            ))
+        })?;
+        let staged_path = format!("{report_path}.next");
+        let report_path = incan_string_literal(report_path)?;
+        let staged_path = incan_string_literal(&staged_path)?;
         let arguments = self.argument_literals()?.join(", ");
-        let mut program = self.source.clone();
+        let result_expression = result_kind.report_expression(&identifiers.result_value);
+        let mut program = format!(
+            "from rust::std::fs import rename as {fs_rename}, write as {fs_write}\n\
+             from rust::std::path import Path as {rust_path}\n\
+             from rust::std::process import exit as {process_exit}\n",
+            fs_rename = identifiers.fs_rename,
+            fs_write = identifiers.fs_write,
+            rust_path = identifiers.rust_path,
+            process_exit = identifiers.process_exit,
+        );
+        program.push_str(&self.source);
         if !program.ends_with('\n') {
             program.push('\n');
         }
         let _ = write!(
             program,
-            "\ndef main() -> None:\n    println(\"{RESULT_BEGIN_MARKER}\")\n    println({}({arguments}))\n    \
-             println(\"{RESULT_END_MARKER}\")\n",
-            self.function
+            "\ndef main() -> None:\n    \
+             \"\"\"Publish this harness call's typed result without sharing program streams.\"\"\"\n    \
+             {result_value} = {}({arguments})\n    \
+             match {fs_write}({rust_path}.new({staged_path}), {result_expression}):\n        \
+                 Ok(_) => pass\n        \
+                 Err(_) => {process_exit}({RESULT_TRANSPORT_WRITE_EXIT_STATUS})\n    \
+             match {fs_rename}({rust_path}.new({staged_path}), {rust_path}.new({report_path})):\n        \
+                 Ok(_) => pass\n        \
+                 Err(_) => {process_exit}({RESULT_TRANSPORT_RENAME_EXIT_STATUS})\n",
+            self.function,
+            result_value = identifiers.result_value,
+            fs_write = identifiers.fs_write,
+            fs_rename = identifiers.fs_rename,
+            rust_path = identifiers.rust_path,
+            process_exit = identifiers.process_exit,
         );
         Ok(program)
     }
@@ -304,31 +517,24 @@ fn incan_string_literal(value: &str) -> Result<String, ShadowUnavailable> {
     Ok(literal)
 }
 
-/// Recover the exact printed result from a legacy program's standard output.
+/// Recover the exact typed function result from its dedicated source-authored report.
 ///
-/// The frame is positional, not searched: the output must begin with the begin-marker line and end with the
-/// end-marker line, and everything between them is the payload verbatim — including any leading or trailing
-/// newlines that belong to the value itself. This is what makes `"x"` and `"x\n"` distinguishable, which trimming
-/// would destroy. Output that does not carry the frame exactly, or whose payload is not valid UTF-8, is
-/// unavailable rather than approximated.
-pub fn decode_framed_result(stdout: &[u8]) -> Result<String, ShadowUnavailable> {
-    let prefix = format!("{RESULT_BEGIN_MARKER}\n").into_bytes();
-    let suffix = format!("\n{RESULT_END_MARKER}\n").into_bytes();
-    let framed =
-        stdout.len() >= prefix.len() + suffix.len() && stdout.starts_with(&prefix) && stdout.ends_with(&suffix);
-    if !framed {
+/// The report starts with fixed ASCII version and checked-kind tokens separated by literal colon bytes. The
+/// remaining bytes are the payload verbatim. In particular, a `str` payload may contain leading, trailing, or
+/// embedded newlines without being confused with normal stdout. A malformed report is unavailable rather than
+/// guessed or lossily decoded.
+pub fn decode_result_report(
+    report: &[u8],
+    expected_kind: FunctionResultKind,
+) -> Result<TypedFunctionResult, ShadowUnavailable> {
+    let header = result_report_header(expected_kind);
+    let Some(payload) = report.strip_prefix(header.as_bytes()) else {
         return Err(ShadowUnavailable::new(format!(
-            "the legacy program's output did not carry the exact result frame, so its result could not be read \
-             back losslessly: {:?}",
-            String::from_utf8_lossy(stdout)
+            "the legacy result report did not start with the expected `{RESULT_REPORT_VERSION}` {} header",
+            expected_kind.report_label()
         )));
-    }
-    let payload = &stdout[prefix.len()..stdout.len() - suffix.len()];
-    String::from_utf8(payload.to_vec()).map_err(|error| {
-        ShadowUnavailable::new(format!(
-            "the legacy program printed a result that is not valid UTF-8, so it could not be compared: {error}"
-        ))
-    })
+    };
+    expected_kind.decode_payload(payload)
 }
 
 // ============================================================================
@@ -365,18 +571,19 @@ impl RuntimeFailureClass {
     }
 }
 
-/// The entire source-level observable this profile compares.
+/// The termination and typed function-result portion of one source-level observation.
 ///
-/// Nothing about timing, output shape, artifact layout, or generated code is part of it. Two routes agree exactly
-/// when their [`SourceObservable`] values are equal.
+/// The route's exact stdout/stderr bytes are compared alongside this value. Timing, artifact layout and generated
+/// code are not part of the comparison. Platform exit codes remain in raw legacy evidence; source-level failures
+/// compare through the explicit classified failure vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum SourceObservable {
-    /// The observed function returned normally, spelled canonically and transported byte-for-byte.
+    /// The observed function returned normally through the typed result channel.
     ///
-    /// For the replacement route this is `ReplacementValue::observable_text`; for the legacy route it is exactly
-    /// what the produced process printed for the same value, recovered by [`decode_framed_result`].
-    Completed { result: String },
+    /// For the replacement route this is validated against the pre-execution checked return kind. For the legacy
+    /// route it is recovered from the atomically published report by [`decode_result_report`].
+    Completed { result: TypedFunctionResult },
     /// The observed function stopped on a classified runtime failure.
     Failed { failure: RuntimeFailureClass },
 }
@@ -389,7 +596,7 @@ impl SourceObservable {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            Self::Completed { result } => format!("completed({result:?})"),
+            Self::Completed { result } => format!("completed({:?}, {:?})", result.kind, result.value),
             Self::Failed { failure } => format!("failed({})", failure.label()),
         }
     }
@@ -407,12 +614,33 @@ pub struct RouteObservation {
     pub profile_kind: String,
     /// Content identity of the exact profile instance this observation was produced under.
     pub profile_identity: String,
-    /// The compared observable.
+    /// The compared termination/result outcome, in addition to the two program streams below.
     pub observable: SourceObservable,
+    /// Exact program stdout bytes, with order preserved within this stream.
+    pub stdout: Vec<u8>,
+    /// Exact program stderr bytes, independent of stdout and without lossily decoding diagnostics.
+    pub stderr: Vec<u8>,
     /// Route-specific evidence retained for reporting only.
     pub detail: String,
     /// Content identity of what this route produced, bound into its receipt.
     pub output_identity: String,
+}
+
+impl RouteObservation {
+    /// Describe the complete comparison surface without expanding arbitrarily large program streams.
+    ///
+    /// Exact bytes remain available in the observation; receipts and diagnostic summaries bind their lengths and
+    /// digests alongside the source-level outcome. Stream equality itself always compares bytes, not these labels.
+    fn describe(&self) -> String {
+        format!(
+            "{}; stdout={} bytes ({}); stderr={} bytes ({})",
+            self.observable.describe(),
+            self.stdout.len(),
+            crate::oven::digest_bytes(&self.stdout),
+            self.stderr.len(),
+            crate::oven::digest_bytes(&self.stderr),
+        )
+    }
 }
 
 /// A comparison that could not run, with the concrete boundary that stopped it.
@@ -454,6 +682,23 @@ pub struct LegacyExecutionAuthority {
     pub output_digest: String,
     /// Whether any Cargo process participated; Oven-owned execution requires `false`.
     pub cargo_process_started: bool,
+}
+
+/// Raw evidence from one Oven-produced legacy process.
+///
+/// Stdout and stderr remain independent, unmodified byte streams. The optional report is separate because it is a
+/// source-authored result transport, read only after a successful process exit and only after the staged file was
+/// atomically replaced. A process that exits unsuccessfully still retains its streams but has no report.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LegacyProcessEvidence {
+    /// Native process exit code, or `None` when the platform did not provide one.
+    pub exit_code: Option<i32>,
+    /// Raw bytes the legacy program wrote to stdout.
+    pub stdout: Vec<u8>,
+    /// Raw bytes the legacy program wrote to stderr.
+    pub stderr: Vec<u8>,
+    /// Raw typed-result report bytes, present only after a successful exit and successful host read.
+    pub result_report: Option<Vec<u8>>,
 }
 
 /// Everything one route contributed to a comparison.
@@ -505,8 +750,15 @@ pub struct ShadowComparison {
     pub replacement: Option<RouteEvidence>,
     /// The direct Body-IR execution behind [`ShadowComparison::replacement`], when it completed normally.
     pub replacement_execution: Option<ReplacementExecution>,
+    /// Direct-route stream observation after any execution attempt, including an unclassifiable failure.
+    ///
+    /// This is independent of a successful execution product or finalized receipt. Pre-execution refusals have no
+    /// observation; bytes accepted before a runtime failure remain available even when comparison is unavailable.
+    pub replacement_output: Option<ProgramOutput>,
     /// The Oven authority behind [`ShadowComparison::legacy`], when the legacy route ran.
     pub legacy_authority: Option<LegacyExecutionAuthority>,
+    /// Raw legacy process streams and its separate typed-result report, when that process ran.
+    pub legacy_process: Option<LegacyProcessEvidence>,
 }
 
 impl ShadowComparison {
@@ -544,11 +796,24 @@ pub fn compare_source_observable(
     capability: &legacy_oven::LegacyOvenCapability,
     workspace: &Path,
 ) -> ShadowComparison {
+    // The source, its Body IR, and its scalar return kind are all checked before either route executes. The
+    // source-authored report wrapper is preflighted through the legacy compiler before direct execution too, so a
+    // wrapper capability gap is an honest profile refusal rather than an asymmetrical execution attempt.
+    let prepared = match PreparedShadowProfile::new(profile) {
+        Ok(prepared) => prepared,
+        Err(unavailable) => {
+            return assemble_comparison(profile, Err(unavailable.clone()), Err(unavailable));
+        }
+    };
+    if let Err(unavailable) = preflight_result_transport(profile, &prepared, workspace) {
+        return assemble_comparison(profile, Err(unavailable.clone()), Err(unavailable));
+    }
+
     // ---- Route 1: direct Body IR, no generation and no subprocess ----
-    let replacement = observe_replacement_route(profile);
+    let replacement = observe_replacement_route(profile, &prepared);
 
     // ---- Route 2: emitted Rust, Oven-authorized native build, executed as a process ----
-    let legacy = legacy_oven::observe_legacy_route(profile, capability, workspace);
+    let legacy = legacy_oven::observe_legacy_route(profile, &prepared, capability, workspace);
 
     assemble_comparison(profile, replacement, legacy)
 }
@@ -566,13 +831,24 @@ fn assemble_comparison(
     let profile_identity = profile.profile_identity();
     let source_identity = profile.source_identity();
 
-    let (replacement_observation, replacement_execution, replacement_unavailable) = match replacement {
-        Ok(observed) => (Some(observed.observation), observed.execution, None),
-        Err(unavailable) => (None, None, Some(unavailable.reason)),
-    };
-    let (legacy_observation, legacy_authority, legacy_unavailable) = match legacy {
-        Ok(observed) => (Some(observed.observation), Some(observed.authority), None),
-        Err(unavailable) => (None, None, Some(unavailable.reason)),
+    let (replacement_observation, replacement_execution, replacement_output, replacement_unavailable) =
+        match replacement {
+            Ok(observed) => (
+                observed.observation,
+                observed.execution,
+                Some(observed.output),
+                observed.unavailable_reason,
+            ),
+            Err(unavailable) => (None, None, None, Some(unavailable.reason)),
+        };
+    let (legacy_observation, legacy_authority, legacy_process, legacy_unavailable) = match legacy {
+        Ok(observed) => (
+            observed.observation,
+            Some(observed.authority),
+            Some(observed.process),
+            observed.unavailable_reason,
+        ),
+        Err(unavailable) => (None, None, None, Some(unavailable.reason)),
     };
 
     let state = match (&legacy_observation, &replacement_observation) {
@@ -636,7 +912,9 @@ fn assemble_comparison(
         legacy: legacy_evidence,
         replacement: replacement_evidence,
         replacement_execution,
+        replacement_output,
         legacy_authority,
+        legacy_process,
     }
 }
 
@@ -660,19 +938,21 @@ fn route_evidence(
 fn unavailable_reason(legacy: Option<String>, replacement: Option<String>) -> String {
     match (legacy, replacement) {
         (Some(legacy), Some(replacement)) => {
-            format!("neither route executed; legacy route: {legacy}; replacement route: {replacement}")
+            format!(
+                "neither route produced a comparable observation; legacy route: {legacy}; replacement route: {replacement}"
+            )
         }
-        (Some(legacy), None) => format!("the legacy route did not execute: {legacy}"),
-        (None, Some(replacement)) => format!("the replacement route did not execute: {replacement}"),
+        (Some(legacy), None) => format!("the legacy route observation is unavailable: {legacy}"),
+        (None, Some(replacement)) => format!("the replacement route observation is unavailable: {replacement}"),
         (None, None) => "no comparison was made and neither route reported a reason".to_string(),
     }
 }
 
 /// Decide whether two independent observations of the same profile agree.
 ///
-/// Equality of [`SourceObservable`] is the whole rule, but only after both observations are confirmed to describe
-/// the *same* profile instance. Comparing observations produced under different profiles would manufacture a
-/// verdict about a comparison nobody ran, so that is refused as unavailable rather than reported as divergence.
+/// The source-level outcome and both raw byte streams must agree, after confirming the same profile instance.
+/// Comparing different profiles would manufacture a verdict about a comparison nobody ran. No total ordering
+/// between the independent streams is inferred.
 #[must_use]
 pub fn classify_observations(legacy: &RouteObservation, replacement: &RouteObservation) -> ShadowComparisonState {
     if legacy.profile_kind != replacement.profile_kind || legacy.profile_identity != replacement.profile_identity {
@@ -684,11 +964,14 @@ pub fn classify_observations(legacy: &RouteObservation, replacement: &RouteObser
             ),
         };
     }
-    if legacy.observable == replacement.observable {
+    if legacy.observable == replacement.observable
+        && legacy.stdout == replacement.stdout
+        && legacy.stderr == replacement.stderr
+    {
         return ShadowComparisonState::Matched {
             profile_kind: legacy.profile_kind.clone(),
             profile_identity: legacy.profile_identity.clone(),
-            observable: legacy.observable.describe(),
+            observable: legacy.describe(),
         };
     }
     ShadowComparisonState::Diverged {
@@ -696,8 +979,8 @@ pub fn classify_observations(legacy: &RouteObservation, replacement: &RouteObser
         profile_identity: legacy.profile_identity.clone(),
         detail: format!(
             "legacy route observed {} and replacement route observed {}; legacy detail: {}; replacement detail: {}",
-            legacy.observable.describe(),
-            replacement.observable.describe(),
+            legacy.describe(),
+            replacement.describe(),
             legacy.detail,
             replacement.detail
         ),
@@ -706,80 +989,224 @@ pub fn classify_observations(legacy: &RouteObservation, replacement: &RouteObser
 
 /// A completed direct execution plus the observation derived from it.
 pub(crate) struct ReplacementRouteResult {
-    pub(crate) observation: RouteObservation,
+    pub(crate) observation: Option<RouteObservation>,
     pub(crate) execution: Option<ReplacementExecution>,
+    pub(crate) output: ProgramOutput,
+    pub(crate) unavailable_reason: Option<String>,
 }
 
-/// A completed Oven-owned legacy execution plus the authority that permitted it.
+/// A completed Oven-owned legacy process plus its authority and retained raw evidence.
 pub(crate) struct LegacyRouteResult {
-    pub(crate) observation: RouteObservation,
+    pub(crate) observation: Option<RouteObservation>,
     pub(crate) authority: LegacyExecutionAuthority,
+    pub(crate) process: LegacyProcessEvidence,
+    /// A post-process report or classification refusal that must not discard the process's raw evidence.
+    pub(crate) unavailable_reason: Option<String>,
 }
 
-/// Observe the replacement route: typecheck, lower to Body IR, and execute the observed function directly.
-///
-/// Refusals from the bounded #988 profile (unsupported construct, wrong arity, missing function) mean this
-/// profile instance is outside the comparison, not that the routes disagreed, so they surface as
-/// [`ShadowUnavailable`].
-fn observe_replacement_route(profile: &ShadowComparisonProfile) -> Result<ReplacementRouteResult, ShadowUnavailable> {
-    let body_ir = {
+/// Prepared direct-execution facts shared by both routes before either begins execution.
+pub(crate) struct PreparedShadowProfile {
+    body_ir: BodyIrModule,
+    result_kind: FunctionResultKind,
+    wrapper_identifiers: GeneratedWrapperIdentifiers,
+}
+
+impl PreparedShadowProfile {
+    /// Check the selected function and reserve collision-free transport names before either route executes.
+    fn new(profile: &ShadowComparisonProfile) -> Result<Self, ShadowUnavailable> {
+        if profile.function == "main" {
+            return Err(ShadowUnavailable::new(PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON));
+        }
         let program = profile.program_after_input_contract()?;
+        refuse_source_process_import(&program)?;
+        let function_declaration = program
+            .declarations
+            .iter()
+            .find(|declaration| {
+                matches!(
+                    &declaration.node,
+                    crate::frontend::ast::Declaration::Function(function) if function.name == profile.function
+                )
+            })
+            .ok_or_else(|| {
+                ShadowUnavailable::new(format!(
+                    "the comparison profile's function `{}` is absent from the manifest-free feature projection, \
+                     so neither route may observe it",
+                    profile.function
+                ))
+            })?;
         let module_path = vec!["incan_shadow_comparison".to_string()];
         let mut checker = TypeChecker::new();
         checker.set_current_module_path(Some(module_path.clone()));
         checker
             .check_program(&program)
             .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not typecheck: {errors:?}")))?;
-        build_body_ir_module_v0(&program, &module_path, checker.type_info())
-    };
+        refuse_source_main(&checker)?;
+        let wrapper_identifiers = GeneratedWrapperIdentifiers::fresh_from_checked_source(&checker)?;
+        let binding = checker
+            .type_info()
+            .declarations
+            .function_bindings_by_span
+            .get(&(function_declaration.span.start, function_declaration.span.end))
+            .ok_or_else(|| {
+                ShadowUnavailable::new(format!(
+                    "the typechecker did not retain a return binding for comparison function `{}`",
+                    profile.function
+                ))
+            })?;
+        let result_kind = match &binding.return_type {
+            ResolvedType::Int => FunctionResultKind::Int,
+            ResolvedType::Bool => FunctionResultKind::Bool,
+            ResolvedType::Str => FunctionResultKind::Str,
+            ResolvedType::Unit => FunctionResultKind::Unit,
+            other => {
+                return Err(ShadowUnavailable::new(format!(
+                    "the bounded source-observable comparison profile requires a checked `int`, `bool`, `str`, \
+                     or `None` return type; `{}` returns {other:?}",
+                    profile.function
+                )));
+            }
+        };
+        let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
+        prepare_free_function_execution(&body_ir, profile.function(), &profile.arguments)
+            .map_err(replacement_profile_unavailable)?;
+        Ok(Self {
+            body_ir,
+            result_kind,
+            wrapper_identifiers,
+        })
+    }
+}
 
+/// Refuse a source entrypoint that would be rebound when the legacy wrapper is appended.
+///
+/// The source is checked first, so this consults the compiler's root binding table rather than guessing from source
+/// spelling. It covers root declarations and imports after the manifest-free input contract; local bindings remain
+/// valid because the generated `main` owns its own scope.
+fn refuse_source_main(checker: &TypeChecker) -> Result<(), ShadowUnavailable> {
+    if checker.lookup_symbol("main").is_some() {
+        return Err(ShadowUnavailable::new(PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON));
+    }
+    Ok(())
+}
+
+/// Keep private result-transport statuses distinct from user-program failure behavior.
+///
+/// This bounded source-only profile has no process-entrypoint comparison contract. Direct Rust process imports would
+/// let source intentionally produce the wrapper's statuses, so reject them from parsed source before either route
+/// executes. The generated wrapper adds its own fresh process alias only after this check.
+fn refuse_source_process_import(program: &crate::frontend::ast::Program) -> Result<(), ShadowUnavailable> {
+    let imports_process = program.declarations.iter().any(|declaration| {
+        let crate::frontend::ast::Declaration::Import(import) = &declaration.node else {
+            return false;
+        };
+        match &import.kind {
+            crate::frontend::ast::ImportKind::RustCrate { crate_name, path, .. } => {
+                crate_name == "std" && (path.is_empty() || path.first().is_some_and(|segment| segment == "process"))
+            }
+            crate::frontend::ast::ImportKind::RustFrom {
+                crate_name,
+                path,
+                items,
+                ..
+            } => {
+                crate_name == "std"
+                    && (path.first().is_some_and(|segment| segment == "process")
+                        || (path.is_empty() && items.iter().any(|item| item.name == "process")))
+            }
+            _ => false,
+        }
+    });
+    if imports_process {
+        return Err(ShadowUnavailable::new(
+            "the bounded source-observable comparison profile reserves direct `rust::std::process` imports for its private result-transport failure statuses",
+        ));
+    }
+    Ok(())
+}
+
+/// Typecheck and emit one non-executed result-report wrapper before either route begins execution.
+fn preflight_result_transport(
+    profile: &ShadowComparisonProfile,
+    prepared: &PreparedShadowProfile,
+    workspace: &Path,
+) -> Result<(), ShadowUnavailable> {
+    // The wrapper only compiles here; nevertheless, give it a caller-managed path so this generated source never
+    // advertises a broad fixed report destination.
+    let report_path = workspace.join("incan-shadow-result-preflight");
+    let program = profile.legacy_program_source(prepared.result_kind, &report_path, &prepared.wrapper_identifiers)?;
+    emit_legacy_rust(&program).map(|_| ()).map_err(|unavailable| {
+        ShadowUnavailable::new(format!(
+            "the bounded source-authored result-report wrapper could not be preflighted through the bare legacy \
+             compiler path: {}",
+            unavailable.reason
+        ))
+    })
+}
+
+/// Observe the replacement route by executing the already checked Body IR.
+///
+/// Refusals from the bounded #988 profile (unsupported construct, wrong arity, missing function) mean this
+/// profile instance is outside the comparison, not that the routes disagreed, so they surface as
+/// [`ShadowUnavailable`].
+fn observe_replacement_route(
+    profile: &ShadowComparisonProfile,
+    prepared: &PreparedShadowProfile,
+) -> Result<ReplacementRouteResult, ShadowUnavailable> {
     let profile_kind = profile.profile_kind().to_string();
     let profile_identity = profile.profile_identity();
-    let plan = prepare_free_function_execution(&body_ir, profile.function(), &profile.arguments)
+    let plan = prepare_free_function_execution(&prepared.body_ir, profile.function(), &profile.arguments)
         .map_err(replacement_profile_unavailable)?;
-    match execute_prevalidated_free_function(plan) {
-        Ok(execution) if !execution.emitted_output().is_empty() => {
-            // A program that printed cannot be compared by this profile, and saying so is the point. The compared
-            // observable is the function's *returned value*; the legacy route recovers it by requiring the process's
-            // stdout to begin and end with the result frame, which the program's own output breaks. Reporting a
-            // match on the return value alone would claim agreement over a run whose printed output nothing looked
-            // at — the exact silent divergence this comparison exists to prevent.
-            Err(ShadowUnavailable::new(format!(
-                "the replacement route emitted {} line(s) of program output, which this profile cannot compare: \
-                 the legacy route recovers its result from a stdout frame that the program's own output breaks",
-                execution.emitted_output().len()
-            )))
-        }
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+    let executed = execute_prevalidated_free_function_with_io(plan, &mut io);
+    let output = io.output().clone();
+    let (execution, observed) = match executed {
         Ok(execution) => {
-            let observation = RouteObservation {
-                profile_kind,
-                profile_identity,
-                observable: SourceObservable::Completed {
-                    result: execution.value.observable_text(),
-                },
-                detail: format!("direct Body-IR execution of `{}`", profile.function()),
-                output_identity: execution.output_identity.clone(),
-            };
-            Ok(ReplacementRouteResult {
-                observation,
-                execution: Some(execution),
-            })
-        }
-        Err(ReplacementExecutionError::RuntimeFailure { detail, .. }) => {
-            let failure = classify_replacement_failure(&detail)?;
-            Ok(ReplacementRouteResult {
-                observation: RouteObservation {
+            let observation = prepared
+                .result_kind
+                .observe_replacement_value(&execution.value)
+                .map(|result| RouteObservation {
                     profile_kind,
                     profile_identity,
-                    observable: SourceObservable::Failed { failure },
-                    detail: format!("direct Body-IR execution failed: {detail}"),
-                    output_identity: digest_output(&[REPLACEMENT_FAILURE_IDENTITY_TAG, &detail]),
-                },
-                execution: None,
-            })
+                    observable: SourceObservable::Completed { result },
+                    stdout: output.stdout().to_vec(),
+                    stderr: output.stderr().to_vec(),
+                    detail: format!("direct Body-IR execution of `{}`", profile.function()),
+                    output_identity: execution.output_identity.clone(),
+                });
+            (Some(execution), observation)
         }
-        Err(error) => Err(replacement_profile_unavailable(error)),
-    }
+        Err(ReplacementExecutionError::RuntimeFailure { detail, .. }) => {
+            let observation = classify_replacement_failure(&detail).map(|failure| RouteObservation {
+                profile_kind,
+                profile_identity,
+                observable: SourceObservable::Failed { failure },
+                stdout: output.stdout().to_vec(),
+                stderr: output.stderr().to_vec(),
+                detail: format!("direct Body-IR execution failed: {detail}"),
+                output_identity: digest_output(&[
+                    REPLACEMENT_FAILURE_IDENTITY_TAG,
+                    &detail,
+                    &crate::oven::digest_bytes(output.stdout()),
+                    &crate::oven::digest_bytes(output.stderr()),
+                ]),
+            });
+            (None, observation)
+        }
+        Err(error) => (None, Err(replacement_profile_unavailable(error))),
+    };
+    let (observation, unavailable_reason) = match observed {
+        Ok(observation) => (Some(observation), None),
+        Err(unavailable) => (None, Some(unavailable.reason)),
+    };
+    Ok(ReplacementRouteResult {
+        observation,
+        execution,
+        output,
+        unavailable_reason,
+    })
 }
 
 /// Fold a replacement-profile refusal into an unavailable reason that keeps the original source span.
@@ -804,28 +1231,49 @@ pub(crate) fn emit_legacy_rust(program: &str) -> Result<String, ShadowUnavailabl
 
 /// Turn one completed legacy process result into a comparable observation.
 ///
-/// A successful exit must carry the exact result frame; a failing exit must carry a classifiable failure. Neither
-/// the exit status alone nor the presence of output is treated as an answer.
+/// A successful exit must carry the separate exact typed report; a failing exit must carry a classifiable stderr
+/// diagnostic. Neither an exit status nor any program stream is read as a return value.
 pub(crate) fn observe_legacy_process(
     profile_kind: &str,
     profile_identity: &str,
     authority: &LegacyExecutionAuthority,
-    exit_code: Option<i32>,
-    stdout: &[u8],
-    stderr: &str,
+    process: &LegacyProcessEvidence,
+    result_kind: FunctionResultKind,
 ) -> Result<RouteObservation, ShadowUnavailable> {
-    let observable = if exit_code == Some(0) {
+    if let Some(reason) = result_transport_failure_reason(process.exit_code) {
+        return Err(ShadowUnavailable::new(reason));
+    }
+    let observable = if process.exit_code == Some(0) {
+        let report = process.result_report.as_deref().ok_or_else(|| {
+            ShadowUnavailable::new(
+                "the legacy process exited successfully but did not publish its source-authored result report",
+            )
+        })?;
         SourceObservable::Completed {
-            result: decode_framed_result(stdout)?,
+            result: decode_result_report(report, result_kind)?,
         }
     } else {
+        let stderr = std::str::from_utf8(&process.stderr).map_err(|error| {
+            ShadowUnavailable::new(format!(
+                "the failed legacy process wrote non-UTF-8 stderr, so this profile cannot classify its diagnostic: \
+                 {error}"
+            ))
+        })?;
         SourceObservable::Failed {
             failure: classify_legacy_failure(stderr)?,
         }
     };
+    let stdout_digest = crate::oven::digest_bytes(&process.stdout);
+    let stderr_digest = crate::oven::digest_bytes(&process.stderr);
+    let report_digest = process
+        .result_report
+        .as_deref()
+        .map(crate::oven::digest_bytes)
+        .unwrap_or_else(|| "none".to_string());
     let detail = format!(
-        "Oven-owned legacy process exited with {exit_code:?} under direct-rustc plan {}; stderr: {stderr:?}",
-        authority.direct_rustc_plan_identity
+        "Oven-owned legacy process exited with {:?} under direct-rustc plan {}; raw stdout {}, stderr {}, and \
+         result report {}",
+        process.exit_code, authority.direct_rustc_plan_identity, stdout_digest, stderr_digest, report_digest
     );
     let output_identity = digest_output(&[
         LEGACY_OUTPUT_IDENTITY_TAG,
@@ -833,15 +1281,35 @@ pub(crate) fn observe_legacy_process(
         authority.oven_build_unit_identity.as_str(),
         authority.direct_rustc_plan_identity.as_str(),
         authority.output_digest.as_str(),
+        &format!("{:?}", process.exit_code),
+        stdout_digest.as_str(),
+        stderr_digest.as_str(),
+        report_digest.as_str(),
         observable.describe().as_str(),
     ]);
     Ok(RouteObservation {
         profile_kind: profile_kind.to_string(),
         profile_identity: profile_identity.to_string(),
         observable,
+        stdout: process.stdout.clone(),
+        stderr: process.stderr.clone(),
         detail,
         output_identity,
     })
+}
+
+/// Recognize the generated wrapper's private report-publication statuses before a non-zero process is interpreted
+/// as a source failure from stderr.
+fn result_transport_failure_reason(exit_code: Option<i32>) -> Option<&'static str> {
+    match exit_code {
+        Some(RESULT_TRANSPORT_WRITE_EXIT_STATUS) => Some(
+            "the legacy process stopped because its source-authored result transport could not write the staged report",
+        ),
+        Some(RESULT_TRANSPORT_RENAME_EXIT_STATUS) => Some(
+            "the legacy process stopped because its source-authored result transport could not atomically rename the staged report",
+        ),
+        _ => None,
+    }
 }
 
 /// Classify a legacy process failure into a class the replacement route can also report.
