@@ -9,6 +9,7 @@ use crate::frontend::resolved_type_subst::{substitute_resolved_type, type_param_
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::freeze_const_type;
 use incan_core::lang::decorators::{self as core_decorators, DecoratorId};
+use incan_semantics_core::{CanonicalSymbolId, SemanticSourceTargetKind};
 
 use super::{
     FunctionBindingInfo, PartialProjectionInfo, PartialProjectionPreset, PartialProjectionTargetKind, TypeChecker,
@@ -192,6 +193,7 @@ impl TypeChecker {
     /// Register a module-level alias after concrete symbols have been collected.
     fn collect_alias(&mut self, alias: &AliasDecl, span: Span) {
         let target_name = alias.target.segments.join(".");
+        let target_identity = self.alias_target_identity(&alias.target.segments);
         let Some(kind) = self.alias_target_symbol_kind(&alias.target.segments) else {
             self.errors.push(CompileError::type_error(
                 format!("Alias '{}' targets unknown symbol '{}'", alias.name, target_name),
@@ -218,12 +220,49 @@ impl TypeChecker {
             }
         };
 
-        self.symbols.define(Symbol {
-            name: alias.name.clone(),
-            kind,
-            span,
-            scope: 0,
-        });
+        // RFC 083/RFC 120: an alias is a binding to the existing declaration, so it carries the target's
+        // identity — never a second identity minted for the alias spelling.
+        self.symbols.define_import_binding(
+            Symbol {
+                name: alias.name.clone(),
+                kind,
+                span,
+                scope: 0,
+            },
+            target_identity,
+        );
+    }
+
+    /// Resolve the RFC 120 identity an alias binding must carry, when resolution proves one.
+    ///
+    /// Single-segment targets take the identity of the module-scope symbol they name. Qualified targets resolve
+    /// through the same dependency-member path import resolution uses, so the alias lands on the declaring module
+    /// even through re-exports. An overload-set or otherwise unproven target yields `None` — the alias binding then
+    /// records no identity rather than an arbitrary or minted one.
+    fn alias_target_identity(&mut self, segments: &[String]) -> Option<CanonicalSymbolId> {
+        match segments {
+            [name] => {
+                let id = self.symbols.lookup(name)?;
+                self.symbols.identity_of(id).cloned()
+            }
+            [module_name, rest @ ..] => {
+                let member = rest.last()?;
+                let module_path = {
+                    let symbol = self.lookup_symbol(module_name)?;
+                    let SymbolKind::Module(info) = &symbol.kind else {
+                        return None;
+                    };
+                    if info.is_python {
+                        return None;
+                    }
+                    let mut module_path = info.path.clone();
+                    module_path.extend_from_slice(&rest[..rest.len().saturating_sub(1)]);
+                    module_path
+                };
+                self.dependency_member_identity(&ImportPath::simple(module_path), member)
+            }
+            [] => None,
+        }
     }
 
     /// Record the common metadata for any source binding that resolves to an overload set.
@@ -263,11 +302,18 @@ impl TypeChecker {
     ) {
         match kind {
             SymbolKind::Function(info) => {
+                let identity = self
+                    .type_info
+                    .declarations
+                    .resolved_import_identities
+                    .get(local_name)
+                    .cloned();
                 self.type_info.declarations.function_bindings.insert(
                     local_name.to_string(),
                     FunctionBindingInfo {
                         params: info.params.clone(),
                         return_type: info.return_type.clone(),
+                        identity,
                     },
                 );
             }
@@ -363,20 +409,23 @@ impl TypeChecker {
             return;
         };
 
-        self.symbols.define(Symbol {
-            name: partial.name.clone(),
-            kind: SymbolKind::Function(FunctionInfo {
-                params: params.clone(),
-                return_type: return_type.clone(),
-                is_async,
-                type_params,
-                type_param_bounds,
-                type_param_bound_details,
-                emitted_name: None,
-            }),
-            span,
-            scope: 0,
-        });
+        self.symbols.define_with_target_kind(
+            Symbol {
+                name: partial.name.clone(),
+                kind: SymbolKind::Function(FunctionInfo {
+                    params: params.clone(),
+                    return_type: return_type.clone(),
+                    is_async,
+                    type_params,
+                    type_param_bounds,
+                    type_param_bound_details,
+                    emitted_name: None,
+                }),
+                span,
+                scope: 0,
+            },
+            SemanticSourceTargetKind::Partial,
+        );
         self.type_info.record_partial_projection(PartialProjectionInfo {
             name: partial.name.clone(),
             target_path: partial.target.segments.clone(),
@@ -392,10 +441,18 @@ impl TypeChecker {
                 .collect(),
             external_library: None,
         });
-        self.type_info
-            .declarations
-            .function_bindings
-            .insert(partial.name.clone(), FunctionBindingInfo { params, return_type });
+        self.type_info.declarations.function_bindings.insert(
+            partial.name.clone(),
+            FunctionBindingInfo {
+                identity: Some(self.symbols.module_declaration_identity(
+                    &partial.name,
+                    SemanticSourceTargetKind::Partial,
+                    span,
+                )),
+                params,
+                return_type,
+            },
+        );
     }
 
     /// Resolve the callable surface that a top-level partial declaration projects from an already-resolved symbol.
@@ -580,17 +637,21 @@ impl TypeChecker {
             })
             .unwrap_or(ResolvedType::Unknown);
 
-        // Define as an immutable variable-like symbol for name resolution.
-        self.symbols.define(Symbol {
-            name: konst.name.clone(),
-            kind: SymbolKind::Variable(VariableInfo {
-                ty,
-                is_mutable: false,
-                is_used: false,
-            }),
-            span,
-            scope: 0,
-        });
+        // Define as an immutable variable-like symbol for name resolution. The identity category is stated
+        // explicitly: a `const` is not a body-local binding even though the table represents both as variables.
+        self.symbols.define_with_target_kind(
+            Symbol {
+                name: konst.name.clone(),
+                kind: SymbolKind::Variable(VariableInfo {
+                    ty,
+                    is_mutable: false,
+                    is_used: false,
+                }),
+                span,
+                scope: 0,
+            },
+            SemanticSourceTargetKind::Const,
+        );
     }
 
     /// Register a module-level static binding (first pass).
@@ -986,12 +1047,17 @@ impl TypeChecker {
         if self.symbols.lookup(name).is_some() {
             return;
         }
-        self.symbols.define(Symbol {
-            name: name.to_string(),
-            kind: SymbolKind::Trait(info),
-            span,
-            scope: 0,
-        });
+        // RFC 120: this binding names a dependency's trait declaration; its identity is unproven here rather than
+        // minted from the referencing module.
+        self.symbols.define_import_binding(
+            Symbol {
+                name: name.to_string(),
+                kind: SymbolKind::Trait(info),
+                span,
+                scope: 0,
+            },
+            None,
+        );
     }
 
     /// Register a trait declaration with its method signatures, supertraits, and requirements.
@@ -1563,6 +1629,11 @@ impl TypeChecker {
         let binding = FunctionBindingInfo {
             params: params.clone(),
             return_type: return_type.clone(),
+            identity: Some(self.symbols.module_declaration_identity(
+                &func.name,
+                SemanticSourceTargetKind::Function,
+                span,
+            )),
         };
         self.type_info
             .declarations
@@ -1605,6 +1676,9 @@ impl TypeChecker {
                     self.type_info
                         .record_function_overloads(func.name.clone(), overloads.clone());
                     existing_symbol.kind = SymbolKind::FunctionOverloads(overloads);
+                    // The symbol no longer names one declaration, so its minted identity must go: each overload
+                    // keeps its own span-keyed identity on `function_bindings_by_span`.
+                    self.symbols.clear_identity(existing_id);
                     return;
                 }
                 SymbolKind::FunctionOverloads(overloads) => {

@@ -2304,12 +2304,15 @@ impl TypeChecker {
     fn check_type_alias(&mut self, alias: &TypeAliasDecl) {
         self.symbols.enter_scope(ScopeKind::Block);
         for param in &alias.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
         self.validate_type_param_bound_type_names(&alias.type_params);
         let _ = self.resolve_type_checked(&alias.target);
@@ -3193,12 +3196,15 @@ impl TypeChecker {
 
         // Define type parameters
         for param in &model.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin), // Type var placeholder
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
 
         // Check traits exist and are satisfied (models can adopt storage-free traits, RFC 000).
@@ -3595,12 +3601,15 @@ impl TypeChecker {
 
         // Define type parameters before resolving class fields, trait adoptions, and method signatures.
         for param in &class.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
 
         self.validate_decorators_rejecting_user_defined(&class.decorators, "class");
@@ -3832,12 +3841,15 @@ impl TypeChecker {
         // scope and revisit every declaration-only surface during the semantic pass.
         let trait_type_params: Vec<String> = tr.type_params.iter().map(|param| param.name.clone()).collect();
         for param in &tr.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
         self.validate_type_param_bound_type_names(&tr.type_params);
         for supertrait in &tr.traits {
@@ -4085,12 +4097,15 @@ impl TypeChecker {
         self.symbols.enter_scope(ScopeKind::Block);
 
         for param in &nt.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
         self.validate_type_param_bound_type_names(&nt.type_params);
 
@@ -4416,12 +4431,15 @@ impl TypeChecker {
         let derives = self.extract_derive_names(&en.decorators);
 
         for param in &en.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
 
         let mut resolved_trait_adoptions = Vec::new();
@@ -5499,12 +5517,15 @@ impl TypeChecker {
 
         // Define type parameters so explicit generic bounds are visible in function-level type resolution.
         for param in &func.type_params {
-            self.symbols.define(Symbol {
-                name: param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
         let active_bounds = self.type_param_bound_details_from_type_params(&func.type_params);
         self.current_type_param_bound_details.push(active_bounds);
@@ -5515,16 +5536,19 @@ impl TypeChecker {
         // binding. The function body still receives its ordinary parameter locals below.
         for (param, resolved_ty) in func.params.iter().zip(resolved_param_types) {
             let ty = local_type_for_param(param.node.kind, resolved_ty);
-            self.symbols.define(Symbol {
-                name: param.node.name.clone(),
-                kind: SymbolKind::Variable(VariableInfo {
-                    ty,
-                    is_mutable: false,
-                    is_used: false,
-                }),
-                span: param.span,
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.node.name.clone(),
+                    kind: SymbolKind::Variable(VariableInfo {
+                        ty,
+                        is_mutable: false,
+                        is_used: false,
+                    }),
+                    span: param.span,
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::Parameter,
+            );
         }
 
         let return_type = self.resolve_type_checked(&func.return_type);
@@ -5752,24 +5776,30 @@ impl TypeChecker {
         });
 
         for type_param in owner_type_params {
-            self.symbols.define(Symbol {
-                name: type_param.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: type_param.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
 
-        self.symbols.define(Symbol {
-            name: "self".to_string(),
-            kind: SymbolKind::Variable(VariableInfo {
-                ty: self_ty.clone(),
-                is_mutable: false,
-                is_used: true,
-            }),
-            span: Span::default(),
-            scope: 0,
-        });
+        self.symbols.define_with_target_kind(
+            Symbol {
+                name: "self".to_string(),
+                kind: SymbolKind::Variable(VariableInfo {
+                    ty: self_ty.clone(),
+                    is_mutable: false,
+                    is_used: true,
+                }),
+                span: Span::default(),
+                scope: 0,
+            },
+            SemanticSourceTargetKind::Receiver,
+        );
 
         let return_type = self.resolve_type_checked(&property.return_type);
         let effective_return_type = Self::concretize_self_type_in_annotation(&return_type, &self_ty);
@@ -5815,22 +5845,28 @@ impl TypeChecker {
 
         // Define owner type parameters so generic wrappers can use them in bodies and annotations.
         for type_param in owner_type_params {
-            self.symbols.define(Symbol {
-                name: type_param.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: type_param.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
 
         // Define method type parameters so generic methods can use them in signatures and bodies.
         for type_param in &method.type_params {
-            self.symbols.define(Symbol {
-                name: type_param.name.clone(),
-                kind: SymbolKind::Type(TypeInfo::Builtin),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: type_param.name.clone(),
+                    kind: SymbolKind::Type(TypeInfo::Builtin), // Type-var placeholder
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::GenericBinder,
+            );
         }
         if let Some(target) = &method.trait_target {
             let trait_name = target.node.name.as_str();
@@ -5852,16 +5888,19 @@ impl TypeChecker {
             if is_mutable {
                 self.mutable_bindings.insert("self".to_string());
             }
-            self.symbols.define(Symbol {
-                name: "self".to_string(),
-                kind: SymbolKind::Variable(VariableInfo {
-                    ty: self_ty.clone(),
-                    is_mutable,
-                    is_used: true,
-                }),
-                span: Span::default(),
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: "self".to_string(),
+                    kind: SymbolKind::Variable(VariableInfo {
+                        ty: self_ty.clone(),
+                        is_mutable,
+                        is_used: true,
+                    }),
+                    span: Span::default(),
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::Receiver,
+            );
         }
         let is_classmethod = Self::method_has_decorator(method, DecoratorId::ClassMethod);
         let previous_classmethod_self_ty = self.current_classmethod_self_ty.take();
@@ -5880,16 +5919,19 @@ impl TypeChecker {
                 param.node.default.is_some(),
             ));
             let ty = local_type_for_param(param.node.kind, resolved_ty);
-            self.symbols.define(Symbol {
-                name: param.node.name.clone(),
-                kind: SymbolKind::Variable(VariableInfo {
-                    ty,
-                    is_mutable: false,
-                    is_used: false,
-                }),
-                span: param.span,
-                scope: 0,
-            });
+            self.symbols.define_with_target_kind(
+                Symbol {
+                    name: param.node.name.clone(),
+                    kind: SymbolKind::Variable(VariableInfo {
+                        ty,
+                        is_mutable: false,
+                        is_used: false,
+                    }),
+                    span: param.span,
+                    scope: 0,
+                },
+                SemanticSourceTargetKind::Parameter,
+            );
         }
 
         let return_type = self.resolve_type_checked(&method.return_type);
@@ -5898,6 +5940,11 @@ impl TypeChecker {
             FunctionBindingInfo {
                 params: checked_params,
                 return_type: return_type.clone(),
+                identity: Some(self.symbols.member_declaration_identity(
+                    &method.name,
+                    SemanticSourceTargetKind::Method,
+                    method_span,
+                )),
             },
         );
         let effective_return_type = Self::concretize_self_type_in_annotation(&return_type, &self_ty);

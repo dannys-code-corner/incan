@@ -63,26 +63,6 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         ))
     }
 
-    /// Build the RFC 120 identity of a declaration *this* module owns, from the declaration the call selected.
-    ///
-    /// The span is the one the caller already resolved to build [`DirectCallDeclaration::direct_call_id`], so the two
-    /// facts on a `NamedCallableTarget` are derived from one decision and cannot name different declarations. That
-    /// matters because locality must not be inferred from the recorded source target: an import binding of the same
-    /// spelling wins in `TypeChecker::source_target_for_symbol` regardless of what the call actually bound, so a local
-    /// declaration shadowed by a same-name import would otherwise be given the *import's* identity.
-    pub(super) fn local_callable_identity(
-        &self,
-        declared_name: &str,
-        declaration_span: ast::Span,
-    ) -> CanonicalSymbolId {
-        CanonicalSymbolId::module_declaration(
-            self.module_path.to_vec(),
-            declared_name,
-            SemanticSourceTargetKind::Function,
-            HirSourceSpan::new(declaration_span.start, declaration_span.end),
-        )
-    }
-
     /// Return the RFC 120 identity of an imported callable, when import resolution proved one.
     ///
     /// Only reached when this module declares no function of that spelling, so there is no local declaration for an
@@ -170,7 +150,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 builtin: None,
                 // The identity anchors to the declaration span, so the selected overload is as nameable as any other
                 // declaration; it is the *spelling* that cannot separate them, and the spelling is not the identity.
-                canonical: Some(self.local_callable_identity(name, *selected_span)),
+                // Consumed from the declaration's checked binding — minted once by the typechecker at the
+                // declaration site, never re-derived here from module path plus spelling.
+                canonical: binding.identity.clone(),
             });
         }
 
@@ -195,7 +177,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 declaration_span.end,
             )),
             builtin: None,
-            canonical: Some(self.local_callable_identity(name, *declaration_span)),
+            // Consumed from the declaration's checked binding — minted once by the typechecker at the declaration
+            // site, never re-derived here from module path plus spelling.
+            canonical: binding.identity.clone(),
         })
     }
 

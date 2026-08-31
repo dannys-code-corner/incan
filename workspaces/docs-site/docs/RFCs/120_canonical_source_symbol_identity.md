@@ -1,6 +1,6 @@
 # RFC 120: canonical source symbol identity
 
-- **Status:** Planned
+- **Status:** In Progress
 - **Created:** 2026-08-19
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -285,6 +285,47 @@ Define and emit the versioned `incan-v1` payload for every linker-visible Incan-
 ### Cutover conformance
 
 The identity guarantees that must not regress at the v0.6 backend cutover belong in the backend-parity corpus rather than only in frontend unit tests, so a replacement backend cannot silently lose them. The matrix worth pinning is the cross-product of binding entry (local, import, alias, re-export), namespace (lexical, member, path), and scope nesting (module, function, block), plus explicit shadowing with `let` and with `mut`, one generic-binder case, and #1116's builtin contract: a rebound builtin-function spelling and the same name reached through `std.builtins.<name>` must carry two different canonical identities across the cutover. It also includes a release-artifact decode of the `incan-v1` payload after v0 mangling and demangling, plus classification fixtures proving non-Incan frames are never reported as source declarations.
+
+## Progress Checklist
+
+Items tick as their PRs merge. The slice structure above remains the governing map; this checklist is its trackable projection.
+
+### Predecessors (not owned by this RFC)
+
+- [x] #1132 statement-level tuple unpack lands first.
+- [x] #1072 assignment semantics, both halves, land together.
+
+### Identity core (Slices 1–2)
+
+- [ ] One compiler-owned identity mint at symbol definition, covering module declarations, locals, consts, statics, parameters, receivers, and generic binders, with scope discriminants.
+- [ ] Import, alias, and re-export bindings carry their resolved target's identity; unproven bindings carry none.
+- [ ] Builtin registry identities: every alias spelling records the one canonical registry identity.
+- [ ] Reference-side identity recording keyed by reference span, with the string-shaped source target retained as a projection.
+- [ ] Method declarations carry member-namespace identities; field/property declaration identities generalized.
+- [ ] Conformance: sibling-scope distinctness, alias/re-export equality, `let`/`mut` shadowing, builtin-rebinding distinctness, duplicate-declaration identity distinctness.
+
+### One shared binding mechanism (Slice 3)
+
+- [ ] Single binding-registration/collision entry point; duplicate declarations and imports become diagnostics.
+- [ ] `duplicate_alias`, `duplicate_trait_instantiation`, and the CLI-owned `duplicate_library_export` checks migrate to call sites of the shared mechanism.
+- [ ] Rebound builtin-function spellings keep reporting nothing.
+
+### Consumers (Slices 4–8)
+
+- [ ] HIR declarations carry canonical identity; single-binding imports carry their target's identity. (Identity fact delivered; the id-derivation rework and per-binding import declarations remain.)
+- [ ] Body IR callable targets consume the typechecker-minted identity instead of re-deriving one. (Delivered for direct calls; local resolution by identity remains.)
+- [ ] Body IR resolves locals by identity so no resolver-resolved reference degrades to an external local.
+- [ ] Diagnostics name canonical declaration sites regardless of the referencing binding.
+- [ ] LSP definition/references/hover resolve through identity.
+- [ ] Codegraph keys records on identity rather than the string triple.
+
+### Recoverable projection (Slice 9)
+
+- [ ] `incan-v1` emitted-name payload with DD-0002 toolchain record and decode fixtures (#1174).
+
+### Cutover conformance
+
+- [ ] Identity matrix rows land in the backend-parity corpus.
 
 ## Design decisions
 

@@ -783,6 +783,40 @@ impl CanonicalSymbolId {
             _ => None,
         }
     }
+
+    /// Render a deterministic, compact single-line spelling for maintainer-facing snapshots.
+    ///
+    /// This is a projection of the identity for humans; nothing may compare or dispatch on it. The shape is
+    /// `<kind>:<origin>::<name>[#<scope>]@<start>..<end>`, with member- and path-namespace identities prefixed by
+    /// their namespace so a member and a lexical binding sharing a spelling render visibly differently.
+    pub fn render_compact(&self) -> String {
+        let origin = match &self.origin {
+            SymbolOrigin::Module(path) => module_identity_for_path(path),
+            SymbolOrigin::Package { library, module_path } => {
+                let mut parts = vec![format!("pub::{library}")];
+                parts.extend(module_path.iter().cloned());
+                parts.join("::")
+            }
+            SymbolOrigin::RustCrate(path) => format!("rust::{}", path.join("::")),
+            SymbolOrigin::Builtin => "builtin".to_string(),
+        };
+        let namespace = match self.namespace {
+            SymbolNamespace::OrdinaryLexical => "",
+            SymbolNamespace::Member => "member/",
+            SymbolNamespace::ModulePath => "path/",
+        };
+        let scope = self
+            .scope_discriminant
+            .map(|ScopeDiscriminant(scope)| format!("#{scope}"))
+            .unwrap_or_default();
+        format!(
+            "{namespace}{}:{origin}::{}{scope}@{}..{}",
+            self.kind.as_str(),
+            self.declaration_name,
+            self.declaration_span.start,
+            self.declaration_span.end
+        )
+    }
 }
 
 impl fmt::Display for SemanticSourceTargetKind {

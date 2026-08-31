@@ -227,7 +227,6 @@ fn build_body_ir_module_v0_with_provider_operations(
         local_fieldless_enum_declarations: &local_fieldless_enum_declarations,
         local_value_enum_declarations: &local_value_enum_declarations,
         module_identity: &module_identity,
-        module_path,
         provider_operations,
     };
     let mut bodies = program
@@ -362,7 +361,6 @@ struct BodyIrLoweringFacts<'type_info, 'source> {
     local_fieldless_enum_declarations: &'source LocalFieldlessEnumDeclarations,
     local_value_enum_declarations: &'source LocalValueEnumDeclarations,
     module_identity: &'source str,
-    module_path: &'source [String],
     /// Provider operations this compilation admits, keyed by canonical identity rather than by any spelling.
     provider_operations: &'source ProviderOperationCatalog,
 }
@@ -459,8 +457,6 @@ struct BodyBuilder<'type_info, 'source> {
     local_value_enum_declarations: &'source LocalValueEnumDeclarations,
     /// Owning module identity used to construct a source-span declaration identity without consulting a backend.
     module_identity: &'source str,
-    /// Owning module path, used to build the RFC 120 origin of a declaration this module owns.
-    module_path: &'source [String],
     /// Provider operations this compilation admits, consulted only by canonical identity (see `provider_ops`).
     provider_operations: &'source ProviderOperationCatalog,
     /// Checked return type of the function/method currently being lowered, used only to retain `?` error routing.
@@ -513,7 +509,6 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             local_fieldless_enum_declarations: lowering_facts.local_fieldless_enum_declarations,
             local_value_enum_declarations: lowering_facts.local_value_enum_declarations,
             module_identity: lowering_facts.module_identity,
-            module_path: lowering_facts.module_path,
             provider_operations: lowering_facts.provider_operations,
             owner_return_type,
             locals: Vec::new(),
