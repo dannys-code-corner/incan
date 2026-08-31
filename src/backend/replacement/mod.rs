@@ -22,6 +22,7 @@
 //! this module supplies it with evaluated operands and refuses an unresolved, inactive, or unauthorized operation
 //! at the original source span.
 
+pub mod hashed;
 pub mod provider;
 
 use std::{
