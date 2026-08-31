@@ -39,7 +39,7 @@ This document decides where that ownership boundary sits concretely, so `build.r
 
 ### `build.rs` is already a de facto API, just filed under the wrong module
 
-25 functions in `build.rs` are already `pub(crate)`, and 12 of them are already called from outside `build.rs` today — from `src/cli/commands/lock.rs`, `src/cli/commands/oven.rs`, and `src/cli/test_runner/execution.rs`:
+25 functions in `build.rs` are already `pub(crate)`, and 13 of them are already called from outside `build.rs` today — from `src/cli/commands/lock.rs`, `src/cli/commands/oven.rs`, and `src/cli/test_runner/execution.rs`:
 
 | Function | Line | Already called from |
 |---|---|---|
@@ -57,7 +57,7 @@ This document decides where that ownership boundary sits concretely, so `build.r
 | `oven_native_provider_records` | 3667 | `execution.rs:2797` |
 | `load_current_project_registry_source_authorities` | 8147 | `execution.rs:89` |
 
-These are the five functions the issue names verbatim, plus their seven direct dependents. The relocation this document decides on is exactly these signatures moving module, not a redesign — the call sites already exist and already cross a module boundary; only *which* module owns the callee changes.
+These are the five functions the issue names verbatim, plus their eight direct dependents. The relocation this document decides on is exactly these signatures moving module, not a redesign — the call sites already exist and already cross a module boundary; only *which* module owns the callee changes.
 
 ### Function inventory: what is Oven-owned vs. CLI-only
 
@@ -101,7 +101,7 @@ The Oven-owned functions and types inventoried above move into a new submodule o
 
 ### API surface
 
-The target API is the same 12 already-`pub(crate)`, already-cross-file-consumed functions in the table above, relocated with their signatures preserved wherever possible, plus the supporting functions they depend on (the ~190-function Oven-owned bucket). This is deliberately not a from-scratch API redesign: the call sites already exist and already cross a module boundary from three different files (`lock.rs`, `oven.rs`, `execution.rs`); the follow-up changes *which* module owns the callee, not the call shape at each existing site. Concretely, callers migrate from:
+The target API is the same 13 already-`pub(crate)`, already-cross-file-consumed functions in the table above, relocated with their signatures preserved wherever possible, plus the supporting functions they depend on (the ~190-function Oven-owned bucket). This is deliberately not a from-scratch API redesign: the call sites already exist and already cross a module boundary from three different files (`lock.rs`, `oven.rs`, `execution.rs`); the follow-up changes *which* module owns the callee, not the call shape at each existing site. Concretely, callers migrate from:
 
 ```rust
 use crate::cli::commands::build::{select_oven_direct_rustc_plan, oven_build_unit_inputs, /* ... */};
@@ -133,7 +133,7 @@ Diagnostics (rustc/build failure formatting, user-facing text) stay CLI-side: `c
 
 ### Migration seams (phased, for the follow-up issue to sequence)
 
-1. Move the ~190 Oven-owned functions and their ad hoc types from `build.rs` into `src/oven/plan.rs`, preserving the 12 already-`pub(crate)` signatures so `lock.rs`/`oven.rs`/`execution.rs` need only an import-path change at first, not a behavior change. Domain error type introduced here.
+1. Move the ~190 Oven-owned functions and their ad hoc types from `build.rs` into `src/oven/plan.rs`, preserving the 13 already-`pub(crate)` signatures so `lock.rs`/`oven.rs`/`execution.rs` need only an import-path change at first, not a behavior change. Domain error type introduced here.
 2. `execution.rs` deletes `oven_test_build_unit_inputs` and calls the relocated `build_unit_inputs` directly, mapping the new domain error to its existing `Result<_, String>` convention at the call site.
 3. `build_file_report`/`build_library_report` are split so plan-select/materialize/bake/receipt calls go through the new API and only `BuildReport` field assembly remains local to `build.rs`.
 4. `promoted_oven_test_dependencies` (currently only in the named-functions table) and any remaining direct `src/oven` primitive imports in `execution.rs` (`runtime_build_unit_inputs`, `direct_rustc_compile_environment`, `OvenStore`, `OvenStoreLimits`) are reconciled so `execution.rs` consistently goes through the plan API rather than sometimes bypassing it — this closes the inconsistency noted in [Current state](#current-state).
@@ -149,10 +149,10 @@ Per #1094's explicit hard boundary, the API's request/response shape must accept
 
 ## Follow-up work
 
-- **[#1266](https://github.com/encero-systems/incan/issues/1266)** (new, narrowly scoped, independently closable, filed as a sub-issue of #1094): relocate the ~190 Oven-owned functions and their types from `build.rs` into `src/oven/plan.rs` per [Migration seams](#migration-seams-phased-for-the-follow-up-issue-to-sequence) above, preserving the 12 already-`pub(crate)` call sites' signatures and introducing the shared domain error type. See the issue itself for its full acceptance contract.
+- **[#1266](https://github.com/encero-systems/incan/issues/1266)** (new, narrowly scoped, independently closable, filed as a sub-issue of #1094): relocate the ~190 Oven-owned functions and their types from `build.rs` into `src/oven/plan.rs` per [Migration seams](#migration-seams-phased-for-the-follow-up-issue-to-sequence) above, preserving the 13 already-`pub(crate)` call sites' signatures and introducing the shared domain error type. See the issue itself for its full acceptance contract.
 - **[#1095](https://github.com/encero-systems/incan/issues/1095)** (existing, not duplicated here): already scoped to apply this decision's API to `execution.rs` and remove its duplicated build-unit construction once the code-move issue above lands. No change needed to its own scope text; it is now unblocked by this decision.
 - **Not filed as part of this decision**: the provider-metadata projection block (`build.rs:10695`–`11520`, `CompiledProviderMetadata`) and `LibraryReexportResolver` (`build.rs:3051`–`3251`) are explicitly out of scope for the Oven plan/build-unit extraction — they are provider/library-manifest semantic logic that happens to sit in `build.rs`, not Oven plan/receipt logic. No existing #1034 sub-issue covers their placement. Flagged for the maintainer to decide whether a separate ownership decision is warranted; not unilaterally filed here since it is tangential to #1094's scope.
 
 ## #1010 readiness
 
-[#1010](https://github.com/encero-systems/incan/issues/1010)'s plan step 1 currently reads "Sequence the command work as follows: 1. #1094 and #1097 decide and extract the shared Oven plan/build-unit API..." Once this document and its follow-up code-move issue (#1266) are accepted, #1010's dependency wording should record that the *decision* half of that step is complete for the `build.rs`/`execution.rs` axis (the boundary is `src/oven/plan.rs`, API surface is the 12-function table above plus supporting functions, domain error is a new `thiserror` enum), while the *extraction* half remains tracked by #1266 and #1095. #1097 (the `commands/common.rs` decomposition decision) is a separate, still-open decision this document does not resolve.
+[#1010](https://github.com/encero-systems/incan/issues/1010)'s plan step 1 currently reads "Sequence the command work as follows: 1. #1094 and #1097 decide and extract the shared Oven plan/build-unit API..." Once this document and its follow-up code-move issue (#1266) are accepted, #1010's dependency wording should record that the *decision* half of that step is complete for the `build.rs`/`execution.rs` axis (the boundary is `src/oven/plan.rs`, API surface is the 13-function table above plus supporting functions, domain error is a new `thiserror` enum), while the *extraction* half remains tracked by #1266 and #1095. #1097 (the `commands/common.rs` decomposition decision) is a separate, still-open decision this document does not resolve.
