@@ -45,7 +45,7 @@ The `v0.5.0` source is a frozen migration baseline, not the beginning of a versi
 | `language.control-flow-complete` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-language.control-flow-complete | NonGreenShadowUnavailable | - | Planned | #1154 |
 | `language.match-and-patterns` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-language.match-and-patterns | NonGreenShadowUnavailable | - | Planned | #1154 |
 | `language.numeric-and-scalar` | Checked | Unknown | Represented | Executable | registered replacement-body-v0-001, replacement-body-v0-002, replacement-body-v0-003, replacement-body-v0-005, replacement-body-v0-022 | NonGreenShadowUnavailable | replacement-body-v0-001: ComparedMatch, replacement-body-v0-022: ComparedMatch | Preserved | - |
-| `language.numeric-complete` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-language.numeric-complete | NonGreenShadowUnavailable | - | Planned | #1154 |
+| `language.numeric-complete` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-language.numeric-complete | NonGreenShadowUnavailable | - | Planned | #1279 |
 | `language.strings-and-format` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-language.strings-and-format | NonGreenShadowUnavailable | - | Planned | #1101 |
 | `module.identity-and-aliases` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-module.identity-and-aliases | NonGreenShadowUnavailable | - | Planned | #1042 |
 | `nominal.models-unions-enums` | Checked | Unknown | Partial | BlockedByRequirements | planned parity-987-plan-nominal.models-unions-enums | NonGreenShadowUnavailable | - | Planned | #1154 |
@@ -166,9 +166,10 @@ Every planned feature below has a currently open mechanism owner. #1146 is compl
 - #1042: `module.identity-and-aliases`
 - #1101: `iteration.user-and-fallible`, `language.strings-and-format`
 - #1152: `call.named-and-variadic`, `call.partial-binding`, `call.stored-callables`, `generator.expressions`, `generator.functions`, `iteration.protocol-and-adapters`
-- #1154: `error.result-and-try`, `language.aggregates-and-projections`, `language.control-flow-complete`, `language.match-and-patterns`, `language.numeric-complete`, `nominal.models-unions-enums`
+- #1154: `error.result-and-try`, `language.aggregates-and-projections`, `language.control-flow-complete`, `language.match-and-patterns`, `nominal.models-unions-enums`
 - #1155: `async.tasks`
 - #1156: `runtime.std-data-services`, `runtime.std-hosted-services`, `runtime.std-observability`
+- #1279: `language.numeric-complete`
 
 ## Probe and ownership obligations
 
@@ -419,10 +420,10 @@ The full numeric contract preserves widths, literals, conversions, overflow, dec
   - Negative contract: Reject unsupported variants with an intentional source-owned diagnostic and no silent legacy fallback.
 - Source/AST: Observed `src/replacement_compatibility/migration_baselines/v0.5.0/capabilities.incn::NumericTypeSystem`
 - Typechecker: Observed `src/frontend/typechecker/check_expr/ops.rs::fn check_binary`
-- Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1154
-- Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1154
-- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1154: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
-- Blocker/migration: The current direct profile is intentionally scalar-bounded; #1154 owns the shared direct value model required for remaining numeric forms.
+- Body IR: Planned `src/frontend/body_ir.rs::fn lower_binary`; owner #1279
+- Replacement executor: Planned `src/backend/replacement/mod.rs::fn evaluate_binary`; owner #1279
+- Aggregate comparison: unavailable; completed comparison infrastructure #1146 at Observed `tests/support/parity_corpus.rs::NonGreenShadowUnavailable`; outstanding evidence owner #1279: The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized.
+- Blocker/migration: The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms.
 
 ### `language.strings-and-format`
 

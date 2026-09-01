@@ -1,4 +1,4 @@
-//! RED-first comparison coverage for canonical scalar-conversion failures (#1249).
+//! Comparison coverage for canonical scalar-conversion success and failure behavior (#1249, #1278).
 //!
 //! Run with: `cargo test --test replacement_scalar_conversion_shadow_tests`
 
@@ -26,11 +26,11 @@ def convert() -> str:
     integer = int(42)
     true_int = int(true)
     false_int = int(false)
-    parsed = int("42")
+    parsed = int("1_000")
     truncated = int(3.9)
     widened = float(10)
     float_identity = float(3.14)
-    float_parsed = float("3.14")
+    float_parsed = float("1_000.50")
     return f"{str(integer)} {str(true)} {str(false)} {str('text')} {str(float_identity)} {true_int} {false_int} {parsed} {truncated} {widened} {float_identity} {float_parsed}"
 "#;
 
@@ -54,10 +54,10 @@ fn route_evidence(comparison: &ShadowComparison) -> Result<(&RouteEvidence, &Rou
     }
 }
 
-/// Conversion payload text must not be reclassified by older assertion/overflow/division substring rules.
+/// Conversion failures retain their canonical class and original input on both execution routes.
 #[test]
-fn scalar_conversion_failure_keeps_its_canonical_class_before_legacy_substring_heuristics()
--> Result<(), Box<dyn std::error::Error>> {
+fn scalar_conversion_failures_keep_their_canonical_class_and_original_input() -> Result<(), Box<dyn std::error::Error>>
+{
     if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
         eprintln!("skipping: {reason}");
         return Ok(());
@@ -75,6 +75,8 @@ fn scalar_conversion_failure_keeps_its_canonical_class_before_legacy_substring_h
             "conversion-float",
             "float",
         ),
+        (INT_CONVERSION_FAILURE_SRC, "1__000", "conversion-int", "int"),
+        (FLOAT_CONVERSION_FAILURE_SRC, "1_000._50", "conversion-float", "float"),
     ] {
         let workspace = tempfile::tempdir()?;
         let profile = ShadowComparisonProfile::new(source, "parse", vec![ReplacementValue::Str(input.to_string())]);
@@ -140,7 +142,7 @@ fn every_admitted_scalar_conversion_pair_matches_the_native_route() -> Result<()
     let expected = SourceObservable::Completed {
         result: TypedFunctionResult {
             kind: FunctionResultKind::Str,
-            value: "42 true false text 3.14 1 0 42 3 10 3.14 3.14".to_string(),
+            value: "42 true false text 3.14 1 0 1000 3 10 3.14 1000.5".to_string(),
         },
     };
     assert_eq!(legacy.observation.observable, expected);

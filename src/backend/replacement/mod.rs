@@ -39,6 +39,7 @@ use incan_core::{
     errors::IncanError,
     lang::surface::constructors::{ConstructorId, as_str as constructor_name},
     lang::types::collections::{self, CollectionTypeId},
+    numeric_strings::{parse_float_string, parse_int_string},
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
@@ -6035,20 +6036,18 @@ fn binary_float_literal_value(repr: &str, span: HirSourceSpan) -> Result<Replace
         .map_err(|_| unsupported("binary float literal outside the direct f64 carrier", span))
 }
 
-/// Execute the legacy `int_from_str` parse policy without exposing its panic-based API to direct execution.
+/// Execute the shared `int(str)` policy without exposing the native route's panic-based API to direct execution.
 fn parse_int_conversion(value: &str, span: HirSourceSpan) -> Result<ReplacementValue, ReplacementExecutionError> {
-    value
-        .parse::<i64>()
+    parse_int_string(value)
         .map(ReplacementValue::Int)
-        .map_err(|_| runtime_failure(IncanError::cannot_convert_to_int(value).to_string(), span))
+        .ok_or_else(|| runtime_failure(IncanError::cannot_convert_to_int(value).to_string(), span))
 }
 
-/// Execute the legacy `float_from_str` parse policy without changing runtime input spelling.
+/// Execute the shared `float(str)` policy while retaining the original input spelling in any diagnostic.
 fn parse_float_conversion(value: &str, span: HirSourceSpan) -> Result<ReplacementValue, ReplacementExecutionError> {
-    value
-        .parse::<f64>()
+    parse_float_string(value)
         .map(ReplacementValue::Float)
-        .map_err(|_| runtime_failure(IncanError::cannot_convert_to_float(value).to_string(), span))
+        .ok_or_else(|| runtime_failure(IncanError::cannot_convert_to_float(value).to_string(), span))
 }
 
 /// Convert only scalar/unit Body-IR constants to a direct pattern comparison value.

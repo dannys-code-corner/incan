@@ -4893,7 +4893,7 @@
               "status": "Planned",
               "repository_path": "src/frontend/body_ir.rs",
               "selector": "fn lower_binary",
-              "owner_issue": 1154,
+              "owner_issue": 1279,
               "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
             },
             "replacement_executor": {
@@ -4901,7 +4901,7 @@
               "status": "Planned",
               "repository_path": "src/backend/replacement/mod.rs",
               "selector": "fn evaluate_binary",
-              "owner_issue": 1154,
+              "owner_issue": 1279,
               "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
             },
             "parity_corpus": {
@@ -4933,7 +4933,7 @@
                 },
                 "outstanding_evidence": {
                   "Scheduled": {
-                    "owner_issue": 1154,
+                    "owner_issue": 1279,
                     "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
                   }
                 }
@@ -4943,8 +4943,8 @@
           }
         },
         "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "The current direct profile is intentionally scalar-bounded; #1154 owns the shared direct value model required for remaining numeric forms."
+        "owner_issue": 1279,
+        "migration_or_blocker": "The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms."
       },
       {
         "id": "language.strings-and-format",

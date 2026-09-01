@@ -138,9 +138,9 @@ fn selected_builtin_argument_type(
 fn replacement_executes_checked_unary_scalar_conversions() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> str:
-  parsed_int = int("42")
+  parsed_int = int("1_000")
   bool_int = int(true)
-  parsed_float = float("3.14")
+  parsed_float = float("1_000.50")
   widened_float = float(10)
   truncated_float = int(3.9)
   return f"{str(parsed_int)} {bool_int} {parsed_float} {widened_float} {truncated_float}"
@@ -148,7 +148,7 @@ def main() -> str:
     let module = lower_typed_body_ir(source)?;
     let execution = execute_free_function(&module, "main", &[])?;
 
-    assert_eq!(execution.value, ReplacementValue::Str("42 1 3.14 10 3".to_string()));
+    assert_eq!(execution.value, ReplacementValue::Str("1000 1 1000.5 10 3".to_string()));
     assert!(execution.emitted_output().is_empty());
     Ok(())
 }
@@ -164,8 +164,11 @@ def parse_int() -> int:
 def parse_float() -> float:
   return float("AssertionError overflow division by zero")
 
-def parse_float_with_underscores() -> float:
-  return float("1_000.50")
+def parse_int_with_invalid_separators() -> int:
+  return int("1__000")
+
+def parse_float_with_invalid_separators() -> float:
+  return float("1_000._50")
 "#;
     let module = lower_typed_body_ir(source)?;
     for (body_name, call, expected_detail) in [
@@ -180,9 +183,14 @@ def parse_float_with_underscores() -> float:
             "ValueError: cannot convert 'AssertionError overflow division by zero' to float",
         ),
         (
-            "parse_float_with_underscores",
-            "float(\"1_000.50\")",
-            "ValueError: cannot convert '1_000.50' to float",
+            "parse_int_with_invalid_separators",
+            "int(\"1__000\")",
+            "ValueError: cannot convert '1__000' to int",
+        ),
+        (
+            "parse_float_with_invalid_separators",
+            "float(\"1_000._50\")",
+            "ValueError: cannot convert '1_000._50' to float",
         ),
     ] {
         let error = match execute_free_function(&module, body_name, &[]) {
@@ -210,17 +218,20 @@ def parse_float_with_underscores() -> float:
     Ok(())
 }
 
-/// Source float literals normalize lexer-provided numeric values, unlike strings passed to the native parser.
+/// Source float literals and runtime strings share the language's valid underscore-separator behavior.
 #[test]
-fn replacement_normalizes_ordinary_float_literal_spelling_but_not_string_parser_input()
--> Result<(), Box<dyn std::error::Error>> {
+fn replacement_normalizes_ordinary_float_literal_and_runtime_string_spelling() -> Result<(), Box<dyn std::error::Error>>
+{
     let source = r#"
 def main() -> str:
-  return f"{str(1_000.50)} {str(1.25e2)}"
+  return f"{str(1_000.50)} {str(1.25e2)} {float('1_000.50')} {float('1.25e1_0')}"
 "#;
     let module = lower_typed_body_ir(source)?;
     let execution = execute_free_function(&module, "main", &[])?;
-    assert_eq!(execution.value, ReplacementValue::Str("1000.5 125".to_string()));
+    assert_eq!(
+        execution.value,
+        ReplacementValue::Str("1000.5 125 1000.5 12500000000".to_string())
+    );
     Ok(())
 }
 

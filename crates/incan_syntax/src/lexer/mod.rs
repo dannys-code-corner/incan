@@ -295,7 +295,7 @@ impl<'a> Lexer<'a> {
             }
 
             // Numbers
-            '0'..='9' => self.scan_number(start, c),
+            '0'..='9' => self.scan_number(start),
 
             // Identifiers and keywords
             _ if is_ident_start(c) => self.scan_identifier(start, c),
@@ -687,16 +687,36 @@ mod tests {
     #[test]
     #[allow(clippy::approx_constant)]
     fn test_numbers() {
-        let tokens = lex_ok("42 3.14 1_000_000 1e10 19.99d 1_000d 340282366920938463463374607431768211455");
+        let tokens = lex_ok("42 3.14 1_000_000 1e1_0 19.99d 1_000.5_0d 340282366920938463463374607431768211455");
         assert!(matches!(&tokens[0].kind, TokenKind::Int(il) if il.value == 42));
         assert!(matches!(&tokens[1].kind, TokenKind::Float(fl) if (fl.value - 3.14).abs() < 0.001));
         assert!(matches!(&tokens[2].kind, TokenKind::Int(il) if il.value == 1_000_000 && il.repr == "1_000_000"));
-        assert!(matches!(tokens[3].kind, TokenKind::Float(_)));
+        assert!(matches!(&tokens[3].kind, TokenKind::Float(fl) if fl.repr == "1e1_0" && fl.value == 1e10));
         assert!(matches!(&tokens[4].kind, TokenKind::Decimal(dl) if dl.body == "19.99" && dl.repr == "19.99d"));
-        assert!(matches!(&tokens[5].kind, TokenKind::Decimal(dl) if dl.body == "1000" && dl.repr == "1_000d"));
+        assert!(matches!(&tokens[5].kind, TokenKind::Decimal(dl) if dl.body == "1000.50" && dl.repr == "1_000.5_0d"));
         assert!(
             matches!(&tokens[6].kind, TokenKind::Int(il) if il.magnitude == u128::MAX && il.repr == "340282366920938463463374607431768211455")
         );
+    }
+
+    #[test]
+    fn numeric_literals_reject_invalid_separator_placement() {
+        for (source, expected_kind) in [
+            ("1__000", "integer"),
+            ("1_", "integer"),
+            ("1_.0", "float"),
+            ("1e_2", "float"),
+            ("1e2_", "float"),
+            ("1__000d", "decimal"),
+        ] {
+            let errors = lex_err(source);
+            assert_eq!(errors.len(), 1, "source `{source}`: {errors:?}");
+            assert!(
+                errors[0].message.to_ascii_lowercase().contains(expected_kind),
+                "source `{source}` should report an invalid {expected_kind} literal: {:?}",
+                errors[0]
+            );
+        }
     }
 
     #[test]

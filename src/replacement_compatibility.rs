@@ -2430,8 +2430,8 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
         planned_feature(
             "language.numeric-complete",
             "The full numeric contract preserves widths, literals, conversions, overflow, decimal behavior, and diagnostics beyond the scalar profile.",
-            1154,
-            "The current direct profile is intentionally scalar-bounded; #1154 owns the shared direct value model required for remaining numeric forms.",
+            1279,
+            "The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms.",
         ),
         planned_feature(
             "language.strings-and-format",
