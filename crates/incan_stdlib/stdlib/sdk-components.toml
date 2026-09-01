@@ -1,6 +1,6 @@
 [sdk]
 id = "incan"
-version = "0.6.0-dev.1"
+version = "0.6.0-dev.1.1"
 compiler-requirement = ">=0.6.0-dev.1,<0.7.0"
 
 [profiles]

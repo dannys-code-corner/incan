@@ -3167,7 +3167,12 @@ fn run_legacy_cargo(
             OvenLegacyCargoPublicationKind::Executable => "build",
             OvenLegacyCargoPublicationKind::LibraryTests => "test",
         },
-        &if publication_kind == OvenLegacyCargoPublicationKind::LibraryTests {
+        &if publication_kind == OvenLegacyCargoPublicationKind::LibraryTests
+            || publication_kind == OvenLegacyCargoPublicationKind::Executable
+        {
+            // The generated executable also exposes `src/main.rs` as a Cargo library target. The named publisher
+            // only needs the Rust dependency closure; compiling the binary root here would try to link a declared C
+            // library before Oven has sealed that locked native artifact into the final direct-rustc plan.
             OvenLegacyCargoInvocationTarget::PackageLibrary
         } else {
             OvenLegacyCargoInvocationTarget::None
@@ -9106,10 +9111,11 @@ mod tests {
         prepare_compiler_test_suite, prepare_direct_rustc_plan, project_registry_source_dependencies,
         publisher_direct_dependencies, publisher_registry_source_catalog, read_legacy_cargo_metadata_with_lock_policy,
         reclaim_unmaterialized_compiler_suite_target_files, release_cohort_generated_project_lock,
-        resolve_direct_dependency_packages, run_legacy_cargo_invocation, select_compiler_test_suite_identity,
-        select_existing_project_extension_identity, source_compiler_vocab_support_paths_are_available,
-        stage_compiler_suite_shard_files, stage_registry_source_directory, stage_self_contained_sdk_provider_tree,
-        validate_compiler_suite_unit_graph, validate_generated_registry_lock, validate_release_cohort_registry_lock,
+        resolve_direct_dependency_packages, run_legacy_cargo, run_legacy_cargo_invocation,
+        select_compiler_test_suite_identity, select_existing_project_extension_identity,
+        source_compiler_vocab_support_paths_are_available, stage_compiler_suite_shard_files,
+        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
+        validate_generated_registry_lock, validate_release_cohort_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
@@ -12022,6 +12028,63 @@ version = "1.0.0"
         );
         assert!(!environment.contains_key("CARGO_PKG_NAME"));
         assert!(!environment.contains_key("CARGO_PKG_VERSION"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn executable_publisher_prepares_the_library_target_before_native_interop_is_sealed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let fixture = tempfile::tempdir()?;
+        let project = fixture.path().join("generated-project");
+        let source = project.join("src/main.rs");
+        let cargo = fixture.path().join("cargo");
+        let rustc = fixture.path().join("rustc");
+        let observed_arguments = fixture.path().join("cargo-arguments");
+        fs::create_dir_all(source.parent().ok_or("source parent missing")?)?;
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nname = \"fixture\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"fixture\"\npath = \"src/main.rs\"\n",
+        )?;
+        // A binary target would need this absent native library at link time. The compatibility publisher must
+        // instead compile the companion library target and leave native linking to the sealed interop plan.
+        fs::write(
+            &source,
+            "#[link(name = \"not-yet-sealed-native\")]\nunsafe extern \"C\" {}\nfn main() {}\n",
+        )?;
+        fs::write(
+            &cargo,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"{}\"\n",
+                observed_arguments.display(),
+            ),
+        )?;
+        fs::write(&rustc, "#!/bin/sh\nexit 0\n")?;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755))?;
+        fs::set_permissions(&rustc, fs::Permissions::from_mode(0o755))?;
+
+        let _ = run_legacy_cargo(
+            &cargo,
+            &rustc,
+            &project.join("Cargo.toml"),
+            &fixture.path().join("target"),
+            "aarch64-apple-darwin",
+            "debug",
+            &[],
+            1024 * 1024,
+            OvenLegacyCargoPublicationKind::Executable,
+            false,
+            false,
+        )?;
+
+        let arguments = fs::read_to_string(observed_arguments)?;
+        assert!(arguments.lines().any(|argument| argument == "--lib"));
+        assert!(
+            !arguments.lines().any(|argument| argument == "--bin"),
+            "the pre-interop publisher must not link the generated binary"
+        );
         Ok(())
     }
 

@@ -313,10 +313,18 @@ impl ProjectGenerator {
         let (bin, lib) = if self.is_binary {
             (
                 vec![BinTarget {
-                    name: target_name,
+                    name: target_name.clone(),
                     path: "src/main.rs".into(),
                 }],
-                None,
+                // Oven's explicit compatibility publisher builds this library target to prepare the Rust
+                // dependency closure. A library compile validates generated Rust and preserves native link metadata
+                // without requiring a package-supplied C library to be available before the later interop baker has
+                // sealed it into the final direct-rustc plan. Normal execution continues to compile `main.rs` as the
+                // binary target through direct rustc.
+                Some(LibTarget {
+                    name: target_name,
+                    path: "src/main.rs".into(),
+                }),
             )
         } else {
             (
@@ -487,6 +495,8 @@ mod tests {
         let toml = generator.generate_cargo_toml()?;
         assert!(toml.contains("name = \"hello\""));
         assert!(toml.contains("[[bin]]"));
+        assert!(toml.contains("[lib]"));
+        assert!(toml.contains("path = \"src/main.rs\""));
         let manifest = parsed_manifest(&toml)?;
         let support_path = manifest
             .get("dependencies")
