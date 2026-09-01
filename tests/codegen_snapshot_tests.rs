@@ -2709,6 +2709,12 @@ fn test_builtins_codegen() {
     let source = load_test_file("builtins");
     let rust_code = generate_rust(&source);
     let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    let min_max = rust_code
+        .split("fn test_min_max_builtins")
+        .nth(1)
+        .and_then(|remainder| remainder.split("fn test_abs_builtin").next())
+        .expect("builtins fixture must retain its min/max function before abs");
+    let compact_min_max = min_max.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
     assert!(
         compact.contains("incan_stdlib::collections::__private::list_min_copy")
             || compact.contains("incan_stdlib::collections::__private::list_min_clone")
@@ -2722,7 +2728,7 @@ fn test_builtins_codegen() {
         "expected max() emission to route through stdlib helpers; generated:\n{rust_code}"
     );
     assert!(
-        !compact.contains(".unwrap_or_else"),
+        !compact_min_max.contains(".unwrap_or_else"),
         "builtins codegen must not inline unwrap_or_else fallback paths for list min/max; generated:\n{rust_code}"
     );
     insta::assert_snapshot!("builtins", rust_code);

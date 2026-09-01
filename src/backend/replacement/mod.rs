@@ -3634,13 +3634,20 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 other => Err(unsupported(format!("`len` of {}", value_kind(&other)), span)),
             },
             BuiltinFnId::Abs => match value {
-                ReplacementValue::Int(value) => Ok(ReplacementValue::Int(value.abs())),
+                ReplacementValue::Int(value) => value
+                    .checked_abs()
+                    .map(ReplacementValue::Int)
+                    .ok_or_else(|| runtime_failure("integer overflow in builtin `abs`".to_string(), span)),
                 other => Err(unsupported(format!("`abs` of {}", value_kind(&other)), span)),
             },
-            // `iter().sum::<i64>()`, with bools counted as 1/0 exactly as the emitted Rust does.
+            // Checked integer accumulation, with bools counted as 1/0 exactly as the emitted Rust does.
             BuiltinFnId::Sum => {
                 let elements = integer_elements(&value, "sum", span)?;
-                Ok(ReplacementValue::Int(elements.iter().sum()))
+                let sum = elements
+                    .iter()
+                    .try_fold(0_i64, |total, value| total.checked_add(*value))
+                    .ok_or_else(|| runtime_failure("integer overflow in builtin `sum`".to_string(), span))?;
+                Ok(ReplacementValue::Int(sum))
             }
             BuiltinFnId::Min => {
                 let elements = integer_elements(&value, "min", span)?;

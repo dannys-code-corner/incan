@@ -642,7 +642,7 @@ pub enum BuiltinFn {
     Print,
     /// `len(x)` → `::std::convert::identity(x.len() as i64)`
     Len,
-    /// `sum(x)` → `x.iter().sum::<i64>()`
+    /// `sum(x)` → checked integer accumulation
     Sum,
     /// `min(xs)` → minimum element
     Min,
@@ -656,7 +656,7 @@ pub enum BuiltinFn {
     Float,
     /// `bool(x)` → convert to bool
     Bool,
-    /// `abs(x)` → `x.abs()`
+    /// `abs(x)` → checked integer absolute value
     Abs,
     /// `range(...)` → Rust range expressions
     Range,
