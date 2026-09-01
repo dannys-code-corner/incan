@@ -136,46 +136,31 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
         .collect::<Vec<_>>();
     assert_eq!(
         compared_case_ids,
-        vec!["replacement-body-v0-001", "replacement-body-v0-022"]
+        vec![
+            "replacement-body-v0-001",
+            "replacement-body-v0-022",
+            "replacement-body-v0-025",
+            "replacement-body-v0-027",
+        ]
     );
     assert!(scalar.evidence.surfaces.scoped_comparisons.iter().all(|comparison| {
         matches!(comparison.state, IndependentComparisonState::ComparedMatch)
             && matches!(&comparison.evidence, ComparisonEvidence::Paired { .. })
     }));
-    assert!(
-        registry
-            .features
-            .iter()
-            .filter(|feature| feature.id != scalar.id)
-            .all(|feature| { feature.evidence.surfaces.scoped_comparisons.is_empty() })
-    );
-    Ok(())
-}
-
-/// Plain hashed membership evidence must not claim the frozen specialized-collection capability.
-#[test]
-fn hashed_membership_evidence_does_not_invent_a_frozen_capability() -> Result<(), Box<dyn std::error::Error>> {
-    let registry = replacement_compatibility_registry();
-    assert!(
-        registry
-            .feature_links
-            .iter()
-            .all(|link| link.feature_id != "language.hashed-membership"),
-        "the frozen StdCollections capability describes imported specialized containers, not plain set/dict membership"
-    );
-    let aggregates = registry
+    let iteration = registry
         .features
         .iter()
-        .find(|feature| feature.id == "language.aggregates-and-projections")
-        .ok_or("missing broad aggregate feature")?;
-    assert!(!aggregates.evidence.is_parity_green());
-    assert!(aggregates.evidence.surfaces.scoped_comparisons.is_empty());
-    assert!(
-        aggregates
-            .migration_or_blocker
-            .as_deref()
-            .is_some_and(|note| note.contains("replacement-body-v0-020"))
-    );
+        .find(|feature| feature.id == "iteration.protocol-and-adapters")
+        .ok_or("missing broad iterator feature")?;
+    assert!(!iteration.evidence.is_parity_green());
+    assert_eq!(iteration.evidence.direct_replacement.as_str(), "BlockedByRequirements");
+    assert!(matches!(
+        iteration.evidence.surfaces.scoped_comparisons.as_slice(),
+        [comparison]
+            if comparison.case_id == "replacement-body-v0-023"
+                && matches!(comparison.state, IndependentComparisonState::ComparedMatch)
+                && matches!(&comparison.evidence, ComparisonEvidence::Paired { .. })
+    ));
     Ok(())
 }
 
@@ -196,13 +181,77 @@ fn selected_string_helper_evidence_does_not_invent_a_frozen_capability() -> Resu
         .find(|feature| feature.id == "language.strings-and-format")
         .ok_or("missing wider string feature")?;
     assert!(!broad.evidence.is_parity_green());
-    assert!(broad.evidence.surfaces.scoped_comparisons.is_empty());
-    assert!(
+    assert_eq!(broad.evidence.direct_replacement.as_str(), "BlockedByRequirements");
+    assert_eq!(
         broad
-            .migration_or_blocker
-            .as_deref()
-            .is_some_and(|note| note.contains("replacement-body-v0-021"))
+            .evidence
+            .surfaces
+            .scoped_comparisons
+            .iter()
+            .map(|comparison| comparison.case_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["replacement-body-v0-021", "replacement-body-v0-024"]
     );
+    assert!(broad.evidence.surfaces.scoped_comparisons.iter().all(|comparison| {
+        matches!(comparison.state, IndependentComparisonState::ComparedMatch)
+            && matches!(&comparison.evidence, ComparisonEvidence::Paired { .. })
+    }));
+    assert!(
+        broad.migration_or_blocker.as_deref().is_some_and(|note| {
+            note.contains("replacement-body-v0-021") && note.contains("replacement-body-v0-024")
+        })
+    );
+    Ok(())
+}
+
+/// Bounded membership, entry-count, and integer-sort evidence must not claim the frozen collection capability.
+#[test]
+fn hashed_bounded_evidence_does_not_invent_a_frozen_capability() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = replacement_compatibility_registry();
+    assert!(
+        registry
+            .feature_links
+            .iter()
+            .all(|link| link.feature_id != "language.hashed-membership"),
+        "the frozen StdCollections capability describes imported specialized containers, not plain set/dict membership"
+    );
+    let aggregates = registry
+        .features
+        .iter()
+        .find(|feature| feature.id == "language.aggregates-and-projections")
+        .ok_or("missing broad aggregate feature")?;
+    assert!(!aggregates.evidence.is_parity_green());
+    assert_eq!(aggregates.evidence.direct_replacement.as_str(), "BlockedByRequirements");
+    assert_eq!(
+        aggregates
+            .evidence
+            .surfaces
+            .scoped_comparisons
+            .iter()
+            .map(|comparison| comparison.case_id.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "replacement-body-v0-020",
+            "replacement-body-v0-026",
+            "replacement-body-v0-028",
+        ]
+    );
+    assert!(
+        aggregates
+            .evidence
+            .surfaces
+            .scoped_comparisons
+            .iter()
+            .all(|comparison| {
+                matches!(comparison.state, IndependentComparisonState::ComparedMatch)
+                    && matches!(&comparison.evidence, ComparisonEvidence::Paired { .. })
+            })
+    );
+    assert!(aggregates.migration_or_blocker.as_deref().is_some_and(|note| {
+        note.contains("replacement-body-v0-020")
+            && note.contains("replacement-body-v0-026")
+            && note.contains("replacement-body-v0-028")
+    }));
     Ok(())
 }
 
@@ -222,6 +271,19 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
     assert!(projection.contains("#1152"));
     assert!(projection.contains("HistoricalDiscrepancyUnresolved; owner #1153"));
     assert!(projection.contains("replacement-body-v0-001: ComparedMatch"));
+    assert!(projection.contains("replacement-body-v0-025: ComparedMatch"));
+    assert!(projection.contains("replacement-body-v0-027: ComparedMatch"));
+    for case_id in [
+        "replacement-body-v0-020",
+        "replacement-body-v0-021",
+        "replacement-body-v0-023",
+        "replacement-body-v0-024",
+        "replacement-body-v0-026",
+        "replacement-body-v0-028",
+    ] {
+        assert!(projection.contains(&format!("Case `{case_id}` (ComparedMatch)")));
+    }
+    assert!(projection.contains("replacement-body-v0-020` through `replacement-body-v0-028"));
     assert!(projection.contains("legacy_receipt_identity"));
     assert!(projection.contains("replacement_receipt_identity"));
     assert!(projection.contains("completed comparison infrastructure #1146"));
@@ -231,6 +293,14 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
     assert!(
         projection
             .contains("Case `replacement-body-v0-022` (ComparedMatch) using completed comparison infrastructure #1146")
+    );
+    assert!(
+        projection
+            .contains("Case `replacement-body-v0-025` (ComparedMatch) using completed comparison infrastructure #1146")
+    );
+    assert!(
+        projection
+            .contains("Case `replacement-body-v0-027` (ComparedMatch) using completed comparison infrastructure #1146")
     );
     assert!(!projection.contains("Completed #1146 case"));
 

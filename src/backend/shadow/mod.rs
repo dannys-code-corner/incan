@@ -69,8 +69,12 @@
 
 pub mod legacy_oven;
 
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
+use std::sync::Arc;
+
+use incan_core::lang::surface::constructors::{ConstructorId, as_str as constructor_name};
 
 use crate::backend::IrCodegen;
 use crate::backend::replacement::{
@@ -88,6 +92,7 @@ use crate::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
 use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::{lexer, parser};
+use crate::provider::ProviderPlan;
 
 /// Content-stable identity of the one comparison profile this module implements.
 ///
@@ -104,6 +109,63 @@ pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_s
 pub const PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON: &str = "the bounded source-observable comparison profile observes a named free function's returned scalar, and a \
      program entrypoint's return value is not observable through a separate source-authored report entrypoint; generated Rust is not \
      semantic proof";
+
+/// The source-owned provider projection required to materialize one legacy comparison program.
+///
+/// The CLI adapter constructs this only from a compilation session that has already resolved the profile source's
+/// Oven-compatible module graph. The legacy route receives the finished projection but never discovers providers,
+/// invents a stdlib path, or infers provider identity from an Oven receipt or Rust extern list.
+#[derive(Debug, Clone)]
+pub(crate) struct ShadowLegacyMaterialization {
+    provider_plan: Arc<ProviderPlan>,
+    oven_build_unit_inputs: BTreeMap<String, String>,
+    entry_source_identity: String,
+}
+
+impl ShadowLegacyMaterialization {
+    /// Retain the final provider plan and native-closure inputs selected by the caller-owned compilation session.
+    pub(crate) fn from_provider_plan(
+        provider_plan: Arc<ProviderPlan>,
+        oven_build_unit_inputs: BTreeMap<String, String>,
+        entry_source_identity: String,
+    ) -> Self {
+        Self {
+            provider_plan,
+            oven_build_unit_inputs,
+            entry_source_identity,
+        }
+    }
+
+    /// Return the immutable provider plan shared by legacy codegen and project materialization.
+    pub(crate) fn provider_plan(&self) -> &Arc<ProviderPlan> {
+        &self.provider_plan
+    }
+
+    /// Refuse a legacy capability whose immutable native closure differs from this source session's projection.
+    pub(crate) fn require_compatible_oven_build_unit_inputs(
+        &self,
+        adopted_build_unit_inputs: &BTreeMap<String, String>,
+    ) -> Result<(), ShadowUnavailable> {
+        if &self.oven_build_unit_inputs == adopted_build_unit_inputs {
+            return Ok(());
+        }
+        Err(ShadowUnavailable::new(
+            "the legacy comparison provider context does not match the adopted Oven build-unit inputs; stage a \
+             receipt-backed native capability for this exact source-session provider closure",
+        ))
+    }
+
+    /// Refuse a profile that differs from the exact source whose session selected this context.
+    pub(crate) fn require_profile_source(&self, profile: &ShadowComparisonProfile) -> Result<(), ShadowUnavailable> {
+        if self.entry_source_identity == profile.source_identity() {
+            return Ok(());
+        }
+        Err(ShadowUnavailable::new(
+            "the legacy comparison profile source does not match the source session that selected its provider \
+             context",
+        ))
+    }
+}
 
 /// Exact first token in a source-authored typed result report.
 const RESULT_REPORT_VERSION: &str = "incan-shadow-result-v1";
@@ -258,7 +320,7 @@ impl FunctionResultKind {
                         "the legacy `None` result report carried an unexpected payload",
                     ));
                 }
-                "None".to_string()
+                constructor_name(ConstructorId::None).to_string()
             }
         };
         Ok(TypedFunctionResult { kind: self, value })
@@ -270,7 +332,7 @@ impl FunctionResultKind {
             (Self::Int, ReplacementValue::Int(value)) => value.to_string(),
             (Self::Bool, ReplacementValue::Bool(value)) => value.to_string(),
             (Self::Str, ReplacementValue::Str(value)) => value.clone(),
-            (Self::Unit, ReplacementValue::Unit) => "None".to_string(),
+            (Self::Unit, ReplacementValue::Unit) => constructor_name(ConstructorId::None).to_string(),
             (expected, actual) => {
                 return Err(ShadowUnavailable::new(format!(
                     "the direct route returned {actual:?}, which contradicts its checked {} result kind",
@@ -395,8 +457,7 @@ impl ShadowComparisonProfile {
     /// calls the observed function and atomically publishes a typed result report.
     ///
     /// The generated entrypoint is Incan source, not hand-written Rust. It imports existing `rust::std::fs`
-    /// `write` and `rename` primitives, avoiding the ordinary project's `__incan_std` facade that a bare legacy
-    /// compilation cannot materialize. Program stdout and stderr are untouched by the result transport.
+    /// `write` and `rename` primitives, leaving program stdout and stderr untouched by the result transport.
     fn legacy_program_source(
         &self,
         result_kind: FunctionResultKind,
@@ -789,8 +850,10 @@ impl ShadowComparison {
 /// Run one bounded shadow comparison and bind every route that executed to its own #986 receipt.
 ///
 /// Both routes run independently: neither reads the other's artifacts, and neither is derived from the other's
-/// result. `capability` names the Oven store, receipt intent, and compiler that authorize the legacy route;
-/// `workspace` is a caller-owned directory the legacy route may write its emitted Rust and produced program into.
+/// result. The comparison constructs its provider projection from the exact profile source inside the caller-owned
+/// `workspace`, then selects the staged Oven receipt whose immutable build inputs match that projection. `capability`
+/// names the Oven store, receipt intent, and compiler that authorize the legacy route; `workspace` is also where the
+/// legacy route may write its generated project and produced program into.
 ///
 /// This is total by design. Every failure — an out-of-profile source, an unstaged Oven capability, a legacy build
 /// failure, an unclassifiable runtime failure, even a backend-selection error — becomes a recorded
@@ -802,9 +865,62 @@ pub fn compare_source_observable(
     capability: &legacy_oven::LegacyOvenCapability,
     workspace: &Path,
 ) -> ShadowComparison {
+    if let Err(unavailable) = PreparedShadowProfile::new(profile) {
+        return assemble_comparison(
+            profile,
+            profile.profile_identity(),
+            Err(unavailable.clone()),
+            Err(unavailable),
+        );
+    }
+    let materialization = match materialize_profile_source_session(profile, workspace) {
+        Ok(materialization) => materialization,
+        Err(unavailable) => {
+            return assemble_comparison(
+                profile,
+                profile.profile_identity(),
+                Err(unavailable.clone()),
+                Err(unavailable),
+            );
+        }
+    };
+    let capability = match capability.select_for_materialization(&materialization) {
+        Ok(capability) => capability,
+        Err(unavailable) => {
+            return assemble_comparison(
+                profile,
+                profile.profile_identity(),
+                Err(unavailable.clone()),
+                Err(unavailable),
+            );
+        }
+    };
+    compare_source_observable_with_materialization(profile, &materialization, &capability, workspace)
+}
+
+/// Compare a profile using a source session that has already selected its provider projection.
+///
+/// This remains crate-private so the public comparison API cannot accept provider or receipt data detached from the
+/// source it observes. Unit tests use it only to exercise refusal edges with deliberately forged materialization
+/// facts; production callers must enter through [`compare_source_observable`].
+#[must_use]
+pub(crate) fn compare_source_observable_with_materialization(
+    profile: &ShadowComparisonProfile,
+    materialization: &ShadowLegacyMaterialization,
+    capability: &legacy_oven::LegacyOvenCapability,
+    workspace: &Path,
+) -> ShadowComparison {
     // The source, its Body IR, and its scalar return kind are all checked before either route executes. The
-    // source-authored report wrapper is preflighted through the legacy compiler before direct execution too, so a
-    // wrapper capability gap is an honest profile refusal rather than an asymmetrical execution attempt.
+    // source-authored report wrapper is preflighted through the same legacy materialization path before direct
+    // execution too, so a wrapper capability gap is an honest profile refusal rather than an asymmetrical attempt.
+    if let Err(unavailable) = materialization.require_profile_source(profile) {
+        return assemble_comparison(
+            profile,
+            profile.profile_identity(),
+            Err(unavailable.clone()),
+            Err(unavailable),
+        );
+    }
     let prepared = match PreparedShadowProfile::new(profile) {
         Ok(prepared) => prepared,
         Err(unavailable) => {
@@ -816,7 +932,15 @@ pub fn compare_source_observable(
             );
         }
     };
-    if let Err(unavailable) = preflight_result_transport(profile, &prepared, workspace) {
+    if let Err(unavailable) = capability.require_materialization_compatibility(materialization) {
+        return assemble_comparison(
+            profile,
+            profile.profile_identity(),
+            Err(unavailable.clone()),
+            Err(unavailable),
+        );
+    }
+    if let Err(unavailable) = preflight_result_transport(profile, &prepared, materialization, workspace) {
         return assemble_comparison(
             profile,
             profile.profile_identity(),
@@ -829,9 +953,39 @@ pub fn compare_source_observable(
     let replacement = observe_replacement_route(profile, &prepared);
 
     // ---- Route 2: emitted Rust, Oven-authorized native build, executed as a process ----
-    let legacy = legacy_oven::observe_legacy_route(profile, &prepared, capability, workspace);
+    let legacy = legacy_oven::observe_legacy_route(profile, &prepared, materialization, capability, workspace);
 
     assemble_comparison(profile, profile.profile_identity(), replacement, legacy)
+}
+
+/// Resolve the compiler-owned provider closure for the exact source text the comparison will observe.
+///
+/// The public comparison profile intentionally stores source text rather than a project path. Materializing that text
+/// at a private, deterministic path below the caller-owned workspace gives the CLI session resolver the same source
+/// bytes while keeping its provider plan, build-input identity, and receipt selection internal to this module.
+fn materialize_profile_source_session(
+    profile: &ShadowComparisonProfile,
+    workspace: &Path,
+) -> Result<ShadowLegacyMaterialization, ShadowUnavailable> {
+    let source_directory = workspace.join("shadow-source-session");
+    std::fs::create_dir_all(&source_directory).map_err(|error| {
+        ShadowUnavailable::new(format!(
+            "the legacy comparison could not create its source-session directory {}: {error}",
+            source_directory.display()
+        ))
+    })?;
+    let source_path = source_directory.join("profile.incn");
+    std::fs::write(&source_path, profile.source()).map_err(|error| {
+        ShadowUnavailable::new(format!(
+            "the legacy comparison could not materialize its exact source session at {}: {error}",
+            source_path.display()
+        ))
+    })?;
+    crate::cli::commands::shadow_support::prepare_shadow_legacy_materialization(
+        &source_path,
+        &crate::provider::FeatureSelection::default(),
+        None,
+    )
 }
 
 /// Fold both routes' results into one comparison, retaining every route that actually executed.
@@ -1145,19 +1299,23 @@ fn refuse_source_process_import(program: &crate::frontend::ast::Program) -> Resu
 fn preflight_result_transport(
     profile: &ShadowComparisonProfile,
     prepared: &PreparedShadowProfile,
+    materialization: &ShadowLegacyMaterialization,
     workspace: &Path,
 ) -> Result<(), ShadowUnavailable> {
     // The wrapper only compiles here; nevertheless, give it a caller-managed path so this generated source never
     // advertises a broad fixed report destination.
     let report_path = workspace.join("incan-shadow-result-preflight");
     let program = profile.legacy_program_source(prepared.result_kind, &report_path, &prepared.wrapper_identifiers)?;
-    emit_legacy_rust(&program).map(|_| ()).map_err(|unavailable| {
-        ShadowUnavailable::new(format!(
-            "the bounded source-authored result-report wrapper could not be preflighted through the bare legacy \
-             compiler path: {}",
-            unavailable.reason
-        ))
-    })
+    let project_root = workspace.join("incan-shadow-result-preflight-project");
+    legacy_oven::materialize_legacy_program(&program, materialization, &project_root)
+        .map(|_| ())
+        .map_err(|unavailable| {
+            ShadowUnavailable::new(format!(
+                "the bounded source-authored result-report wrapper could not be preflighted through the legacy \
+                 materialization path: {}",
+                unavailable.reason
+            ))
+        })
 }
 
 /// Observe the replacement route by executing the already checked Body IR.
@@ -1232,17 +1390,38 @@ fn replacement_profile_unavailable(error: ReplacementExecutionError) -> ShadowUn
     ))
 }
 
-/// Emit Rust for the legacy route's derived program through the real legacy backend.
-pub(crate) fn emit_legacy_rust(program: &str) -> Result<String, ShadowUnavailable> {
+/// Emit Rust for the legacy route's derived program through the real legacy backend and caller-owned provider plan.
+pub(crate) fn emit_legacy_rust_with_materialization(
+    program: &str,
+    materialization: &ShadowLegacyMaterialization,
+) -> Result<String, ShadowUnavailable> {
+    emit_legacy_rust_with_provider_plan(program, Some(materialization.provider_plan()))
+}
+
+/// Emit legacy Rust while optionally configuring a source-backed test fixture provider plan.
+fn emit_legacy_rust_with_provider_plan(
+    program: &str,
+    provider_plan: Option<&Arc<ProviderPlan>>,
+) -> Result<String, ShadowUnavailable> {
     let tokens = lexer::lex(program)
         .map_err(|errors| ShadowUnavailable::new(format!("the legacy program did not lex: {errors:?}")))?;
     let ast = parser::parse(&tokens)
         .map_err(|errors| ShadowUnavailable::new(format!("the legacy program did not parse: {errors:?}")))?;
     crate::frontend::typechecker::check(&ast)
         .map_err(|errors| ShadowUnavailable::new(format!("the legacy program did not typecheck: {errors:?}")))?;
-    IrCodegen::new()
+    let mut codegen = IrCodegen::new();
+    if let Some(provider_plan) = provider_plan {
+        codegen.set_provider_plan(Arc::clone(provider_plan));
+    }
+    codegen
         .try_generate(&ast)
         .map_err(|error| ShadowUnavailable::new(format!("the legacy backend could not emit Rust: {error}")))
+}
+
+#[cfg(test)]
+/// Emit a provider-free legacy source fixture for unit tests that do not materialize or execute a native program.
+pub(crate) fn emit_legacy_rust(program: &str) -> Result<String, ShadowUnavailable> {
+    emit_legacy_rust_with_provider_plan(program, None)
 }
 
 /// Turn one completed legacy process result into a comparable observation.
@@ -1427,7 +1606,15 @@ fn route_receipt(
 }
 
 #[cfg(test)]
+mod len_string_tests;
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod abs_sum_profile_tests;
+
+#[cfg(all(test, feature = "cli"))]
+mod enumerate_zip_tests;
+
+#[cfg(test)]
+mod json_stringify_tests;

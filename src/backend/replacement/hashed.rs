@@ -22,12 +22,13 @@
 //! not `true` here — which is the same equality the list-membership arm already applies through
 //! `ReplacementValue`'s own `PartialEq`.
 //!
-//! ## Membership-grade only
+//! ## Bounded read surface
 //!
-//! Source execution admits construction and membership only. Internal equality and canonical rendering support carrier
-//! tests and diagnostics; they do not admit source equality, printing, iteration, indexing, length, or mutation. These
-//! immutable carriers do not retain insertion order. Rendering sorts entries by [`HashedKey`] for deterministic
-//! diagnostics, not as a claim about language-level iteration or formatting.
+//! Source execution admits construction, membership, entry count, and canonical truthiness's empty/nonempty query
+//! only. Internal equality and canonical rendering support carrier tests and diagnostics; they do not admit source
+//! equality, printing, iteration, indexing, projection, or mutation. These immutable carriers do not retain insertion
+//! order. Rendering sorts entries by [`HashedKey`] for deterministic diagnostics, not as a claim about language-level
+//! iteration or formatting.
 
 use std::collections::{HashMap, HashSet};
 
@@ -98,7 +99,7 @@ impl HashedKey {
     }
 }
 
-/// A source-local hashed set value with a membership-grade surface.
+/// A source-local hashed set value with a bounded membership-and-entry-count surface.
 ///
 /// Equality ignores construction order, as the underlying [`HashSet`] equality does; two sets are equal exactly
 /// when they hold the same keys.
@@ -145,6 +146,18 @@ impl ReplacementSet {
         Ok(self.entries.contains(&key))
     }
 
+    /// Return the number of distinct entries after hashed set construction has collapsed duplicates.
+    #[must_use]
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether canonical `bool` observes this immutable set as empty.
+    #[must_use]
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Canonical diagnostic spelling; this does not admit source printing or formatting of sets.
     ///
     /// Entries render in canonical [`HashedKey`] order — a determinism choice, not source order, which this
@@ -167,7 +180,7 @@ impl ReplacementSet {
     }
 }
 
-/// A source-local hashed dict value with a membership-grade surface.
+/// A source-local hashed dict value with a bounded membership-and-entry-count surface.
 ///
 /// Entry values are retained so a dict stays a faithful value — `{"a": 1}` and `{"a": 2}` must not compare equal —
 /// but membership never consults them: `k in d` asks about keys, matching `HelperOp::DictContainsKey` and the
@@ -215,6 +228,18 @@ impl ReplacementDict {
     pub fn contains_key(&self, needle: ReplacementValue) -> Result<bool, NonScalarKey> {
         let key = HashedKey::try_from_value(needle)?;
         Ok(self.entries.contains_key(&key))
+    }
+
+    /// Return the number of distinct keys after later duplicate-key entries have replaced earlier values.
+    #[must_use]
+    pub(super) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether canonical `bool` observes this immutable dict as empty.
+    #[must_use]
+    pub(super) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
     }
 
     /// Canonical diagnostic spelling; this does not admit source printing or formatting of dicts.

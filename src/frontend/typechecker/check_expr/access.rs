@@ -11,7 +11,7 @@ use crate::frontend::resolved_type_subst::{substitute_resolved_type, type_param_
 use crate::frontend::symbols::*;
 use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, generator_ty, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty,
-    option_ty, render_resolved_type_as_rust_arg, string_method_identity_and_return, string_method_return,
+    option_ty, render_resolved_type_as_rust_arg, runtime_string_method_identity_and_return, string_method_return,
 };
 use crate::frontend::typechecker::type_info::{CBindingEnumAccess, RustMethodTraitImportUse, RustTraitImportInfo};
 use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
@@ -4437,7 +4437,7 @@ impl TypeChecker {
         }
 
         if matches!(base_ty, ResolvedType::Str)
-            && let Some((id, ret)) = string_method_identity_and_return(method, false)
+            && let Some((id, ret)) = runtime_string_method_identity_and_return(method)
         {
             if type_args.is_empty()
                 && HelperOp::for_selected_string_method(id).is_some()

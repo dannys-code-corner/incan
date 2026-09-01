@@ -3295,13 +3295,13 @@
       },
       {
         "id": "language.numeric-and-scalar",
-        "contract": "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
+        "contract": "Bounded scalar arithmetic, comparisons, boolean operators, strings, and int/bool/str/None JSON stringification execute directly from Body IR.",
         "probes": [
           {
             "id": "probe:language.numeric-and-scalar:bounded-direct-profile",
             "positive": {
               "outcome": "AcceptedBehavior",
-              "contract": "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
+              "contract": "Bounded scalar arithmetic, comparisons, boolean operators, strings, and int/bool/str/None JSON stringification execute directly from Body IR.",
               "anchor": {
                 "surface": "SourceAst",
                 "status": "Observed",
@@ -3371,7 +3371,9 @@
                   "replacement-body-v0-002",
                   "replacement-body-v0-003",
                   "replacement-body-v0-005",
-                  "replacement-body-v0-022"
+                  "replacement-body-v0-022",
+                  "replacement-body-v0-025",
+                  "replacement-body-v0-027"
                 ],
                 "anchor": {
                   "surface": "ParityCorpus",
@@ -3464,6 +3466,70 @@
                       "selector": "fn the_scalar_conversions_row_carries_two_route_receipts_and_exact_output",
                       "owner_issue": null,
                       "note": "#1249 records the matched typed result and exact streams for replacement-body-v0-022."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-025",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the legacy Oven route receipt for replacement-body-v0-025."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the direct replacement route receipt for replacement-body-v0-025."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 records exact scalar JSON bytes and the matched two-route source observable for replacement-body-v0-025."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-027",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the legacy Oven route receipt for replacement-body-v0-027."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the direct replacement route receipt for replacement-body-v0-027."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 records bounded canonical truthiness and exact streams for replacement-body-v0-027."
                     }
                   }
                 }
@@ -4340,16 +4406,17 @@
               "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
             },
             "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-iteration.protocol-and-adapters",
-                "owner_issue": 987,
+              "Registered": {
+                "case_ids": [
+                  "replacement-body-v0-023"
+                ],
                 "anchor": {
                   "surface": "ParityCorpus",
-                  "status": "Planned",
+                  "status": "Observed",
                   "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                  "selector": "replacement-body-v0-023",
+                  "owner_issue": null,
+                  "note": "The stable #987 corpus registers only the bounded direct profiles already executable inside this broader planned feature."
                 }
               }
             },
@@ -4374,7 +4441,40 @@
                 }
               }
             },
-            "scoped_comparisons": []
+            "scoped_comparisons": [
+              {
+                "case_id": "replacement-body-v0-023",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_enumerate_zip_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for canonical list-based enumerate and Zip in replacement-body-v0-023."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_enumerate_zip_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for canonical list-based enumerate and Zip in replacement-body-v0-023."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_enumerate_zip_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for canonical list-based enumerate and Zip in replacement-body-v0-023."
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "disposition": "Planned",
@@ -4566,16 +4666,19 @@
               "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
             },
             "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-language.aggregates-and-projections",
-                "owner_issue": 987,
+              "Registered": {
+                "case_ids": [
+                  "replacement-body-v0-020",
+                  "replacement-body-v0-026",
+                  "replacement-body-v0-028"
+                ],
                 "anchor": {
                   "surface": "ParityCorpus",
-                  "status": "Planned",
+                  "status": "Observed",
                   "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                  "selector": "replacement-body-v0-020",
+                  "owner_issue": null,
+                  "note": "The stable #987 corpus registers only the bounded direct profiles already executable inside this broader planned feature."
                 }
               }
             },
@@ -4600,12 +4703,109 @@
                 }
               }
             },
-            "scoped_comparisons": []
+            "scoped_comparisons": [
+              {
+                "case_id": "replacement-body-v0-020",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_hashed_membership_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for scalar-key set and dict membership in replacement-body-v0-020."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_hashed_membership_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for scalar-key set and dict membership in replacement-body-v0-020."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_hashed_membership_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for scalar-key set and dict membership in replacement-body-v0-020."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-026",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_collection_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for distinct set-entry and dict-key counts in replacement-body-v0-026."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_collection_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for distinct set-entry and dict-key counts in replacement-body-v0-026."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_collection_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for distinct set-entry and dict-key counts in replacement-body-v0-026."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-028",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_sorted_int_list_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for nonempty integer-list sorting in replacement-body-v0-028."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_sorted_int_list_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for nonempty integer-list sorting in replacement-body-v0-028."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_sorted_int_list_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for nonempty integer-list sorting in replacement-body-v0-028."
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "disposition": "Planned",
         "owner_issue": 1154,
-        "migration_or_blocker": "Source-local scalar-key set/dict membership executes directly, with standalone replacement-body-v0-020 proving exact streams and a typed result across independent routes. This bounded proof does not establish the full aggregate contract; #1154 owns remaining direct value storage, projection and mutation behavior."
+        "migration_or_blocker": "Source-local scalar-key set/dict membership and entry count plus nonempty integer-list sorting execute directly. Standalone replacement-body-v0-020, replacement-body-v0-026 and replacement-body-v0-028 prove their exact streams and typed results across independent routes. These bounded proofs do not establish the full aggregate or ordering contract; #1154 owns remaining direct value storage, projection and mutation behavior."
       },
       {
         "id": "language.control-flow-complete",
@@ -5018,16 +5218,18 @@
               "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
             },
             "parity_corpus": {
-              "Planned": {
-                "case_id": "parity-987-plan-language.strings-and-format",
-                "owner_issue": 987,
+              "Registered": {
+                "case_ids": [
+                  "replacement-body-v0-021",
+                  "replacement-body-v0-024"
+                ],
                 "anchor": {
                   "surface": "ParityCorpus",
-                  "status": "Planned",
+                  "status": "Observed",
                   "repository_path": "tests/parity_corpus_tests.rs",
-                  "selector": "fn seed_corpus",
-                  "owner_issue": 987,
-                  "note": "#987 owns materializing the reserved stable corpus case with direct/refusal evidence."
+                  "selector": "replacement-body-v0-021",
+                  "owner_issue": null,
+                  "note": "The stable #987 corpus registers only the bounded direct profiles already executable inside this broader planned feature."
                 }
               }
             },
@@ -5052,12 +5254,77 @@
                 }
               }
             },
-            "scoped_comparisons": []
+            "scoped_comparisons": [
+              {
+                "case_id": "replacement-body-v0-021",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_helper_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for selected canonical string helpers in replacement-body-v0-021."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_helper_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for selected canonical string helpers in replacement-body-v0-021."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_helper_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for selected canonical string helpers in replacement-body-v0-021."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-024",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the legacy Oven receipt for Unicode-scalar string length in replacement-body-v0-024."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test verifies the direct replacement receipt for Unicode-scalar string length in replacement-body-v0-024."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_string_len_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "The paired corpus test records matching exact streams and the typed result for Unicode-scalar string length in replacement-body-v0-024."
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "disposition": "Planned",
         "owner_issue": 1101,
-        "migration_or_blocker": "String concatenation, bounded scalar interpolation and selected canonical string helpers execute directly. The separate replacement-body-v0-021 corpus case proves the selected helpers, not this full formatting contract; broad feature parity remains non-green."
+        "migration_or_blocker": "String concatenation, bounded scalar interpolation, selected canonical string helpers and Unicode-scalar string length execute directly. The separate replacement-body-v0-021 and replacement-body-v0-024 corpus cases prove those bounded profiles, not this full formatting contract; broad feature parity remains non-green."
       },
       {
         "id": "module.identity-and-aliases",
@@ -6101,9 +6368,9 @@
       },
       {
         "id": "runtime.scalar-values",
-        "invariant": "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
+        "invariant": "Scalars, strings, operators, conversions, and scalar JSON stringification preserve checked type, exact bytes, and failure behavior.",
         "owner_boundary": "Body IR operands/rvalues and replacement evaluator",
-        "verification_anchor": "replacement-body-v0 scalar corpus",
+        "verification_anchor": "replacement-body-v0 scalar corpus, including replacement-body-v0-025",
         "internal_only_rationale": "Scalar representation is an internal evaluator mechanism."
       },
       {

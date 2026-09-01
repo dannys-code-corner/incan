@@ -58,7 +58,7 @@ fn route_evidence(comparison: &ShadowComparison) -> Result<(&RouteEvidence, &Rou
 #[test]
 fn scalar_conversion_failures_keep_their_canonical_class_and_original_input() -> Result<(), Box<dyn std::error::Error>>
 {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -130,7 +130,7 @@ fn scalar_conversion_failures_keep_their_canonical_class_and_original_input() ->
 /// cases.
 #[test]
 fn every_admitted_scalar_conversion_pair_matches_the_native_route() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -157,7 +157,7 @@ fn every_admitted_scalar_conversion_pair_matches_the_native_route() -> Result<()
 /// Lexer-normalized source literals must compare through the same f64 display semantics on both routes.
 #[test]
 fn ordinary_float_literal_display_matches_the_native_route() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -185,7 +185,7 @@ fn ordinary_float_literal_display_matches_the_native_route() -> Result<(), Box<d
 /// Existing Rust parser and `as i64` edge behavior is observed through two independent routes, not redefined here.
 #[test]
 fn float_parser_and_int_cast_edges_match_the_native_route() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }

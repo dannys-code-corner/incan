@@ -30,6 +30,7 @@ pub mod lifecycle;
 pub mod lock;
 pub mod oven;
 pub mod provider_inspect;
+pub(crate) mod shadow_support;
 pub mod stdlib_loader;
 pub mod tools;
 pub(crate) mod vocab_extraction;

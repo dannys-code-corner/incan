@@ -48,6 +48,21 @@ pub fn string_method_identity_and_return(method: &str, include_len: bool) -> Opt
     Some((id, result))
 }
 
+/// Return one canonical method identity for a runtime `str` receiver.
+///
+/// Runtime strings admit the shared Unicode-scalar `len` operation, but not the separate `is_empty` surface that
+/// `FrozenStr` currently exposes. Keeping this distinction explicit avoids broadening one method while selecting
+/// the other for direct execution.
+pub fn runtime_string_method_identity_and_return(method: &str) -> Option<(StringMethodId, ResolvedType)> {
+    let id = string_methods::from_str(method)?;
+    let result = if id == StringMethodId::Len {
+        ResolvedType::Int
+    } else {
+        string_method_return_for_id(id, false)?
+    };
+    Some((id, result))
+}
+
 /// Return the resolved type for a supported string method, if known.
 pub fn string_method_return(method: &str, include_len: bool) -> Option<ResolvedType> {
     string_method_identity_and_return(method, include_len).map(|(_, result)| result)

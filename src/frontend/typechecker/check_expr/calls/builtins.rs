@@ -370,6 +370,9 @@ impl TypeChecker {
                     Some(list_ty(ResolvedType::Int))
                 }
                 BuiltinFnId::Enumerate => {
+                    if args.len() != 1 {
+                        self.errors.push(errors::builtin_arity(name, 1, args.len(), call_span));
+                    }
                     // enumerate(xs) -> list[(int, T)]
                     let mut inner_ty = ResolvedType::Unknown;
                     if let Some(arg) = args.first() {
@@ -477,7 +480,12 @@ impl TypeChecker {
                     Some(result_ty(ResolvedType::Unit, ResolvedType::Str))
                 }
                 BuiltinFnId::JsonStringify => {
-                    self.check_call_args(args);
+                    if args.len() != 1 {
+                        self.errors.push(errors::builtin_arity(name, 1, args.len(), call_span));
+                        self.check_call_args(args);
+                        return Some(ResolvedType::Str);
+                    }
+                    self.check_expr(Self::call_arg_expr(&args[0]));
                     Some(ResolvedType::Str)
                 }
             };

@@ -19271,6 +19271,10 @@ pub model Nested:
         let project = tempfile::tempdir()?;
         let entrypoint = project.path().join("main.incn");
         fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"replacement_inactive_feature\"\n\n[project.features]\nbeta = []\n",
+        )?;
+        fs::write(
             &entrypoint,
             "when feature(\"beta\"):\n    def main() -> int:\n        return 7\n",
         )?;

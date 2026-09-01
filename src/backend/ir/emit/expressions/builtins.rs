@@ -75,6 +75,38 @@ fn stringify_file_io_error(result: TokenStream) -> TokenStream {
     quote! { (#result).map_err(|error| error.to_string()) }
 }
 
+/// Emit scalar or trait-backed JSON serialization after evaluating the source operand exactly once.
+fn emit_json_stringify(emitter: &IrEmitter<'_>, args: &[TypedExpr]) -> Result<TokenStream, EmitError> {
+    let [arg] = args else {
+        return Err(EmitError::InternalInvariant(format!(
+            "checked json_stringify call reached emission with {} operands instead of one",
+            args.len()
+        )));
+    };
+    // A source-level `None` has no payload type for Rust to infer here. JSON serializes every empty `Option<T>` as
+    // `null`, so use the unit payload as the concrete, behavior-neutral representative at this builtin boundary.
+    let value = if matches!(&arg.kind, IrExprKind::None) {
+        quote! { None::<()> }
+    } else {
+        emitter.emit_expr(arg)?
+    };
+    let binding = if matches!(&arg.ty, IrType::Int) {
+        // Integer literals are emitted without a suffix elsewhere so surrounding Rust can infer their type. The
+        // generic serializer supplies no such context, so retain Incan's canonical signed 64-bit representation.
+        quote! { let __incan_json_value: &i64 = &(#value); }
+    } else {
+        // Bind one borrow so an rvalue is evaluated once while a named owned value remains available to its source.
+        quote! { let __incan_json_value = &(#value); }
+    };
+    Ok(quote! {{
+        #binding
+        incan_stdlib::json::__private::stringify_or_raise(
+            __incan_json_value,
+            std::any::type_name_of_val(__incan_json_value),
+        )
+    }})
+}
+
 /// Emit the builtin `zip(left, right)` as the same source-owned iterator model used by `.zip()`.
 fn emit_zip(emitter: &IrEmitter<'_>, args: &[TypedExpr]) -> Result<Option<TokenStream>, EmitError> {
     let [left, right, ..] = args else {
@@ -112,21 +144,13 @@ fn is_frozen_string_iterable_type(ty: &IrType) -> bool {
     }
 }
 
-/// Return whether `ty` lowers to a byte vector or byte slice that yields Incan integer items.
-fn is_bytes_iterable_type(ty: &IrType) -> bool {
-    match ty {
-        IrType::Bytes | IrType::StaticBytes => true,
-        IrType::Ref(inner) | IrType::RefMut(inner) => is_bytes_iterable_type(inner),
-        _ => false,
-    }
-}
-
-/// Return whether `ty` lowers to a `FrozenBytes` wrapper that must be unwrapped before iteration.
-fn is_frozen_bytes_iterable_type(ty: &IrType) -> bool {
-    match ty {
-        IrType::FrozenBytes => true,
-        IrType::Ref(inner) | IrType::RefMut(inner) => is_frozen_bytes_iterable_type(inner),
-        _ => false,
+/// Emit canonical string length without consuming the argument; retain ordinary `.len()` for other operands.
+fn emit_len(emitter: &IrEmitter<'_>, arg: &TypedExpr) -> Result<TokenStream, EmitError> {
+    let value = emitter.emit_expr(arg)?;
+    if is_string_iterable_type(&arg.ty) || is_frozen_string_iterable_type(&arg.ty) {
+        Ok(quote! { incan_stdlib::strings::str_len(&(#value)) })
+    } else {
+        Ok(quote! { ::std::convert::identity(#value.len() as i64) })
     }
 }
 
@@ -156,6 +180,24 @@ fn emit_sum(emitter: &IrEmitter<'_>, arg: &TypedExpr) -> Result<TokenStream, Emi
                 incan_stdlib::errors::raise_value_error("integer overflow in builtin `sum`")
             })
     })
+}
+
+/// Return whether `ty` lowers to a byte vector or byte slice that yields Incan integer items.
+fn is_bytes_iterable_type(ty: &IrType) -> bool {
+    match ty {
+        IrType::Bytes | IrType::StaticBytes => true,
+        IrType::Ref(inner) | IrType::RefMut(inner) => is_bytes_iterable_type(inner),
+        _ => false,
+    }
+}
+
+/// Return whether `ty` lowers to a `FrozenBytes` wrapper that must be unwrapped before iteration.
+fn is_frozen_bytes_iterable_type(ty: &IrType) -> bool {
+    match ty {
+        IrType::FrozenBytes => true,
+        IrType::Ref(inner) | IrType::RefMut(inner) => is_frozen_bytes_iterable_type(inner),
+        _ => false,
+    }
 }
 
 impl<'a> IrEmitter<'a> {
@@ -205,6 +247,15 @@ impl<'a> IrEmitter<'a> {
         Ok(tokens)
     }
 
+    /// Emit `enumerate(arg)` where the checked expression is retained as a `list[tuple[int, T]]` value.
+    ///
+    /// Direct `for` and comprehension consumers call [`Self::emit_enumerate_iter`] instead, preserving the lazy
+    /// iterator path they consume immediately. A stored value must materialize before later list traversal.
+    fn emit_enumerate_value(&self, arg: &TypedExpr) -> Result<TokenStream, EmitError> {
+        let iter = self.emit_enumerate_iter(arg)?;
+        Ok(quote! { (#iter).collect::<Vec<_>>() })
+    }
+
     /// Emit a builtin function call using enum-based dispatch.
     ///
     /// This handles calls that have been lowered to `IrExprKind::BuiltinCall`.
@@ -224,8 +275,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFn::Print => self.emit_print_call(args),
             BuiltinFn::Len => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(quote! { ::std::convert::identity(#a.len() as i64) })
+                    emit_len(self, arg)
                 } else {
                     Ok(quote! { 0i64 })
                 }
@@ -338,9 +388,9 @@ impl<'a> IrEmitter<'a> {
                 .map(|opt| opt.unwrap_or_else(|| quote! { 0..0 })),
             BuiltinFn::Enumerate => {
                 if let Some(arg) = args.first() {
-                    self.emit_enumerate_iter(arg)
+                    self.emit_enumerate_value(arg)
                 } else {
-                    Ok(quote! { std::iter::empty::<(i64, ())>() })
+                    Ok(quote! { Vec::<(i64, ())>::new() })
                 }
             }
             BuiltinFn::Zip => {
@@ -406,16 +456,7 @@ impl<'a> IrEmitter<'a> {
                     }))
                 }
             }
-            BuiltinFn::JsonStringify => {
-                if let Some(arg) = args.first() {
-                    let value = self.emit_expr(arg)?;
-                    Ok(quote! {
-                        incan_stdlib::json::__private::stringify_or_raise(&#value, std::any::type_name_of_val(&#value))
-                    })
-                } else {
-                    Ok(quote! { String::from("null") })
-                }
-            }
+            BuiltinFn::JsonStringify => emit_json_stringify(self, args),
             BuiltinFn::CollectionConstructor(CollectionTypeId::Set) => {
                 if args.len() > 1 {
                     return Err(EmitError::InternalInvariant(format!(
@@ -487,8 +528,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFnId::Print => self.emit_print_call(args).map(Some),
             BuiltinFnId::Len => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
-                    Ok(Some(quote! { ::std::convert::identity(#a.len() as i64) }))
+                    emit_len(self, arg).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -599,7 +639,7 @@ impl<'a> IrEmitter<'a> {
             BuiltinFnId::Range => self.emit_range_call(args),
             BuiltinFnId::Enumerate => {
                 if let Some(arg) = args.first() {
-                    self.emit_enumerate_iter(arg).map(Some)
+                    self.emit_enumerate_value(arg).map(Some)
                 } else {
                     Ok(None)
                 }
@@ -665,16 +705,7 @@ impl<'a> IrEmitter<'a> {
                     })))
                 }
             }
-            BuiltinFnId::JsonStringify => {
-                if let Some(arg) = args.first() {
-                    let value = self.emit_expr(arg)?;
-                    Ok(Some(quote! {
-                        incan_stdlib::json::__private::stringify_or_raise(&#value, std::any::type_name_of_val(&#value))
-                    }))
-                } else {
-                    Ok(None)
-                }
-            }
+            BuiltinFnId::JsonStringify => emit_json_stringify(self, args).map(Some),
         }
     }
 
@@ -752,6 +783,44 @@ mod tests {
             IrType::Int,
         ])));
         assert!(!enumerate_elem_can_copy(&IrType::Option(Box::new(IrType::Int))));
+    }
+
+    /// The explicit canonical and retained legacy identities both emit a value matching `list[tuple[int, T]]`.
+    #[test]
+    fn canonical_and_legacy_enumerate_values_materialize_checked_lists() -> Result<(), Box<dyn std::error::Error>> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let values = TypedExpr::new(
+            IrExprKind::Var {
+                name: "values".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::List(Box::new(IrType::Int)),
+        );
+
+        let canonical = emitter
+            .emit_builtin_call(&BuiltinFn::Enumerate, std::slice::from_ref(&values))?
+            .to_string()
+            .split_whitespace()
+            .collect::<String>();
+        assert!(
+            canonical.contains("collect::<Vec<_>>()"),
+            "explicit BuiltinFn::Enumerate must emit a materialized list value: {canonical}"
+        );
+
+        assert_eq!(builtins::from_str("enumerate"), Some(BuiltinFnId::Enumerate));
+        let legacy = emitter
+            .try_emit_builtin_call("enumerate", &[values])?
+            .ok_or_else(|| std::io::Error::other("registered legacy enumerate identity must emit"))?
+            .to_string()
+            .split_whitespace()
+            .collect::<String>();
+        assert!(
+            legacy.contains("collect::<Vec<_>>()"),
+            "legacy BuiltinFnId::Enumerate must emit a materialized list value: {legacy}"
+        );
+        Ok(())
     }
 
     /// Both retained builtin dispatch paths must emit explicit checks, never profile-sensitive Rust arithmetic.

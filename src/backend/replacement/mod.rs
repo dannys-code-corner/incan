@@ -7,13 +7,13 @@
 //! recursive tuple/list values, fully supplied source-local plain-model values, and exact source-local RFC 032
 //! value-enum members followed by their generated scalar `.value()` extraction. It admits one numeric tuple or
 //! canonical plain-model field projection and one integer list projection or assignment;
-//! builtin iteration remains limited to `list[tuple[scalar, scalar]]`. The selected entrypoint must produce a scalar
-//! observable, although an admitted sibling may return a structural intermediate to its direct caller. The executor
-//! also consumes the retained callable vocabulary directly: captured local closures, partial presets,
-//! source-evaluable defaults, identity-selected local or same-module named calls, generator expressions and
-//! generator functions, and their bounded lazy `map`/`filter` adapters. Packages, Rust interop, unsupported
-//! callable/default forms, general destructuring, and other projections remain visible refusals. Its enclosing
-//! declaration snapshot retains a deferred generator's shape, but the frame executes and adds execution-frame
+//! builtin iteration admits structural lists, canonical global list enumeration, and list-pair Zip. The selected
+//! entrypoint must produce a scalar observable, although an admitted sibling may return a structural intermediate to
+//! its direct caller. The executor also consumes the retained callable vocabulary directly: captured local closures,
+//! partial presets, source-evaluable defaults, identity-selected local or same-module named calls, generator
+//! expressions and generator functions, and their bounded lazy `map`/`filter` adapters. Packages, Rust interop,
+//! unsupported callable/default forms, general destructuring, and other projections remain visible refusals. Its
+//! enclosing declaration snapshot retains a deferred generator's shape, but the frame executes and adds execution-frame
 //! evidence only when collection polls it; no path falls back to generated Rust.
 //!
 //! One checked provider-service operation also executes directly, from the already-lowered
@@ -23,8 +23,10 @@
 //! at the original source span.
 
 pub mod hashed;
+mod list_iteration;
 pub mod program_io;
 pub mod provider;
+mod provider_preflight;
 
 pub use program_io::{ProgramIo, ProgramIoError, ProgramOutput};
 
@@ -90,6 +92,8 @@ pub enum ReplacementValue {
         elements: Vec<ReplacementValue>,
         next: usize,
     },
+    /// A canonical global Zip over two checked structural lists, with private left-to-right polling state.
+    Zip(Box<ReplacementZip>),
     /// A source-local structural tuple whose elements remain direct replacement values.
     Tuple(Vec<ReplacementValue>),
     /// An immutable hashed set; operand reads share its table rather than copying it before every probe.
@@ -158,13 +162,22 @@ pub enum ReplacementValue {
     Adapter(Box<ReplacementAdapter>),
     /// Values materialized by an admitted lazy generator consumer such as `.collect()`.
     ///
-    /// This is deliberately distinct from [`Self::List`]: the latter remains the existing scalar-pair collection
-    /// profile, while this variant makes the narrow generator consumer explicit and lets its scalar results be
-    /// indexed without admitting general list execution.
+    /// This is deliberately distinct from [`Self::List`]: the latter carries checked structural elements, while
+    /// this variant preserves the generator consumer's separate admission and indexing contract.
     CollectedGenerator {
         elements: Vec<ReplacementValue>,
         next: usize,
     },
+}
+
+/// Private list cursors for one compiler-selected Zip invocation.
+///
+/// Construction evaluates both source operands once in written order. Polling then advances the left list before
+/// the right and returns no pair as soon as either is exhausted; this carrier grants no general iterator admission.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReplacementZip {
+    left: ReplacementValue,
+    right: ReplacementValue,
 }
 
 /// A stored closure or partial-callable environment.
@@ -395,6 +408,7 @@ impl ReplacementValue {
             Self::Generator(_) => "<generator>".to_string(),
             Self::Task(_) => "<task>".to_string(),
             Self::Adapter(_) => "<generator-adapter>".to_string(),
+            Self::Zip(_) => "<zip-iterator>".to_string(),
             Self::CollectedGenerator { elements, .. } => format!(
                 "[{}]",
                 elements
@@ -745,7 +759,10 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
     }
     validate_scalar_arguments(args, body.span)?;
     validate_selected_float_parameter_arguments(&body.params, args)?;
-    validate_direct_body_profile(body, providers.map(Rc::as_ref))?;
+    // Preserve the selected body's numeric refusal before querying provider availability.
+    validate_nonordinary_numeric_locals(body)?;
+    provider_preflight::validate(module, body, providers.map(Rc::as_ref))?;
+    validate_direct_body_profile(body)?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
@@ -754,17 +771,14 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
     })
 }
 
-/// Validate every direct-execution invariant of one body before it is executed or stored as a lazy frame.
+/// Validate the structural direct-execution invariants of one body before it is executed or stored as a lazy frame.
 ///
 /// The selected entrypoint and every same-module named callee use this one gate. Applying it only at the entrypoint
 /// would let an otherwise admitted call dispatch an unvalidated sibling body and publish a receipt for a profile the
-/// runtime promises to refuse.
-fn validate_direct_body_profile(
-    body: &Body,
-    providers: Option<&ProviderRuntime>,
-) -> Result<(), ReplacementExecutionError> {
+/// runtime promises to refuse. Provider-host availability is checked separately across the reachable computation
+/// once during preparation; runtime invocation still rechecks the host and authority.
+fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
     validate_nonordinary_numeric_locals(body)?;
-    validate_provider_operation_hosts(&body.block.stmts, providers)?;
     // An `async def` produces an awaitable even when its body has no explicit `await`. Executing its statements as
     // an ordinary scalar body would erase task construction, suspension, wake, cancellation, and receipt semantics
     // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
@@ -774,7 +788,8 @@ fn validate_direct_body_profile(
     }
     validate_binding_identity(body)?;
     let range_iterator_locals = range_iterator_locals(&body.block);
-    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals)?;
+    let zip_iterator_locals = list_iteration::validate_body(body)?;
+    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals, &zip_iterator_locals)?;
     validate_nested_structural_aggregate_types(body)?;
     let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
     let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
@@ -790,62 +805,71 @@ fn validate_direct_body_profile(
     }
 }
 
-/// Refuse every admitted provider operation this body invokes that no host in this run executes.
+/// Resolve one named call by its retained same-module identity for both preflight and runtime dispatch.
 ///
-/// This is a separate pass rather than another clause of the structural profile validator because it asks a
-/// different question. The structural gate asks whether the *plan* is executable at all — an active provider, a
-/// capability-kinded authority, one input per argument — and needs nothing but the plan to answer. This asks
-/// whether *this run* has a host for the operation, which only the supplied runtime knows. Splitting them keeps the
-/// structural refusal identical whether or not a runtime was supplied, and keeps both refusals before execution, so
-/// an unresolved operation never leaves a partially executed body or an execution receipt behind.
-fn validate_provider_operation_hosts(
-    statements: &[Statement],
-    providers: Option<&ProviderRuntime>,
-) -> Result<(), ReplacementExecutionError> {
-    for statement in statements {
-        match &statement.kind {
-            StatementKind::Call {
-                callee: Callee::ProviderOperation(plan),
-                ..
-            } => {
-                let resolved = providers.is_some_and(|runtime| runtime.resolves(&plan.operation));
-                if !resolved {
-                    return Err(unsupported(
-                        format!(
-                            "provider operation `{}` that no provider host in this run executes",
-                            plan.operation.declaration_name
-                        ),
-                        plan.call_span,
-                    ));
-                }
-            }
-            StatementKind::If {
-                then_block, else_block, ..
-            } => {
-                validate_provider_operation_hosts(&then_block.stmts, providers)?;
-                if let Some(else_block) = else_block {
-                    validate_provider_operation_hosts(&else_block.stmts, providers)?;
-                }
-            }
-            StatementKind::Loop { body } => validate_provider_operation_hosts(&body.stmts, providers)?,
-            StatementKind::Race { arms, .. } => {
-                for arm in arms {
-                    validate_provider_operation_hosts(&arm.body.stmts, providers)?;
-                }
-            }
-            StatementKind::Assign {
-                rvalue: Rvalue::Match { arms, .. },
-                ..
-            } => {
-                for arm in arms {
-                    validate_provider_operation_hosts(&arm.guard_stmts, providers)?;
-                    validate_provider_operation_hosts(&arm.body_stmts, providers)?;
-                }
-            }
-            _ => {}
-        }
+/// The source name is only a consistency check after unique, module-scoped identity selection. Neither caller may
+/// fall back to a name lookup, an imported target or a malformed body identity.
+fn named_callable_body<'module>(
+    module: &'module BodyIrModule,
+    target: &NamedCallableTarget,
+    span: HirSourceSpan,
+) -> Result<&'module Body, ReplacementExecutionError> {
+    let direct_call_id = target.direct_call_id.as_ref().ok_or_else(|| {
+        unsupported(
+            format!(
+                "named callable `{}` without a same-module declaration identity",
+                target.name
+            ),
+            span,
+        )
+    })?;
+    if !is_module_span_declaration_id(module, direct_call_id) {
+        return Err(unsupported(
+            "named callable declaration identity is not scoped to this Body-IR module",
+            span,
+        ));
     }
-    Ok(())
+    let mut matching_bodies = module
+        .bodies
+        .iter()
+        .filter(|body| body.direct_call_id == *direct_call_id);
+    let body = matching_bodies.next().ok_or_else(|| {
+        unsupported(
+            format!(
+                "named callable `{}` targets a declaration outside this Body-IR module",
+                target.name
+            ),
+            span,
+        )
+    })?;
+    if matching_bodies.next().is_some() {
+        return Err(unsupported(
+            format!(
+                "named callable `{}` declaration identity selects multiple Body-IR bodies",
+                target.name
+            ),
+            span,
+        ));
+    }
+    if !has_canonical_direct_call_id(module, body) {
+        return Err(unsupported(
+            format!(
+                "named callable `{}` body does not retain its canonical declaration identity",
+                target.name
+            ),
+            span,
+        ));
+    }
+    if body.name != target.name {
+        return Err(unsupported(
+            format!(
+                "named callable `{}` disagrees with its same-module declaration identity",
+                target.name
+            ),
+            span,
+        ));
+    }
+    Ok(body)
 }
 
 /// Validate the deliberately source-local async subset without treating a task frame as a synchronous body.
@@ -859,7 +883,8 @@ fn validate_direct_async_body_profile(body: &Body) -> Result<(), ReplacementExec
     }
     validate_async_binding_identity(body)?;
     let range_iterator_locals = range_iterator_locals(&body.block);
-    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals)?;
+    let zip_iterator_locals = list_iteration::validate_body(body)?;
+    validate_collection_local_types(body, &body.block.stmts, &range_iterator_locals, &zip_iterator_locals)?;
     validate_nested_structural_aggregate_types(body)?;
     let tuple_iteration_locals = builtin_iteration_destinations(&body.block);
     let scalar_tuple_collection_locals = scalar_tuple_collection_elements(&body.block);
@@ -1196,12 +1221,13 @@ fn validate_closure_profile(
 /// Validate structural aggregate destinations and retain the narrower builtin-iteration type boundary.
 ///
 /// Runtime operands alone cannot classify an empty aggregate. This pass therefore consumes the compiler-owned local
-/// declaration type before execution: tuple and list aggregates may be recursively structural values, while the
-/// existing builtin collection iteration profile remains restricted to scalar tuple pairs.
+/// declaration type before execution: tuple and list aggregates and their loop items may be recursively structural
+/// values. Range and canonical Zip iterators have their own checked item contracts.
 fn validate_collection_local_types(
     body: &Body,
     statements: &[Statement],
     range_iterator_locals: &BTreeSet<LocalId>,
+    zip_iterator_locals: &BTreeSet<LocalId>,
 ) -> Result<(), ReplacementExecutionError> {
     for statement in statements {
         match &statement.kind {
@@ -1236,7 +1262,7 @@ fn validate_collection_local_types(
                 let iterator_local = bare_local(&iterator.place, statement.span)?;
                 if range_iterator_locals.contains(&iterator_local) {
                     validate_range_iteration_local_types(body, destination, iterator_local, statement.span)?;
-                } else {
+                } else if !zip_iterator_locals.contains(&iterator_local) {
                     validate_structural_iteration_local_type(
                         body,
                         bare_local(destination, statement.span)?,
@@ -1254,21 +1280,31 @@ fn validate_collection_local_types(
             StatementKind::If {
                 then_block, else_block, ..
             } => {
-                validate_collection_local_types(body, &then_block.stmts, range_iterator_locals)?;
+                validate_collection_local_types(body, &then_block.stmts, range_iterator_locals, zip_iterator_locals)?;
                 if let Some(else_block) = else_block {
-                    validate_collection_local_types(body, &else_block.stmts, range_iterator_locals)?;
+                    validate_collection_local_types(
+                        body,
+                        &else_block.stmts,
+                        range_iterator_locals,
+                        zip_iterator_locals,
+                    )?;
                 }
             }
             StatementKind::Loop { body: loop_body } => {
-                validate_collection_local_types(body, &loop_body.stmts, range_iterator_locals)?;
+                validate_collection_local_types(body, &loop_body.stmts, range_iterator_locals, zip_iterator_locals)?;
             }
             StatementKind::Assign {
                 rvalue: Rvalue::Match { arms, .. },
                 ..
             } => {
                 for arm in arms {
-                    validate_collection_local_types(body, &arm.guard_stmts, range_iterator_locals)?;
-                    validate_collection_local_types(body, &arm.body_stmts, range_iterator_locals)?;
+                    validate_collection_local_types(
+                        body,
+                        &arm.guard_stmts,
+                        range_iterator_locals,
+                        zip_iterator_locals,
+                    )?;
+                    validate_collection_local_types(body, &arm.body_stmts, range_iterator_locals, zip_iterator_locals)?;
                 }
             }
             _ => {}
@@ -1359,7 +1395,7 @@ fn validate_nested_aggregate_types_in_rvalue(body: &Body, rvalue: &Rvalue) -> Re
 ///
 /// Generator frames use a deliberately different `IterNext` type contract from ordinary bodies. Deferred aggregate
 /// checks therefore share the same compiler-owned local type rule without accidentally applying the enclosing
-/// body's scalar-pair collection-iteration restriction to generator-local iterator values.
+/// body's structural-list iteration rule to generator-local iterator values.
 fn validate_structural_aggregate_types_in_statements(
     body: &Body,
     statements: &[Statement],
@@ -1616,6 +1652,26 @@ fn format_interpolation(
     }
 }
 
+/// Serialize one admitted scalar with the same `serde_json` implementation as generated native code.
+///
+/// The direct profile intentionally stops at `int`, `bool`, `str`, and `None`/unit. Structural values may be
+/// serializable on the native route, but admitting them here requires separate type, ordering, and failure-parity
+/// evidence; they remain an original-call-span refusal instead of acquiring a second serializer policy.
+fn stringify_json_scalar(
+    value: ReplacementValue,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    let serialized = match value {
+        ReplacementValue::Int(value) => serde_json::to_string(&value),
+        ReplacementValue::Bool(value) => serde_json::to_string(&value),
+        ReplacementValue::Str(value) => serde_json::to_string(&value),
+        ReplacementValue::Unit => serde_json::to_string(&()),
+        other => return Err(unsupported(format!("`json_stringify` of {}", value_kind(&other)), span)),
+    }
+    .map_err(|error| runtime_failure(format!("`json_stringify` serialization failed: {error}"), span))?;
+    Ok(ReplacementValue::Str(serialized))
+}
+
 /// The integer elements of a list-shaped value, with booleans counted as 1/0.
 ///
 /// `sum`, `min` and `max` all emit `iter()`-based Rust over a list, and the emitted `sum` maps `bool` to `1i64`/
@@ -1707,7 +1763,7 @@ fn is_explicit_range_builtin(target: &NamedCallableTarget) -> bool {
 /// The compiler-owned builtin this target names, if it names one and source did not take the spelling.
 ///
 /// A same-module declaration carries a [`NamedCallableTarget::direct_call_id`] and dispatches to itself, so a
-/// module defining its own `print` or `len` keeps meaning its own. One accessor rather than a predicate per
+/// module defining its own `range` or `len` keeps meaning its own. One accessor rather than a predicate per
 /// builtin, so admission and execution read the same answer instead of drifting apart as the set grows.
 fn explicit_builtin(target: &NamedCallableTarget) -> Option<BuiltinFnId> {
     target.direct_call_id.is_none().then_some(target.builtin).flatten()
@@ -1717,9 +1773,10 @@ fn explicit_builtin(target: &NamedCallableTarget) -> Option<BuiltinFnId> {
 ///
 /// Deliberately a subset. A builtin belongs here only when this runtime's answer provably matches the one the
 /// Rust-emission backend generates for the same call; anything else refuses by name rather than producing a second
-/// opinion. `len` over a `str` is the instructive exclusion — see [`BodyExecutor::execute_builtin`].
+/// opinion. String `len` is admitted because both routes share the canonical Unicode-scalar helper.
 const EXECUTABLE_BUILTINS: &[BuiltinFnId] = &[
     BuiltinFnId::Print,
+    BuiltinFnId::Bool,
     BuiltinFnId::Str,
     BuiltinFnId::Int,
     BuiltinFnId::Float,
@@ -1728,6 +1785,10 @@ const EXECUTABLE_BUILTINS: &[BuiltinFnId] = &[
     BuiltinFnId::Sum,
     BuiltinFnId::Min,
     BuiltinFnId::Max,
+    BuiltinFnId::Sorted,
+    BuiltinFnId::Enumerate,
+    BuiltinFnId::Zip,
+    BuiltinFnId::JsonStringify,
 ];
 
 /// Collect the local identities written by builtin collection polling across one normalized body.
@@ -2031,7 +2092,9 @@ fn validate_call_profile(
         ));
     };
     let supported = match callee {
-        Callee::Helper(HelperOp::StrUpper | HelperOp::StrLower | HelperOp::StrStrip) => args.len() == 1,
+        Callee::Helper(HelperOp::StrUpper | HelperOp::StrLower | HelperOp::StrStrip | HelperOp::StrLen) => {
+            args.len() == 1
+        }
         Callee::Helper(HelperOp::StrReplace) => args.len() == 3,
         Callee::Helper(
             HelperOp::StrJoin
@@ -2087,7 +2150,7 @@ fn validate_call_profile(
         }
         // An admitted provider operation is executable when its plan is: an active provider, an authority that
         // really names a capability, and one described input per evaluated argument. Whether *this run* has a host
-        // for it is a different question, answered by `validate_provider_operation_hosts` before execution starts.
+        // for it is a different question, answered by `provider_preflight` before execution starts.
         Callee::ProviderOperation(plan) => {
             if let Some(description) = unexecutable_provider_plan(plan, args.len()) {
                 return Err(unsupported(description, span));
@@ -3129,6 +3192,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 helper @ (HelperOp::StrUpper
                 | HelperOp::StrLower
                 | HelperOp::StrStrip
+                | HelperOp::StrLen
                 | HelperOp::StrReplace
                 | HelperOp::StrJoin
                 | HelperOp::StrSplit
@@ -3443,64 +3507,8 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let direct_call_id = target.direct_call_id.as_ref().ok_or_else(|| {
-            unsupported(
-                format!(
-                    "named callable `{}` without a same-module declaration identity",
-                    target.name
-                ),
-                span,
-            )
-        })?;
-        if !is_module_span_declaration_id(&self.module, direct_call_id) {
-            return Err(unsupported(
-                "named callable declaration identity is not scoped to this Body-IR module",
-                span,
-            ));
-        }
-        let mut matching_bodies = self
-            .module
-            .bodies
-            .iter()
-            .filter(|body| body.direct_call_id == *direct_call_id);
-        let body = matching_bodies.next().ok_or_else(|| {
-            unsupported(
-                format!(
-                    "named callable `{}` targets a declaration outside this Body-IR module",
-                    target.name
-                ),
-                span,
-            )
-        })?;
-        if matching_bodies.next().is_some() {
-            return Err(unsupported(
-                format!(
-                    "named callable `{}` declaration identity selects multiple Body-IR bodies",
-                    target.name
-                ),
-                span,
-            ));
-        }
-        if !has_canonical_direct_call_id(&self.module, body) {
-            return Err(unsupported(
-                format!(
-                    "named callable `{}` body does not retain its canonical declaration identity",
-                    target.name
-                ),
-                span,
-            ));
-        }
-        let body = body.clone();
-        if body.name != target.name {
-            return Err(unsupported(
-                format!(
-                    "named callable `{}` disagrees with its same-module declaration identity",
-                    target.name
-                ),
-                span,
-            ));
-        }
-        validate_direct_body_profile(&body, self.providers.as_deref())?;
+        let body = named_callable_body(&self.module, target, span)?.clone();
+        validate_direct_body_profile(&body)?;
         if body.is_async && !target.type_args.is_empty() {
             return Err(unsupported("generic async callable target", span));
         }
@@ -3590,7 +3598,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         Ok(ReplacementValue::Range { next, end, step })
     }
 
-    /// Poll one admitted range or scalar-tuple-list iterator and express exhaustion as the Body-IR loop break it
+    /// Poll one admitted range, structural list or canonical Zip and express exhaustion as the Body-IR loop break it
     /// represents.
     fn execute_builtin_next(
         &mut self,
@@ -3650,15 +3658,13 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         }
     }
 
-    /// Execute one compiler-owned builtin whose answer provably matches the Rust-emission backend's.
+    /// Execute an admitted compiler-owned builtin from its retained target identity.
     ///
-    /// Each arm mirrors what `emit_builtin_call` generates rather than what the name suggests in Python, because a
-    /// second opinion is worse than a refusal: the two backends are meant to agree, and the shadow comparison would
-    /// have no way to notice if they quietly did not.
+    /// Each arm consumes the checked operand profile; the separate shadow route measures agreement with native
+    /// execution rather than deriving an answer from this evaluator.
     ///
-    /// `len` over a `str` is the exclusion worth naming. The Rust backend emits `.len()`, which on a `String` counts
-    /// **bytes**; Python's `len` counts characters. They agree only for ASCII, so this refuses rather than picking a
-    /// side — the underlying disagreement is a language-semantics question, not something an executor should settle.
+    /// String `len` follows the canonical Unicode-scalar helper shared with generated Rust. Collection length keeps
+    /// counting materialized elements, so the executor does not infer a string policy from a source name.
     fn execute_builtin(
         &mut self,
         builtin: BuiltinFnId,
@@ -3668,6 +3674,9 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         if matches!(builtin, BuiltinFnId::Print) {
             return self.execute_print(args, span);
         }
+        if matches!(builtin, BuiltinFnId::Enumerate | BuiltinFnId::Zip) {
+            return self.execute_list_iteration_builtin(builtin, args, span);
+        }
 
         let [argument] = args else {
             return Err(unsupported(format!("`{}` call arity", builtins::as_str(builtin)), span));
@@ -3675,16 +3684,27 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         let value = self.evaluate_operand(argument, span)?;
 
         match builtin {
-            // `.len() as i64` on a `Vec` counts elements, which both backends agree on. A `str` does not agree,
-            // and a value with no length at all is not a `len` this profile can answer.
+            // Canonical `bool` follows the native emitter only for values this replacement profile represents with
+            // the same checked carrier. Float, bytes, frozen collections, and higher-level wrappers remain visible
+            // refusals rather than acquiring truthiness from a lossy runtime guess.
+            BuiltinFnId::Bool => match value {
+                ReplacementValue::Bool(value) => Ok(ReplacementValue::Bool(value)),
+                ReplacementValue::Int(value) => Ok(ReplacementValue::Bool(value != 0)),
+                ReplacementValue::Str(value) => Ok(ReplacementValue::Bool(!value.is_empty())),
+                ReplacementValue::List { elements, .. } => Ok(ReplacementValue::Bool(!elements.is_empty())),
+                ReplacementValue::Set(values) => Ok(ReplacementValue::Bool(!values.is_empty())),
+                ReplacementValue::Dict(values) => Ok(ReplacementValue::Bool(!values.is_empty())),
+                other => Err(unsupported(format!("`bool` of {}", value_kind(&other)), span)),
+            },
+            // Collection length counts elements. String length follows the canonical Unicode-scalar contract, and a
+            // value with no length at all remains outside the profile.
             BuiltinFnId::Len => match value {
                 ReplacementValue::List { elements, .. }
                 | ReplacementValue::CollectedGenerator { elements, .. }
                 | ReplacementValue::Tuple(elements) => Ok(ReplacementValue::Int(elements.len() as i64)),
-                ReplacementValue::Str(_) => Err(unsupported(
-                    "`len` of a string, whose byte-versus-character meaning the two backends do not agree on",
-                    span,
-                )),
+                ReplacementValue::Set(values) => Ok(ReplacementValue::Int(values.len() as i64)),
+                ReplacementValue::Dict(values) => Ok(ReplacementValue::Int(values.len() as i64)),
+                ReplacementValue::Str(value) => Ok(ReplacementValue::Int(incan_core::strings::str_len(&value))),
                 other => Err(unsupported(format!("`len` of {}", value_kind(&other)), span)),
             },
             BuiltinFnId::Abs => match value {
@@ -3744,7 +3764,81 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     .map(ReplacementValue::Int)
                     .ok_or_else(|| unsupported("`max` of an empty collection", span))
             }
+            // This first sorting profile has no checked element-type fact at runtime for an empty list, so it
+            // admits only a nonempty list whose represented elements prove the integer carrier. Sorting consumes
+            // the evaluated clone and returns a fresh cursor, leaving the source local unchanged.
+            BuiltinFnId::Sorted => match value {
+                ReplacementValue::List { elements, .. } if elements.is_empty() => Err(unsupported(
+                    "`sorted` of an empty list outside the integer-only profile",
+                    span,
+                )),
+                ReplacementValue::List { elements, .. } => {
+                    let mut values = elements
+                        .into_iter()
+                        .map(|element| match element {
+                            ReplacementValue::Int(value) => Ok(value),
+                            other => Err(unsupported(
+                                format!(
+                                    "`sorted` list element {} outside the integer-only profile",
+                                    value_kind(&other)
+                                ),
+                                span,
+                            )),
+                        })
+                        .collect::<Result<Vec<_>, ReplacementExecutionError>>()?;
+                    values.sort();
+                    Ok(ReplacementValue::List {
+                        elements: values.into_iter().map(ReplacementValue::Int).collect(),
+                        next: 0,
+                    })
+                }
+                other => Err(unsupported(format!("`sorted` of {}", value_kind(&other)), span)),
+            },
+            BuiltinFnId::JsonStringify => stringify_json_scalar(value, span),
             other => Err(unsupported(format!("builtin `{}`", builtins::as_str(other)), span)),
+        }
+    }
+
+    /// Construct canonical global enumeration or Zip after the owning Body's checked-type preflight.
+    ///
+    /// Enumeration has a checked list result and therefore materializes its zero-based pairs. Zip retains two
+    /// list cursors for polling; evaluating its operands here preserves written argument order without inventing
+    /// general user-iterator dispatch. Both start fresh traversals rather than inheriting another local's cursor.
+    fn execute_list_iteration_builtin(
+        &mut self,
+        builtin: BuiltinFnId,
+        args: &[&Operand],
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        match (builtin, args) {
+            (BuiltinFnId::Enumerate, [source]) => {
+                let values = self.evaluate_list_elements(source, span)?;
+                let elements = values
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, value)| {
+                        let index = i64::try_from(index)
+                            .map_err(|_| unsupported("enumerate index outside the Incan int range", span))?;
+                        Ok(ReplacementValue::Tuple(vec![ReplacementValue::Int(index), value]))
+                    })
+                    .collect::<Result<Vec<_>, ReplacementExecutionError>>()?;
+                Ok(ReplacementValue::List { elements, next: 0 })
+            }
+            (BuiltinFnId::Zip, [left, right]) => {
+                let left = self.evaluate_list_elements(left, span)?;
+                let right = self.evaluate_list_elements(right, span)?;
+                Ok(ReplacementValue::Zip(Box::new(ReplacementZip {
+                    left: ReplacementValue::List {
+                        elements: left,
+                        next: 0,
+                    },
+                    right: ReplacementValue::List {
+                        elements: right,
+                        next: 0,
+                    },
+                })))
+            }
+            _ => Err(unsupported("enumerate/Zip call arity", span)),
         }
     }
 
@@ -4066,6 +4160,15 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             ReplacementValue::List { .. } | ReplacementValue::CollectedGenerator { .. } => Ok(None),
             ReplacementValue::Generator(generator) => self.resume_generator(generator, span),
             ReplacementValue::Adapter(adapter) => self.poll_adapter(adapter, span),
+            ReplacementValue::Zip(zip) => {
+                let Some(left) = self.poll_iterator(&mut zip.left, span)? else {
+                    return Ok(None);
+                };
+                let Some(right) = self.poll_iterator(&mut zip.right, span)? else {
+                    return Ok(None);
+                };
+                Ok(Some(ReplacementValue::Tuple(vec![left, right])))
+            }
             value => Err(unsupported(format!("iteration over {}", value_kind(value)), span)),
         }
     }
@@ -5255,6 +5358,10 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 let receiver = self.evaluate_operand(receiver, span)?.into_string(span)?;
                 ReplacementValue::Str(incan_core::strings::str_strip(&receiver))
             }
+            (HelperOp::StrLen, [receiver]) => {
+                let receiver = self.evaluate_operand(receiver, span)?.into_string(span)?;
+                ReplacementValue::Int(incan_core::strings::str_len(&receiver))
+            }
             (HelperOp::StrReplace, [receiver, from, to]) => {
                 let receiver = self.evaluate_operand(receiver, span)?.into_string(span)?;
                 let from = self.evaluate_operand(from, span)?.into_string(span)?;
@@ -5899,7 +6006,7 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
             ),
             preserved_feature_at_boundary(
                 "language.numeric-and-scalar",
-                "Bounded scalar arithmetic, comparisons, boolean operators, and strings execute directly from Body IR.",
+                "Bounded scalar arithmetic, comparisons, boolean operators, strings, and int/bool/str/None JSON stringification execute directly from Body IR.",
                 "src/frontend/typechecker/check_expr/ops.rs",
                 "fn check_binary",
                 "fn lower_binary",
@@ -5917,9 +6024,9 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
             ),
             implementation_requirement(
                 "runtime.scalar-values",
-                "Scalars, strings, operators, and conversions preserve checked type and failure behavior.",
+                "Scalars, strings, operators, conversions, and scalar JSON stringification preserve checked type, exact bytes, and failure behavior.",
                 "Body IR operands/rvalues and replacement evaluator",
-                "replacement-body-v0 scalar corpus",
+                "replacement-body-v0 scalar corpus, including replacement-body-v0-025",
                 "Scalar representation is an internal evaluator mechanism.",
             ),
             implementation_requirement(
@@ -5998,6 +6105,7 @@ const fn value_kind(value: &ReplacementValue) -> &'static str {
         ReplacementValue::Generator(_) => "generator",
         ReplacementValue::Task(_) => "direct task",
         ReplacementValue::Adapter(_) => "generator adapter",
+        ReplacementValue::Zip(_) => "Zip iterator",
         ReplacementValue::CollectedGenerator { .. } => "collected generator list",
     }
 }

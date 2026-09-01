@@ -10,6 +10,7 @@ use super::super::errors::LoweringError;
 use super::super::types::union_ir_type;
 use crate::frontend::ast::{self, Spanned};
 use incan_core::lang::surface::constructors::{self, ConstructorId};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 struct UnionPatternVariant {
@@ -447,7 +448,46 @@ impl AstLowering {
         let mut lowered_arms = Vec::new();
         let mut remaining_union_members = scrutinee_ty.union_members().map(|members| members.to_vec());
 
-        for a in arms {
+        // The surrounding statement-block counter contains the sum of every textual arm, but only one unguarded arm
+        // executes. Give each arm a counter containing its own reads plus reads after the match. This permits the final
+        // read in every mutually exclusive arm to move the same value without inventing a `Clone` requirement. Guarded
+        // arms stay on the established conservative counter: a guard can read a value, fail, and allow a later arm to
+        // execute. Once all unguarded arms are lowered, restore the counter with the complete syntactic arm total
+        // consumed so following source retains the established straight-line last-use behavior.
+        let arms_are_mutually_exclusive = arms.iter().all(|arm| arm.node.guard.is_none());
+        let arm_read_counts = arms
+            .iter()
+            .map(|arm| self.count_match_arm_ident_reads(&arm.node))
+            .collect::<Vec<_>>();
+        let mut all_arm_reads = HashMap::<String, usize>::new();
+        for counts in &arm_read_counts {
+            for (name, count) in counts {
+                *all_arm_reads.entry(name.clone()).or_default() += count;
+            }
+        }
+        let original_remaining_reads = self.remaining_ident_reads.clone();
+        let mut remaining_reads_after_match = original_remaining_reads.clone();
+        if arms_are_mutually_exclusive {
+            for reads in &mut remaining_reads_after_match {
+                for (name, count) in &all_arm_reads {
+                    if let Some(remaining) = reads.get_mut(name) {
+                        *remaining = remaining.saturating_sub(*count);
+                    }
+                }
+            }
+        }
+
+        for (a, current_arm_reads) in arms.iter().zip(&arm_read_counts) {
+            if arms_are_mutually_exclusive {
+                self.remaining_ident_reads = remaining_reads_after_match.clone();
+                for reads in &mut self.remaining_ident_reads {
+                    for (name, count) in current_arm_reads {
+                        if let Some(remaining) = reads.get_mut(name) {
+                            *remaining += count;
+                        }
+                    }
+                }
+            }
             let narrowed_subject_ty = remaining_union_members
                 .as_ref()
                 .and_then(|remaining| self.match_arm_remainder_type(&a.node.pattern.node, remaining));
@@ -499,7 +539,14 @@ impl AstLowering {
                 };
 
                 if let Some(target) = target {
-                    let arms = self.lower_narrowed_union_capture_arms(a, scrutinee_ty, target, &capture_bindings)?;
+                    let arms = match self.lower_narrowed_union_capture_arms(a, scrutinee_ty, target, &capture_bindings)
+                    {
+                        Ok(arms) => arms,
+                        Err(error) => {
+                            self.remaining_ident_reads = original_remaining_reads;
+                            return Err(error);
+                        }
+                    };
                     if !arms.is_empty() {
                         lowered_arms.extend(arms);
                         if a.node.guard.is_none()
@@ -538,7 +585,13 @@ impl AstLowering {
                 })
             })();
             self.pop_scope();
-            lowered_arms.push(arm_result?);
+            match arm_result {
+                Ok(arm) => lowered_arms.push(arm),
+                Err(error) => {
+                    self.remaining_ident_reads = original_remaining_reads;
+                    return Err(error);
+                }
+            }
 
             if a.node.guard.is_none()
                 && let Some(remaining) = remaining_union_members.as_mut()
@@ -547,6 +600,9 @@ impl AstLowering {
             }
         }
 
+        if arms_are_mutually_exclusive {
+            self.remaining_ident_reads = remaining_reads_after_match;
+        }
         Ok(lowered_arms)
     }
 

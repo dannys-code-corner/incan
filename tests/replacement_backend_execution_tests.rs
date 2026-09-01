@@ -4322,6 +4322,169 @@ def main() -> str:
 }
 
 #[test]
+fn replacement_executes_json_stringify_for_the_admitted_scalar_domain() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def negative() -> str:
+  return json_stringify(-9223372036854775807)
+
+def truth() -> str:
+  return json_stringify(true)
+
+def escaped() -> str:
+  return json_stringify("line\né\t\\\"")
+
+def absent() -> str:
+  return json_stringify(None)
+"#;
+    let module = lower_typed_body_ir(source)?;
+
+    assert_eq!(
+        execute_free_function(&module, "negative", &[])?.value,
+        ReplacementValue::Str("-9223372036854775807".to_string())
+    );
+    assert_eq!(
+        execute_free_function(&module, "truth", &[])?.value,
+        ReplacementValue::Str("true".to_string())
+    );
+    assert_eq!(
+        execute_free_function(&module, "escaped", &[])?.value,
+        ReplacementValue::Str("\"line\\né\\t\\\\\\\"\"".to_string())
+    );
+    assert_eq!(
+        execute_free_function(&module, "absent", &[])?.value,
+        ReplacementValue::Str("null".to_string())
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_json_stringify_evaluates_its_operand_once() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def observed_operand() -> int:
+  println("direct JSON operand")
+  return 7
+
+def main() -> str:
+  return json_stringify(observed_operand())
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Str("7".to_string()));
+    assert_eq!(execution.emitted_output(), ["direct JSON operand"]);
+    Ok(())
+}
+
+#[test]
+fn replacement_cli_reports_scalar_json_without_legacy_artifacts() -> Result<(), Box<dyn std::error::Error>> {
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("main.incn");
+    fs::write(
+        &entrypoint,
+        r#"def main() -> str:
+  maximum = json_stringify(9223372036854775807)
+  escaped = json_stringify("line\né\t\\\"")
+  absent = json_stringify(None)
+  return f"{maximum}|{escaped}|{absent}"
+"#,
+    )?;
+
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+            "--report",
+            "json",
+            "--report-output",
+            temporary
+                .path()
+                .join("replacement-report.json")
+                .to_string_lossy()
+                .as_ref(),
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "scalar JSON must execute through the ordinary replacement CLI path. stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert!(output.stderr.is_empty());
+    let report: serde_json::Value =
+        serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
+    assert_eq!(
+        report["replacement_execution"]["result"],
+        r#"9223372036854775807|"line\né\t\\\""|null"#
+    );
+    assert_eq!(report["replacement_execution"]["stdout_bytes"], serde_json::json!([]));
+    assert_eq!(report["replacement_execution"]["stderr_bytes"], serde_json::json!([]));
+    let receipt: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        temporary.path().join(".incan/backend/receipt.json"),
+    )?)?;
+    assert_eq!(receipt["executed_backend"], "replacement");
+    assert_eq!(receipt["fallback_outcome"], "not_needed");
+    assert!(
+        receipt["identity"]
+            .as_str()
+            .is_some_and(|identity| identity.starts_with("sha256:"))
+    );
+    assert!(
+        !temporary.path().join("target/incan").exists(),
+        "direct scalar JSON must not create a legacy generated-project directory"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_refuses_json_stringify_outside_the_scalar_domain_at_the_call_span()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "def main() -> str:\n  return json_stringify([1, 2])\n";
+    let module = lower_typed_body_ir(source)?;
+    let error = execute_free_function(&module, "main", &[])
+        .err()
+        .ok_or("direct list JSON must remain outside the scalar profile")?;
+    let call = "json_stringify([1, 2])";
+    let start = source.find(call).ok_or("fixture must contain the JSON call")?;
+    let span = error
+        .primary_span()
+        .ok_or("direct JSON refusal must retain a source span")?;
+
+    assert_eq!((span.start, span.end), (start, start + call.len()));
+    assert!(
+        error.to_string().contains("`json_stringify` of list"),
+        "the refusal must name the builtin and unsupported value kind: {error}"
+    );
+    Ok(())
+}
+
+#[test]
+fn replacement_dispatches_a_lexical_json_stringify_function_by_declaration_identity()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def json_stringify(value: int) -> int:
+  return value + 1
+
+def main() -> int:
+  return json_stringify(41)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let execution = execute_free_function(&module, "main", &[])?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(42));
+    assert!(
+        execution.body_snapshot.contains("body json_stringify"),
+        "the direct call must execute the retained source declaration: {}",
+        execution.body_snapshot
+    );
+    Ok(())
+}
+
+#[test]
 fn replacement_refuses_f_string_interpolation_it_cannot_render_identically() -> Result<(), Box<dyn std::error::Error>> {
     // Interpolation is deliberately narrow: structural list Display remains outside the shared rendering profile.
     // Ordinary float Display now uses the same normalized f64 value as native emission; Float Debug still refuses.

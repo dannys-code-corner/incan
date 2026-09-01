@@ -95,7 +95,7 @@ pub mod string_methods {
             const ONE_LIST_OF_STR: &[SelectedStringMethodArgumentKind] = &[SelectedStringMethodArgumentKind::ListOfStr];
 
             match self {
-                Self::Upper | Self::Lower | Self::Strip => Some(SelectedStringMethodSignature {
+                Self::Upper | Self::Lower | Self::Strip | Self::Len => Some(SelectedStringMethodSignature {
                     positional_arguments: NO_ARGUMENTS,
                     required_positional_arguments: 0,
                 }),
@@ -115,12 +115,7 @@ pub mod string_methods {
                     positional_arguments: ONE_STR,
                     required_positional_arguments: 1,
                 }),
-                Self::ToString
-                | Self::SplitWhitespace
-                | Self::StartsWith
-                | Self::EndsWith
-                | Self::Len
-                | Self::IsEmpty => None,
+                Self::ToString | Self::SplitWhitespace | Self::StartsWith | Self::EndsWith | Self::IsEmpty => None,
             }
         }
     }

@@ -21,7 +21,7 @@ fn hashed_membership_matches_the_receipt_backed_native_route() -> Result<(), Box
 
 /// Compile and execute the wide membership predicate on the same compiler-sized stack as the CLI.
 fn check_hashed_membership() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }

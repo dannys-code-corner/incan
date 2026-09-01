@@ -186,8 +186,8 @@ fn a_non_scalar_needle_refuses_even_over_an_empty_container() {
 
 #[test]
 fn float_stays_outside_the_hashed_key_domain() {
-    // Float remains outside the admitted hashed-key domain even though its carrier is normalized; it refuses as an
-    // element, a key, and a needle alike.
+    // Normalizing the ordinary Float carrier does not admit floating-point equality or hashing. It still refuses
+    // as an element, a key, and a needle alike.
     let float = ReplacementValue::Float(1.5);
     assert_eq!(
         ReplacementSet::from_elements([float.clone()]),

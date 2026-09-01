@@ -2414,6 +2414,8 @@ pub enum HelperOp {
     StrLower,
     /// `str.strip()` over a checked runtime string receiver.
     StrStrip,
+    /// `str.len()` over a checked runtime string receiver, counting Unicode scalar values.
+    StrLen,
     /// `str.replace(from, to)` over a checked runtime string receiver.
     StrReplace,
     /// `separator.join(items)` over a checked runtime string receiver.
@@ -2505,6 +2507,7 @@ impl HelperOp {
             StringMethodId::Upper => Some(Self::StrUpper),
             StringMethodId::Lower => Some(Self::StrLower),
             StringMethodId::Strip => Some(Self::StrStrip),
+            StringMethodId::Len => Some(Self::StrLen),
             StringMethodId::Replace => Some(Self::StrReplace),
             StringMethodId::Join => Some(Self::StrJoin),
             StringMethodId::Split => Some(Self::StrSplit),
@@ -2513,7 +2516,6 @@ impl HelperOp {
             | StringMethodId::SplitWhitespace
             | StringMethodId::StartsWith
             | StringMethodId::EndsWith
-            | StringMethodId::Len
             | StringMethodId::IsEmpty => None,
         }
     }
@@ -2532,6 +2534,7 @@ impl HelperOp {
             Self::StrUpper => "str_upper",
             Self::StrLower => "str_lower",
             Self::StrStrip => "str_strip",
+            Self::StrLen => "str_len",
             Self::StrReplace => "str_replace",
             Self::StrJoin => "str_join",
             Self::StrSplit => "str_split",

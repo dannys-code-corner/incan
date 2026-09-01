@@ -952,6 +952,20 @@ pub fn determine_conversion(expr: &IrExpr, target_ty: Option<&IrType>, context: 
                     Conversion::ToString
                 }
                 _ if borrowed_expr_needs_owned_materialization(expr, target_ty) => Conversion::Clone,
+                // A Read marks a source binding that remains live after this owned assignment. Preserve compiler-owned
+                // values with the centralized clone policy, but never infer Clone for an opaque Rust boundary type.
+                // Owned Rust strings are the one interop shape whose Clone contract the compiler owns.
+                (IrExprKind::Var { access, .. }, _)
+                    if !expr.ty.is_copy()
+                        && ((!matches!(expr.ty, IrType::RustDisplay(_)) && !is_rust_path_value_type(&expr.ty))
+                            && !matches!(expr.ty, IrType::Unknown)
+                            || is_owned_string_type(&expr.ty)) =>
+                {
+                    match access {
+                        VarAccess::Move => Conversion::None,
+                        _ => Conversion::Clone,
+                    }
+                }
                 (IrExprKind::Field { .. }, _)
                     if matches!(expr.ty, IrType::String) && field_read_needs_owned_materialization(expr) =>
                 {
@@ -1579,6 +1593,27 @@ mod tests {
 
         let conv = determine_conversion(&expr, Some(&target), ConversionContext::Assignment);
         assert_eq!(conv, Conversion::None);
+    }
+
+    #[test]
+    fn test_assignment_does_not_assume_opaque_rust_value_is_clone() {
+        for decoder_ty in [
+            IrType::Unknown,
+            IrType::Struct("zstd::stream::read::Decoder".to_string()),
+            IrType::RustDisplay("zstd::stream::read::Decoder<'a, R>".to_string()),
+        ] {
+            let expr = IrExpr::new(
+                IrExprKind::Var {
+                    name: "reader".to_string(),
+                    access: VarAccess::Read,
+                    ref_kind: VarRefKind::Value,
+                },
+                decoder_ty.clone(),
+            );
+
+            let conv = determine_conversion(&expr, Some(&decoder_ty), ConversionContext::Assignment);
+            assert_eq!(conv, Conversion::None);
+        }
     }
 
     #[test]

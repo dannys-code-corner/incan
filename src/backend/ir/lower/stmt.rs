@@ -2015,6 +2015,27 @@ impl AstLowering {
         }
     }
 
+    /// Count identifier reads in one `match` arm without conflating it with mutually exclusive sibling arms.
+    ///
+    /// The enclosing statement-block counter deliberately includes every arm as a conservative syntactic total.
+    /// Match lowering uses this per-arm view to decide whether a value may move inside the selected arm while still
+    /// restoring the all-arms total before lowering source that follows the match.
+    pub(super) fn count_match_arm_ident_reads(&self, arm: &ast::MatchArm) -> HashMap<String, usize> {
+        let mut counts = HashMap::new();
+        if let Some(guard) = &arm.guard {
+            self.count_expr_ident_reads(&guard.node, &mut counts);
+        }
+        match &arm.body {
+            ast::MatchBody::Expr(expr) => self.count_expr_ident_reads(&expr.node, &mut counts),
+            ast::MatchBody::Block(stmts) => {
+                for stmt in stmts {
+                    self.count_statement_ident_reads(&stmt.node, &mut counts);
+                }
+            }
+        }
+        counts
+    }
+
     /// Count the number of ident reads in a statement.
     ///
     /// # Parameters

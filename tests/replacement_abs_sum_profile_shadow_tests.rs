@@ -1,8 +1,8 @@
 //! Paired receipt-backed characterizations for builtin `abs` and `sum` overflow.
 //!
-//! The native-only module test observes the staged route independently. These assertions keep the final two-route
-//! contract separate. The caught panic is retained from the initial RED so any direct-route regression cannot be
-//! mistaken for native evidence.
+//! The native-only module test observes the staged route independently. These assertions keep the two-route contract
+//! separate. The panic guard turns an unexpected direct-executor panic into a test error so native evidence cannot be
+//! mistaken for a paired comparison.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;

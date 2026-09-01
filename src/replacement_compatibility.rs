@@ -1557,13 +1557,13 @@ fn validate_feature_surface_coverage(
             ));
         }
         if matches!(&comparison.evidence, ComparisonEvidence::Paired { .. })
-            && !matches!(
+            && matches!(
                 feature.evidence.direct_replacement,
-                DirectReplacementOutcome::Executable
+                DirectReplacementOutcome::ExplicitlyRefused | DirectReplacementOutcome::OutsideDirectExecution
             )
         {
             errors.push(format!(
-                "feature `{}` has paired scoped case `{}` without direct execution",
+                "feature `{}` has paired scoped case `{}` despite excluding direct execution",
                 feature.id, comparison.case_id
             ));
         }
@@ -1802,6 +1802,12 @@ fn registered_parity_corpus_case_id(case_id: &str) -> bool {
             | "replacement-body-v0-020"
             | "replacement-body-v0-021"
             | "replacement-body-v0-022"
+            | "replacement-body-v0-023"
+            | "replacement-body-v0-024"
+            | "replacement-body-v0-025"
+            | "replacement-body-v0-026"
+            | "replacement-body-v0-027"
+            | "replacement-body-v0-028"
     )
 }
 
@@ -1916,7 +1922,7 @@ pub fn render_developer_projection(
         ));
     }
     output.push_str("\n## Remaining-work issue map\n\n");
-    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. `replacement-body-v0-001` has one paired match, while all incomplete features and uncovered cases remain non-green.\n\n");
+    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. Stable corpus rows `replacement-body-v0-001` and `replacement-body-v0-020` through `replacement-body-v0-028` have case-scoped paired matches, while all incomplete features and uncovered cases remain non-green.\n\n");
     let features_by_owner = features_by_owner(&registry.features);
     for (owner, features) in features_by_owner {
         output.push_str(&format!(
@@ -2397,7 +2403,7 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
             1152,
             "Generator-function frames and resumption remain explicit replacement refusals.",
         ),
-        planned_feature(
+        planned_feature_with_bounded_cases(
             "iteration.protocol-and-adapters",
             "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
             1152,
@@ -2409,11 +2415,11 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
             1101,
             "Body IR protocol facts need a runtime dispatch and error-routing owner before the direct profile can admit these forms.",
         ),
-        planned_feature(
+        planned_feature_with_bounded_cases(
             "language.aggregates-and-projections",
             "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
             1154,
-            "Source-local scalar-key set/dict membership executes directly, with standalone replacement-body-v0-020 proving exact streams and a typed result across independent routes. This bounded proof does not establish the full aggregate contract; #1154 owns remaining direct value storage, projection and mutation behavior.",
+            "Source-local scalar-key set/dict membership and entry count plus nonempty integer-list sorting execute directly. Standalone replacement-body-v0-020, replacement-body-v0-026 and replacement-body-v0-028 prove their exact streams and typed results across independent routes. These bounded proofs do not establish the full aggregate or ordering contract; #1154 owns remaining direct value storage, projection and mutation behavior.",
         ),
         planned_feature(
             "language.control-flow-complete",
@@ -2433,11 +2439,11 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
             1279,
             "The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms.",
         ),
-        planned_feature(
+        planned_feature_with_bounded_cases(
             "language.strings-and-format",
             "String operators and formatting preserve interpolation order, conversions, and runtime failures.",
             1101,
-            "String concatenation, bounded scalar interpolation and selected canonical string helpers execute directly. The separate replacement-body-v0-021 corpus case proves the selected helpers, not this full formatting contract; broad feature parity remains non-green.",
+            "String concatenation, bounded scalar interpolation, selected canonical string helpers and Unicode-scalar string length execute directly. The separate replacement-body-v0-021 and replacement-body-v0-024 corpus cases prove those bounded profiles, not this full formatting contract; broad feature parity remains non-green.",
         ),
         planned_feature(
             "module.identity-and-aliases",
@@ -2665,6 +2671,33 @@ fn planned_feature(
     )
 }
 
+/// Build a broad planned feature while retaining independently executable bounded corpus cases.
+///
+/// The feature-wide Body-IR, direct-execution, and comparison states remain non-green. Registered cases and their
+/// paired receipts describe only the named bounded probes, so landed evidence is not hidden behind the remaining
+/// feature work and does not promote that wider contract to preserved.
+fn planned_feature_with_bounded_cases(
+    id: &'static str,
+    contract: &'static str,
+    owner_issue: u32,
+    blocker: &'static str,
+) -> CompatibilityFeature {
+    let mut feature = planned_feature(id, contract, owner_issue, blocker);
+    let case_ids = registered_parity_case_ids(id);
+    let anchor_selector = case_ids.first().copied().unwrap_or("fn seed_corpus");
+    feature.evidence.surfaces.parity_corpus = ParityCorpusReference::Registered {
+        case_ids: case_ids.into_iter().map(str::to_string).collect(),
+        anchor: observed_anchor(
+            EvidenceSurface::ParityCorpus,
+            "tests/parity_corpus_tests.rs",
+            anchor_selector,
+            "The stable #987 corpus registers only the bounded direct profiles already executable inside this broader planned feature.",
+        ),
+    };
+    feature.evidence.surfaces.scoped_comparisons = scoped_comparisons(id);
+    feature
+}
+
 /// Build one planned feature at the module that owns its current compiler boundary.
 ///
 /// The bootstrap map uses [`planned_feature`] only until an implementation has a coherent local registration. New
@@ -2799,7 +2832,7 @@ pub(crate) fn preserved_feature_at_boundary(
         profile.typechecker_selector,
         "The audited typechecker boundary supplies the current source admission anchor for this bounded direct profile.",
     );
-    let case_ids = preserved_parity_case_ids(id);
+    let case_ids = registered_parity_case_ids(id);
     let direct_selector = case_ids.first().copied().unwrap_or("replacement-body-v0-001");
     CompatibilityFeature {
         id: id.to_string(),
@@ -2880,6 +2913,40 @@ fn completed_comparison_infrastructure() -> CompletedComparisonInfrastructure {
 /// Return case-scoped comparisons, each proving one registered corpus case without widening the feature.
 fn scoped_comparisons(feature_id: &str) -> Vec<CorpusCaseComparisonEvidence> {
     match feature_id {
+        "iteration.protocol-and-adapters" => vec![paired_scoped_comparison(
+            "replacement-body-v0-023",
+            "fn the_enumerate_zip_row_carries_two_route_receipts_and_exact_output",
+            "canonical list-based enumerate and Zip",
+        )],
+        "language.aggregates-and-projections" => vec![
+            paired_scoped_comparison(
+                "replacement-body-v0-020",
+                "fn the_hashed_membership_row_carries_two_route_receipts_and_exact_output",
+                "scalar-key set and dict membership",
+            ),
+            paired_scoped_comparison(
+                "replacement-body-v0-026",
+                "fn the_collection_len_row_carries_two_route_receipts_and_exact_output",
+                "distinct set-entry and dict-key counts",
+            ),
+            paired_scoped_comparison(
+                "replacement-body-v0-028",
+                "fn the_sorted_int_list_row_carries_two_route_receipts_and_exact_output",
+                "nonempty integer-list sorting",
+            ),
+        ],
+        "language.strings-and-format" => vec![
+            paired_scoped_comparison(
+                "replacement-body-v0-021",
+                "fn the_string_helper_row_carries_two_route_receipts_and_exact_output",
+                "selected canonical string helpers",
+            ),
+            paired_scoped_comparison(
+                "replacement-body-v0-024",
+                "fn the_string_len_row_carries_two_route_receipts_and_exact_output",
+                "Unicode-scalar string length",
+            ),
+        ],
         "language.numeric-and-scalar" => vec![
             CorpusCaseComparisonEvidence {
                 case_id: "replacement-body-v0-001".to_string(),
@@ -2929,13 +2996,99 @@ fn scoped_comparisons(feature_id: &str) -> Vec<CorpusCaseComparisonEvidence> {
                     ),
                 },
             },
+            CorpusCaseComparisonEvidence {
+                case_id: "replacement-body-v0-025".to_string(),
+                state: IndependentComparisonState::ComparedMatch,
+                evidence: ComparisonEvidence::Paired {
+                    legacy_receipt: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 verifies the legacy Oven route receipt for replacement-body-v0-025.",
+                    ),
+                    replacement_receipt: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 verifies the direct replacement route receipt for replacement-body-v0-025.",
+                    ),
+                    comparison_record: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_scalar_json_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 records exact scalar JSON bytes and the matched two-route source observable for replacement-body-v0-025.",
+                    ),
+                },
+            },
+            CorpusCaseComparisonEvidence {
+                case_id: "replacement-body-v0-027".to_string(),
+                state: IndependentComparisonState::ComparedMatch,
+                evidence: ComparisonEvidence::Paired {
+                    legacy_receipt: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 verifies the legacy Oven route receipt for replacement-body-v0-027.",
+                    ),
+                    replacement_receipt: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 verifies the direct replacement route receipt for replacement-body-v0-027.",
+                    ),
+                    comparison_record: observed_anchor(
+                        EvidenceSurface::IndependentComparison,
+                        "tests/parity_corpus_tests.rs",
+                        "fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output",
+                        "#1249 records bounded canonical truthiness and exact streams for replacement-body-v0-027.",
+                    ),
+                },
+            },
         ],
         _ => Vec::new(),
     }
 }
 
-/// Return the reviewed stable #987 rows that cover each bounded preserved direct profile.
-fn preserved_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
+/// Build one paired comparison record whose evidence remains confined to a single stable corpus case.
+fn paired_scoped_comparison(
+    case_id: &'static str,
+    test_selector: &'static str,
+    bounded_contract: &'static str,
+) -> CorpusCaseComparisonEvidence {
+    CorpusCaseComparisonEvidence {
+        case_id: case_id.to_string(),
+        state: IndependentComparisonState::ComparedMatch,
+        evidence: ComparisonEvidence::Paired {
+            legacy_receipt: observed_anchor(
+                EvidenceSurface::IndependentComparison,
+                "tests/parity_corpus_tests.rs",
+                test_selector,
+                &format!(
+                    "The paired corpus test verifies the legacy Oven receipt for {bounded_contract} in {case_id}."
+                ),
+            ),
+            replacement_receipt: observed_anchor(
+                EvidenceSurface::IndependentComparison,
+                "tests/parity_corpus_tests.rs",
+                test_selector,
+                &format!(
+                    "The paired corpus test verifies the direct replacement receipt for {bounded_contract} in {case_id}."
+                ),
+            ),
+            comparison_record: observed_anchor(
+                EvidenceSurface::IndependentComparison,
+                "tests/parity_corpus_tests.rs",
+                test_selector,
+                &format!(
+                    "The paired corpus test records matching exact streams and the typed result for {bounded_contract} in {case_id}."
+                ),
+            ),
+        },
+    }
+}
+
+/// Return the reviewed stable #987 rows that cover each bounded direct profile.
+fn registered_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
     match feature_id {
         "language.control-flow" => vec![
             "replacement-body-v0-004",
@@ -2948,7 +3101,16 @@ fn preserved_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
             "replacement-body-v0-003",
             "replacement-body-v0-005",
             "replacement-body-v0-022",
+            "replacement-body-v0-025",
+            "replacement-body-v0-027",
         ],
+        "iteration.protocol-and-adapters" => vec!["replacement-body-v0-023"],
+        "language.aggregates-and-projections" => vec![
+            "replacement-body-v0-020",
+            "replacement-body-v0-026",
+            "replacement-body-v0-028",
+        ],
+        "language.strings-and-format" => vec!["replacement-body-v0-021", "replacement-body-v0-024"],
         "async.tasks" => vec!["replacement-body-v0-018", "replacement-body-v0-019"],
         _ => Vec::new(),
     }

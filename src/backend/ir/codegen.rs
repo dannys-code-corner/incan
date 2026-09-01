@@ -3954,7 +3954,23 @@ def main() -> None:
     fn streaming_hash_helpers_import_io_error_for_reader_chunk_failures() -> Result<(), Box<dyn std::error::Error>> {
         let streaming_module = read_stdlib_program("crates/incan_stdlib/stdlib/hash/_streaming.incn")?;
         let streaming_code = IrCodegen::new().try_generate(&streaming_module)?;
+        let compact_streaming_code = streaming_code
+            .chars()
+            .filter(|character| !character.is_whitespace())
+            .collect::<String>();
 
+        assert!(
+            compact_streaming_code.contains("pubfnreader_digest<R:BinaryReader>"),
+            "the public reader API must retain its source-declared BinaryReader-only contract; got:\n{streaming_code}"
+        );
+        assert!(
+            compact_streaming_code.contains("_feed_digest_reader<H:ByteDigestHasher,R:BinaryReader>"),
+            "streaming over ReaderChunks<R> must preserve the source-declared BinaryReader contract without a hidden Clone requirement; got:\n{streaming_code}"
+        );
+        assert!(
+            !compact_streaming_code.contains("R:BinaryReader+Clone"),
+            "streaming hash dispatch must move mutually exclusive reader uses instead of narrowing public or private contracts with Clone; got:\n{streaming_code}"
+        );
         assert!(
             streaming_code.contains("pub use crate::__incan_std::io::IoError;"),
             "std.hash._streaming must import the IoError carried by BinaryReader chunks; got:\n{streaming_code}"
@@ -3962,6 +3978,22 @@ def main() -> None:
         assert!(
             streaming_code.contains("FallibleIterator::<\n                Vec<u8>,\n                IoError,"),
             "streaming reader helpers must preserve their fallible chunk type; got:\n{streaming_code}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn compression_auto_moves_non_clone_decoder_match_bindings() -> Result<(), Box<dyn std::error::Error>> {
+        let auto_module = read_stdlib_program("crates/incan_stdlib/stdlib/compression/_auto.incn")?;
+        let auto_code = IrCodegen::new().try_generate(&auto_module)?;
+
+        assert!(
+            auto_code.contains("let mut adapter = reader;"),
+            "a final assignment from a Rust decoder match binding must move without assuming Clone"
+        );
+        assert!(
+            !auto_code.contains("let mut adapter = reader.clone();"),
+            "non-Clone Rust decoder match bindings must not receive backend-inserted clones"
         );
         Ok(())
     }
