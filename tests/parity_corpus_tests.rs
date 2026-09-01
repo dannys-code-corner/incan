@@ -50,8 +50,16 @@ const SHADOW_COMPARED_CASE_ID: &str = "replacement-body-v0-001";
 
 /// Hashed membership has its own stable paired case; adding direct execution alone never widens this list.
 const HASHED_SHADOW_CASE_ID: &str = "replacement-body-v0-020";
-const SHADOW_COMPARED_CASE_IDS: [&str; 2] = [SHADOW_COMPARED_CASE_ID, HASHED_SHADOW_CASE_ID];
+const SHADOW_COMPARED_CASE_IDS: [&str; 3] = [
+    SHADOW_COMPARED_CASE_ID,
+    HASHED_SHADOW_CASE_ID,
+    STRING_HELPER_SHADOW_CASE_ID,
+];
 const HASHED_MEMBERSHIP_SOURCE: &str = include_str!("fixtures/replacement/hashed_membership.incn");
+
+/// Selected checked string helpers have a separate case; wider string/format behavior stays non-green.
+const STRING_HELPER_SHADOW_CASE_ID: &str = "replacement-body-v0-021";
+const STRING_HELPER_SOURCE: &str = include_str!("fixtures/replacement/string_helpers.incn");
 
 use parity_corpus::{
     BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, ReceiptRef,
@@ -2310,6 +2318,22 @@ fn seed_corpus() -> Vec<ParityCase> {
             }),
         },
         ParityCase {
+            id: STRING_HELPER_SHADOW_CASE_ID,
+            title: "Canonical selected string helpers agree across independent routes",
+            category: BehaviorCategory::StdlibRuntimeBehavior,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1256; tests/replacement_string_helper_shadow_tests.rs::selected_string_helpers_match_the_receipt_backed_native_route; seven retained helper identities, shared Unicode and separator behavior, exact stdout and a separate boolean result",
+            disposition: Disposition::Preserved,
+            source: STRING_HELPER_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "string_helpers",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Bool(true),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
             id: "parity-987-1156-provider-allowed",
             title: "An allowed provider operation executes and its backend receipt references the RFC 104 receipt",
             category: BehaviorCategory::SupportedLanguageContract,
@@ -2596,7 +2620,7 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 #[test]
 fn only_a_row_with_a_real_two_route_comparison_can_be_green() -> Result<(), Box<dyn std::error::Error>> {
     // This is the corpus's core promise: direct replacement execution does not become green parity merely because
-    // it has a receipt, and generated Rust never counts as proof. Only the two explicitly selected rows declare
+    // it has a receipt, and generated Rust never counts as proof. Only the explicitly selected rows declare
     // the bounded comparison profile; they are green only when their comparisons ran through Oven and agreed.
     //
     // The branch is taken on what the summary reports, not on whether a capability could be *resolved*: a staged
@@ -2775,6 +2799,60 @@ fn the_hashed_membership_row_carries_two_route_receipts_and_exact_output() -> Re
     Ok(())
 }
 
+/// The selected string row binds the typed result and both exact streams to independent no-fallback receipts.
+#[test]
+fn the_string_helper_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == STRING_HELPER_SHADOW_CASE_ID)
+        .ok_or("missing selected string-helper row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!("string helpers need matched two-route evidence, got {:?}", row.receipt).into());
+    };
+    let stdout = b"string helper checks\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Bool, \"true\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
 /// A comparison that could not run still leaves the row the replacement execution it really performed.
 #[test]
 fn an_unavailable_comparison_keeps_the_rows_replacement_evidence() -> Result<(), Box<dyn std::error::Error>> {
@@ -2820,8 +2898,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        20,
-        "the nineteen original direct cases and hashed membership must stay stable in #987"
+        21,
+        "the nineteen original direct cases plus hashed membership and selected string helpers must stay stable in #987"
     );
     let nominal_row = replacement_rows
         .iter()
