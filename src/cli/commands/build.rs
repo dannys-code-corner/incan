@@ -5474,6 +5474,33 @@ fn declared_rust_libraries_missing_from_selected_plan_with_owned_roots(
         .collect()
 }
 
+/// Profiles an explicit `oven bake` materializes, and that its consumers then expect to find.
+///
+/// A bake normally produces every profile a later `build`, `test`, or `run` could select, so a project with a
+/// large `[rust-dependencies]` closure pays a full optimized build even when only `debug` is ever loaded. On
+/// IncQL that release half measured 2098 of 2717 rustc CPU seconds.
+///
+/// This is deliberately an environment policy rather than an `oven bake` flag. The profile set is not private to
+/// the bake: `build` verifies project inspection authority across the same set, and a narrowed bake seen by a
+/// consumer that still expects both profiles reports "no source-current project inspection authority is
+/// available" rather than the profile it is actually missing. An environment override applies to every command in
+/// a session — one `env:` block in CI covers `bake`, `build`, and `test` alike — whereas a per-invocation flag
+/// would leave the consumers disagreeing with the bake that produced their inputs.
+///
+/// A future change could record the materialized profile set in the authority itself and let each consumer check
+/// only the profile it needs; until then the set must be stated the same way to every command.
+fn explicit_bake_profiles() -> Vec<&'static str> {
+    match std::env::var("INCAN_OVEN_BAKE_PROFILES")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        Some("debug") => vec!["debug"],
+        Some("release") => vec!["release"],
+        _ => vec!["debug", "release"],
+    }
+}
+
 /// Analyze, generate, receipt, and select the direct-Rustc plan for one normal Oven executable command.
 #[allow(clippy::too_many_arguments)]
 fn prepare_oven_project(
@@ -5757,7 +5784,7 @@ fn prepare_oven_project(
     let rust_dependencies = resolved.dependencies.clone();
     let rust_dev_dependencies = resolved.dev_dependencies.clone();
     let requested_provider_profiles = if oven_plan_mode == OvenProjectPlanMode::ExplicitBake {
-        vec!["debug", "release"]
+        explicit_bake_profiles()
     } else {
         vec![profile]
     };
@@ -8719,10 +8746,13 @@ fn completed_library_output_report(
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "incan_library".to_string());
+    // Prefer the release output, but accept the profile this project actually baked: a bake narrowed by
+    // `explicit_bake_profiles` has no release output, and this only names the reused library for the report.
     let release = outputs
         .iter()
         .find(|output| output.profile == "release")
-        .ok_or_else(|| CliError::failure("completed Oven library output is missing the release profile"))?;
+        .or_else(|| outputs.first())
+        .ok_or_else(|| CliError::failure("completed Oven library output has no profile to report"))?;
     let mut artifacts = Vec::new();
     for output in outputs {
         let native = output
@@ -9144,7 +9174,7 @@ fn select_default_library_project_outputs(
     let target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
     let toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
     let mut outputs = Vec::new();
-    for profile in ["debug", "release"] {
+    for profile in explicit_bake_profiles() {
         let Some(selected) = select_baked_project_output_with_source_authority(
             &store,
             &project_root,
@@ -10449,7 +10479,7 @@ fn prepare_library_project(
             .ok_or_else(|| CliError::failure("normal Oven library build omitted toolchain"))?;
         checked_packaged_provider_profiles(
             &provider_plan,
-            &["debug", "release"],
+            &explicit_bake_profiles(),
             target,
             toolchain,
             authority_context,
@@ -10591,7 +10621,7 @@ fn prepare_library_project(
             "library_oven_receipt_source_evidence",
             oven_receipt_source_evidence_start,
         );
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             let mut receipt_request = OvenGeneratedProjectRequest::new(
                 &project_root,
                 &project_name,
@@ -10740,10 +10770,14 @@ fn prepare_library_project(
     let oven_vocab_context_start = Instant::now();
     let normal_oven_vocab_context = if manifest.vocab().is_some() {
         if let Some(oven) = oven.as_ref() {
+            // Prefer the release selection, but fall back to whatever profile this bake actually prepared.
+            // An explicit bake may be narrowed to one profile (see `explicit_bake_profiles`), and the vocab
+            // helper is a wasm desugarer whose identity does not depend on the host profile that carried it.
             let release = oven
                 .profiles
                 .get("release")
-                .ok_or_else(|| CliError::failure("normal Oven library build did not prepare its release selection"))?;
+                .or_else(|| oven.profiles.values().next())
+                .ok_or_else(|| CliError::failure("normal Oven library build prepared no profile selection"))?;
             if release.plan_selection.artifacts().vocab_auxiliary_targets.is_empty() {
                 // A receipt-exact project closure may predate project-extension publication or legitimately own a
                 // disjoint Rust ABI universe. It must not manufacture compiler-private helper artifacts or invoke
@@ -10807,10 +10841,12 @@ fn prepare_library_project(
             &generator.output_dir().join("oven"),
         );
         report_draft.cargo = None;
+        // Report identities from the release selection when present, else the profile that was prepared.
         let release = oven
             .profiles
             .get("release")
-            .ok_or_else(|| CliError::failure("normal Oven library build did not prepare its release selection"))?;
+            .or_else(|| oven.profiles.values().next())
+            .ok_or_else(|| CliError::failure("normal Oven library build prepared no profile selection"))?;
         report_draft.oven = Some(BuildOvenReport {
             receipt_identity: release.receipt.identity.clone(),
             build_unit_identity: release.receipt.build_unit_identity.clone(),
@@ -12482,7 +12518,7 @@ fn try_reuse_baked_project(
     let lock_dependencies_fingerprint = baked_project_lock_dependencies_fingerprint(project_root)?;
     let mut expected_outputs = Vec::new();
     for (project_target, entrypoint) in targets {
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             let receipt_path = project_bake_receipt_path(project_root, *project_target, entrypoint, profile)?;
             let receipt = match fs::read(&receipt_path)
                 .ok()
@@ -13346,12 +13382,16 @@ pub fn build_library(
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            // Prefer the release output's backend receipt, but accept the profile this project actually baked.
+            // A bake narrowed by `explicit_bake_profiles` has no release output to find, and the default backend
+            // receipt records the selected plan rather than anything profile-specific.
             let backend_receipt = outputs
                 .iter()
                 .find(|output| output.profile == "release")
+                .or_else(|| outputs.first())
                 .and_then(completed_output_default_backend_receipt)
                 .ok_or_else(|| {
-                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                    CliError::failure("completed Oven library output has no verified backend receipt")
                 })?;
             for selected in outputs {
                 materialize_project_output(&project_root, &selected)?;
@@ -13729,7 +13769,7 @@ pub(crate) fn bake_oven_project_targets(
                         })
                     })
                     .transpose()?;
-                for profile in ["debug", "release"] {
+                for profile in explicit_bake_profiles() {
                     let prepared = prepare_oven_project(
                         entrypoint,
                         target_output_dir,
@@ -13897,12 +13937,16 @@ pub(crate) fn build_library_report(
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            // Prefer the release output's backend receipt, but accept the profile this project actually baked.
+            // A bake narrowed by `explicit_bake_profiles` has no release output to find, and the default backend
+            // receipt records the selected plan rather than anything profile-specific.
             let backend_receipt = outputs
                 .iter()
                 .find(|output| output.profile == "release")
+                .or_else(|| outputs.first())
                 .and_then(completed_output_default_backend_receipt)
                 .ok_or_else(|| {
-                    CliError::failure("completed Oven library output has no verified release backend receipt")
+                    CliError::failure("completed Oven library output has no verified backend receipt")
                 })?;
             for output in &outputs {
                 materialize_project_output(&project_root, output)?;
@@ -13950,7 +13994,7 @@ pub(crate) fn build_library_report(
             .as_ref()
             .ok_or_else(|| CliError::failure("normal Oven library build lost its prepared direct-rustc selection"))?;
         let mut bakes = Vec::new();
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             bakes.push((profile, bake_oven_library(&prepared, oven, profile, None)?));
         }
         let oven_build_ms = elapsed_ms(oven_build_start);
