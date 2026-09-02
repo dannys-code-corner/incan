@@ -5945,7 +5945,7 @@ mod tests {
     use std::time::Instant;
 
     #[test]
-    fn interop_bake_text_evidence_distinguishes_automatic_bootstrap_cargo() {
+    fn interop_bake_text_evidence_distinguishes_automatic_bootstrap_cargo() -> Result<(), Box<dyn std::error::Error>> {
         let report = super::OvenInteropBakeReport {
             target: "aarch64-apple-darwin".to_string(),
             base_receipt: PathBuf::from("base-receipt.json"),
@@ -5964,10 +5964,8 @@ mod tests {
 
         assert!(message.contains("named compatibility publisher"));
         assert!(!message.contains("without invoking Cargo"));
-        assert_eq!(
-            serde_json::to_value(&report).expect("interop report must serialize")["cargo_process_started"],
-            true
-        );
+        assert_eq!(serde_json::to_value(&report)?["cargo_process_started"], true);
+        Ok(())
     }
 
     #[test]

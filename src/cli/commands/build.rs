@@ -6220,6 +6220,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
 /// publishing the project delta, the baker canonicalizes compiler-owned runtime artifacts, overlapping locked registry
 /// units, and vocabulary auxiliaries against that exact base cohort. This prevents later consumers from observing
 /// distinct Incan release cohorts while preserving the project's own dependency lock.
+#[allow(clippy::too_many_arguments)] // Each input is a distinct publisher authority: store, receipt, roots, rustc, base Loaf, vocab support, kind.
 fn bake_generated_project_compatibility_plan(
     store: &OvenStore,
     receipt: &crate::oven::OvenReceipt,
@@ -6640,8 +6641,9 @@ fn select_or_bake_generated_project_plan(
             // The bootstrap has no caller-owned Rust registry inputs. Seed its generated manifest from the checked
             // compiler lock, normalize the local path records offline, and make the later compatibility build
             // unconditionally locked. That closes the first-plan loop without turning native interop into ambient
-            // Cargo or network discovery.
-            let compiler_lock = Path::new(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock");
+            // Cargo or network discovery. The lock is resolved through the toolchain layout: an installed release
+            // carries it below `crates/Cargo.lock`, and only a development checkout keeps it at the workspace root.
+            let compiler_lock = crate::toolchain_layout::resolve_toolchain_runtime_lockfile();
             let cargo = resolved_cargo_executable()
                 .map_err(|error| CliError::failure(format!("cannot resolve Cargo for interop bootstrap: {error}")))?;
             stage_locked_loaf_fixture(&cargo, generated_project, &compiler_lock).map_err(|error| {
@@ -17616,11 +17618,18 @@ impl ChildId {
         ])?;
         assert_eq!(selected, (OvenBakeProjectTarget::Executable, main));
 
-        let error = sole_oven_interop_executable_target(vec![
+        let error = match sole_oven_interop_executable_target(vec![
             (OvenBakeProjectTarget::Executable, project.path().join("src/main.incn")),
             (OvenBakeProjectTarget::Executable, extra),
-        ])
-        .expect_err("automatic interop bootstrap must not select one of several scripts");
+        ]) {
+            Err(error) => error,
+            Ok(selected) => {
+                return Err(format!(
+                    "automatic interop bootstrap must not select one of several scripts, but selected {selected:?}"
+                )
+                .into());
+            }
+        };
         assert!(error.to_string().contains("provide an explicit base receipt"));
         Ok(())
     }
