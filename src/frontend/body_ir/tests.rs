@@ -278,6 +278,19 @@ fn lowers_the_power_operator_as_a_primitive_keeping_the_checked_float_promotion(
 }
 
 #[test]
+fn exact_binary_float_arithmetic_keeps_the_checked_body_ir_width() -> Result<(), Box<dyn std::error::Error>> {
+    for kind in ["f32", "f64"] {
+        let source = format!("def f(left: {kind}, right: {kind}) -> {kind}:\n  return left * right\n");
+        let rendered = rendered_f(&source, &format!("exact_{kind}"))?;
+        assert!(
+            rendered.contains(&format!("local 2 <tmp> : {kind}")),
+            "{kind} multiplication must retain its checked exact result in Body IR: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn lowers_the_bitwise_and_shift_operators_as_primitives_keeping_the_checked_int_result()
 -> Result<(), Box<dyn std::error::Error>> {
     for (spelling, module_leaf) in [
@@ -1247,7 +1260,9 @@ fn top_level_defaults_lower_to_deferred_source_computations() -> Result<(), Box<
     assert_eq!(limit.name, "limit");
     assert_eq!(
         limit.ty,
-        IncanType::Primitive(IncanPrimitiveType::Numeric("u8".to_string()))
+        IncanType::Primitive(IncanPrimitiveType::Numeric(
+            incan_core::lang::types::numerics::NumericTypeId::U8
+        ))
     );
     let bir::CallableParamDefault::Source(limit_default) = &limit.default else {
         return Err("a checked literal default must become a deferred Body-IR computation".into());
@@ -1255,7 +1270,13 @@ fn top_level_defaults_lower_to_deferred_source_computations() -> Result<(), Box<
     let limit_start = source.find("7,").ok_or("missing literal default source spelling")?;
     assert_eq!(limit_default.span, HirSourceSpan::new(limit_start, limit_start + 1));
     assert!(limit_default.stmts.is_empty());
-    assert_eq!(limit_default.result, bir::Operand::Constant(bir::Constant::Int(7)));
+    assert_eq!(
+        limit_default.result,
+        bir::Operand::Constant(bir::Constant::TypedNumeric(bir::TypedNumericConstant::Unsigned {
+            kind: incan_core::lang::types::numerics::NumericTypeId::U8,
+            value: 7,
+        }))
+    );
 
     assert_eq!(value.local, bir::LocalId(1));
     assert_eq!(value.name, "value");
@@ -7477,5 +7498,71 @@ fn plain_multi_target_assignment_reuses_active_body_ir_locals() -> Result<(), Bo
             module.render_snapshot()
         );
     }
+    Ok(())
+}
+
+// ---- #1281: `isinstance` is an explicit checked Body-IR type test ----
+
+#[test]
+fn lowers_isinstance_as_a_typed_test_without_a_runtime_type_operand() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "type Text = str\n\ndef probe(value: int | str) -> bool:\n  return isinstance(value, Text)\n";
+    let module = build(source, &["m", "isinstance"])?;
+    let snapshot = module.render_snapshot();
+    let target_start = source.rfind("Text").ok_or("fixture must contain the target spelling")?;
+
+    assert!(
+        snapshot.contains(&format!(
+            "isinstance(move(_0, last_use): Union[int, str], target=str@{target_start}..{}",
+            target_start + 4
+        )),
+        "the typed test must retain the resolved target and its exact source span: {snapshot}"
+    );
+    assert!(
+        !snapshot.contains("call builtin:isinstance"),
+        "the target type must not be lowered as an ordinary runtime call argument: {snapshot}"
+    );
+    Ok(())
+}
+
+#[test]
+fn missing_checked_isinstance_target_lowers_to_an_explicit_target_span_refusal()
+-> Result<(), Box<dyn std::error::Error>> {
+    let source = "def probe(value: int | str) -> bool:\n  return isinstance(value, str)\n";
+    let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let program = parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let mut type_info = checker.type_info().clone();
+    let target = type_info
+        .calls
+        .isinstance_targets
+        .values()
+        .next()
+        .cloned()
+        .ok_or("fixture must record an isinstance target")?;
+    type_info.calls.isinstance_targets.clear();
+    let module_path = vec!["m".to_string(), "missing_isinstance_target".to_string()];
+    let module = build_body_ir_module_v0(&program, &module_path, &type_info);
+    let body = body_named(&module, "probe")?;
+    let refusal_span = body
+        .block
+        .stmts
+        .iter()
+        .find_map(|statement| {
+            matches!(
+                &statement.kind,
+                bir::StatementKind::Unsupported { description }
+                    if description == "isinstance without checked target evidence"
+            )
+            .then_some(statement.span)
+        })
+        .ok_or("missing target evidence must lower to an explicit refusal")?;
+    assert_eq!(
+        refusal_span,
+        HirSourceSpan::new(target.span.start, target.span.end),
+        "missing evidence must refuse at the target expression rather than guessing from its spelling"
+    );
     Ok(())
 }

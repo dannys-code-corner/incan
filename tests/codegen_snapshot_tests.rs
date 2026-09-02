@@ -1346,6 +1346,129 @@ def main() -> Result[None, str]:
 }
 
 #[test]
+fn generic_fallible_iterator_consumer_inherits_implementation_bounds_issue1280() {
+    let source = r#"
+from std.derives.collection import FallibleIterator
+
+model Stream[R] with FallibleIterator[int, str]:
+    value: R
+
+    def __next__(mut self) -> Result[Option[int], str]:
+        return Ok(None)
+
+pub def drain[R](value: R) -> Result[int, str]:
+    mut count = 0
+    for _item in Stream[R](value=value)?:
+        count += 1
+    return Ok(count)
+
+pub def relay[R](value: R) -> Result[int, str]:
+    return drain(value)
+
+def main() -> None:
+    return
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+    assert!(
+        compact.contains("impl<R:Clone>FallibleIterator<i64,String>forStream<R>"),
+        "the generic trait implementation must retain its backend-inferred Clone requirement:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("pubfndrain<R:Clone>(value:R)->Result<i64,String>"),
+        "a generic caller consuming that implementation must inherit the same Clone requirement:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("pubfnrelay<R:Clone>(value:R)->Result<i64,String>"),
+        "ordinary transitive callers must inherit the implementation requirement at the same fixed point:\n{rust_code}"
+    );
+}
+
+#[test]
+fn compiled_provider_consumer_inherits_manifest_implementation_bounds_issue1280()
+-> Result<(), Box<dyn std::error::Error>> {
+    use incan::frontend::library_manifest_index::{
+        LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
+    };
+    use incan::library_manifest::{
+        ImplementationTraitBoundExport, ImplementationTraitBoundOriginExport, ImplementationTypeParamExport,
+        LibraryManifest, ModelExport, TypeBoundExport, TypeParamExport, TypeRef,
+    };
+    use std::collections::HashMap;
+
+    let source = r#"
+from pub::streams import Stream
+
+pub def drain[R](stream: Stream[R]) -> Result[int, str]:
+    mut count = 0
+    for _item in stream?:
+        count += 1
+    return Ok(count)
+
+def main() -> None:
+    return
+"#;
+    let ast = parse_incan_program(source, "compiled provider implementation-bound consumer");
+    let mut manifest = LibraryManifest::new("streams_core", "0.1.0");
+    manifest.exports.models.push(ModelExport {
+        name: "Stream".to_string(),
+        type_params: vec![TypeParamExport {
+            name: "R".to_string(),
+            bounds: Vec::new(),
+        }],
+        traits: vec!["FallibleIterator".to_string()],
+        trait_adoptions: vec![TypeBoundExport {
+            name: "FallibleIterator".to_string(),
+            source_name: Some("FallibleIterator".to_string()),
+            module_path: Some(vec!["std".to_string(), "derives".to_string(), "collection".to_string()]),
+            type_args: vec![
+                TypeRef::Named {
+                    name: "int".to_string(),
+                },
+                TypeRef::Named {
+                    name: "str".to_string(),
+                },
+            ],
+            implementation_type_params: vec![ImplementationTypeParamExport {
+                name: "R".to_string(),
+                bounds: vec![ImplementationTraitBoundExport {
+                    trait_path: "Clone".to_string(),
+                    type_args: Vec::new(),
+                    associated_types: Vec::new(),
+                    origin: ImplementationTraitBoundOriginExport::Standard,
+                }],
+            }],
+        }],
+        derives: Vec::new(),
+        fields: Vec::new(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+    });
+    let index = LibraryManifestIndex::from_entries(HashMap::from([(
+        "streams".to_string(),
+        LibraryManifestIndexEntry::Loaded {
+            manifest: Box::new(manifest),
+            metadata: LibraryArtifactMetadata::from_crate_root(
+                "streams",
+                "streams_core",
+                std::env::temp_dir().join("incan_test_streams_artifacts"),
+            ),
+        },
+    )]));
+    let mut codegen = codegen_with_builtin_stdlib_inventory();
+    codegen.set_library_manifest_index(index);
+    let rust_code = codegen.try_generate(&ast)?;
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+    assert!(
+        compact.contains("pubfndrain<R:Clone>(stream:Stream<R>)->Result<i64,String>"),
+        "a manifest-only consumer must inherit the exact implementation requirement:\n{rust_code}"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_std_fallible_adapter_loop_inherits_qualified_trait_dispatch_codegen() {
     let source = r#"
 from std.io import BinaryReader
@@ -1703,6 +1826,64 @@ fn test_issue1116_builtin_len_shadowing_codegen() {
 }
 
 #[test]
+fn builtin_json_stringify_evaluates_its_operand_once() {
+    for call in [
+        "json_stringify(next_value())",
+        "std.builtins.json_stringify(next_value())",
+    ] {
+        let source = format!(
+            r#"
+def next_value() -> str:
+  println("evaluated")
+  return "line\né"
+
+def main() -> str:
+  return {call}
+"#
+        );
+        let rust_code = generate_rust(&source);
+        let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+        assert!(
+            compact.contains("let__incan_json_value=&(next_value());"),
+            "the emitted {call} must bind its operand before serialization; generated:\n{rust_code}"
+        );
+        assert_eq!(
+            compact.matches("next_value()").count(),
+            2,
+            "the declaration and one {call} operand evaluation must be the only occurrences; generated:\n{rust_code}"
+        );
+    }
+}
+
+#[test]
+fn builtin_json_stringify_gives_untyped_none_a_concrete_rust_type() {
+    let source = r#"
+def main() -> str:
+  return json_stringify(None)
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    assert!(
+        compact.contains("let__incan_json_value=&(None::<()>);"),
+        "an untyped Incan None must have a concrete serializable Rust type; generated:\n{rust_code}"
+    );
+}
+
+#[test]
+fn builtin_json_stringify_preserves_the_incan_int_width() {
+    let source = r#"
+def main() -> str:
+  return json_stringify(9223372036854775807)
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+    assert!(
+        compact.contains("let__incan_json_value:&i64=&(9223372036854775807);"),
+        "an Incan int operand must retain its i64 width at the JSON boundary; generated:\n{rust_code}"
+    );
+}
+
+#[test]
 fn test_issue950_builtin_zip_only_codegen() {
     let source = load_test_file("issue950_builtin_zip_only");
     let rust_code = generate_rust(&source);
@@ -1823,6 +2004,120 @@ fn test_rfc029_union_types_codegen() {
         "union isinstance chains must fully lower before Rust emission:\n{rust_code}"
     );
     insta::assert_snapshot!("rfc029_union_types", rust_code);
+}
+
+#[test]
+fn isinstance_alias_target_uses_the_typecheckers_resolved_target_in_native_lowering()
+-> Result<(), Box<dyn std::error::Error>> {
+    let rust_code = generate_rust(
+        r#"
+type Whole = int
+
+const STATIC_TEXT: str = "static text"
+
+def isinstance(value: int, target: int) -> bool:
+  return false
+
+pub def probe(value: int | str) -> bool:
+  return std.builtins.isinstance(value, Whole)
+
+pub def narrow_union(value: int | str) -> str:
+  if std.builtins.isinstance(value, str):
+    return value.upper()
+  return "number"
+
+pub def narrow_option(value: int | str | None) -> str:
+  if std.builtins.isinstance(value, int):
+    return "number"
+  else:
+    if value is None:
+      return "missing"
+    else:
+      return value.upper()
+
+pub def static_text_is_str() -> bool:
+  return std.builtins.isinstance(STATIC_TEXT, str)
+
+pub def frozen_union_kind(value: FrozenStr | int) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "number"
+
+pub def frozen_option_kind(value: FrozenStr | None) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "missing"
+
+pub def frozen_option_union_kind(value: Option[FrozenStr | int]) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "other"
+
+pub def mixed_string_union_kind(value: FrozenStr | str | int) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "number"
+
+pub def mixed_string_option_union_kind(value: Option[FrozenStr | str | int]) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "other"
+"#,
+    );
+    assert!(
+        !rust_code.contains("isinstance("),
+        "the native expression route must consume the retained alias-expanded target rather than emit a raw call:\n{rust_code}"
+    );
+    assert!(
+        rust_code.contains("matches!(value"),
+        "the checked explicit builtin expression must lower to native union dispatch:\n{rust_code}"
+    );
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact.contains("let_=STATIC_TEXT;true"),
+        "semantic str matching must normalize the native const/static-string storage form:\n{rust_code}"
+    );
+    let (_, frozen_shapes) = compact
+        .split_once("pubfnfrozen_union_kind")
+        .ok_or("missing frozen-union isinstance regression function")?;
+    let (frozen_union, frozen_options) = frozen_shapes
+        .split_once("pubfnfrozen_option_kind")
+        .ok_or("missing frozen-option isinstance regression function")?;
+    assert!(
+        frozen_union.contains("matchvalue") && frozen_union.contains("::V0(value)=>"),
+        "frozen-string union statement lowering must select and bind its semantic str variant:\n{rust_code}"
+    );
+    let (frozen_option, frozen_option_union) = frozen_options
+        .split_once("pubfnfrozen_option_union_kind")
+        .ok_or("missing frozen option-union isinstance regression function")?;
+    assert!(
+        frozen_option.contains("matchvalue{Some(value)=>"),
+        "optional frozen string must select its semantic str payload:\n{rust_code}"
+    );
+    assert!(
+        frozen_option_union.contains("Some(__IncanUnion") && frozen_option_union.contains("::V0(value))=>"),
+        "optional frozen-string union statement lowering must select and bind its semantic str variant:\n{rust_code}"
+    );
+    let (_, mixed_string_shapes) = compact
+        .split_once("pubfnmixed_string_union_kind")
+        .ok_or("missing mixed string-storage union isinstance regression function")?;
+    let (mixed_string_union, mixed_string_option_union) = mixed_string_shapes
+        .split_once("pubfnmixed_string_option_union_kind")
+        .ok_or("missing optional mixed string-storage union isinstance regression function")?;
+    assert_eq!(
+        mixed_string_union.matches("returnvalue.to_string()").count(),
+        2,
+        "every matching string-storage union variant must execute the true branch:\n{rust_code}"
+    );
+    assert_eq!(
+        mixed_string_option_union.matches("returnvalue.to_string()").count(),
+        2,
+        "every matching optional string-storage union variant must execute the true branch:\n{rust_code}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -2245,6 +2540,212 @@ def main() -> None:
 }
 
 #[test]
+fn exact_float_boundaries_emit_finite_guards_without_changing_ordinary_float() {
+    let source = r#"
+pub def parsed_exact(value: str) -> f64:
+    return float(value)
+
+pub def widened_exact(value: f32) -> f64:
+    return value
+
+pub def exact_f32(value: f32) -> f32:
+    return value
+
+pub def ordinary(value: str) -> float:
+    return float(value)
+"#;
+    let rust_code = generate_rust(source);
+    assert_eq!(
+        rust_code.matches("incan_stdlib::num::require_finite_f64").count(),
+        2,
+        "ordinary float must remain unguarded while exact f64 returns and f32 widening are guarded:\n{rust_code}"
+    );
+    assert_eq!(
+        rust_code.matches("incan_stdlib::num::require_finite_f32").count(),
+        3,
+        "public exact f32 inputs and exact f32 returns must be guarded:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_arithmetic_is_validated_before_every_observable_use() {
+    let source = r#"
+pub def returned_f32(left: f32, right: f32) -> f32:
+    return left * right
+
+pub def stored_f64(left: f64, right: f64) -> f64:
+    value: f64 = left * right
+    return value
+
+pub def compared_f32(left: f32, right: f32) -> bool:
+    return left * right > left
+
+pub def printed_f64(left: f64, right: f64) -> None:
+    println(left * right)
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    assert!(
+        compact.contains("require_finite_f32(left*right)"),
+        "exact f32 arithmetic must be checked before return or comparison:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("require_finite_f64(left*right)"),
+        "exact f64 arithmetic must be checked before storage or printing:\n{rust_code}"
+    );
+    assert!(
+        compact.contains(
+            "println!(\"{}\",incan_stdlib::num::require_finite_f64(incan_stdlib::num::require_finite_f64(left*right)))"
+        ),
+        "print must not observe a non-finite exact f64 arithmetic result:\n{rust_code}"
+    );
+    assert!(
+        compact.contains(">incan_stdlib::num::require_finite_f32(left)"),
+        "comparison must not observe a non-finite exact f32 arithmetic result:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_public_and_rust_ingress_is_guarded_before_observation() {
+    let source = r#"
+rust.module("incan_stdlib::num")
+
+@rust.extern
+pub def require_finite_f32(value: f32) -> f32:
+    ...
+
+pub def observe_exact(left: f32, right: f64) -> bool:
+    println(left)
+    rendered = str(right)
+    formatted = f"{left}"
+    return left < right
+
+pub def observe_ieee(value: float) -> bool:
+    println(value)
+    return value < value
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "let_=incan_stdlib::num::require_finite_f32(value);",
+        "incan_stdlib::num::require_finite_f32(incan_stdlib::num::require_finite_f32(value))",
+        "let_=incan_stdlib::num::require_finite_f32(left);",
+        "let_=incan_stdlib::num::require_finite_f64(right);",
+        "println!(\"{}\",incan_stdlib::num::require_finite_f32(left))",
+        "incan_stdlib::num::require_finite_f64(right).to_string()",
+        "format!(\"{}\",incan_stdlib::num::require_finite_f32(left))",
+        "((incan_stdlib::num::require_finite_f32(left))asf64)<incan_stdlib::num::require_finite_f64(right)",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "exact public/Rust ingress and observation must be finite-checked ({expected}); generated:\n{rust_code}"
+        );
+    }
+    assert!(
+        compact.contains("pubfnobserve_ieee(value:f64)->bool{let_=println!(\"{}\",value);returnvalue<value;"),
+        "ordinary float must retain unguarded IEEE observation behavior:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_scalars_extracted_from_aggregates_are_guarded_before_use() {
+    let source = r#"
+rust.module("incan_stdlib::num")
+
+@rust.extern
+def consume_exact(value: f32) -> f32:
+    ...
+
+pub model ExactSamples:
+    pub narrow: f32
+    pub wide: f64
+    pub maybe: Option[f32]
+
+pub def observe_aggregate(samples: ExactSamples, values: list[f64]) -> bool:
+    forwarded = consume_exact(samples.narrow)
+    return not samples.narrow.is_nan() and values[0].is_finite() and samples.wide.is_finite() and forwarded.is_finite()
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "require_finite_f32(samples.narrow).is_nan()",
+        "require_finite_f64(*incan_stdlib::collections::list_get(&values,(0)asi64)",
+        "require_finite_f64(samples.wide).is_finite()",
+        "consume_exact(incan_stdlib::num::require_finite_f32",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "exact aggregate scalar use must retain its finite guard ({expected}); generated:\n{rust_code}"
+        );
+    }
+    assert_eq!(
+        compact.matches("require_finite_f32(self.narrow)").count(),
+        2,
+        "field value reflection and field-item reflection must guard exact f32 values:\n{rust_code}"
+    );
+    assert_eq!(
+        compact.matches("require_finite_f64(self.wide)").count(),
+        2,
+        "field value reflection and field-item reflection must guard exact f64 values:\n{rust_code}"
+    );
+    assert_eq!(
+        compact.matches("require_finite_f32(*value)").count(),
+        2,
+        "optional exact field reflection must guard each present value:\n{rust_code}"
+    );
+}
+
+#[test]
+fn mixed_f32_arithmetic_widens_operands_for_f64_codegen() {
+    let source = r#"
+pub def with_f64(left: f32, right: f64) -> float:
+    added = left + right
+    divided = left / right
+    floored = left // right
+    remainder = left % right
+    return left ** right
+
+pub def with_float(left: f32, right: float) -> float:
+    return left + right
+
+pub def with_int(left: f32, right: int) -> float:
+    return left + right
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "(left)asf64+right",
+        "incan_stdlib::num::py_div((left)asf64,right)",
+        "incan_stdlib::num::py_floor_div_f64((left)asf64,right)",
+        "incan_stdlib::num::py_mod_f64((left)asf64,right)",
+        "((left)asf64).powf(right)",
+        "return(left)asf64+right;",
+        "return(left)asf64+(right)asf64;",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "mixed exact/broad arithmetic must emit concrete f64 operands ({expected}); generated:\n{rust_code}"
+        );
+    }
+}
+
+#[test]
 fn test_rfc046_computed_properties_codegen() {
     let source = load_test_file("rfc046_computed_properties");
     let rust_code = generate_rust(&source);
@@ -2326,7 +2827,7 @@ fn test_issue383_dict_comp_reuses_noncopy_key_codegen() {
     let source = load_test_file("issue383_dict_comp_reuses_noncopy_key");
     let rust_code = generate_rust(&source);
     assert!(
-        rust_code.contains(".map(|name| (name.clone(), ::std::convert::identity(name.len() as i64)))"),
+        rust_code.contains(".map(|name| (name.clone(), incan_stdlib::strings::str_len(&(name))))"),
         "expected dict comprehension to clone the non-Copy key before reading it again in the value expression; generated:\n{rust_code}"
     );
     insta::assert_snapshot!("issue383_dict_comp_reuses_noncopy_key", rust_code);

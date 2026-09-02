@@ -4229,7 +4229,7 @@ for BatchIterator<T, Source> {
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
-impl<T: Clone, Source: Iterator<T> + Clone> BatchIterator<T, Source> {
+impl<T: Clone, Source: Iterator<T>> BatchIterator<T, Source> {
     /// Build and return the next non-empty batch.
     pub fn __next__(&mut self) -> Option<Vec<T>> {
         let _ = "\n        Build and return the next non-empty batch.\n        ";
@@ -4286,8 +4286,7 @@ impl<T: Clone, Source: Iterator<T> + Clone> BatchIterator<T, Source> {
         incan_stdlib::frozen::FrozenList::new(&__INCAN_FIELDS)
     }
 }
-impl<T: Clone, Source: Iterator<T> + Clone> Iterator<Vec<T>>
-for BatchIterator<T, Source> {
+impl<T: Clone, Source: Iterator<T>> Iterator<Vec<T>> for BatchIterator<T, Source> {
     fn __next__(&mut self) -> Option<Vec<T>> {
         let _ = "\n        Build and return the next non-empty batch.\n        ";
         if self.size <= 0 {

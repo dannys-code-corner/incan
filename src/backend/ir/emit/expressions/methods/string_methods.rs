@@ -18,6 +18,7 @@ pub(super) fn emit_string_method(
         StringMethodKind::Upper => Ok(quote! { incan_stdlib::strings::str_upper(#r_borrow) }),
         StringMethodKind::Lower => Ok(quote! { incan_stdlib::strings::str_lower(#r_borrow) }),
         StringMethodKind::Strip => Ok(quote! { incan_stdlib::strings::str_strip(#r_borrow) }),
+        StringMethodKind::Len => Ok(quote! { incan_stdlib::strings::str_len(#r_borrow) }),
         StringMethodKind::Split => {
             let sep = if let Some(arg) = args.first() {
                 let a = emitter.emit_expr(arg)?;

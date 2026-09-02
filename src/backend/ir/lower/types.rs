@@ -9,7 +9,7 @@
 //! - `**` yields `Int` only for non-negative int literal exponents; otherwise `Float`
 
 use super::super::expr::BinOp;
-use super::super::types::{IR_UNION_TYPE_NAME, IrType};
+use super::super::types::{IR_UNION_TYPE_NAME, IrType, same_exact_binary_float_type};
 use super::errors::LoweringError;
 use super::{AstLowering, FunctionSignature};
 use crate::frontend::api_metadata::ApiDeclaration;
@@ -1228,6 +1228,9 @@ impl AstLowering {
             | ast::BinaryOp::FloorDiv
             | ast::BinaryOp::Mod
             | ast::BinaryOp::Pow => {
+                if let Some(exact_float) = same_exact_binary_float_type(left, right) {
+                    return exact_float;
+                }
                 if matches!(op, ast::BinaryOp::FloorDiv | ast::BinaryOp::Mod) {
                     if let IrType::Numeric(id) = left
                         && numerics::info_for(*id).family == NumericFamily::UnsignedInteger
@@ -1293,6 +1296,30 @@ mod tests {
     use crate::frontend::ast;
     use crate::frontend::symbols::ResolvedType;
     use crate::frontend::typechecker::canonical_public_library_type_name;
+    use incan_core::lang::types::numerics::NumericTypeId;
+
+    #[test]
+    fn exact_binary_float_arithmetic_keeps_its_native_ir_width() {
+        let lowering = AstLowering::new();
+        for kind in [NumericTypeId::F32, NumericTypeId::F64] {
+            let exact = IrType::Numeric(kind);
+            for op in [
+                ast::BinaryOp::Add,
+                ast::BinaryOp::Sub,
+                ast::BinaryOp::Mul,
+                ast::BinaryOp::Div,
+                ast::BinaryOp::FloorDiv,
+                ast::BinaryOp::Mod,
+                ast::BinaryOp::Pow,
+            ] {
+                assert_eq!(
+                    lowering.binary_result_type(&exact, &exact, &op, None),
+                    exact,
+                    "{kind:?} arithmetic lost its exact width for {op:?}"
+                );
+            }
+        }
+    }
 
     /// Imported trait defaults are expanded in the adopter's module, but their annotations still name types from the
     /// trait's defining module. Preserve that type identity without applying the same name rule to value expressions.

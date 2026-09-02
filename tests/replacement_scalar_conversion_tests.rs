@@ -237,9 +237,9 @@ def main() -> str:
 
 /// Keep compiler-distinguished numeric locals outside every selected scalar-conversion builtin.
 #[test]
-fn replacement_refuses_checked_nonordinary_numeric_locals_before_selected_scalar_conversions()
+fn replacement_executes_checked_typed_numeric_locals_through_selected_scalar_conversions()
 -> Result<(), Box<dyn std::error::Error>> {
-    for (case_name, source, type_name) in [
+    for (case_name, source, expected) in [
         (
             "str f32 local",
             r#"
@@ -247,7 +247,7 @@ def main() -> str:
   value: f32 = 1.23456789
   return str(value)
 "#,
-            "f32",
+            ReplacementValue::Str(1.234_567_9_f32.to_string()),
         ),
         (
             "int f64 local",
@@ -256,7 +256,7 @@ def main() -> int:
   value: f64 = 1.23456789
   return int(value)
 "#,
-            "f64",
+            ReplacementValue::Int(1),
         ),
         (
             "float sized integer local",
@@ -265,7 +265,7 @@ def main() -> float:
   value: u128 = 10
   return float(value)
 "#,
-            "u128",
+            ReplacementValue::Float(10.0),
         ),
         (
             "str f32 closure",
@@ -275,65 +275,41 @@ def main() -> str:
   render: () -> str = () => str(value)
   return render()
 "#,
-            "f32",
+            ReplacementValue::Str(1.234_567_9_f32.to_string()),
         ),
     ] {
         let module = lower_typed_body_ir(source)?;
-        let error = match execute_free_function(&module, "main", &[]) {
-            Ok(execution) => {
-                return Err(format!("{case_name} unexpectedly completed with {:?}", execution.value).into());
-            }
-            Err(error) => error,
-        };
-        let span = error
-            .primary_span()
-            .ok_or("a rejected numeric local must retain its declaration source span")?;
-        assert!(
-            module
-                .bodies
-                .iter()
-                .flat_map(|body| body.locals.iter())
-                .any(|local| local.ty.to_string() == type_name && local.span == span),
-            "{case_name} must refuse at a checked {type_name} local declaration, got {}..{}",
-            span.start,
-            span.end
-        );
-        assert!(
-            error.to_string().contains(&format!(
-                "checked nonordinary numeric local has Body-IR type `{type_name}`"
-            )),
-            "{case_name} must refuse the checked nonordinary numeric type rather than widening it: {error}"
-        );
+        let execution = execute_free_function(&module, "main", &[])?;
+        assert_eq!(execution.value, expected, "{case_name}");
     }
     Ok(())
 }
 
-/// Decimal values retain a distinct literal form and never enter the ordinary binary-float carrier.
+/// Decimal values retain their fixed decimal carrier and native Display spelling.
 #[test]
-fn replacement_refuses_decimal_observation_before_it_can_be_rendered() -> Result<(), Box<dyn std::error::Error>> {
+fn replacement_preserves_decimal_observation_without_entering_binary_float() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def main() -> None:
   value: decimal[5, 2] = 19.99d
   println(value)
 "#;
     let module = lower_typed_body_ir(source)?;
-    let error = require_execution_error(
-        execute_free_function(&module, "main", &[]),
-        "a decimal literal must not enter the ordinary direct float carrier",
-    )?;
-    assert!(error.to_string().contains("decimal literal"), "{error}");
-    let span = error
-        .primary_span()
-        .ok_or("decimal refusal must keep its original span")?;
-    assert!(span.start < span.end && span.end <= source.len());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+    let execution = execute_free_function_with_io(&module, "main", &[], &mut io)?;
+    drop(io);
+    assert_eq!(execution.value, ReplacementValue::Unit);
+    assert_eq!(stdout, b"19.99\n");
+    assert!(stderr.is_empty());
     Ok(())
 }
 
-/// Newly enabled Float display paths must not turn checked f32/f64/sized-int values into ordinary f64 output.
+/// Typed numeric Display paths retain their checked carrier's native spelling.
 #[test]
-fn replacement_refuses_nonordinary_numeric_values_in_print_and_fstring_paths() -> Result<(), Box<dyn std::error::Error>>
-{
-    let cases = [
+fn replacement_preserves_typed_numeric_values_in_print_and_fstring_paths() -> Result<(), Box<dyn std::error::Error>> {
+    let rounded = 1.234_567_9_f32.to_string();
+    let cases = vec![
         (
             "f32 print",
             r#"
@@ -341,7 +317,8 @@ def main() -> None:
   value: f32 = 1.23456789
   println(value)
 "#,
-            "f32",
+            ReplacementValue::Unit,
+            format!("{rounded}\n").into_bytes(),
         ),
         (
             "f32 f-string",
@@ -350,7 +327,8 @@ def main() -> str:
   value: f32 = 1.23456789
   return f"{value}"
 "#,
-            "f32",
+            ReplacementValue::Str(rounded.clone()),
+            Vec::new(),
         ),
         (
             "f32 sibling return",
@@ -361,7 +339,8 @@ def identity(value: f32) -> f32:
 def main() -> str:
   return f"{identity(1.23456789)}"
 "#,
-            "f32",
+            ReplacementValue::Str(rounded.clone()),
+            Vec::new(),
         ),
         (
             "f32 closure print",
@@ -371,7 +350,8 @@ def main() -> None:
   render: () -> None = () => println(value)
   render()
 "#,
-            "f32",
+            ReplacementValue::Unit,
+            format!("{rounded}\n").into_bytes(),
         ),
         (
             "sized integer string conversion",
@@ -380,36 +360,20 @@ def main() -> str:
   value: u128 = 10
   return str(value)
 "#,
-            "u128",
+            ReplacementValue::Str("10".to_string()),
+            Vec::new(),
         ),
     ];
-    for (case_name, source, type_name) in cases {
+    for (case_name, source, expected, expected_stdout) in cases {
         let module = lower_typed_body_ir(source)?;
-        let error = match execute_free_function(&module, "main", &[]) {
-            Ok(execution) => {
-                return Err(format!("{case_name} unexpectedly completed with {:?}", execution.value).into());
-            }
-            Err(error) => error,
-        };
-        let span = error
-            .primary_span()
-            .ok_or("a rejected observable numeric value must retain an original source span")?;
-        assert!(
-            module
-                .bodies
-                .iter()
-                .flat_map(|body| body.locals.iter())
-                .any(|local| local.ty.to_string() == type_name && local.span == span),
-            "{case_name} must refuse at a checked {type_name} local declaration, got {}..{}",
-            span.start,
-            span.end
-        );
-        assert!(
-            error.to_string().contains(&format!(
-                "checked nonordinary numeric local has Body-IR type `{type_name}`"
-            )),
-            "{case_name} must refuse instead of displaying a widened value: {error}"
-        );
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        let mut io = ProgramIo::new(&mut stdout, &mut stderr);
+        let execution = execute_free_function_with_io(&module, "main", &[], &mut io)?;
+        drop(io);
+        assert_eq!(execution.value, expected, "{case_name}");
+        assert_eq!(stdout, expected_stdout, "{case_name}");
+        assert!(stderr.is_empty(), "{case_name}");
     }
     Ok(())
 }
@@ -602,30 +566,22 @@ def main() -> float:
     Ok(())
 }
 
-/// Float values can be intermediate conversion results, but cannot widen either direct entrypoint boundary.
+/// Ordinary Float is a first-class direct entrypoint argument and result without becoming an exact `f64` carrier.
 #[test]
-fn replacement_refuses_float_direct_arguments_and_results_without_widening_the_profile()
--> Result<(), Box<dyn std::error::Error>> {
+fn replacement_preserves_float_direct_arguments_and_results() -> Result<(), Box<dyn std::error::Error>> {
     let argument_source = r#"
 def show(value: float) -> str:
-  println("must not run")
+  println("argument ran")
   return str(value)
 "#;
     let module = lower_typed_body_ir(argument_source)?;
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-    let argument_error = require_execution_error(
-        execute_free_function_with_io(&module, "show", &[ReplacementValue::Float(1.5)], &mut io),
-        "direct Float arguments remain outside the scalar entrypoint profile",
-    )?;
+    let argument_execution = execute_free_function_with_io(&module, "show", &[ReplacementValue::Float(1.5)], &mut io)?;
     drop(io);
-    assert!(
-        argument_error
-            .to_string()
-            .contains("float argument in the scalar replacement profile")
-    );
-    assert!(stdout.is_empty(), "preflight must run before the source print");
+    assert_eq!(argument_execution.value, ReplacementValue::Str("1.5".to_string()));
+    assert_eq!(stdout, b"argument ran\n");
     assert!(stderr.is_empty());
 
     let result_source = r#"
@@ -637,16 +593,9 @@ def main() -> float:
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
     let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-    let result_error = require_execution_error(
-        execute_free_function_with_io(&module, "main", &[], &mut io),
-        "a direct Float result remains outside the scalar result profile",
-    )?;
+    let result_execution = execute_free_function_with_io(&module, "main", &[], &mut io)?;
     drop(io);
-    assert!(
-        result_error
-            .to_string()
-            .contains("returning float from the scalar replacement profile")
-    );
+    assert_eq!(result_execution.value, ReplacementValue::Float(10.0));
     assert_eq!(stdout, b"before float result\n");
     assert!(stderr.is_empty());
     Ok(())

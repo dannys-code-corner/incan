@@ -1155,6 +1155,7 @@ fn trait_adoption_infos_from_bounds(
                 .map(|arg| ast_type_to_resolved(&arg.node, type_params))
                 .collect(),
             module_path: stdlib_imports.get(&bound.node.name).cloned(),
+            implementation_type_params: Vec::new(),
         })
         .collect()
 }
@@ -1260,6 +1261,7 @@ fn method_info_from_ast_method(
                             })
                             .collect(),
                         module_path: stdlib_imports.get(&bound.name).cloned(),
+                        implementation_type_params: Vec::new(),
                     })
                     .collect(),
             )
@@ -1288,6 +1290,7 @@ fn method_info_from_ast_method(
             .map(|arg| ast_type_to_resolved_with_rust_imports(&arg.node, &all_type_params, rust_imports))
             .collect(),
         module_path: stdlib_imports.get(&target.node.name).cloned(),
+        implementation_type_params: Vec::new(),
     });
     MethodInfo {
         type_params: method_type_params,
@@ -1334,6 +1337,7 @@ fn function_decl_to_info(func: &ast::FunctionDecl, stdlib_imports: &HashMap<Stri
                             .map(|arg| ast_type_to_resolved(&arg.node, &tp_names))
                             .collect(),
                         module_path: stdlib_imports.get(&bound.name).cloned(),
+                        implementation_type_params: Vec::new(),
                     })
                     .collect(),
             )

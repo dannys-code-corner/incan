@@ -16,6 +16,7 @@ pub mod indexing;
 pub mod interop;
 pub mod lang;
 pub mod numeric_strings;
+pub mod numeric_values;
 pub mod strings;
 
 /// Represent the numeric category used by semantic policy.

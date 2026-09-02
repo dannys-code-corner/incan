@@ -2560,6 +2560,107 @@ def main() -> None:
 }
 
 #[test]
+fn exact_f32_arithmetic_and_mixed_f64_operands_compile_and_run() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let project_name = unique_test_project_name("exact_float_arithmetic");
+    let src_dir = tmp.path().join("src");
+    fs::create_dir_all(&src_dir)?;
+    fs::write(
+        tmp.path().join("incan.toml"),
+        format!("[project]\nname = \"{project_name}\"\nversion = \"0.1.0\"\n"),
+    )?;
+    let source = r#"
+model ExactSamples:
+  narrow: f32
+  wide: f64
+
+
+def main() -> None:
+  narrow: f32 = 9.0
+  peer: f32 = 4.0
+  wide: f64 = 4.0
+  ieee: float = 0.5
+  count: int = 1
+  samples = ExactSamples(narrow=narrow, wide=wide)
+  exact_values: list[f64] = [wide]
+  println(narrow + peer)
+  println(narrow - peer)
+  println(narrow * peer)
+  println(narrow / peer)
+  println(narrow // peer)
+  println(narrow % peer)
+  println(narrow ** peer)
+  println(narrow + wide)
+  println(narrow / wide)
+  println(narrow // wide)
+  println(narrow % wide)
+  println(narrow ** wide)
+  println(narrow + ieee)
+  println(narrow + count)
+  println(samples.narrow.is_finite())
+  println(samples.wide.is_nan())
+  println(exact_values[0].is_finite())
+"#;
+    let main_path = src_dir.join("main.incn");
+    fs::write(&main_path, source)?;
+
+    let oven_home = tmp.path().join("incan-home");
+    let mut bake_command = incan_command();
+    bake_command
+        .args(["oven", "bake", "--project", "."])
+        .current_dir(tmp.path())
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home);
+    support::configure_explicit_oven_bake_command(&mut bake_command)?;
+    let bake_output = bake_command.output()?;
+    assert!(
+        bake_output.status.success(),
+        "expected explicit Oven bake to prepare exact-float arithmetic.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&bake_output.stdout),
+        String::from_utf8_lossy(&bake_output.stderr)
+    );
+
+    let out_dir = tmp.path().join("out");
+    let build_output = incan_command()
+        .args([
+            "build",
+            "--locked",
+            main_path.to_string_lossy().as_ref(),
+            out_dir.to_string_lossy().as_ref(),
+        ])
+        .current_dir(tmp.path())
+        .env("CARGO_NET_OFFLINE", "true")
+        .env("INCAN_HOME", &oven_home)
+        .output()?;
+
+    assert!(
+        build_output.status.success(),
+        "expected mixed exact-f32 arithmetic to compile and run.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&build_output.stdout),
+        String::from_utf8_lossy(&build_output.stderr)
+    );
+
+    let binary = out_dir.join("oven/release").join(&project_name);
+    assert!(
+        binary.is_file(),
+        "expected exact-float executable at {}",
+        binary.display()
+    );
+    let output = Command::new(&binary).output()?;
+    assert!(
+        output.status.success(),
+        "expected exact-float arithmetic executable to run.\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "13\n5\n36\n2.25\n2\n1\n6561\n13\n2.25\n2\n1\n6561\n9.5\n10\ntrue\nfalse\ntrue\n"
+    );
+    Ok(())
+}
+
+#[test]
 fn runtime_error_canonicalization_cases() -> Result<(), Box<dyn std::error::Error>> {
     // One CLI journey proves generated-main subprocess diagnostics. The same compiled program then exercises the
     // remaining independent runtime failures by selector, avoiding seven rebuilds of an otherwise identical project.
@@ -2573,6 +2674,16 @@ fn runtime_error_canonicalization_cases() -> Result<(), Box<dyn std::error::Erro
         ("swap", "IndexError", &["out of range for list"]),
         ("assert-int", "AssertionError", &["boom"]),
         ("assert-generic", "AssertionError", &["boom"]),
+        (
+            "exact-f32-overflow",
+            "ValueError",
+            &["non-finite float cannot initialize exact f32"],
+        ),
+        (
+            "exact-f64-overflow",
+            "ValueError",
+            &["non-finite float cannot initialize exact f64"],
+        ),
     ];
     let tmp = tempfile::tempdir()?;
     let project_name = unique_test_project_name("runtime_error_matrix");
@@ -2621,6 +2732,12 @@ def main() -> None:
     _ = fail_int("boom")
   elif scenario == "assert-generic":
     _ = fail_as[int]("boom")
+  elif scenario == "exact-f32-overflow":
+    let value: f32 = 3.4e38
+    println(value * value)
+  elif scenario == "exact-f64-overflow":
+    let value: f64 = 1.7e308
+    println(value * value)
 "#,
     )?;
 
@@ -3808,6 +3925,42 @@ def main() -> None:
             lines,
             vec!["GET/healthtext|HEAD/headtext"],
             "unexpected local partial output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generic_caller_inherits_selected_implementation_bounds_issue1280() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+from std.derives.collection import FallibleIterator
+
+model Stream[R] with FallibleIterator[int, str]:
+    value: R
+
+    def __next__(mut self) -> Result[Option[int], str]:
+        return Ok(None)
+
+pub def drain[R](value: R) -> Result[int, str]:
+    mut count = 0
+    for _item in Stream[R](value=value)?:
+        count += 1
+    return Ok(count)
+
+pub def relay[R](value: R) -> Result[int, str]:
+    return drain(value)
+
+def main() -> Result[None, str]:
+    println(relay("ready")?)
+    return Ok(None)
+"#,
+            "generic_implementation_bound_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["0"],
+            "unexpected generic implementation-bound output:\n{stdout}"
         );
         Ok(())
     }
@@ -6293,6 +6446,59 @@ def main() -> None:
             lines,
             vec!["FROM-STRING", "from-path", "missing"],
             "unexpected Option[Union] narrowing output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_string_storage_isinstance_union_variants_compile_and_run() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+const FROZEN_TEXT: FrozenStr = "frozen"
+
+def is_string(value: FrozenStr | str | int) -> bool:
+    return std.builtins.isinstance(value, str)
+
+def optional_is_string(value: Option[FrozenStr | str | int]) -> bool:
+    return std.builtins.isinstance(value, str)
+
+def render_string(value: FrozenStr | str | int) -> str:
+    if std.builtins.isinstance(value, str):
+        return str(value)
+    return "number"
+
+def render_optional_string(value: Option[FrozenStr | str | int]) -> str:
+    if std.builtins.isinstance(value, str):
+        return str(value)
+    return "other"
+
+def main() -> None:
+    println(is_string(FROZEN_TEXT))
+    println(is_string("runtime"))
+    println(is_string(7))
+    println(optional_is_string(FROZEN_TEXT))
+    println(optional_is_string("runtime"))
+    println(optional_is_string(7))
+    println(optional_is_string(None))
+    println(render_string(FROZEN_TEXT))
+    println(render_string("runtime"))
+    println(render_string(7))
+    println(render_optional_string(FROZEN_TEXT))
+    println(render_optional_string("runtime"))
+    println(render_optional_string(7))
+    println(render_optional_string(None))
+"#,
+            "mixed_string_storage_isinstance_contract",
+        )?;
+
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "true", "true", "false", "true", "true", "false", "false", "frozen", "runtime", "number", "frozen",
+                "runtime", "other", "other",
+            ],
+            "unexpected mixed string-storage isinstance output:\n{stdout}"
         );
         Ok(())
     }

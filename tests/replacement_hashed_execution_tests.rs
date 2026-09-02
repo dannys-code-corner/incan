@@ -200,8 +200,6 @@ fn hashed_container_equality_remains_an_original_span_refusal() -> Result<(), Bo
 #[test]
 fn hashed_non_membership_operations_remain_refused() -> Result<(), Box<dyn std::error::Error>> {
     for source in [
-        "def main() -> int:\n  values = {1}\n  return len(values)\n",
-        "def main() -> int:\n  values = {1: 2}\n  return len(values)\n",
         "def main() -> int:\n  values = {1: 2}\n  return values[1]\n",
         "def main() -> bool:\n  mut values = {1: 2}\n  values[1] = 3\n  return 1 in values\n",
         "def main() -> None:\n  values = {1, 2}\n  for value in values:\n    pass\n",

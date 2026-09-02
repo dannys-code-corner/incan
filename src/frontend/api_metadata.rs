@@ -23,13 +23,18 @@ use crate::frontend::library_exports::{
     CheckedTypeBound, CheckedTypeParam, collect_checked_public_exports,
 };
 use crate::frontend::module::canonicalize_source_module_segments;
+use crate::frontend::symbols::{
+    ImplementationTraitBoundInfo, ImplementationTraitBoundOriginInfo, ImplementationTypeParamInfo,
+};
 use crate::frontend::typechecker::{ConstValue, TypeChecker};
 use crate::library_manifest::{
     ClassExport, EnumExport, EnumValueExport, EnumValueTypeExport, EnumVariantAliasExport, EnumVariantExport,
-    FieldExport, FieldRequirementExport, FunctionExport, MethodExport, ModelExport, NewtypeConstraintExport,
-    NewtypeExport, ParamExport, PartialExport, PartialPresetExport, PartialTargetKindExport, PresetDictEntryExport,
-    PresetModelFieldExport, PresetValueExport, PropertyExport, ReceiverExport, TraitExport, TypeAliasExport,
-    TypeBoundExport, TypeParamExport, TypeRef, param_default_from_checked, params_from_checked, type_ref_from_resolved,
+    FieldExport, FieldRequirementExport, FunctionExport, ImplementationAssociatedTypeExport,
+    ImplementationTraitBoundExport, ImplementationTraitBoundOriginExport, ImplementationTypeParamExport, MethodExport,
+    ModelExport, NewtypeConstraintExport, NewtypeExport, ParamExport, PartialExport, PartialPresetExport,
+    PartialTargetKindExport, PresetDictEntryExport, PresetModelFieldExport, PresetValueExport, PropertyExport,
+    ReceiverExport, TraitExport, TypeAliasExport, TypeBoundExport, TypeParamExport, TypeRef,
+    param_default_from_checked, params_from_checked, type_ref_from_resolved,
 };
 
 pub const CHECKED_API_METADATA_SCHEMA_VERSION: u32 = 1;
@@ -1714,6 +1719,40 @@ fn type_bound(bound: &CheckedTypeBound) -> TypeBoundExport {
         source_name: bound.source_name.clone(),
         module_path: bound.module_path.clone(),
         type_args: bound.type_args.iter().map(type_ref_from_resolved).collect(),
+        implementation_type_params: bound
+            .implementation_type_params
+            .iter()
+            .map(implementation_type_param)
+            .collect(),
+    }
+}
+
+/// Convert one checked implementation parameter into API manifest metadata.
+fn implementation_type_param(type_param: &ImplementationTypeParamInfo) -> ImplementationTypeParamExport {
+    ImplementationTypeParamExport {
+        name: type_param.name.clone(),
+        bounds: type_param.bounds.iter().map(implementation_trait_bound).collect(),
+    }
+}
+
+/// Convert one checked implementation requirement into API manifest metadata.
+fn implementation_trait_bound(bound: &ImplementationTraitBoundInfo) -> ImplementationTraitBoundExport {
+    ImplementationTraitBoundExport {
+        trait_path: bound.trait_path.clone(),
+        type_args: bound.type_args.iter().map(type_ref_from_resolved).collect(),
+        associated_types: bound
+            .associated_types
+            .iter()
+            .map(|(name, ty)| ImplementationAssociatedTypeExport {
+                name: name.clone(),
+                ty: type_ref_from_resolved(ty),
+            })
+            .collect(),
+        origin: match bound.origin {
+            ImplementationTraitBoundOriginInfo::Standard => ImplementationTraitBoundOriginExport::Standard,
+            ImplementationTraitBoundOriginInfo::RustCapability => ImplementationTraitBoundOriginExport::RustCapability,
+            ImplementationTraitBoundOriginInfo::SourceCallable => ImplementationTraitBoundOriginExport::SourceCallable,
+        },
     }
 }
 

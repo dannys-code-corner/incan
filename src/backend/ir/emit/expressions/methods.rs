@@ -1032,7 +1032,7 @@ impl<'a> IrEmitter<'a> {
                 _ => None,
             };
             let has_incan_method_signature = matches!(arg_policy, MethodCallArgPolicy::SourceOwned)
-                || matches!(dispatch, Some(IrMethodDispatch::Trait { .. }))
+                || matches!(dispatch, Some(IrMethodDispatch::Trait(_)))
                 || self
                     .method_signature_for_receiver(&rewritten_receiver.ty, method)
                     .is_some();
@@ -1201,12 +1201,11 @@ impl<'a> IrEmitter<'a> {
             }
         }
 
-        if let Some(IrMethodDispatch::Trait {
-            trait_path, type_args, ..
-        }) = dispatch
-            && trait_dispatch_requires_ufcs(trait_path)
+        if let Some(IrMethodDispatch::Trait(trait_dispatch)) = dispatch
+            && trait_dispatch_requires_ufcs(&trait_dispatch.trait_path)
         {
-            let path_tokens: Vec<TokenStream> = trait_path
+            let path_tokens: Vec<TokenStream> = trait_dispatch
+                .trait_path
                 .split("::")
                 .map(|segment| {
                     let ident = Self::rust_ident(segment);
@@ -1214,7 +1213,8 @@ impl<'a> IrEmitter<'a> {
                 })
                 .collect();
             let trait_tokens = super::super::decls::join_path_tokens(&path_tokens);
-            let trait_type_args: Vec<TokenStream> = type_args.iter().map(|ty| self.emit_type(ty)).collect();
+            let trait_type_args: Vec<TokenStream> =
+                trait_dispatch.type_args.iter().map(|ty| self.emit_type(ty)).collect();
             let trait_tokens = if trait_type_args.is_empty() {
                 quote! { #trait_tokens }
             } else {
@@ -1267,7 +1267,7 @@ impl<'a> IrEmitter<'a> {
             _ => None,
         };
         let has_incan_method_signature = matches!(arg_policy, MethodCallArgPolicy::SourceOwned)
-            || matches!(dispatch, Some(IrMethodDispatch::Trait { .. }))
+            || matches!(dispatch, Some(IrMethodDispatch::Trait(_)))
             || self.method_signature_for_receiver(&receiver.ty, method).is_some();
         let preserve_lookup_arg_shape = matches!(arg_policy, MethodCallArgPolicy::PreserveShape)
             || rust_collection_family_for_ir_type(&receiver.ty)
@@ -1294,7 +1294,7 @@ impl<'a> IrEmitter<'a> {
                 base_use_site: use_site,
                 result_target_ty,
                 infer_unresolved_generic_args: type_args.is_empty(),
-                preserve_incan_int_count: matches!(dispatch, Some(IrMethodDispatch::Trait { trait_path, .. }) if !trait_dispatch_requires_ufcs(trait_path)),
+                preserve_incan_int_count: matches!(dispatch, Some(IrMethodDispatch::Trait(trait_dispatch)) if !trait_dispatch_requires_ufcs(&trait_dispatch.trait_path)),
             },
         )?;
         Ok(quote! { #r.#m #method_turbofish (#(#arg_tokens),*) })

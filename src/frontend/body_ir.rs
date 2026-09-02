@@ -920,8 +920,8 @@ pub(crate) fn replacement_compatibility_body_ir_contribution()
             planned_feature_at_boundary(
                 "call.partial-binding",
                 "Partial presets capture at construction, remain overrideable defaults, and preserve named/positional binding rules.",
-                1152,
-                "Body IR carries the source contract; direct local callable targets remain visibly refused until the callable runtime slice executes them.",
+                988,
+                "Body IR and closed #1152 carry the source and callable-runtime substrate; open #988 owns the direct local callable forms that remain visibly refused.",
                 "src/frontend/typechecker/check_expr/calls.rs",
                 "fn check_call",
                 "fn lower_call",
@@ -930,8 +930,8 @@ pub(crate) fn replacement_compatibility_body_ir_contribution()
             planned_feature_at_boundary(
                 "call.stored-callables",
                 "Stored closures and partials retain lexical capture timing, ownership, and isolated local call frames.",
-                1152,
-                "Direct execution deliberately refuses local callable targets; this is the coherent callable-frame profile.",
+                988,
+                "Closed #1152 delivered the coherent callable-frame substrate; open #988 owns broadening the local callable targets that direct execution still refuses.",
                 "src/frontend/typechecker/check_expr/calls.rs",
                 "fn check_call",
                 "fn lower_call",

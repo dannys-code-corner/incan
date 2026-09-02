@@ -30,6 +30,7 @@ use crate::library_manifest::{
     ParamDefaultExport, ParamExport, ParamKindExport,
 };
 use crate::provider::{ProviderModuleResolution, ProviderRecord};
+use incan_core::lang::builtins::BuiltinFnId;
 use incan_core::lang::c_abi;
 use incan_core::lang::keywords::{self, KeywordId};
 use incan_core::lang::stdlib;
@@ -57,6 +58,49 @@ impl AstLowering {
             .and_then(|info| info.expr_type(call_span))
             .map(|ty| self.lower_resolved_type(ty))
             .unwrap_or(IrType::Unknown)
+    }
+
+    /// Lower a compiler-owned `isinstance` expression from checked call-site facts.
+    fn lower_checked_isinstance_expr(
+        &mut self,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+        call_span: ast::Span,
+    ) -> Result<(IrExprKind, IrType), LoweringError> {
+        if !type_args.is_empty() {
+            return Err(LoweringError {
+                message: "checked isinstance call unexpectedly retained explicit type arguments".to_string(),
+                span: call_span.into(),
+            });
+        }
+        let [ast::CallArg::Positional(value), ast::CallArg::Positional(_)] = args else {
+            return Err(LoweringError {
+                message: "checked isinstance call unexpectedly lost its two positional operands".to_string(),
+                span: call_span.into(),
+            });
+        };
+        let target = self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.isinstance_target(call_span))
+            .cloned()
+            .ok_or_else(|| LoweringError {
+                message: "checked isinstance call is missing its retained target fact".to_string(),
+                span: call_span.into(),
+            })?;
+        let target_ty = self.lower_resolved_type(&target.ty);
+        let value = self.lower_expr_spanned(value)?;
+        let target_token = TypedExpr::new(
+            IrExprKind::TypeToken { ty: target_ty.clone() },
+            IrType::TypeToken(Box::new(target_ty)),
+        );
+        Ok((
+            IrExprKind::BuiltinCall {
+                func: BuiltinFn::IsInstance,
+                args: vec![value, target_token],
+            },
+            IrType::Bool,
+        ))
     }
 
     /// Lower an ordinary output-slot constructor after a checked raw call has bound it to one exact parameter.
@@ -2784,6 +2828,14 @@ impl AstLowering {
         }
         if let Some(lowered) = self.lower_checked_c_span_constructor(call_span, args)? {
             return Ok(lowered);
+        }
+        if self
+            .type_info
+            .as_ref()
+            .and_then(|info| info.resolved_builtin_call(call_span))
+            == Some(BuiltinFnId::IsInstance)
+        {
+            return self.lower_checked_isinstance_expr(type_args, args, call_span);
         }
         let source_args = args;
         if let Some(name) = Self::explicit_builtin_member_name(f)

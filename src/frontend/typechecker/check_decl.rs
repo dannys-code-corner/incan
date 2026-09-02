@@ -95,6 +95,7 @@ pub(in crate::frontend::typechecker) struct TraitMethodEntry {
     pub origin_trait: String,
     pub origin_type_args: Vec<ResolvedType>,
     pub origin_module_path: Option<Vec<String>>,
+    pub implementation_type_params: Vec<ImplementationTypeParamInfo>,
     pub info: MethodInfo,
 }
 
@@ -1171,6 +1172,7 @@ impl TypeChecker {
                 origin_trait: trait_name.to_string(),
                 origin_type_args: trait_args.to_vec(),
                 origin_module_path: origin_module_path.map(<[String]>::to_vec),
+                implementation_type_params: Vec::new(),
                 info: method_info.clone(),
             });
         }
@@ -1389,6 +1391,7 @@ impl TypeChecker {
                     origin_trait: adoption.name.clone(),
                     origin_type_args: Vec::new(),
                     origin_module_path: None,
+                    implementation_type_params: adoption.implementation_type_params.clone(),
                     info,
                 });
         }
@@ -1451,6 +1454,7 @@ impl TypeChecker {
                     origin_trait: origin_trait.clone(),
                     origin_type_args,
                     origin_module_path,
+                    implementation_type_params: adoption.implementation_type_params.clone(),
                     info: info.clone(),
                 })
             }
@@ -1492,6 +1496,7 @@ impl TypeChecker {
                             origin == &rest[0].0 && self.method_sigs_compatible(candidate, exp0)
                         })
                         .and_then(|(_, module_path, _, _)| module_path.clone()),
+                    implementation_type_params: adoption.implementation_type_params.clone(),
                     info: exp0.clone(),
                 })
             }
@@ -5674,6 +5679,7 @@ impl TypeChecker {
                                     .map(|type_arg| self.resolve_type_checked(type_arg))
                                     .collect(),
                                 module_path,
+                                implementation_type_params: Vec::new(),
                             }
                         })
                         .collect(),

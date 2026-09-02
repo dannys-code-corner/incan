@@ -1,8 +1,8 @@
 //! Paired receipt-backed characterizations for builtin `abs` and `sum` overflow.
 //!
-//! The native-only module test observes the staged route independently. These assertions keep the final two-route
-//! contract separate. The caught panic is retained from the initial RED so any direct-route regression cannot be
-//! mistaken for native evidence.
+//! The native-only module test observes the staged route independently. These assertions keep the two-route contract
+//! separate. The panic guard turns an unexpected direct-executor panic into a test error so native evidence cannot be
+//! mistaken for a paired comparison.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::Path;
@@ -11,8 +11,8 @@ use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::ShadowComparisonState;
 use incan::backend::shadow::{
     RouteEvidence, RuntimeFailureClass, ShadowComparison, ShadowComparisonProfile, SourceObservable,
-    compare_source_observable,
 };
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -55,7 +55,7 @@ impl OverflowCase {
     }
 }
 
-/// Run the public paired comparator while turning any direct-route panic into a test error.
+/// Run the CLI-owned paired comparator while turning any direct-route panic into a test error.
 fn compare_without_direct_panic(
     profile: &ShadowComparisonProfile,
     capability: &incan::backend::shadow::legacy_oven::LegacyOvenCapability,

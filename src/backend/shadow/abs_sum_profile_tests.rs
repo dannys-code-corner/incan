@@ -1,11 +1,11 @@
 //! Receipt-authorized native observations for the bounded builtin `abs`/`sum` overflow repair.
 //!
-//! This module intentionally observes only the legacy route. The integration test retains the final two-route contract;
-//! keeping it separate lets the native profile prove its behavior even while a direct-route regression is being
-//! characterized.
+//! This module intentionally observes only the legacy route. The paired integration test owns the two-route contract,
+//! while this module independently qualifies the receipt-selected native overflow profile.
 
 use crate::backend::replacement::ReplacementValue;
 use crate::backend::shadow::legacy_oven::{self, LegacyOvenCapability};
+use crate::provider::FeatureSelection;
 
 use super::{LegacyRouteResult, PreparedShadowProfile, RuntimeFailureClass, ShadowComparisonProfile, SourceObservable};
 
@@ -76,7 +76,14 @@ fn observe_native(
     let workspace = tempfile::tempdir()?;
     let profile = case.profile();
     let prepared = PreparedShadowProfile::new(&profile)?;
-    let route = legacy_oven::observe_legacy_route(&profile, &prepared, capability, workspace.path())?;
+    let source_path = workspace.path().join("native-abs-sum-profile.incn");
+    std::fs::write(&source_path, profile.source())?;
+    let materialization = crate::cli::commands::shadow_support::prepare_shadow_legacy_materialization(
+        &source_path,
+        &FeatureSelection::default(),
+        None,
+    )?;
+    let route = legacy_oven::observe_legacy_route(&profile, &prepared, &materialization, capability, workspace.path())?;
     assert!(route.authority.oven_receipt_identity.starts_with("sha256:"));
     assert!(route.authority.oven_build_unit_identity.starts_with("sha256:"));
     assert!(route.authority.direct_rustc_plan_identity.starts_with("sha256:"));

@@ -2438,7 +2438,7 @@ const DEFAULT_BACKEND_RECEIPT_RELATIVE_PATH: &str = ".incan/backend/receipt.json
 /// This is distinct from the Oven build-report schema because this path has no generated Rust, artifacts, or Oven
 /// plan to report. Consumers must inspect its backend receipt and direct-execution evidence rather than treating it
 /// as a partial legacy build report.
-const REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION: &str = "incan.replacement_execution.v0";
+const REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION: &str = "incan.replacement_execution.v1";
 
 /// Return the compiler-owned project-relative destination for a backend-selection execution receipt.
 fn default_backend_receipt_path(project_root: &Path) -> PathBuf {
@@ -2688,6 +2688,9 @@ fn build_replacement_file_report(
     let executed = resolve_available_replacement_execution(&selection)?;
     let execution = execute_prevalidated_free_function(execution_plan)
         .map_err(|error| replacement_profile_cli_error(error, &entrypoint))?;
+    let result_type = execution.value.scalar_type_name().ok_or_else(|| {
+        CliError::failure("replacement execution produced a non-scalar value after scalar-result validation")
+    })?;
     let shadow_comparison = backend_shadow_comparison(&selection);
     let backend_receipt = finalize_receipt_with_semantic_module(
         &selection,
@@ -2710,6 +2713,7 @@ fn build_replacement_file_report(
         "semantic_module": session_inputs.semantic_module,
         "replacement_execution": {
             "result": execution.value.observable_text(),
+            "result_type": result_type,
             "output_identity": execution.output_identity,
             "emitted_output": execution.emitted_output(),
             "stdout_bytes": execution.output.stdout(),
@@ -10376,10 +10380,10 @@ fn prepare_library_project(
     // Keep the historical aggregate for existing consumers, while separating the stages that were previously
     // attributed misleadingly as one `library_generate_rust` cost in Oven performance evidence.
     let codegen_start = Instant::now();
-    let backend_output_identity = if emitted_dep_modules.is_empty() {
+    let (backend_output_identity, generation_metadata) = if emitted_dep_modules.is_empty() {
         let emit_rust_start = Instant::now();
-        let rust_code = codegen
-            .try_generate(&lib_module.ast)
+        let (rust_code, generation_metadata) = codegen
+            .try_generate_with_metadata(&lib_module.ast, &lib_module.path_segments)
             .map_err(|e| CliError::failure(format!("Code generation error: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_emit_rust", emit_rust_start);
         let write_project_start = Instant::now();
@@ -10387,15 +10391,15 @@ fn prepare_library_project(
             .generate(&rust_code)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
-        digest_output(&[rust_code.as_str()])
+        (digest_output(&[rust_code.as_str()]), generation_metadata)
     } else {
         let module_paths: Vec<Vec<String>> = emitted_dep_modules
             .iter()
             .map(|module| module.path_segments.clone())
             .collect();
         let emit_rust_start = Instant::now();
-        let (main_code, rust_modules) = codegen
-            .try_generate_multi_file_nested(&lib_module.ast, &module_paths)
+        let ((main_code, rust_modules), generation_metadata) = codegen
+            .try_generate_multi_file_nested_with_metadata(&lib_module.ast, &module_paths, &lib_module.path_segments)
             .map_err(|e| CliError::failure(format!("Code generation error: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_emit_rust", emit_rust_start);
         let write_project_start = Instant::now();
@@ -10403,8 +10407,18 @@ fn prepare_library_project(
             .generate_nested(&main_code, &rust_modules)
             .map_err(|e| CliError::failure(format!("Error generating project: {e}")))?;
         record_timing(&mut timings_ms, "library_codegen_write_project", write_project_start);
-        multi_file_output_identity(&main_code, &rust_modules)
+        (
+            multi_file_output_identity(&main_code, &rust_modules),
+            generation_metadata,
+        )
     };
+    generation_metadata
+        .apply_to_library_manifest(&mut library_manifest)
+        .map_err(|error| {
+            CliError::failure(format!(
+                "failed to publish inferred implementation requirements: {error}"
+            ))
+        })?;
     let backend_receipt = finalize_backend_receipt(&backend_selection, backend_executed, backend_output_identity)?;
     // Not persisted here — see the matching comment in `prepare_oven_project`: this function
     // also runs for internal/dependency callers, and real compilation still follows below. The
@@ -14096,6 +14110,7 @@ fn run_oven_prepared_project(prepared: OvenPreparedProject, profile: &str) -> Cl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::api_metadata::ApiDeclaration;
     use crate::frontend::body_ir;
     use crate::frontend::lexer;
     use crate::frontend::library_exports::CheckedExportIdentity;
@@ -17801,6 +17816,95 @@ impl ChildId {
         Ok(())
     }
 
+    /// Exercise the artifact-only `incan build --lib` publisher without mutating its process-wide internal mode flag.
+    #[test]
+    fn build_library_omits_private_generic_implementation_requirements_issue1280()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let project_root = tmp.path();
+        let src_dir = project_root.join("src");
+        std::fs::create_dir_all(&src_dir)?;
+
+        std::fs::write(
+            project_root.join("incan.toml"),
+            "[project]\nname = \"privateimpl\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            src_dir.join("lib.incn"),
+            r#"
+"""Exercise a private generic implementation without publishing its compiler metadata."""
+
+trait Copyable:
+    def copy(self) -> Self: ...
+
+model PrivateValue[T] with Copyable:
+    value: T
+
+    def copy(self) -> Self:
+        return self
+
+pub def answer() -> int:
+    """Return the public library value."""
+    return 42
+"#,
+        )?;
+
+        let cargo_lock_payload = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))?;
+        let fingerprint = compute_deps_fingerprint(&[], &[], &CargoFeatureSelection::default(), Some(project_root));
+        let incan_lock = IncanLock::new(fingerprint, CargoFeatureSelection::default(), cargo_lock_payload);
+        incan_lock.write(&project_root.join("incan.lock"))?;
+
+        let lib_path = src_dir.join("lib.incn");
+        let lib_path_str = lib_path
+            .to_str()
+            .ok_or("lib path should be valid utf-8 for build_library test")?;
+        let mut prepared = prepare_library_project(
+            Some(lib_path_str),
+            None,
+            CargoPolicy::default(),
+            &FeatureSelection::default(),
+            None,
+            Vec::new(),
+            false,
+            false,
+            None,
+            false,
+            false,
+            OvenProjectPlanMode::ConsumeOnly,
+            None,
+            &BackendSelectionOptions::default(),
+        )?;
+        write_library_manifest_artifacts(&mut prepared)?;
+
+        let manifest_path = project_root.join("target/lib/privateimpl.incnlib");
+        let manifest = LibraryManifest::read_from_path(&manifest_path)?;
+        let checked_api = manifest
+            .contract_metadata
+            .api
+            .as_ref()
+            .ok_or("library should publish checked API metadata")?;
+        assert!(
+            !checked_api
+                .modules
+                .iter()
+                .flat_map(|module| &module.declarations)
+                .any(|declaration| {
+                    matches!(declaration, ApiDeclaration::Model(model) if model.name == "PrivateValue")
+                }),
+            "private implementation targets must not leak into checked API metadata"
+        );
+        assert!(
+            !manifest.exports.models.iter().any(|model| model.name == "PrivateValue"),
+            "private implementation targets must not leak into public model exports"
+        );
+        assert!(
+            !std::fs::read_to_string(manifest_path)?.contains("PrivateValue"),
+            "private implementation targets must not leak into the serialized library manifest"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn build_library_publishes_public_registry_metadata_and_facade_projections()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -19234,6 +19338,32 @@ pub model Nested:
     }
 
     #[test]
+    fn the_replacement_report_retains_exact_numeric_result_type() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("main.incn");
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"typed_report\"\n",
+        )?;
+        fs::write(&entrypoint, "def main() -> f32:\n    return 1.23456789\n")?;
+
+        let report = build_replacement_file_report(
+            &entrypoint.to_string_lossy(),
+            replacement_build_options(),
+            &BuildReportOptions::default(),
+        )?;
+        assert_eq!(report["schema_version"], REPLACEMENT_EXECUTION_REPORT_SCHEMA_VERSION);
+        assert_eq!(report["replacement_execution"]["result"], 1.234_567_9_f32.to_string());
+        assert_eq!(report["replacement_execution"]["result_type"], "f32");
+        assert!(
+            report["replacement_execution"]["output_identity"]
+                .as_str()
+                .is_some_and(|identity| identity.starts_with("sha256:"))
+        );
+        Ok(())
+    }
+
+    #[test]
     fn the_replacement_build_pipeline_analyzes_its_session_exactly_once() -> Result<(), Box<dyn std::error::Error>> {
         let project = tempfile::tempdir()?;
         let entrypoint = project.path().join("src/main.incn");
@@ -19270,6 +19400,10 @@ pub model Nested:
         // to lower, so the build must refuse rather than execute a body this compilation does not contain.
         let project = tempfile::tempdir()?;
         let entrypoint = project.path().join("main.incn");
+        fs::write(
+            project.path().join("incan.toml"),
+            "[project]\nname = \"replacement_inactive_feature\"\n\n[project.features]\nbeta = []\n",
+        )?;
         fs::write(
             &entrypoint,
             "when feature(\"beta\"):\n    def main() -> int:\n        return 7\n",

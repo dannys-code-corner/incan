@@ -48,12 +48,168 @@ fn replacement_shadow_observation_does_not_leak_program_output() -> Result<(), B
     Ok(())
 }
 
+/// Shadow preparation may admit ordinary float parsing, but the direct route must classify non-finite exact results.
+#[test]
+fn replacement_shadow_route_classifies_runtime_non_finite_exact_f64_results() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = "def exact(value: str) -> f64:\n    return float(value)\n";
+    for input in ["NaN", "inf", "-inf", "1e9999"] {
+        let profile = ShadowComparisonProfile::new(source, "exact", vec![ReplacementValue::Str(input.to_string())]);
+        let prepared = PreparedShadowProfile::new(&profile)?;
+        let observed = observe_replacement_route(&profile, &prepared)?;
+
+        assert!(
+            observed.execution.is_none(),
+            "{input} must not produce direct execution evidence"
+        );
+        assert_eq!(
+            observed.observation.as_ref().map(|observation| &observation.observable),
+            Some(&SourceObservable::Failed {
+                failure: RuntimeFailureClass::NonFiniteExactF64,
+            }),
+            "{input} must retain the exact-float failure class"
+        );
+        assert!(observed.output.stdout().is_empty(), "{input} unexpectedly wrote stdout");
+        assert!(observed.output.stderr().is_empty(), "{input} unexpectedly wrote stderr");
+        assert!(
+            observed.unavailable_reason.is_none(),
+            "{input}: classified failure became unavailable"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn exact_float_failure_payloads_are_classified_without_heuristics() -> Result<(), Box<dyn std::error::Error>> {
+    for (detail, expected) in [
+        (
+            "ValueError: non-finite float cannot initialize exact f32",
+            RuntimeFailureClass::NonFiniteExactF32,
+        ),
+        (
+            "ValueError: non-finite float cannot initialize exact f64\n",
+            RuntimeFailureClass::NonFiniteExactF64,
+        ),
+    ] {
+        assert_eq!(classify_replacement_failure(detail)?, expected);
+        assert_eq!(classify_legacy_failure(detail)?, expected);
+    }
+    Ok(())
+}
+
 fn profile() -> ShadowComparisonProfile {
     ShadowComparisonProfile::new(
         "def add(x: int, y: int) -> int:\n    return x + y\n",
         "add",
         vec![ReplacementValue::Int(40), ReplacementValue::Int(2)],
     )
+}
+
+/// A source-session provider closure cannot borrow an unrelated adopted native plan.
+#[test]
+fn mismatched_native_build_inputs_are_unavailable_before_materialization() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = tempfile::tempdir()?;
+    let generated_source = workspace.path().join("adopted-main.rs");
+    std::fs::write(&generated_source, "fn main() {}\n")?;
+    let adopted_receipt = crate::oven::receipt_generated_project(
+        &crate::oven::OvenGeneratedProjectRequest::new(
+            workspace.path(),
+            "shadow-context-fixture",
+            "0.1.0",
+            "fixture-target",
+            "fixture-toolchain",
+            "debug",
+            Vec::new(),
+        )
+        .with_generated_source("generated-root", &generated_source)
+        .with_build_unit_input("provider-plan", "sha256:adopted-context"),
+    )?;
+    let adopted_receipt_path = workspace.path().join("adopted-receipt.json");
+    std::fs::write(&adopted_receipt_path, serde_json::to_vec(&adopted_receipt)?)?;
+    let capability = legacy_oven::LegacyOvenCapability::adopt_baked_project(
+        workspace.path().join("store"),
+        workspace.path().join("rustc"),
+        &adopted_receipt_path,
+    )?;
+    let context_profile = profile();
+    let materialization = ShadowLegacyMaterialization::from_provider_plan(
+        std::sync::Arc::new(crate::provider::ProviderPlan::default()),
+        std::collections::BTreeMap::from([("provider-plan".to_string(), "sha256:source-session-context".to_string())]),
+        context_profile.source_identity(),
+    );
+
+    let comparison = compare_source_observable_with_materialization(
+        &context_profile,
+        &materialization,
+        &capability,
+        workspace.path(),
+    );
+    let reason = comparison
+        .unavailable_reason()
+        .ok_or("mismatched native inputs must not produce a comparison outcome")?;
+    assert!(
+        reason.contains("does not match the adopted Oven build-unit inputs"),
+        "{reason}"
+    );
+    assert!(comparison.replacement.is_none());
+    assert!(comparison.legacy.is_none());
+    assert!(comparison.legacy_authority.is_none());
+    assert!(comparison.legacy_process.is_none());
+    Ok(())
+}
+
+/// A session prepared for source A cannot authorize a same-closure comparison over source B.
+#[test]
+fn mismatched_profile_source_is_unavailable_before_materialization() -> Result<(), Box<dyn std::error::Error>> {
+    let workspace = tempfile::tempdir()?;
+    let generated_source = workspace.path().join("adopted-main.rs");
+    std::fs::write(&generated_source, "fn main() {}\n")?;
+    let adopted_receipt = crate::oven::receipt_generated_project(
+        &crate::oven::OvenGeneratedProjectRequest::new(
+            workspace.path(),
+            "shadow-source-fixture",
+            "0.1.0",
+            "fixture-target",
+            "fixture-toolchain",
+            "debug",
+            Vec::new(),
+        )
+        .with_generated_source("generated-root", &generated_source)
+        .with_build_unit_input("provider-plan", "sha256:shared-context"),
+    )?;
+    let adopted_receipt_path = workspace.path().join("adopted-receipt.json");
+    std::fs::write(&adopted_receipt_path, serde_json::to_vec(&adopted_receipt)?)?;
+    let capability = legacy_oven::LegacyOvenCapability::adopt_baked_project(
+        workspace.path().join("store"),
+        workspace.path().join("rustc"),
+        &adopted_receipt_path,
+    )?;
+    let source_a = profile();
+    let source_b = ShadowComparisonProfile::new(
+        "def add(x: int, y: int) -> int:\n    return x - y\n",
+        "add",
+        vec![ReplacementValue::Int(40), ReplacementValue::Int(2)],
+    );
+    let materialization = ShadowLegacyMaterialization::from_provider_plan(
+        std::sync::Arc::new(crate::provider::ProviderPlan::default()),
+        std::collections::BTreeMap::from([("provider-plan".to_string(), "sha256:shared-context".to_string())]),
+        source_a.source_identity(),
+    );
+
+    let comparison =
+        compare_source_observable_with_materialization(&source_b, &materialization, &capability, workspace.path());
+    let reason = comparison
+        .unavailable_reason()
+        .ok_or("a profile that differs from its prepared source must not compare")?;
+    assert!(
+        reason.contains("profile source does not match the source session"),
+        "{reason}"
+    );
+    assert!(comparison.replacement.is_none());
+    assert!(comparison.legacy.is_none());
+    assert!(comparison.legacy_authority.is_none());
+    assert!(comparison.legacy_process.is_none());
+    Ok(())
 }
 
 fn authority() -> LegacyExecutionAuthority {
@@ -122,7 +278,7 @@ fn a_typed_result_report_round_trips_exactly() -> Result<(), ShadowUnavailable> 
         decode_result_report(&report(FunctionResultKind::Unit, ""), FunctionResultKind::Unit)?,
         TypedFunctionResult {
             kind: FunctionResultKind::Unit,
-            value: "None".to_string(),
+            value: constructor_name(ConstructorId::None).to_string(),
         }
     );
     Ok(())
@@ -132,12 +288,62 @@ fn a_typed_result_report_round_trips_exactly() -> Result<(), ShadowUnavailable> 
 fn the_result_report_protocol_uses_literal_ascii_colon_delimiters() {
     assert_eq!(
         result_report_header(FunctionResultKind::Int).as_bytes(),
-        b"incan-shadow-result-v1:int:"
+        b"incan-shadow-result-v2:int:"
     );
     assert_eq!(
         report(FunctionResultKind::Str, "\nleading\ntrailing\n"),
-        b"incan-shadow-result-v1:str:\nleading\ntrailing\n"
+        b"incan-shadow-result-v2:str:\nleading\ntrailing\n"
     );
+}
+
+#[test]
+fn typed_numeric_result_reports_preserve_kind_and_validate_canonical_payloads() -> Result<(), ShadowUnavailable> {
+    for (kind, payload) in [
+        (FunctionResultKind::Float, "3.5"),
+        (FunctionResultKind::Numeric(NumericTypeId::F32), "3.5"),
+        (FunctionResultKind::Numeric(NumericTypeId::F64), "3.5"),
+        (
+            FunctionResultKind::Numeric(NumericTypeId::I128),
+            "-170141183460469231731687303715884105728",
+        ),
+        (
+            FunctionResultKind::Numeric(NumericTypeId::U128),
+            "340282366920938463463374607431768211455",
+        ),
+        (FunctionResultKind::Decimal { precision: 6, scale: 2 }, "19.90"),
+    ] {
+        assert_eq!(
+            decode_result_report(&report(kind, payload), kind)?,
+            TypedFunctionResult {
+                kind,
+                value: payload.to_string(),
+            }
+        );
+    }
+
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Numeric(NumericTypeId::U8), "256"),
+            FunctionResultKind::Numeric(NumericTypeId::U8)
+        )
+        .is_err()
+    );
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Numeric(NumericTypeId::F32), "NaN"),
+            FunctionResultKind::Numeric(NumericTypeId::F32)
+        )
+        .is_err()
+    );
+    assert!(decode_result_report(&report(FunctionResultKind::Float, "inf"), FunctionResultKind::Float).is_err());
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Decimal { precision: 5, scale: 2 }, "1234.5"),
+            FunctionResultKind::Decimal { precision: 5, scale: 2 }
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]
@@ -769,6 +975,84 @@ fn arguments_are_part_of_the_profile_identity() {
 }
 
 #[test]
+fn exact_numeric_argument_kind_is_part_of_the_profile_identity() {
+    let source = "def identity(value: f64) -> f64:\n    return value\n";
+    let f32_argument = ShadowComparisonProfile::new(
+        source,
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::F32(1.0))],
+    );
+    let f64_argument = ShadowComparisonProfile::new(
+        source,
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::F64(1.0))],
+    );
+    assert_ne!(f32_argument.profile_identity(), f64_argument.profile_identity());
+}
+
+#[test]
+fn typed_numeric_arguments_and_results_prepare_through_checked_types() -> Result<(), ShadowUnavailable> {
+    let cases = [
+        (
+            "def identity(value: f32) -> f32:\n    return value\n",
+            ReplacementNumericValue::F32(1.25),
+            FunctionResultKind::Numeric(NumericTypeId::F32),
+        ),
+        (
+            "def identity(value: u128) -> u128:\n    return value\n",
+            ReplacementNumericValue::Unsigned {
+                kind: NumericTypeId::U128,
+                value: u128::MAX,
+            },
+            FunctionResultKind::Numeric(NumericTypeId::U128),
+        ),
+        (
+            "def identity(value: decimal[6, 2]) -> decimal[6, 2]:\n    return value\n",
+            ReplacementNumericValue::Decimal {
+                precision: 6,
+                scale: 2,
+                coefficient: 1990,
+                literal_scale: 2,
+            },
+            FunctionResultKind::Decimal { precision: 6, scale: 2 },
+        ),
+    ];
+    for (source, argument, expected_kind) in cases {
+        let profile = ShadowComparisonProfile::new(source, "identity", vec![ReplacementValue::Numeric(argument)]);
+        let prepared = PreparedShadowProfile::new(&profile)?;
+        assert_eq!(prepared.result_kind, expected_kind);
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_typed_numeric_arguments_are_refused_before_source_synthesis() -> Result<(), ShadowUnavailable> {
+    let profile = ShadowComparisonProfile::new(
+        "def identity(value: decimal[5, 2]) -> decimal[5, 2]:\n    return value\n",
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::Decimal {
+            precision: 5,
+            scale: 2,
+            coefficient: 12345,
+            literal_scale: 0,
+        })],
+    );
+    let unavailable = match argument_literal(&profile.arguments[0]) {
+        Err(unavailable) => unavailable,
+        Ok(_) => {
+            return Err(ShadowUnavailable::new(
+                "a decimal exceeding its declared integer-width budget must be refused",
+            ));
+        }
+    };
+    assert!(
+        unavailable.reason.contains("malformed `decimal[5, 2]`"),
+        "{unavailable:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn source_bindings_do_not_shadow_generated_result_transport_imports() -> Result<(), ShadowUnavailable> {
     let profile = ShadowComparisonProfile::new(
         "const IoError: int = 1\n\
@@ -838,6 +1122,7 @@ fn private_transport_exit_statuses_are_unavailable_before_stderr_is_classified()
     Ok(())
 }
 
+#[cfg(feature = "cli")]
 #[test]
 fn forced_source_transport_failures_keep_program_streams_and_stay_unavailable() -> Result<(), Box<dyn std::error::Error>>
 {
@@ -869,9 +1154,17 @@ fn forced_source_transport_failures_keep_program_streams_and_stay_unavailable() 
         ),
     ] {
         let workspace = tempfile::tempdir()?;
+        let source_path = workspace.path().join("transport-failure-shadow-profile.incn");
+        std::fs::write(&source_path, profile.source())?;
+        let materialization = crate::cli::commands::shadow_support::prepare_shadow_legacy_materialization(
+            &source_path,
+            &crate::provider::FeatureSelection::default(),
+            None,
+        )?;
         let legacy = legacy_oven::observe_legacy_route_with_forced_transport_failure(
             &profile,
             &prepared,
+            &materialization,
             &capability,
             workspace.path(),
             failure,

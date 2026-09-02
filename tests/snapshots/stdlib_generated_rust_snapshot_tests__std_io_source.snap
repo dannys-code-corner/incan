@@ -1144,12 +1144,24 @@ impl BinaryWrite<i128> for _BytesIO {
 }
 impl BinaryWrite<f32> for _BytesIO {
     fn write(&self, value: f32, endian: Endian) -> Result<(), IoError> {
-        return _write_f32_value(self.clone(), value, endian, "write".to_string());
+        let _ = incan_stdlib::num::require_finite_f32(value);
+        return _write_f32_value(
+            self.clone(),
+            incan_stdlib::num::require_finite_f32(value),
+            endian,
+            "write".to_string(),
+        );
     }
 }
 impl BinaryWrite<f64> for _BytesIO {
     fn write(&self, value: f64, endian: Endian) -> Result<(), IoError> {
-        return _write_f64_value(self.clone(), value, endian, "write".to_string());
+        let _ = incan_stdlib::num::require_finite_f64(value);
+        return _write_f64_value(
+            self.clone(),
+            incan_stdlib::num::require_finite_f64(value),
+            endian,
+            "write".to_string(),
+        );
     }
 }
 /// Construct a writable, seekable in-memory byte stream.
@@ -1224,7 +1236,7 @@ fn _write_u8_value(
     let mut cursor = Cursor::new(_zeros(1));
     let _ = match cursor.write_u8(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1242,7 +1254,7 @@ fn _write_i8_value(
     let mut cursor = Cursor::new(_zeros(1));
     let _ = match cursor.write_i8(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1336,7 +1348,7 @@ fn _write_u16_value(
     }
     let _ = match cursor.write_u16::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1368,7 +1380,7 @@ fn _write_i16_value(
     }
     let _ = match cursor.write_i16::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1462,7 +1474,7 @@ fn _write_u32_value(
     }
     let _ = match cursor.write_u32::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1494,7 +1506,7 @@ fn _write_i32_value(
     }
     let _ = match cursor.write_i32::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1588,7 +1600,7 @@ fn _write_u64_value(
     }
     let _ = match cursor.write_u64::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1620,7 +1632,7 @@ fn _write_i64_value(
     }
     let _ = match cursor.write_i64::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1714,7 +1726,7 @@ fn _write_u128_value(
     }
     let _ = match cursor.write_u128::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1746,7 +1758,7 @@ fn _write_i128_value(
     }
     let _ = match cursor.write_i128::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1840,7 +1852,7 @@ fn _write_f32_value(
     }
     let _ = match cursor.write_f32::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<
@@ -1872,7 +1884,7 @@ fn _write_f64_value(
     }
     let _ = match cursor.write_f64::<BigEndian>(value) {
         Ok(_) => {
-            return _finish_numeric_write(stream.clone(), cursor.clone());
+            return _finish_numeric_write(stream, cursor.clone());
         }
         Err(err) => {
             return Err::<

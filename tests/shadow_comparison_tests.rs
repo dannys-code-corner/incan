@@ -19,8 +19,9 @@ use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy, Sh
 use incan::backend::shadow::legacy_oven::LegacyOvenCapability;
 use incan::backend::shadow::{
     FunctionResultKind, PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON, RouteEvidence, RuntimeFailureClass, ShadowComparison,
-    ShadowComparisonProfile, SourceObservable, TypedFunctionResult, compare_source_observable,
+    ShadowComparisonProfile, ShadowUnavailable, SourceObservable, TypedFunctionResult,
 };
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -127,14 +128,14 @@ fn assert_receipts_are_independent_but_bound(comparison: &ShadowComparison) -> R
 /// Returns the reason when nothing is staged, so the test reports why it could not assert a match rather than
 /// passing silently. Setting `INCAN_SHADOW_REQUIRE_LEGACY_ROUTE` turns that report into a failure, which is how
 /// an environment that is supposed to be staged proves it.
-fn require_staged_legacy_route() -> Option<String> {
+fn require_staged_legacy_route() -> Result<Option<String>, ShadowUnavailable> {
     shadow_capability::unstaged_legacy_route_reason()
 }
 
 /// A real scalar profile keeps normal stdout separate from its typed result under Oven authority.
 #[test]
 fn a_scalar_profile_compares_program_streams_and_typed_result() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -164,7 +165,7 @@ fn a_scalar_profile_compares_program_streams_and_typed_result() -> Result<(), Bo
         process
             .result_report
             .as_deref()
-            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v1:int:42")),
+            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v2:int:42")),
         "the typed result must be out-of-band from program stdout"
     );
 
@@ -190,7 +191,7 @@ fn a_scalar_profile_compares_program_streams_and_typed_result() -> Result<(), Bo
 /// String results compare through the typed report, not a trimmed stdout approximation.
 #[test]
 fn a_string_profile_retains_its_exact_typed_value() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -213,7 +214,7 @@ fn a_string_profile_retains_its_exact_typed_value() -> Result<(), Box<dyn std::e
 /// indistinguishable if any layer trimmed the program stream.
 #[test]
 fn a_trailing_newline_in_a_result_is_not_lost_in_transport() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -239,7 +240,7 @@ fn a_trailing_newline_in_a_result_is_not_lost_in_transport() -> Result<(), Box<d
 /// Matching failure classes do not hide the current difference between native stderr and returned direct errors.
 #[test]
 fn division_failure_preserves_prior_stdout_and_reports_stderr_divergence() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -289,7 +290,7 @@ fn division_failure_preserves_prior_stdout_and_reports_stderr_divergence() -> Re
 /// Source failure output survives on both routes, but a native runtime diagnostic is not erased to claim parity.
 #[test]
 fn assertion_failure_preserves_prior_stdout_and_reports_stderr_divergence() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -321,7 +322,7 @@ fn assertion_failure_preserves_prior_stdout_and_reports_stderr_divergence() -> R
 #[test]
 fn a_program_entrypoint_profile_is_unavailable_without_executing_either_route() -> Result<(), Box<dyn std::error::Error>>
 {
-    if let Some(reason) = require_staged_legacy_route() {
+    if let Some(reason) = require_staged_legacy_route()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -367,6 +368,9 @@ fn a_source_outside_the_replacement_profile_stays_unavailable() -> Result<(), Bo
     let capability = match shadow_capability::legacy_capability() {
         Ok(capability) => capability,
         Err(unavailable) => {
+            if shadow_capability::legacy_route_is_required() {
+                return Err(unavailable.into());
+            }
             eprintln!(
                 "legacy route unstaged ({}); the replacement refusal still decides",
                 unavailable.reason
@@ -385,7 +389,7 @@ fn a_source_outside_the_replacement_profile_stays_unavailable() -> Result<(), Bo
         )
     })?;
     assert!(
-        reason.contains("requires a checked `int`, `bool`, `str`, or `None` return type"),
+        reason.contains("requires a checked scalar or `None` return type"),
         "{reason}"
     );
     assert!(!comparison.matched());

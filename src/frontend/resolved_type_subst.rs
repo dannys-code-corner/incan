@@ -5,7 +5,10 @@
 
 use std::collections::HashMap;
 
-use crate::frontend::symbols::{CallableParam, MethodInfo, PropertyInfo, ResolvedType, TypeBoundInfo};
+use crate::frontend::symbols::{
+    CallableParam, ImplementationTraitBoundInfo, ImplementationTypeParamInfo, MethodInfo, PropertyInfo, ResolvedType,
+    TypeBoundInfo,
+};
 
 /// Build a substitution map from declared type parameter names to concrete (or still-generic) arguments.
 ///
@@ -107,6 +110,10 @@ pub(crate) fn substitute_method_info(info: &MethodInfo, map: &HashMap<String, Re
                                 .map(|ty| substitute_resolved_type(ty, map))
                                 .collect(),
                             module_path: bound.module_path.clone(),
+                            implementation_type_params: substitute_implementation_type_params(
+                                &bound.implementation_type_params,
+                                map,
+                            ),
                         })
                         .collect(),
                 )
@@ -132,6 +139,37 @@ pub(crate) fn substitute_method_info(info: &MethodInfo, map: &HashMap<String, Re
     }
 }
 
+/// Substitute owner and call-site types throughout one implementation header.
+fn substitute_implementation_type_params(
+    type_params: &[ImplementationTypeParamInfo],
+    map: &HashMap<String, ResolvedType>,
+) -> Vec<ImplementationTypeParamInfo> {
+    type_params
+        .iter()
+        .map(|type_param| ImplementationTypeParamInfo {
+            name: type_param.name.clone(),
+            bounds: type_param
+                .bounds
+                .iter()
+                .map(|bound| ImplementationTraitBoundInfo {
+                    trait_path: bound.trait_path.clone(),
+                    type_args: bound
+                        .type_args
+                        .iter()
+                        .map(|ty| substitute_resolved_type(ty, map))
+                        .collect(),
+                    associated_types: bound
+                        .associated_types
+                        .iter()
+                        .map(|(name, ty)| (name.clone(), substitute_resolved_type(ty, map)))
+                        .collect(),
+                    origin: bound.origin,
+                })
+                .collect(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -149,6 +187,7 @@ mod tests {
                     ResolvedType::TypeVar("F".to_string()),
                 ],
                 module_path: Some(vec!["std".to_string(), "traits".to_string(), "callable".to_string()]),
+                implementation_type_params: Vec::new(),
             }],
         );
         let method = MethodInfo {

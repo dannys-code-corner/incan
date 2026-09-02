@@ -20,6 +20,7 @@ fn manifest_io_round_trip_preserves_recursive_types_and_bounds() -> Result<(), B
                 source_name: None,
                 module_path: None,
                 type_args: Vec::new(),
+                implementation_type_params: Vec::new(),
             }],
         }],
         params: vec![ParamExport {
@@ -1023,6 +1024,7 @@ fn manifest_io_round_trip_preserves_trait_supertraits() -> Result<(), Box<dyn st
             source_name: None,
             module_path: None,
             type_args: Vec::new(),
+            implementation_type_params: Vec::new(),
         }],
         requires: Vec::new(),
         methods: Vec::new(),
@@ -1256,6 +1258,7 @@ fn manifest_io_round_trip_preserves_generic_method_type_params() -> Result<(), B
                     source_name: None,
                     module_path: None,
                     type_args: Vec::new(),
+                    implementation_type_params: Vec::new(),
                 }],
             }],
             receiver: Some(ReceiverExport::Immutable),
@@ -1325,6 +1328,15 @@ fn manifest_io_round_trip_preserves_type_trait_adoptions() -> Result<(), Box<dyn
         type_args: vec![TypeRef::Named {
             name: "int".to_string(),
         }],
+        implementation_type_params: vec![ImplementationTypeParamExport {
+            name: "R".to_string(),
+            bounds: vec![ImplementationTraitBoundExport {
+                trait_path: "Clone".to_string(),
+                type_args: Vec::new(),
+                associated_types: Vec::new(),
+                origin: ImplementationTraitBoundOriginExport::Standard,
+            }],
+        }],
     };
     let convert_float = TypeBoundExport {
         name: "Convert".to_string(),
@@ -1333,6 +1345,7 @@ fn manifest_io_round_trip_preserves_type_trait_adoptions() -> Result<(), Box<dyn
         type_args: vec![TypeRef::Named {
             name: "float".to_string(),
         }],
+        implementation_type_params: Vec::new(),
     };
     manifest.exports.models.push(ModelExport {
         name: "Record".to_string(),
@@ -1356,6 +1369,7 @@ fn manifest_io_round_trip_preserves_type_trait_adoptions() -> Result<(), Box<dyn
             type_args: vec![TypeRef::Named {
                 name: "str".to_string(),
             }],
+            implementation_type_params: Vec::new(),
         }],
         derives: Vec::new(),
         fields: Vec::new(),

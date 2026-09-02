@@ -259,6 +259,20 @@ impl TypeChecker {
         span: Span,
         expected_return_ty: Option<&ResolvedType>,
     ) -> ResolvedType {
+        if matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::FloorDiv
+                | BinaryOp::Mod
+                | BinaryOp::Pow
+        ) && let Some(expected_ty) = expected_return_ty
+        {
+            self.validate_exact_float_literals_in_arithmetic(left, expected_ty);
+            self.validate_exact_float_literals_in_arithmetic(right, expected_ty);
+        }
         let left_ty = self.check_expr(left);
         let right_ty = self.check_expr(right);
 
@@ -1050,6 +1064,7 @@ impl TypeChecker {
             source_name: None,
             type_args: receiver_args,
             module_path: Some(module_path.clone()),
+            implementation_type_params: Vec::new(),
         };
         self.resolve_named_method(
             &std::collections::HashMap::new(),

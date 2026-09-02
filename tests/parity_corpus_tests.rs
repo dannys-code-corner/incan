@@ -24,7 +24,9 @@ use incan::backend::replacement::provider::{
     PROVIDER_COMPARISON_UNAVAILABLE_REASON, ProviderInputValue, ProviderInvocation, ProviderOperationHost,
     ProviderOperationOutcome, ProviderRuntime,
 };
-use incan::backend::replacement::{ReplacementExecutionError, ReplacementValue, execute_free_function_with_providers};
+use incan::backend::replacement::{
+    ReplacementExecutionError, ReplacementNumericValue, ReplacementValue, execute_free_function_with_providers,
+};
 use incan::frontend::body_ir::{build_body_ir_module_v0, build_body_ir_module_v0_with_provider_plan};
 use incan::frontend::diagnostics::CompileError;
 use incan::frontend::library_manifest_index::LibraryManifestIndex;
@@ -47,22 +49,53 @@ mod shadow_capability;
 
 /// The original scalar case that exercises the reusable paired-comparison route.
 const SHADOW_COMPARED_CASE_ID: &str = "replacement-body-v0-001";
+/// The selected canonical list-iteration row that also carries a receipt-backed paired comparison.
+const ENUMERATE_ZIP_SHADOW_CASE_ID: &str = "replacement-body-v0-023";
 
 /// Hashed membership has its own stable paired case; adding direct execution alone never widens this list.
 const HASHED_SHADOW_CASE_ID: &str = "replacement-body-v0-020";
-/// The scalar conversion case has its own paired evidence; broad numeric behavior remains non-green.
+/// Selected checked string helpers have a separate case; wider string/format behavior stays non-green.
+const STRING_HELPER_SHADOW_CASE_ID: &str = "replacement-body-v0-021";
+/// Scalar conversions have their own paired case without admitting the broader numeric surface.
 const SCALAR_CONVERSIONS_SHADOW_CASE_ID: &str = "replacement-body-v0-022";
-const SHADOW_COMPARED_CASE_IDS: [&str; 4] = [
+/// Unicode-scalar string length has a separate case; other builtin operand profiles stay bounded.
+const STRING_LEN_SHADOW_CASE_ID: &str = "replacement-body-v0-024";
+/// Scalar JSON stringification has a separate exact-byte paired case.
+const JSON_STRINGIFY_SHADOW_CASE_ID: &str = "replacement-body-v0-025";
+/// Hashed set/dict entry count has a separate paired case without admitting broader aggregate operations.
+const COLLECTION_LEN_SHADOW_CASE_ID: &str = "replacement-body-v0-026";
+/// Canonical bounded truthiness has its own paired case without admitting every frontend-supported carrier.
+const BOOL_TRUTHINESS_SHADOW_CASE_ID: &str = "replacement-body-v0-027";
+/// Nonempty integer-list sorting has a separate paired case without admitting general ordering.
+const SORTED_INT_LIST_SHADOW_CASE_ID: &str = "replacement-body-v0-028";
+/// Exact numeric carriers have one bounded paired case; #988 still owns their operation surface.
+const TYPED_NUMERIC_SHADOW_CASE_ID: &str = "replacement-body-v0-029";
+/// Checked primitive `isinstance` targets have a case-scoped paired proof without promoting broad union/nominal work.
+const ISINSTANCE_TARGETS_SHADOW_CASE_ID: &str = "replacement-body-v0-030";
+const SHADOW_COMPARED_CASE_IDS: [&str; 12] = [
     SHADOW_COMPARED_CASE_ID,
     HASHED_SHADOW_CASE_ID,
     STRING_HELPER_SHADOW_CASE_ID,
     SCALAR_CONVERSIONS_SHADOW_CASE_ID,
+    ENUMERATE_ZIP_SHADOW_CASE_ID,
+    STRING_LEN_SHADOW_CASE_ID,
+    JSON_STRINGIFY_SHADOW_CASE_ID,
+    COLLECTION_LEN_SHADOW_CASE_ID,
+    BOOL_TRUTHINESS_SHADOW_CASE_ID,
+    SORTED_INT_LIST_SHADOW_CASE_ID,
+    TYPED_NUMERIC_SHADOW_CASE_ID,
+    ISINSTANCE_TARGETS_SHADOW_CASE_ID,
 ];
+const BOOL_TRUTHINESS_SOURCE: &str = include_str!("fixtures/replacement/bool_truthiness.incn");
 const HASHED_MEMBERSHIP_SOURCE: &str = include_str!("fixtures/replacement/hashed_membership.incn");
-
-/// Selected checked string helpers have a separate case; wider string/format behavior stays non-green.
-const STRING_HELPER_SHADOW_CASE_ID: &str = "replacement-body-v0-021";
+const COLLECTION_LEN_SOURCE: &str = include_str!("fixtures/replacement/collection_len.incn");
 const STRING_HELPER_SOURCE: &str = include_str!("fixtures/replacement/string_helpers.incn");
+const STRING_LEN_SOURCE: &str = include_str!("fixtures/replacement/string_len.incn");
+const JSON_STRINGIFY_SCALARS_SOURCE: &str = include_str!("fixtures/replacement/json_stringify_scalars.incn");
+const JSON_STRINGIFY_SCALARS_EXPECTED: &str =
+    r#"7|-42|9223372036854775807|-9223372036854775807|true|false|"quote:\" slash:\\ line:\n tab:\t café 😀"|null"#;
+const SORTED_INT_LIST_SOURCE: &str = include_str!("fixtures/replacement/sorted_int_list.incn");
+const ISINSTANCE_TARGETS_SOURCE: &str = include_str!("fixtures/replacement/isinstance_targets.incn");
 
 use parity_corpus::{
     BehaviorCategory, ComparisonOutcome, Disposition, EvidenceLane, OverallState, ParityCase, ReceiptRef,
@@ -1072,6 +1105,20 @@ def scalar_conversions() -> str:
     return f"{str(parsed_int)} {parsed_float} {widened_float}"
 "#;
 
+const REPLACEMENT_BODY_V0_023_SRC: &str = include_str!("fixtures/replacement/enumerate_zip.incn");
+
+const REPLACEMENT_BODY_V0_029_SRC: &str = r#"
+def typed_numeric_profile() -> f32:
+    unsigned_min: u8 = 0
+    unsigned_max: u8 = 255
+    signed_min: i128 = -170141183460469231731687303715884105728
+    wide_max: u128 = 340282366920938463463374607431768211455
+    rounded: f32 = 1.23456789
+    money: decimal[6, 2] = 19.90d
+    println(f"{unsigned_min} {unsigned_max} {signed_min} {wide_max} {money}")
+    return rounded
+"#;
+
 fn replacement_body_v0_001_arguments() -> Vec<ReplacementValue> {
     vec![ReplacementValue::Int(40), ReplacementValue::Int(2)]
 }
@@ -1224,12 +1271,30 @@ fn replacement_body_v0_019_expected() -> ReplacementValue {
     ReplacementValue::Int(1)
 }
 
+fn replacement_body_v0_025_expected() -> ReplacementValue {
+    ReplacementValue::Str(JSON_STRINGIFY_SCALARS_EXPECTED.to_string())
+}
+
 fn replacement_body_v0_022_arguments() -> Vec<ReplacementValue> {
     vec![]
 }
 
 fn replacement_body_v0_022_expected() -> ReplacementValue {
     ReplacementValue::Str("42 3.14 10".to_string())
+}
+
+/// The selected list-iteration fixture has no entry arguments.
+fn replacement_body_v0_023_arguments() -> Vec<ReplacementValue> {
+    vec![]
+}
+
+/// Stored enumeration contributes ten and Zip contributes thirty-nine.
+fn replacement_body_v0_023_expected() -> ReplacementValue {
+    ReplacementValue::Int(49)
+}
+
+fn replacement_body_v0_029_expected() -> ReplacementValue {
+    ReplacementValue::Numeric(ReplacementNumericValue::F32(1.234_567_9_f32))
 }
 
 // ============================================================================
@@ -2373,6 +2438,135 @@ fn seed_corpus() -> Vec<ParityCase> {
             }),
         },
         ParityCase {
+            id: ENUMERATE_ZIP_SHADOW_CASE_ID,
+            title: "Canonical stored Enumerate and direct Zip preserve source order through both routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; tests/fixtures/replacement/enumerate_zip.incn; \
+                       tests/parity_corpus_tests.rs::the_enumerate_zip_row_carries_two_route_receipts_and_exact_output",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_023_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "enumerate_zip_profile",
+                arguments: replacement_body_v0_023_arguments,
+                expected: replacement_body_v0_023_expected,
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: STRING_LEN_SHADOW_CASE_ID,
+            title: "Global and method string length agree on Unicode-scalar semantics across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; tests/replacement_string_len_shadow_tests.rs::string_len_matches_the_receipt_backed_native_route; global builtin and checked method-helper identities, five Unicode rows, exact stdout and a separate boolean result",
+            disposition: Disposition::Preserved,
+            source: STRING_LEN_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "string_len",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Bool(true),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: JSON_STRINGIFY_SHADOW_CASE_ID,
+            title: "Scalar JSON stringification agrees across independent routes",
+            category: BehaviorCategory::StdlibRuntimeBehavior,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; src/backend/shadow/json_stringify_tests.rs::scalar_json_stringify_matches_the_receipt_backed_native_route; int/bool/str/None exact bytes, empty streams, and independent route receipts",
+            disposition: Disposition::Preserved,
+            source: JSON_STRINGIFY_SCALARS_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "observe",
+                arguments: Vec::new,
+                expected: replacement_body_v0_025_expected,
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: COLLECTION_LEN_SHADOW_CASE_ID,
+            title: "Hashed set and dict length returns duplicate-normalized entry counts across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; tests/replacement_collection_len_shadow_tests.rs::collection_len_matches_the_receipt_backed_native_route; canonical builtin identity, populated/duplicate/typed-empty counts, exact stdout and a separate integer result",
+            disposition: Disposition::Preserved,
+            source: COLLECTION_LEN_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "collection_len",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Int(2200),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: BOOL_TRUTHINESS_SHADOW_CASE_ID,
+            title: "Canonical bool preserves bounded scalar and container truthiness across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; tests/replacement_bool_truthiness_shadow_tests.rs::bool_truthiness_matches_the_receipt_backed_native_route; canonical builtin identity, empty/nonempty scalar and container behavior, exact stdout and a separate boolean result",
+            disposition: Disposition::Preserved,
+            source: BOOL_TRUTHINESS_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "bool_truthiness",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Bool(true),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: SORTED_INT_LIST_SHADOW_CASE_ID,
+            title: "Canonical sorted preserves a fresh ascending nonempty integer list across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1249; tests/replacement_sorted_int_list_shadow_tests.rs::sorted_int_list_matches_the_receipt_backed_native_route; canonical builtin identity, negative/duplicate ordering, source-list preservation, exact stdout and a separate integer result",
+            disposition: Disposition::Preserved,
+            source: SORTED_INT_LIST_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "sorted_int_list",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Int(29_320_233),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: TYPED_NUMERIC_SHADOW_CASE_ID,
+            title: "Exact-width and decimal carriers preserve checked values across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1279; tests/replacement_typed_numeric_tests.rs; tests/replacement_scalar_conversion_shadow_tests.rs; representative u8/i128/u128 endpoints, f32 rounding, decimal scale, exact stdout, typed cast edges, and an f32 result",
+            disposition: Disposition::Preserved,
+            source: REPLACEMENT_BODY_V0_029_SRC,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "typed_numeric_profile",
+                arguments: Vec::new,
+                expected: replacement_body_v0_029_expected,
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
+            id: ISINSTANCE_TARGETS_SHADOW_CASE_ID,
+            title: "Checked primitive isinstance targets preserve true and false union narrowing across independent routes",
+            category: BehaviorCategory::SupportedLanguageContract,
+            lane: EvidenceLane::DirectReplacementBodyIr,
+            evidence: "#1281; tests/replacement_isinstance_shadow_tests.rs::checked_isinstance_targets_match_the_receipt_backed_native_route; retained compiler-owned target type/span, int/bool/str/float targets, true/false union branches, exact stdout/stderr and a separate boolean result; closed #1154 delivered the current direct nominal/value substrate and open #988 owns broader replacement execution",
+            disposition: Disposition::Preserved,
+            source: ISINSTANCE_TARGETS_SOURCE,
+            evaluate: None,
+            replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
+                function: "isinstance_targets",
+                arguments: Vec::new,
+                expected: || ReplacementValue::Bool(true),
+                shadow_comparison: true,
+            }),
+        },
+        ParityCase {
             id: "parity-987-1156-provider-allowed",
             title: "An allowed provider operation executes and its backend receipt references the RFC 104 receipt",
             category: BehaviorCategory::SupportedLanguageContract,
@@ -2657,10 +2851,11 @@ fn seed_corpus_every_case_confirms_its_documented_current_behavior() {
 }
 
 #[test]
-fn only_a_row_with_a_real_two_route_comparison_can_be_green() -> Result<(), Box<dyn std::error::Error>> {
+fn only_rows_with_real_two_route_comparisons_can_be_green() -> Result<(), Box<dyn std::error::Error>> {
     // This is the corpus's core promise: direct replacement execution does not become green parity merely because
-    // it has a receipt, and generated Rust never counts as proof. Only the explicitly selected rows declare
-    // the bounded comparison profile; they are green only when their comparisons ran through Oven and agreed.
+    // it has a receipt, and generated Rust never counts as proof. Only rows that declare the bounded #1146
+    // comparison profile are green, and each is green only when that comparison actually ran through Oven and
+    // agreed.
     //
     // The branch is taken on what the summary reports, not on whether a capability could be *resolved*: a staged
     // capability whose Oven build then fails has run no comparison, and must not be treated as if it had.
@@ -2690,7 +2885,7 @@ fn only_a_row_with_a_real_two_route_comparison_can_be_green() -> Result<(), Box<
             summary.total_cases - SHADOW_COMPARED_CASE_IDS.len()
         );
     } else {
-        // No comparison ran, so nothing may be green — including the row that declares one.
+        // No comparison ran, so nothing may be green — including rows that declare one.
         require_staging_when_demanded(&summary)?;
         assert!(
             green.is_empty(),
@@ -2724,6 +2919,66 @@ fn require_staging_when_demanded(summary: &parity_corpus::CorpusSummary) -> Resu
 /// The original scalar row that declares the bounded #1146 comparison profile.
 fn compared_row(summary: &parity_corpus::CorpusSummary) -> Option<&parity_corpus::CaseReport> {
     summary.cases.iter().find(|case| case.id == SHADOW_COMPARED_CASE_ID)
+}
+
+/// Canonical Enumerate/Zip bind exact source output and an integer result to two independent route receipts.
+#[test]
+fn the_enumerate_zip_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == ENUMERATE_ZIP_SHADOW_CASE_ID)
+        .ok_or("missing Enumerate/Zip comparison row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        profile_kind,
+        profile_identity,
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+    } = &row.receipt
+    else {
+        return Err(format!("Enumerate/Zip needs matched two-route evidence, got {:?}", row.receipt).into());
+    };
+    let stdout = b"left\nleft\nright\npair\npair\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(profile_kind, incan::backend::shadow::SHADOW_COMPARISON_PROFILE_ID);
+    assert!(profile_identity.starts_with("sha256:"));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Int, \"49\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(
+        !legacy_authority.cargo_process_started,
+        "the native observation must be attributable to Oven rather than a Cargo process"
+    );
+    Ok(())
 }
 
 /// The compared row's evidence must name both routes' receipts and the Oven authority behind the legacy one.
@@ -2892,6 +3147,402 @@ fn the_string_helper_row_carries_two_route_receipts_and_exact_output() -> Result
     Ok(())
 }
 
+/// Scalar JSON binds its exact returned bytes and empty program streams to two independently verified receipts.
+#[test]
+fn the_scalar_json_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == JSON_STRINGIFY_SHADOW_CASE_ID)
+        .ok_or("missing scalar JSON row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        profile_kind,
+        profile_identity,
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+    } = &row.receipt
+    else {
+        return Err(format!("scalar JSON needs matched two-route evidence, got {:?}", row.receipt).into());
+    };
+    let empty_stream_digest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    assert_eq!(profile_kind, incan::backend::shadow::SHADOW_COMPARISON_PROFILE_ID);
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Str, {:?}); stdout=0 bytes ({empty_stream_digest}); stderr=0 bytes ({empty_stream_digest})",
+            JSON_STRINGIFY_SCALARS_EXPECTED
+        )
+    );
+    for identity in [
+        profile_identity,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// Hashed entry count binds duplicate normalization and exact streams to two independently verified receipts.
+#[test]
+fn the_collection_len_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == COLLECTION_LEN_SHADOW_CASE_ID)
+        .ok_or("missing collection-length row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "collection length needs matched two-route evidence, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    let stdout = b"collection len\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Int, \"2200\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// Canonical truthiness binds its bounded carrier result and exact streams to independently verified receipts.
+#[test]
+fn the_bool_truthiness_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == BOOL_TRUTHINESS_SHADOW_CASE_ID)
+        .ok_or("missing bool-truthiness row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "bool truthiness needs matched two-route evidence, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    let stdout = b"bool truthiness\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Bool, \"true\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// Integer-list sorting binds order, source preservation, and exact streams to independently verified receipts.
+#[test]
+fn the_sorted_int_list_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == SORTED_INT_LIST_SHADOW_CASE_ID)
+        .ok_or("missing sorted-integer-list row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "sorted integer list needs matched two-route evidence, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    let stdout = b"sorted int list\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Int, \"29320233\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// The typed-numeric row binds exact carrier identity, decimal scale, f32 rounding, and streams to both receipts.
+#[test]
+fn the_typed_numeric_row_carries_exact_type_and_two_route_receipts() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == TYPED_NUMERIC_SHADOW_CASE_ID)
+        .ok_or("missing typed-numeric row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        profile_kind,
+        profile_identity,
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+    } = &row.receipt
+    else {
+        return Err(format!("typed numerics need matched two-route evidence, got {:?}", row.receipt).into());
+    };
+    let stdout = b"0 255 -170141183460469231731687303715884105728 340282366920938463463374607431768211455 19.90\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(profile_kind, incan::backend::shadow::SHADOW_COMPARISON_PROFILE_ID);
+    assert!(profile_identity.starts_with("sha256:"));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Numeric(F32), \"1.2345679\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// Checked `isinstance` targets bind their exact type-test output to independently verified route receipts.
+#[test]
+fn the_isinstance_targets_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == ISINSTANCE_TARGETS_SHADOW_CASE_ID)
+        .ok_or("missing checked-isinstance-target row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "checked isinstance targets need matched two-route evidence, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    let stdout = b"isinstance targets\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Bool, \"true\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
+/// The string-length row binds Unicode behavior and both exact streams to independent no-fallback receipts.
+#[test]
+fn the_string_len_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
+    use sha2::{Digest, Sha256};
+
+    let summary = parity_corpus::summarize(&seed_corpus());
+    if !summary.source_observable_comparison_available {
+        return require_staging_when_demanded(&summary);
+    }
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == STRING_LEN_SHADOW_CASE_ID)
+        .ok_or("missing string-length row")?;
+    assert_eq!(row.overall_state, OverallState::Green);
+    let ReceiptRef::ShadowMatched {
+        observable,
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        legacy_authority,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!("string length needs matched two-route evidence, got {:?}", row.receipt).into());
+    };
+    let stdout = b"string len\n";
+    let stdout_digest = format!("sha256:{:x}", Sha256::digest(stdout));
+    let stderr_digest = format!("sha256:{:x}", Sha256::digest(b""));
+    assert_eq!(
+        observable,
+        &format!(
+            "completed(Bool, \"true\"); stdout={} bytes ({stdout_digest}); stderr=0 bytes ({stderr_digest})",
+            stdout.len()
+        )
+    );
+    for identity in [
+        legacy_receipt_identity,
+        replacement_receipt_identity,
+        legacy_output_identity,
+        replacement_output_identity,
+        &legacy_authority.oven_receipt_identity,
+        &legacy_authority.oven_build_unit_identity,
+        &legacy_authority.direct_rustc_plan_identity,
+    ] {
+        assert!(identity.starts_with("sha256:"), "{identity}");
+    }
+    assert_ne!(legacy_receipt_identity, replacement_receipt_identity);
+    assert_ne!(legacy_output_identity, replacement_output_identity);
+    assert!(!legacy_authority.cargo_process_started);
+    Ok(())
+}
+
 /// Scalar conversions bind a typed `str` result and their visible output to two independent route receipts.
 #[test]
 fn the_scalar_conversions_row_carries_two_route_receipts_and_exact_output() -> Result<(), Box<dyn std::error::Error>> {
@@ -2986,6 +3637,47 @@ fn an_unavailable_comparison_keeps_the_rows_replacement_evidence() -> Result<(),
     Ok(())
 }
 
+/// An unstaged Enumerate/Zip comparison remains explicitly non-green while retaining its direct receipt evidence.
+#[test]
+fn an_unavailable_enumerate_zip_comparison_keeps_its_replacement_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    let summary = parity_corpus::summarize(&seed_corpus());
+    let row = summary
+        .cases
+        .iter()
+        .find(|row| row.id == ENUMERATE_ZIP_SHADOW_CASE_ID)
+        .ok_or("the Enumerate/Zip comparison row must be present in the corpus")?;
+    if matches!(&row.receipt, ReceiptRef::ShadowMatched { .. }) {
+        eprintln!(
+            "skipping: the Enumerate/Zip comparison ran, so this row reports agreement rather than degraded evidence"
+        );
+        return Ok(());
+    }
+    assert_eq!(row.overall_state, OverallState::NonGreenShadowUnavailable);
+    let ReceiptRef::ReplacementExecuted {
+        receipt_identity,
+        body_snapshot,
+        comparison_reason,
+        ..
+    } = &row.receipt
+    else {
+        return Err(format!(
+            "an unavailable Enumerate/Zip comparison must retain direct replacement evidence, got {:?}",
+            row.receipt
+        )
+        .into());
+    };
+    assert!(receipt_identity.starts_with("sha256:"));
+    assert!(
+        body_snapshot.contains("body enumerate_zip_profile"),
+        "the retained evidence must be the real Enumerate/Zip Body-IR execution: {body_snapshot}"
+    );
+    assert!(
+        !comparison_reason.is_empty(),
+        "the row must name why its requested native comparison did not run"
+    );
+    Ok(())
+}
+
 /// Bind each selected direct-replacement source case to its own receipt and complete Body-IR proof evidence.
 #[test]
 fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -> Result<(), Box<dyn std::error::Error>>
@@ -2998,8 +3690,8 @@ fn replacement_body_v0_cases_have_receipt_bound_non_green_execution_evidence() -
         .collect();
     assert_eq!(
         replacement_rows.len(),
-        22,
-        "the nineteen original direct cases plus hashed membership, selected string helpers, and scalar conversions must stay stable in #987"
+        30,
+        "the nineteen original direct cases plus hashed membership, selected string helpers, scalar conversions, canonical Enumerate/Zip, string length, scalar JSON, hashed collection length, bounded bool truthiness, nonempty integer-list sorting, typed numeric carriers and checked isinstance targets must stay stable in #987"
     );
     let nominal_row = replacement_rows
         .iter()

@@ -139,8 +139,12 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         // type, with captured presets represented as named-overrideable defaults. Positional calls skip those preset
         // slots, and `LocalCallableTarget::binding` records the resulting declaration mapping. Keeping this type on
         // the binding makes the local call contract agree with the `Rvalue::Closure` that creates the value.
+        let assignment_span = ast::Span::new(span.start, span.end);
         let ty = self
-            .callable_value_ty(&assignment.value)
+            .type_info
+            .assignment_binding_type(assignment_span)
+            .map(semantic_type_from_resolved)
+            .or_else(|| self.callable_value_ty(&assignment.value))
             .unwrap_or_else(|| self.resolve_ty(assignment.value.span));
         let materializes_range = self.expr_has_materialized_range_layout(&assignment.value);
         let value = self.lower_expr_to_operand(&assignment.value, scope, out);

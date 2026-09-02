@@ -5,7 +5,8 @@
 
 use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy};
-use incan::backend::shadow::{ShadowComparisonProfile, compare_source_observable};
+use incan::backend::shadow::ShadowComparisonProfile;
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -21,7 +22,7 @@ fn hashed_membership_matches_the_receipt_backed_native_route() -> Result<(), Box
 
 /// Compile and execute the wide membership predicate on the same compiler-sized stack as the CLI.
 fn check_hashed_membership() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }

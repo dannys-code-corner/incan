@@ -44,7 +44,7 @@ pub(super) fn lower_function_body(
         .map(|binding| semantic_type_from_resolved(&binding.return_type))
         .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type.clone());
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut param_locals = Vec::with_capacity(function.params.len());
@@ -93,6 +93,7 @@ pub(super) fn lower_function_body(
         direct_call_id,
         name: function.name.clone(),
         span: hir_span(decl_span),
+        return_type: owner_return_type,
         locals: builder.locals,
         params,
         param_locals,
@@ -152,7 +153,7 @@ pub(super) fn lower_method_body(
         .map(|binding| semantic_type_from_resolved(&binding.return_type))
         .unwrap_or(IncanType::Unknown);
 
-    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type);
+    let mut builder = BodyBuilder::new(lowering_facts, owner_return_type.clone());
     let root_scope = builder.new_scope(None, hir_span(decl_span));
 
     let mut params = Vec::with_capacity(method.params.len() + 1);
@@ -216,6 +217,7 @@ pub(super) fn lower_method_body(
         direct_call_id,
         name: method.name.clone(),
         span: hir_span(decl_span),
+        return_type: owner_return_type,
         locals: builder.locals,
         params,
         param_locals,

@@ -21,7 +21,10 @@ use crate::frontend::library_exports::{
     CheckedTypeAliasExport, CheckedTypeBound, CheckedTypeParam,
 };
 use crate::frontend::registry_metadata::CheckedRegistryMetadataPackage;
-use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ValueEnumBacking, ValueEnumValue};
+use crate::frontend::symbols::{
+    CallableParam, ImplementationTraitBoundInfo, ImplementationTraitBoundOriginInfo, ImplementationTypeParamInfo,
+    NewtypePrimitiveConstraint, ValueEnumBacking, ValueEnumValue,
+};
 use incan_core::interop::RustItemMetadata;
 use incan_semantics_core::{AbiV0RuntimeRequirement, CanonicalSymbolId, SemanticSourceTargetKind};
 
@@ -707,6 +710,49 @@ pub struct TypeBoundExport {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module_path: Option<Vec<String>>,
     pub type_args: Vec<TypeRef>,
+    /// Compiler-resolved generic header required by this exact trait implementation.
+    ///
+    /// These are deliberately separate from the owning type's declared generic bounds: they constrain use of this
+    /// implementation, not construction or every other operation on the type. The header can repeat declared owner
+    /// bounds alongside backend-inferred requirements. Older manifests omit the field.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub implementation_type_params: Vec<ImplementationTypeParamExport>,
+}
+
+/// One implementation-header type parameter published with a checked trait adoption.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImplementationTypeParamExport {
+    pub name: String,
+    pub bounds: Vec<ImplementationTraitBoundExport>,
+}
+
+/// One exact requirement on an implementation type parameter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImplementationTraitBoundExport {
+    pub trait_path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub type_args: Vec<TypeRef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub associated_types: Vec<ImplementationAssociatedTypeExport>,
+    #[serde(default)]
+    pub origin: ImplementationTraitBoundOriginExport,
+}
+
+/// One associated-type equality carried by an inferred implementation bound.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImplementationAssociatedTypeExport {
+    pub name: String,
+    pub ty: TypeRef,
+}
+
+/// Stable origin classification for an inferred implementation bound.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImplementationTraitBoundOriginExport {
+    #[default]
+    Standard,
+    RustCapability,
+    SourceCallable,
 }
 
 /// Stable manifest-level type reference used by library exports.
@@ -1604,6 +1650,44 @@ fn type_bound_from_checked(bound: &CheckedTypeBound) -> TypeBoundExport {
         source_name: bound.source_name.clone(),
         module_path: bound.module_path.clone(),
         type_args: bound.type_args.iter().map(type_ref_from_resolved).collect(),
+        implementation_type_params: bound
+            .implementation_type_params
+            .iter()
+            .map(implementation_type_param_from_info)
+            .collect(),
+    }
+}
+
+/// Convert one checked implementation parameter into the shared manifest model.
+fn implementation_type_param_from_info(type_param: &ImplementationTypeParamInfo) -> ImplementationTypeParamExport {
+    ImplementationTypeParamExport {
+        name: type_param.name.clone(),
+        bounds: type_param
+            .bounds
+            .iter()
+            .map(implementation_trait_bound_from_info)
+            .collect(),
+    }
+}
+
+/// Convert one checked implementation requirement into the shared manifest model.
+fn implementation_trait_bound_from_info(bound: &ImplementationTraitBoundInfo) -> ImplementationTraitBoundExport {
+    ImplementationTraitBoundExport {
+        trait_path: bound.trait_path.clone(),
+        type_args: bound.type_args.iter().map(type_ref_from_resolved).collect(),
+        associated_types: bound
+            .associated_types
+            .iter()
+            .map(|(name, ty)| ImplementationAssociatedTypeExport {
+                name: name.clone(),
+                ty: type_ref_from_resolved(ty),
+            })
+            .collect(),
+        origin: match bound.origin {
+            ImplementationTraitBoundOriginInfo::Standard => ImplementationTraitBoundOriginExport::Standard,
+            ImplementationTraitBoundOriginInfo::RustCapability => ImplementationTraitBoundOriginExport::RustCapability,
+            ImplementationTraitBoundOriginInfo::SourceCallable => ImplementationTraitBoundOriginExport::SourceCallable,
+        },
     }
 }
 

@@ -13,8 +13,9 @@ use crate::frontend::ast::{
 use crate::frontend::decorator_resolution;
 use crate::frontend::module::canonicalize_source_module_segments;
 use crate::frontend::symbols::{
-    CallableParam, ClassInfo, FieldInfo, FunctionInfo, MethodInfo, ModelInfo, NewtypeInfo, PropertyInfo, ResolvedType,
-    SymbolKind, TraitInfo, TypeBoundInfo, TypeInfo, ValueEnumBacking, ValueEnumValue, VariableInfo, resolve_type,
+    CallableParam, ClassInfo, FieldInfo, FunctionInfo, ImplementationTypeParamInfo, MethodInfo, ModelInfo, NewtypeInfo,
+    PropertyInfo, ResolvedType, SymbolKind, TraitInfo, TypeBoundInfo, TypeInfo, ValueEnumBacking, ValueEnumValue,
+    VariableInfo, resolve_type,
 };
 use crate::frontend::typechecker::{PartialProjectionTargetKind, TypeChecker};
 
@@ -86,6 +87,7 @@ pub struct CheckedTypeBound {
     pub source_name: Option<String>,
     pub type_args: Vec<ResolvedType>,
     pub module_path: Option<Vec<String>>,
+    pub implementation_type_params: Vec<ImplementationTypeParamInfo>,
 }
 
 #[derive(Debug, Clone)]
@@ -1349,6 +1351,7 @@ fn checked_trait_bound(bound: &TraitBound, checker: &TypeChecker) -> CheckedType
             .map(|type_arg| resolve_type(&type_arg.node, &checker.symbols))
             .collect(),
         module_path: checker.trait_bound_module_path(&bound.name),
+        implementation_type_params: Vec::new(),
     }
 }
 
@@ -1361,6 +1364,7 @@ fn map_type_bound_infos(bounds: &[TypeBoundInfo]) -> Vec<CheckedTypeBound> {
             source_name: bound.source_name.clone(),
             type_args: bound.type_args.clone(),
             module_path: bound.module_path.clone(),
+            implementation_type_params: bound.implementation_type_params.clone(),
         })
         .collect()
 }
@@ -1624,6 +1628,7 @@ fn checked_method_from_info(name: &str, info: &MethodInfo) -> CheckedMethod {
                         source_name: bound.source_name,
                         type_args: bound.type_args,
                         module_path: bound.module_path,
+                        implementation_type_params: bound.implementation_type_params,
                     })
                     .collect(),
             })

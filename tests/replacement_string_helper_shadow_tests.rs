@@ -2,7 +2,8 @@
 
 use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy};
-use incan::backend::shadow::{ShadowComparisonProfile, compare_source_observable};
+use incan::backend::shadow::ShadowComparisonProfile;
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -10,7 +11,7 @@ mod shadow_capability;
 /// The minimal omitted-separator source must compile and agree on the native route, not only in direct execution.
 #[test]
 fn default_split_separator_compiles_and_matches_native() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }
@@ -37,7 +38,7 @@ fn default_split_separator_compiles_and_matches_native() -> Result<(), Box<dyn s
 /// Both routes must agree on shared string semantics, exact program streams and a separately transported result.
 #[test]
 fn selected_string_helpers_match_the_receipt_backed_native_route() -> Result<(), Box<dyn std::error::Error>> {
-    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason() {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
         eprintln!("skipping: {reason}");
         return Ok(());
     }

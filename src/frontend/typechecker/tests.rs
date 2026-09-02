@@ -1684,24 +1684,140 @@ def main(data: bytes) -> None:
 }
 
 #[test]
-fn rfc009_binary_float_literals_are_checked_for_f32_targets() {
+fn rfc009_binary_float_literals_are_checked_for_f32_targets() -> Result<(), String> {
     let ok = r#"
 def main() -> None:
   value: f32 = 1.5
 "#;
-    check_str(ok).unwrap_or_else(|errs| panic!("expected f32 literal to typecheck: {errs:?}"));
+    check_str(ok).map_err(|errs| format!("expected f32 literal to typecheck: {errs:?}"))?;
 
     let too_large = r#"
 def main() -> None:
   value: f32 = 1e100
 "#;
-    let errors = check_str_err(too_large, "expected out-of-range f32 literal to fail");
+    let errors = check_str(too_large)
+        .err()
+        .ok_or_else(|| "expected out-of-range f32 literal to fail".to_string())?;
     assert!(
         errors
             .iter()
             .any(|err| err.message.contains("Float literal 1e100 does not fit in f32")),
         "expected f32 range diagnostic, got: {errors:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn rfc009_non_finite_exact_float_literals_are_rejected_with_source_spans() -> Result<(), String> {
+    let cases = [
+        (
+            "positive f32 local",
+            "def main() -> None:\n  value: f32 = 1e9999\n",
+            "f32",
+            "1e9999",
+        ),
+        (
+            "negative f32 local",
+            "def main() -> None:\n  value: f32 = -1e9999\n",
+            "f32",
+            "1e9999",
+        ),
+        (
+            "positive f64 local",
+            "def main() -> None:\n  value: f64 = 1e9999\n",
+            "f64",
+            "1e9999",
+        ),
+        (
+            "negative f64 local",
+            "def main() -> None:\n  value: f64 = -1e9999\n",
+            "f64",
+            "1e9999",
+        ),
+        ("positive f32 const", "const VALUE: f32 = 1e9999\n", "f32", "1e9999"),
+        ("negative f32 const", "const VALUE: f32 = -1e9999\n", "f32", "-1e9999"),
+        ("positive f64 const", "const VALUE: f64 = 1e9999\n", "f64", "1e9999"),
+        ("negative f64 const", "const VALUE: f64 = -1e9999\n", "f64", "-1e9999"),
+    ];
+
+    for (case, source, target, expected_span) in cases {
+        let errors = check_str(source)
+            .err()
+            .ok_or_else(|| format!("expected {case} to be rejected"))?;
+        let error = errors
+            .iter()
+            .find(|error| error.message.contains(&format!("does not fit in {target}")))
+            .ok_or_else(|| format!("expected a finite-only {target} diagnostic for {case}, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid diagnostic span {:?} for {case}", error.span))?;
+        assert_eq!(actual_span, expected_span, "wrong source span for {case}");
+    }
+    Ok(())
+}
+
+#[test]
+fn non_finite_exact_float_literals_nested_in_arithmetic_keep_literal_spans() -> Result<(), String> {
+    let cases = [
+        ("f32", "1e9999 + 0.0", "1e9999"),
+        ("f64", "0.0 + -1e9999", "1e9999"),
+        ("f64", "(0.0 + (1e9999 * 1.0))", "1e9999"),
+    ];
+    for (target, expression, expected_span) in cases {
+        let source = format!("def main() -> None:\n  value: {target} = {expression}\n");
+        let errors = check_str(&source)
+            .err()
+            .ok_or_else(|| format!("expected nested {target} non-finite literal to fail"))?;
+        let error = errors
+            .iter()
+            .find(|error| {
+                error.message.contains("Float literal") && error.message.contains(&format!("does not fit in {target}"))
+            })
+            .ok_or_else(|| format!("expected a nested exact-float diagnostic, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid diagnostic span {:?}", error.span))?;
+        assert_eq!(actual_span, expected_span, "wrong nested literal span for {target}");
+    }
+    Ok(())
+}
+
+#[test]
+fn folded_non_finite_exact_float_const_reports_a_constant_value() -> Result<(), String> {
+    let source = "const VALUE: f64 = -1e9999\n";
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "expected folded non-finite f64 const to fail".to_string())?;
+    let error = errors
+        .iter()
+        .find(|error| error.message.contains("Constant value") && error.message.contains("does not fit in f64"))
+        .ok_or_else(|| format!("expected a folded-constant diagnostic, got {errors:?}"))?;
+    let actual_span = source
+        .get(error.span.start..error.span.end)
+        .ok_or_else(|| format!("invalid folded-constant diagnostic span {:?}", error.span))?;
+    assert_eq!(actual_span, "-1e9999");
+    Ok(())
+}
+
+#[test]
+fn ordinary_float_literals_remain_ieee_non_finite() -> Result<(), String> {
+    let source = "const VALUE: float = 1e9999\n\ndef main() -> None:\n  value: float = -1e9999\n";
+    check_str(source).map_err(|errors| format!("ordinary float must retain IEEE non-finite values: {errors:?}"))
+}
+
+#[test]
+fn ordinary_float_values_cannot_narrow_to_exact_f32() -> Result<(), String> {
+    let source = "def exact(value: str) -> f32:\n  return float(value)\n";
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "ordinary float must not narrow to exact f32".to_string())?;
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Return type mismatch: expected 'f32', found 'float'")),
+        "expected the exact-f32 return boundary to reject ordinary float, got {errors:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1740,15 +1856,18 @@ def distance(time: f32) -> f32:
 }
 
 #[test]
-fn exact_width_float_const_literals_reject_out_of_range_f32_issue1219() {
+fn exact_width_float_const_literals_reject_out_of_range_f32_issue1219() -> Result<(), String> {
     let source = r#"
 const TOO_LARGE: f32 = 1e100
 "#;
-    let errors = check_str_err(source, "expected out-of-range f32 const literal to fail");
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "expected out-of-range f32 const literal to fail".to_string())?;
     assert!(
         errors.iter().any(|error| error.message.contains("does not fit in f32")),
         "expected an f32 range diagnostic, got: {errors:?}"
     );
+    Ok(())
 }
 
 #[cfg(feature = "rust_inspect")]
@@ -3269,6 +3388,7 @@ fn library_index_with_rfc025_trait_adoptions() -> LibraryManifestIndex {
         type_args: vec![TypeRef::Named {
             name: "int".to_string(),
         }],
+        implementation_type_params: Vec::new(),
     };
     let convert_float = TypeBoundExport {
         name: "Convert".to_string(),
@@ -3277,6 +3397,7 @@ fn library_index_with_rfc025_trait_adoptions() -> LibraryManifestIndex {
         type_args: vec![TypeRef::Named {
             name: "float".to_string(),
         }],
+        implementation_type_params: Vec::new(),
     };
     let manifest = LibraryManifest {
         name: "mylib".to_string(),
@@ -3536,6 +3657,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: Vec::new(),
+                        implementation_type_params: Vec::new(),
                     }],
                     derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
@@ -3552,6 +3674,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: Vec::new(),
+                        implementation_type_params: Vec::new(),
                     }],
                     derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
@@ -3616,6 +3739,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: vec![TypeRef::TypeParam { name: "T".to_string() }],
+                        implementation_type_params: Vec::new(),
                     }],
                     requires: Vec::new(),
                     methods: Vec::new(),
@@ -4951,6 +5075,31 @@ def normalize(value: int | str | None) -> str:
       return value.upper()
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn explicit_builtin_isinstance_narrows_union_and_option_branches() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def normalize_union(value: int | str) -> str:
+  if std.builtins.isinstance(value, str):
+    return value.upper()
+  return "number"
+
+def normalize_option(value: int | str | None) -> str:
+  if std.builtins.isinstance(value, int):
+    return "number"
+  else:
+    if value is None:
+      return "missing"
+    else:
+      return value.upper()
+"#;
+    check_str(source).map_err(|errors| {
+        std::io::Error::other(format!(
+            "the explicit builtin identity must drive the same union and option narrowing as the ambient spelling: {errors:?}"
+        ))
+    })?;
+    Ok(())
 }
 
 #[test]
@@ -13143,6 +13292,51 @@ def foo() -> int:
 }
 
 #[test]
+fn builtin_json_stringify_requires_exactly_one_operand_at_the_call_span() -> Result<(), String> {
+    for (source, call, expected) in [
+        (
+            "def main() -> str:\n  return json_stringify()\n",
+            "json_stringify()",
+            "json_stringify() expects 1 argument(s), got 0",
+        ),
+        (
+            "def main() -> str:\n  return std.builtins.json_stringify(1, 2)\n",
+            "std.builtins.json_stringify(1, 2)",
+            "json_stringify() expects 1 argument(s), got 2",
+        ),
+    ] {
+        let errors = check_str(source)
+            .err()
+            .ok_or_else(|| "json_stringify arity mismatch should fail".to_string())?;
+        let error = errors
+            .iter()
+            .find(|error| error.message == expected)
+            .ok_or_else(|| format!("expected {expected:?}, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid json_stringify diagnostic span {:?}", error.span))?;
+        assert_eq!(
+            actual_span, call,
+            "the arity diagnostic must own the complete source call"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn local_function_named_json_stringify_remains_an_ordinary_lexical_binding() -> Result<(), String> {
+    let source = r#"
+def json_stringify(value: int) -> int:
+  return value + 1
+
+def main() -> int:
+  return json_stringify(41)
+"#;
+    check_str(source).map_err(|errors| format!("local json_stringify binding should typecheck: {errors:?}"))?;
+    Ok(())
+}
+
+#[test]
 fn test_local_function_named_sum_shadows_builtin_sum() {
     let source = r#"
 def sum(value: str) -> str:
@@ -17273,6 +17467,7 @@ fn test_same_trait_adapter_chain_preserves_defining_module_dispatch() {
             trait_name: "Stream".to_string(),
             module_path: Some(vec!["streams".to_string()]),
             type_args: vec![ResolvedType::Int, ResolvedType::Str],
+            implementation_type_params: Vec::new(),
             receiver_is_mutable: false,
         },
     );
@@ -17283,6 +17478,7 @@ fn test_same_trait_adapter_chain_preserves_defining_module_dispatch() {
             trait_name: "Stream".to_string(),
             module_path: None,
             type_args: vec![ResolvedType::Int, ResolvedType::Str],
+            implementation_type_params: Vec::new(),
             receiver_is_mutable: false,
         },
     );
@@ -23585,4 +23781,77 @@ fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
         check_str(source).is_ok(),
         "plain chained assignment must resolve every target through the enclosing scope chain"
     );
+}
+
+// ---- #1281: retain checked `isinstance` target facts for Body IR ----
+
+#[test]
+fn isinstance_records_the_resolved_alias_target_and_original_target_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "type Text = str\n\ndef probe(value: int | str) -> bool:\n  return isinstance(value, Text)\n";
+    let info = typecheck_info_for_module(
+        source,
+        vec!["facts".to_string(), "isinstance".to_string()],
+        "checked isinstance target",
+    )?;
+
+    let targets = info.calls.isinstance_targets.values().collect::<Vec<_>>();
+    let [target] = targets.as_slice() else {
+        return Err("expected exactly one checked isinstance target".into());
+    };
+    let target_start = source.rfind("Text").ok_or("fixture must contain the target spelling")?;
+    assert_eq!(target.ty, ResolvedType::Str, "aliases must be expanded before lowering");
+    assert_eq!(target.span, Span::new(target_start, target_start + "Text".len()));
+    Ok(())
+}
+
+#[test]
+fn invalid_isinstance_target_does_not_create_checked_executable_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "def probe(value: int) -> bool:\n  return isinstance(value, 1)\n";
+    let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let mut checker = TypeChecker::new();
+    let errors = checker
+        .check_program(&ast)
+        .err()
+        .ok_or("a value must not typecheck as an isinstance type target")?;
+
+    assert!(
+        errors.iter().any(|error| error.message.contains("Type mismatch")),
+        "expected the existing type-target diagnostic, got {errors:?}"
+    );
+    assert!(
+        checker.type_info().calls.isinstance_targets.is_empty(),
+        "a rejected target must not leave executable checked evidence"
+    );
+    Ok(())
+}
+
+#[test]
+fn isinstance_retains_a_nominal_targets_canonical_declaration_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "model Marker:\n  value: int\n\ntype Alias = Marker\n\ndef probe(value: Marker | str) -> bool:\n  return isinstance(value, Alias)\n";
+    let module_path = vec!["facts".to_string(), "nominal_isinstance".to_string()];
+    let info = typecheck_info_for_module(source, module_path.clone(), "nominal isinstance target")?;
+    let target = info
+        .calls
+        .isinstance_targets
+        .values()
+        .next()
+        .ok_or("fixture must retain its checked target")?;
+    let identity = target
+        .canonical
+        .as_ref()
+        .ok_or("a nominal target must retain its declaration identity")?;
+
+    assert_eq!(target.ty, ResolvedType::Named("Marker".to_string()));
+    assert_eq!(identity.module_path(), Some(module_path.as_slice()));
+    assert_eq!(identity.declaration_name, "Marker");
+    assert_eq!(identity.kind, incan_semantics_core::SemanticSourceTargetKind::Model);
+    let alias_target = source.rfind("Alias").ok_or("fixture must contain the target alias")?;
+    assert_eq!(target.span, Span::new(alias_target, alias_target + "Alias".len()));
+    assert_eq!(
+        source.get(target.span.start..target.span.end),
+        Some("Alias"),
+        "the target fact must retain the reference span, not the declaration span"
+    );
+    Ok(())
 }
