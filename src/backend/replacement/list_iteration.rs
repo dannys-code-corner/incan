@@ -13,7 +13,7 @@ use super::{
     ArgumentElement, Body, CallableParam, CallableParamDefault, CallableTarget, Callee, HirSourceSpan, IncanType,
     IterProtocol, LocalId, Operand, Place, PlaceElem, ReplacementExecutionError, Rvalue, Statement, StatementKind,
     bare_local, collections, declared_local_type, explicit_builtin, fixed_operands, is_direct_structural_type,
-    is_int_type, unsupported,
+    is_int_type, local_root, unsupported,
 };
 use incan_core::lang::{builtins::BuiltinFnId, types::collections::CollectionTypeId};
 
@@ -41,7 +41,13 @@ pub(super) fn validate_body(body: &Body) -> Result<BTreeSet<LocalId>, Replacemen
             if let StatementKind::Assign { place, rvalue } = &statement.kind {
                 match rvalue {
                     Rvalue::Use(source) if place.projection.is_empty() => {
-                        changed |= retain_alias(body, &mut iterator_locals, place.local, source, statement.span)?;
+                        changed |= retain_alias(
+                            body,
+                            &mut iterator_locals,
+                            bare_local(place, statement.span)?,
+                            source,
+                            statement.span,
+                        )?;
                     }
                     Rvalue::Closure {
                         captured_operands,
@@ -91,20 +97,23 @@ pub(super) fn validate_body(body: &Body) -> Result<BTreeSet<LocalId>, Replacemen
             protocol: IterProtocol::Builtin,
         } = &statement.kind
             && iterator.place.projection.is_empty()
-            && let Some(builtin) = iterator_locals.get(&iterator.place.local)
         {
-            let iterator_type = declared_local_type(body, iterator.place.local, statement.span)?;
-            let destination_type = declared_local_type(body, bare_local(destination, statement.span)?, statement.span)?;
-            let item_type = match builtin {
-                BuiltinFnId::Enumerate => list_element_type(iterator_type),
-                BuiltinFnId::Zip => zip_item_type(iterator_type),
-                _ => None,
-            };
-            if item_type != Some(destination_type) {
-                return Err(unsupported(
-                    "enumerate/Zip polling destination disagrees with its checked pair type",
-                    statement.span,
-                ));
+            let iterator_local = bare_local(&iterator.place, statement.span)?;
+            if let Some(builtin) = iterator_locals.get(&iterator_local) {
+                let iterator_type = declared_local_type(body, iterator_local, statement.span)?;
+                let destination_type =
+                    declared_local_type(body, bare_local(destination, statement.span)?, statement.span)?;
+                let item_type = match builtin {
+                    BuiltinFnId::Enumerate => list_element_type(iterator_type),
+                    BuiltinFnId::Zip => zip_item_type(iterator_type),
+                    _ => None,
+                };
+                if item_type != Some(destination_type) {
+                    return Err(unsupported(
+                        "enumerate/Zip polling destination disagrees with its checked pair type",
+                        statement.span,
+                    ));
+                }
             }
         }
         Ok(())
@@ -129,10 +138,11 @@ fn retain_alias(
     if !source.place.projection.is_empty() {
         return Ok(false);
     }
-    let Some(builtin) = iterator_locals.get(&source.place.local).copied() else {
+    let source_local = bare_local(&source.place, span)?;
+    let Some(builtin) = iterator_locals.get(&source_local).copied() else {
         return Ok(false);
     };
-    let source_type = declared_local_type(body, source.place.local, span)?;
+    let source_type = declared_local_type(body, source_local, span)?;
     let destination_type = declared_local_type(body, destination, span)?;
     if source_type != destination_type {
         return Err(unsupported(
@@ -192,12 +202,12 @@ fn list_operand_element<'a>(
             span,
         ));
     };
-    let local_type = declared_local_type(body, operand.place.local, span)?;
+    let local_type = declared_local_type(body, local_root(&operand.place, span)?, span)?;
     let operand_type = match operand.place.projection.as_slice() {
         [] => Some(local_type),
         [PlaceElem::Index(_)] => list_element_type(local_type),
-        [PlaceElem::Field(field)] => match local_type {
-            IncanType::Tuple(elements) => field.parse::<usize>().ok().and_then(|index| elements.get(index)),
+        [PlaceElem::Field { name, canonical: None }] => match local_type {
+            IncanType::Tuple(elements) => name.parse::<usize>().ok().and_then(|index| elements.get(index)),
             _ => None,
         },
         _ => None,

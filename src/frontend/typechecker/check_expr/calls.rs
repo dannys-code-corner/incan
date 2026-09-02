@@ -139,7 +139,7 @@ impl TypeChecker {
         }
         if let Some(name) = Self::explicit_builtin_member_name(callee) {
             let result = self.check_explicit_builtin_call(name, args, span);
-            if let Some(builtin) = incan_core::lang::builtins::from_str(name)
+            if let Some(builtin) = self.type_info.resolved_builtin_call(span)
                 && let Some(identity) = self.symbols.builtin_function_identity(builtin)
             {
                 self.type_info.record_resolved_identity(callee.span, identity);
@@ -353,7 +353,11 @@ impl TypeChecker {
                         .push(errors::explicit_call_site_type_args_not_supported(span));
                     return ResolvedType::Unknown;
                 }
-                self.record_direct_callee_identity(name, callee.span);
+                if let Some(builtin) = self.type_info.resolved_builtin_call(span)
+                    && let Some(identity) = self.symbols.builtin_function_identity(builtin)
+                {
+                    self.type_info.record_resolved_identity(callee.span, identity);
+                }
                 return result;
             }
 

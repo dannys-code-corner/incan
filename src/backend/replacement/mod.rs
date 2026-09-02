@@ -51,11 +51,11 @@ use incan_semantics_core::body_ir::{
     AggregateKind, ArgumentBinding, ArgumentElement, AssertionKind, BinOp, Body, BodyIrModule, CallableParam,
     CallableParamDefault, CallableTarget, Callee, ClosureBody, Constant, ConstructorTarget, DefaultComputation,
     DictEntry, FieldlessEnumDeclaration, FieldlessEnumVariantDeclaration, FieldlessEnumVariantTarget, FormatPart,
-    FormatStyle, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm,
-    NamedCallableTarget, NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding,
-    Place, PlaceElem, ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue,
-    ScopeId, Statement, StatementKind, TryErrorRouting, TypedNumericConstant, UnOp, ValueEnumBacking,
-    ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
+    FormatStyle, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, MatchArm, NamedCallableTarget,
+    NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding, Place, PlaceElem,
+    ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue, Statement, StatementKind,
+    TryErrorRouting, TypedNumericConstant, UnOp, ValueEnumBacking, ValueEnumDeclaration, ValueEnumVariantDeclaration,
+    ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CanonicalSymbolId, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType,
@@ -2011,7 +2011,7 @@ fn typed_numeric_operand_kind(
         Operand::Constant(_) => Ok(None),
         Operand::Place(place) => Ok(typed_numeric_kind_from_type(declared_local_type(
             body,
-            place.place.local,
+            local_root(&place.place, span)?,
             span,
         )?)),
     }
@@ -4794,9 +4794,8 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
 
     /// Assign exactly the authoritative Body-IR `LocalId` selected by lowering.
     ///
-    /// The profile preflight rejects repeated user-binding names rather than reconstructing scope equivalence from
-    /// spelling. Reassignment is therefore refused until Body IR carries binding-equivalence facts; no name-based
-    /// aliasing is permitted here.
+    /// Body IR has already resolved repeated source spellings to the canonical local selected by lexical scope. The
+    /// executor writes that exact `LocalId` and never reconstructs binding equivalence or aliases locals by name.
     fn assign_local(
         &mut self,
         local: LocalId,
@@ -7607,13 +7606,13 @@ mod tests {
 
     use incan_semantics_core::{
         CanonicalSymbolId, CompilerNodeId, IncanPrimitiveType, IncanType, SemanticSourceTargetKind,
-        body_ir::{Block, GlobalPlace, GlobalWritePolicy, RaceArm},
+        body_ir::{Block, GlobalPlace, GlobalWritePolicy, RaceArm, ScopeId},
     };
 
     use super::{
         Body, BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, LocalId, MAX_EXECUTION_STEPS,
         Operand, OwnershipFact, Place, ProgramIo, ReplacementExecutionError, ReplacementGenerator, ReplacementTask,
-        ReplacementTaskState, ReplacementValue, ScopeId, Statement, StatementKind, bare_local, validate_read_place,
+        ReplacementTaskState, ReplacementValue, Statement, StatementKind, bare_local, validate_read_place,
     };
 
     #[test]

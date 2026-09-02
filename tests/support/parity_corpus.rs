@@ -62,7 +62,7 @@ use incan_semantics_core::{
     CanonicalSymbolId, HirModule, SemanticSourceTargetKind, SymbolNamespace, encode_incan_symbol_identity,
 };
 use proc_macro2::{TokenStream, TokenTree};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::str::FromStr;
 
 // ============================================================================
@@ -924,7 +924,12 @@ impl CheckedIdentityGraph {
             .ok_or_else(|| format!("identity graph has no module `{name}`"))
     }
 
-    /// Read the checker-owned identity recorded for the selected source fragment occurrence.
+    /// Read the outermost checker-owned identity recorded at or inside the selected source fragment.
+    ///
+    /// Conformance rows use full call expressions as stable source anchors even though the checker records the
+    /// callable reference (and, for member calls, its receiver) rather than assigning an identity to the call node.
+    /// Selecting the widest checked reference inside that anchor preserves the compiler-owned fact without
+    /// reconstructing an identity from source spelling.
     pub(crate) fn resolved_identity(
         &self,
         module: &str,
@@ -933,12 +938,35 @@ impl CheckedIdentityGraph {
     ) -> Result<CanonicalSymbolId, String> {
         let module = self.module(module)?;
         let span = nth_source_span(module.source, needle, occurrence)?;
-        module.type_info.resolved_identity(span).cloned().ok_or_else(|| {
-            format!(
+        if let Some(identity) = module.type_info.resolved_identity(span) {
+            return Ok(identity.clone());
+        }
+
+        let candidates = module
+            .type_info
+            .references
+            .resolved_identities
+            .iter()
+            .filter(|((start, end), _)| *start >= span.start && *end <= span.end)
+            .map(|(&(start, end), identity)| (end.saturating_sub(start), start, end, identity));
+        let Some((widest, _, _, _)) = candidates.clone().max_by_key(|candidate| candidate.0) else {
+            return Err(format!(
                 "`{}` has no checked identity for occurrence {occurrence} of `{needle}`",
                 module.name
-            )
-        })
+            ));
+        };
+        let widest_candidates = candidates.filter(|candidate| candidate.0 == widest).collect::<Vec<_>>();
+        if widest_candidates.len() != 1 {
+            return Err(format!(
+                "`{}` has ambiguous outermost checked identities inside occurrence {occurrence} of `{needle}`: {:?}",
+                module.name,
+                widest_candidates
+                    .iter()
+                    .map(|(_, start, end, identity)| (*start, *end, identity.render_compact()))
+                    .collect::<Vec<_>>()
+            ));
+        }
+        Ok(widest_candidates[0].3.clone())
     }
 
     /// Resolve one unique local declaration identity by semantic name/kind/namespace.
@@ -1095,9 +1123,15 @@ impl CheckedIdentityGraph {
         let module = self.module(module)?;
         let projection = encode_incan_symbol_identity(identity);
         let matched = exact_rust_identifier(&module.emitted_rust, &projection).map_err(|error| {
+            let available = module
+                .emitted_rust
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .filter(|token| token.starts_with("__incan_v1_"))
+                .take(8)
+                .collect::<Vec<_>>();
             format!(
-                "generated Rust for `{}` could not prove canonical projection `{projection}`: {error}",
-                module.name
+                "generated Rust for `{}` could not prove canonical projection `{projection}`: {error}; available projections: {available:?}",
+                module.name,
             )
         })?;
         Ok(format!("{} identifier {matched}", module.name))
@@ -1264,6 +1298,39 @@ fn check_identity_source_graph(plan: SourceIdentityConformancePlan) -> Result<Ch
     let (root_spec, root_program) = &parsed[root_index];
     let mut codegen = IrCodegen::new();
     codegen.set_root_source_module_name(Some(root_spec.path.join(".")));
+    codegen.set_externally_reachable_items(
+        root_program
+            .declarations
+            .iter()
+            .filter_map(|declaration| match &declaration.node {
+                ast::Declaration::Function(function) => Some(function.name.clone()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>(),
+    );
+    codegen.set_externally_reachable_items_by_module(
+        parsed
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != root_index)
+            .map(|(_, (module, program))| {
+                let path = module
+                    .path
+                    .iter()
+                    .map(|segment| (*segment).to_string())
+                    .collect::<Vec<_>>();
+                let functions = program
+                    .declarations
+                    .iter()
+                    .filter_map(|declaration| match &declaration.node {
+                        ast::Declaration::Function(function) => Some(function.name.clone()),
+                        _ => None,
+                    })
+                    .collect::<HashSet<_>>();
+                (path, functions)
+            })
+            .collect::<HashMap<_, _>>(),
+    );
     let mut dependency_paths = Vec::new();
     for (module, program) in &parsed {
         if module.name == root_spec.name {

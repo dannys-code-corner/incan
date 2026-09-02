@@ -167,7 +167,16 @@ impl TypeChecker {
             return matches!(kind, SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_))
                 .then_some((kind, source_module_path));
         }
-        None
+        let import_path = ImportPath::simple(module_path.to_vec());
+        let kind = self.dependency_member_symbol_for_path(&import_path, member)?;
+        if !matches!(kind, SymbolKind::Function(_) | SymbolKind::FunctionOverloads(_)) {
+            return None;
+        }
+        let identity = self.dependency_member_identity(&import_path, member)?;
+        let incan_semantics_core::SymbolOrigin::Module(source_module_path) = identity.origin else {
+            return None;
+        };
+        Some((kind, source_module_path))
     }
 
     /// Resolve a constant reached through an imported standard-library or checked public-package module.

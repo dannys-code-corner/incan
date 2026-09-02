@@ -82,18 +82,26 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         &self,
         name: &str,
         callee_span: ast::Span,
+        call_span: ast::Span,
     ) -> Result<DirectCallDeclaration, String> {
         let declarations = &self.type_info.declarations;
         let local_declarations = self.local_function_declarations.get(name);
         let Some(local_declarations) = local_declarations else {
             let canonical = self.type_info.resolved_identity(callee_span).cloned();
+            let builtin = self.type_info.resolved_builtin_call(call_span);
+            let canonical_builtin_id = canonical.as_ref().and_then(canonical_builtin);
+            if builtin != canonical_builtin_id && (builtin.is_some() || canonical_builtin_id.is_some()) {
+                return Err(format!(
+                    "checked builtin call `{name}` does not retain its canonical builtin identity"
+                ));
+            }
             return Ok(DirectCallDeclaration {
                 slots: declarations
                     .function_bindings
                     .get(name)
                     .map(|binding| binding.params.iter().map(DeclaredSlot::from_checked_param).collect()),
                 direct_call_id: None,
-                builtin: canonical.as_ref().and_then(canonical_builtin),
+                builtin,
                 canonical,
             });
         };
@@ -701,7 +709,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             );
         }
 
-        let declaration = match self.declared_slots_for_direct_call(&name, callee.span) {
+        let declaration = match self.declared_slots_for_direct_call(&name, callee.span, span) {
             Ok(declaration) => declaration,
             Err(description) => {
                 return self.unsupported_operand(description, scope, hir_span_value, out);
@@ -755,6 +763,67 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
     }
 
+    /// Lower a method-shaped explicit builtin call from the typechecker's retained builtin selection.
+    ///
+    /// `std.builtins.len(value)` reaches the AST as a method call, but the namespace is not a runtime receiver. The
+    /// typechecker records the selected [`BuiltinFnId`] at the full call span. Consuming that closed fact here keeps
+    /// the call distinct from a user-defined function or method with the same spelling and avoids evaluating the
+    /// namespace as a value.
+    #[allow(clippy::too_many_arguments)]
+    fn lower_checked_builtin_method_call(
+        &mut self,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> Option<bir::Operand> {
+        let builtin = self.type_info.resolved_builtin_call(span)?;
+        if builtin == BuiltinFnId::IsInstance {
+            return None;
+        }
+        let call_span = hir_span(span);
+        let Some(canonical) = crate::frontend::symbols::canonical_builtin_function_identity(builtin) else {
+            return Some(self.unsupported_operand(
+                "checked builtin call has no canonical registry identity".to_string(),
+                scope,
+                call_span,
+                out,
+            ));
+        };
+        let resolved_type_args = match self.call_site_type_arguments(span, type_args) {
+            Ok(resolved_type_args) => resolved_type_args,
+            Err(description) => return Some(self.unsupported_operand(description, scope, call_span, out)),
+        };
+        let declared = self
+            .type_info
+            .call_site_callable_params(span)
+            .map(|params| params.iter().map(DeclaredSlot::from_checked_param).collect());
+        let display_name = canonical.declaration_name.clone();
+        let (operands, binding) =
+            match self.bind_declared_args(&format!("builtin `{display_name}`"), declared, args, scope, out) {
+                Ok(bound) => bound,
+                Err(description) => return Some(self.unsupported_operand(description, scope, call_span, out)),
+            };
+        let ty = self.resolve_ty(span);
+        Some(self.push_call_temp(
+            bir::Callee::Function(bir::CallableTarget::Named(bir::NamedCallableTarget {
+                name: display_name,
+                direct_call_id: None,
+                canonical: Some(canonical),
+                builtin: Some(builtin),
+                type_args: resolved_type_args,
+                binding,
+            })),
+            operands,
+            ty,
+            scope,
+            call_span,
+            false,
+            out,
+        ))
+    }
+
     /// Lower a method call `recv.name(args)` to a [`bir::Callee::Method`] call, with the receiver prepended to
     /// `args[0]` as a [`bir::OwnershipFact::Borrow`] operand (see the inline comment on the receiver-borrow decision
     /// below).
@@ -781,6 +850,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         let hir_span_value = hir_span(span);
         if self.type_info.resolved_builtin_call(span) == Some(BuiltinFnId::IsInstance) {
             return self.lower_checked_isinstance_call(type_args, args, span, scope, out);
+        }
+        if let Some(lowered) = self.lower_checked_builtin_method_call(type_args, args, span, scope, out) {
+            return lowered;
         }
         if self.type_info.resolved_identity(recv.span).is_some_and(|identity| {
             identity.namespace == incan_semantics_core::SymbolNamespace::OrdinaryLexical

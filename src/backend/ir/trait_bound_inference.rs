@@ -4050,6 +4050,7 @@ mod tests {
             trait_type_args: vec![IrType::List(Box::new(IrType::Int)), IrType::String],
             associated_types: Vec::new(),
             methods: Vec::new(),
+            method_projections: Vec::new(),
         })));
 
         propagate_trait_bounds_from_programs(&mut local, &[&external]);

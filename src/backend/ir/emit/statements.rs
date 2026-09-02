@@ -1578,7 +1578,8 @@ mod tests {
     use crate::backend::ir::FunctionRegistry;
     use crate::backend::ir::TypedExpr;
     use crate::backend::ir::expr::{
-        CollectionMethodKind, IrCallArg, IrCallArgKind, MethodCallArgPolicy, MethodKind, VarAccess, VarRefKind,
+        CollectionMethodKind, IrCallArg, IrCallArgKind, IrStaticReferenceKind, MethodCallArgPolicy, MethodKind,
+        VarAccess, VarRefKind,
     };
     use crate::backend::ir::types::Mutability;
 
@@ -1594,7 +1595,7 @@ mod tests {
             value: TypedExpr::new(
                 IrExprKind::StaticBinding {
                     name: "ACTIVE_FLAGS".to_string(),
-                    reference_kind: super::super::expr::IrStaticReferenceKind::Source,
+                    reference_kind: IrStaticReferenceKind::Source,
                 },
                 IrType::List(Box::new(IrType::Bool)),
             ),
@@ -1775,7 +1776,7 @@ mod tests {
                 value: TypedExpr::new(
                     IrExprKind::StaticBinding {
                         name: "ITEMS".to_string(),
-                        reference_kind: super::super::expr::IrStaticReferenceKind::Source,
+                        reference_kind: IrStaticReferenceKind::Source,
                     },
                     IrType::List(Box::new(IrType::Int)),
                 ),

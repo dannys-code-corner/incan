@@ -607,6 +607,23 @@ impl<'a> IrCodegen<'a> {
             .unwrap_or_else(|| name.to_string())
     }
 
+    /// Give an internal typecheck pass the canonical source paths already supplied to codegen for its dependencies.
+    ///
+    /// The dependency cache key is an emission detail and may flatten multiple source paths to the same spelling.
+    /// Rechecking without this mapping would therefore discard declaration ownership that the compilation request
+    /// already knew, leaving ordinary `module.function(...)` calls unable to carry their canonical target into IR.
+    fn register_dependency_module_paths(
+        checker: &mut crate::frontend::typechecker::TypeChecker,
+        dependencies: &[(&str, &Program, Option<Vec<String>>)],
+    ) {
+        for (name, _, path_segments) in dependencies {
+            if let Some(path_segments) = path_segments {
+                checker
+                    .register_dependency_module_path_segments(name, canonicalize_source_module_segments(path_segments));
+            }
+        }
+    }
+
     /// Capture bound-bearing implementation headers from one inferred IR module.
     fn capture_implementation_bound_requirements(&mut self, module_path: Vec<String>, program: &IrProgram) {
         for requirement in super::trait_bound_inference::collect_local_implementation_bound_requirements(program) {
@@ -1177,6 +1194,7 @@ impl<'a> IrCodegen<'a> {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
                 self.configure_typechecker(&mut tc);
+                Self::register_dependency_module_paths(&mut tc, &dependencies);
                 tc.set_current_module_path(Some(canonicalize_source_module_segments(path_segments)));
                 let typecheck_deps =
                     Self::imported_dependency_modules_for_program(module_ast, &dependencies, Some(&module_key));
@@ -1465,6 +1483,7 @@ impl<'a> IrCodegen<'a> {
             use crate::frontend::typechecker::TypeChecker;
             let mut tc = TypeChecker::new();
             self.configure_typechecker(&mut tc);
+            Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(root_module_path.clone());
             let typecheck_deps = Self::imported_dependency_modules_for_program(program, &dependency_modules, None);
             let result = match tc.check_with_imports(program, &typecheck_deps) {
@@ -1535,6 +1554,7 @@ impl<'a> IrCodegen<'a> {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
                 self.configure_typechecker(&mut tc);
+                Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(Some(dep_path.clone()));
                 let dep_key = Self::dependency_module_key(dep_name, &dep_path_segments);
                 let typecheck_deps =
@@ -1700,6 +1720,7 @@ impl<'a> IrCodegen<'a> {
             use crate::frontend::typechecker::TypeChecker;
             let mut tc = TypeChecker::new();
             self.configure_typechecker(&mut tc);
+            Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(module_identity_path.clone());
             let typecheck_deps =
                 Self::imported_dependency_modules_for_program(program, &dependency_modules, Some(&module_key));
@@ -1732,6 +1753,7 @@ impl<'a> IrCodegen<'a> {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
                 self.configure_typechecker(&mut tc);
+                Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(dep_identity_path.clone());
                 let typecheck_deps =
                     Self::imported_dependency_modules_for_program(dep_ast, &dependency_modules, Some(&dep_key));
@@ -1862,6 +1884,7 @@ impl<'a> IrCodegen<'a> {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
                 self.configure_typechecker(&mut tc);
+                Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(module_identity_path.clone());
                 let module_key = Self::dependency_module_key(name, &path_segments);
                 let typecheck_deps =
@@ -2155,6 +2178,7 @@ impl<'a> IrCodegen<'a> {
                     use crate::frontend::typechecker::TypeChecker;
                     let mut tc = TypeChecker::new();
                     self.configure_typechecker(&mut tc);
+                    Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                     tc.set_current_module_path(Some(canonicalize_source_module_segments(path)));
                     let self_key = canonicalize_source_module_segments(path).join("_");
                     let typecheck_deps =

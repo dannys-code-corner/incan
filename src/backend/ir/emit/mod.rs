@@ -1189,16 +1189,6 @@ impl<'a> IrEmitter<'a> {
                 .any(|binding| binding == name)
     }
 
-    /// Emit the generated init call required before touching a static binding.
-    pub(super) fn emit_static_init_call_for_static(&self, name: &str) -> TokenStream {
-        if self.static_needs_imported_init_call(name) {
-            let init_fn = Self::imported_static_init_ident(name);
-            quote! { #init_fn(); }
-        } else {
-            self.emit_module_static_init_call()
-        }
-    }
-
     /// Emit initialization for one exact source or generated static reference.
     pub(super) fn emit_static_init_call_for_reference(
         &self,

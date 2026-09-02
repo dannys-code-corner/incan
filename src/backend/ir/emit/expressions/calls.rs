@@ -720,7 +720,10 @@ impl<'a> IrEmitter<'a> {
         {
             self.emit_expr(func)?
         } else if let Some(path) = canonical_path {
-            self.emit_canonical_callee_path(path)?.unwrap_or(self.emit_expr(func)?)
+            let materialize_internal_path =
+                *self.qualify_internal_canonical_paths.borrow() || Self::callee_is_imported_module_path(func);
+            self.emit_canonical_callee_path(path, materialize_internal_path)?
+                .unwrap_or(self.emit_expr(func)?)
         } else {
             self.emit_expr(func)?
         };
@@ -1032,9 +1035,7 @@ impl<'a> IrEmitter<'a> {
     fn callee_is_imported_module_path(func: &TypedExpr) -> bool {
         match &func.kind {
             IrExprKind::Field { object, .. } => Self::callee_is_imported_module_path(object),
-            IrExprKind::Var { ref_kind, .. } => {
-                matches!(ref_kind, VarRefKind::ExternalName | VarRefKind::ExternalRustName)
-            }
+            IrExprKind::Var { ref_kind, .. } => matches!(ref_kind, VarRefKind::ExternalName),
             _ => false,
         }
     }
@@ -1238,7 +1239,11 @@ impl<'a> IrEmitter<'a> {
     /// Canonical stdlib calls route through the generated `crate::__incan_std` module. Canonical calls to internal
     /// source modules route through an explicit `crate::...` path so imported helper calls remain valid when default
     /// argument expressions are expanded outside the defining module.
-    fn emit_canonical_callee_path(&self, canonical_path: &[String]) -> Result<Option<TokenStream>, EmitError> {
+    fn emit_canonical_callee_path(
+        &self,
+        canonical_path: &[String],
+        materialize_internal_path: bool,
+    ) -> Result<Option<TokenStream>, EmitError> {
         if canonical_path.len() < 2 {
             return Ok(None);
         }
@@ -1303,7 +1308,7 @@ impl<'a> IrEmitter<'a> {
                 return Ok(None);
             }
             segments
-        } else if *self.qualify_internal_canonical_paths.borrow() && self.is_internal_module_path(&module_path) {
+        } else if materialize_internal_path && self.is_internal_module_path(&module_path) {
             let mut segments = vec![quote! { crate }];
             for seg in &module_path {
                 let ident = Self::rust_ident(seg);

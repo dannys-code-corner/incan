@@ -1593,7 +1593,11 @@ impl AstLowering {
                         target.module_path.first().map(String::as_str) == Some("pub")
                             && matches!(target.kind.as_str(), "model" | "class" | "newtype" | "rusttype")
                     });
-                if self.imported_module_function_callee_path(&o.node, m).is_some() || is_public_module_constructor {
+                if self
+                    .imported_module_function_callee_path(&o.node, m, expr_span)
+                    .is_some()
+                    || is_public_module_constructor
+                {
                     let callee = ast::Spanned::new(ast::Expr::Field(o.clone(), m.clone()), expr_span);
                     return self
                         .lower_call_expr(&callee, type_args, args, expr_span)

@@ -156,6 +156,29 @@ fn identity_namespace_for_kind(kind: &SemanticSourceTargetKind) -> SymbolNamespa
     }
 }
 
+/// Return the canonical root identity for one compiler-owned builtin function.
+///
+/// This is shared by symbol registration and downstream checked-IR consumers so the builtin registry has one
+/// identity projection. Callers must already hold a [`BuiltinFnId`]; this function never classifies source spelling.
+pub(crate) fn canonical_builtin_function_identity(builtin: BuiltinFnId) -> Option<CanonicalSymbolId> {
+    builtins::BUILTIN_FUNCTIONS
+        .iter()
+        .find(|entry| entry.id == builtin)
+        .map(|entry| canonical_builtin_identity(entry.canonical))
+}
+
+/// Build one canonical identity from a compiler-owned builtin registry entry.
+fn canonical_builtin_identity(canonical_name: &str) -> CanonicalSymbolId {
+    CanonicalSymbolId {
+        namespace: SymbolNamespace::OrdinaryLexical,
+        origin: SymbolOrigin::Builtin,
+        declaration_name: canonical_name.to_string(),
+        kind: SemanticSourceTargetKind::Builtin,
+        scope_discriminant: None,
+        declaration_span: HirSourceSpan::new(0, 0),
+    }
+}
+
 /// Canonical semantic name for anonymous union types (RFC 029).
 pub const UNION_TYPE_NAME: &str = incan_core::lang::types::UNION_TYPE_NAME;
 
@@ -302,17 +325,11 @@ impl SymbolTable {
     /// Return the canonical root identity for one builtin function registry entry.
     ///
     /// This deliberately bypasses lexical lookup: an ordinary builtin such as `len` may be shadowed locally, while
-    /// an explicit `std.builtins.len` resolution still needs the compiler-owned builtin identity.
+    /// an explicit `std.builtins.len` resolution still needs the compiler-owned builtin identity. Some builtin
+    /// functions are recognized directly by the typechecker and do not need a physical root-scope symbol, but every
+    /// closed registry id still has the same canonical registry identity.
     pub fn builtin_function_identity(&self, builtin: BuiltinFnId) -> Option<CanonicalSymbolId> {
-        let canonical_name = builtins::as_str(builtin);
-        self.identities
-            .values()
-            .find(|identity| {
-                identity.origin == SymbolOrigin::Builtin
-                    && identity.kind == SemanticSourceTargetKind::Builtin
-                    && identity.declaration_name == canonical_name
-            })
-            .cloned()
+        canonical_builtin_function_identity(builtin)
     }
 
     /// Populate the root scope with built-in type symbols.
@@ -1015,17 +1032,7 @@ impl SymbolTable {
     /// builtin fallback tier has one canonical entry per builtin — so every alias records the canonical registry
     /// spelling as its declaration name and all spellings compare equal.
     fn record_builtin_identity(&mut self, id: SymbolId, canonical_name: &str) {
-        self.identities.insert(
-            id,
-            CanonicalSymbolId {
-                namespace: SymbolNamespace::OrdinaryLexical,
-                origin: SymbolOrigin::Builtin,
-                declaration_name: canonical_name.to_string(),
-                kind: SemanticSourceTargetKind::Builtin,
-                scope_discriminant: None,
-                declaration_span: HirSourceSpan::new(0, 0),
-            },
-        );
+        self.identities.insert(id, canonical_builtin_identity(canonical_name));
     }
 
     /// Look up a symbol by name in the current scope chain
@@ -2469,6 +2476,24 @@ fn render_rust_tuple(items: &[ResolvedType]) -> String {
 mod tests {
     use super::*;
     use crate::ast::{Span, Spanned, Type};
+
+    /// Builtins that are checker-recognized without a physical root symbol still receive the one registry identity.
+    #[test]
+    fn every_builtin_function_registry_entry_has_a_canonical_identity() -> Result<(), String> {
+        let table = SymbolTable::new();
+        for entry in builtins::BUILTIN_FUNCTIONS {
+            let identity = table
+                .builtin_function_identity(entry.id)
+                .ok_or_else(|| format!("missing canonical identity for builtin `{}`", entry.canonical))?;
+            assert_eq!(identity.namespace, SymbolNamespace::OrdinaryLexical);
+            assert_eq!(identity.origin, SymbolOrigin::Builtin);
+            assert_eq!(identity.declaration_name, entry.canonical);
+            assert_eq!(identity.kind, SemanticSourceTargetKind::Builtin);
+            assert_eq!(identity.scope_discriminant, None);
+            assert_eq!(identity.declaration_span, HirSourceSpan::new(0, 0));
+        }
+        Ok(())
+    }
 
     #[test]
     fn shared_binding_registration_preserves_the_first_site_and_reports_the_collision() {

@@ -1191,7 +1191,7 @@ pub(crate) fn determine_conversion_for_incan_call(
 mod tests {
     use super::*;
     use crate::backend::ir::decl::FunctionParam;
-    use crate::backend::ir::expr::{MethodCallArgPolicy, VarAccess, VarRefKind};
+    use crate::backend::ir::expr::{IrStaticReferenceKind, MethodCallArgPolicy, VarAccess, VarRefKind};
     use crate::backend::ir::types::Mutability;
 
     #[test]
@@ -1449,7 +1449,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "POLICY".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::FrozenStr,
         );
@@ -1555,7 +1555,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "PREFIX".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );
@@ -1570,7 +1570,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "MARKER".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::Int,
         );
@@ -1688,7 +1688,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "MARKER".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::Int,
         );
@@ -1740,7 +1740,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "PREFIX".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );
@@ -2078,7 +2078,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "OPTION_NAME".to_string(),
-                reference_kind: super::expr::IrStaticReferenceKind::Source,
+                reference_kind: IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );

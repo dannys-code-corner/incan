@@ -2669,36 +2669,24 @@ fn verify_shadow_binding(
     body: &str,
     declaration_name: &str,
 ) -> Result<IdentityAssertions, String> {
-    let outer_declaration = graph.resolved_identity(module, "x", 0)?;
-    let inner_declaration = graph.resolved_identity(module, "x", 1)?;
+    // Binding tokens introduce declarations and are intentionally absent from the checked-reference map. Read the
+    // identities selected by the two use sites, then require Body IR to carry those same declaration identities.
     let inner_read = graph.resolved_identity(module, "x", 2)?;
     let outer_read = graph.resolved_identity(module, "x", 3)?;
-    if outer_declaration == inner_declaration {
+    if outer_read == inner_read {
         return Err("same-spelled shadow declarations collapsed to one canonical identity".to_string());
     }
     let mut checked_relations = Vec::new();
-    require_same_identity(
-        "inner shadow read",
-        &inner_declaration,
-        &inner_read,
-        &mut checked_relations,
-    )?;
-    require_same_identity(
-        "outer shadow read",
-        &outer_declaration,
-        &outer_read,
-        &mut checked_relations,
-    )?;
     checked_relations.push(format!(
         "shadow declarations distinct: {} != {}",
-        outer_declaration.render_compact(),
-        inner_declaration.render_compact()
+        outer_read.render_compact(),
+        inner_read.render_compact()
     ));
 
     let locals = graph.body_local_identities(module, body, "x")?;
     if locals.len() != 2
-        || !locals.iter().any(|identity| identity == &outer_declaration)
-        || !locals.iter().any(|identity| identity == &inner_declaration)
+        || !locals.iter().any(|identity| identity == &outer_read)
+        || !locals.iter().any(|identity| identity == &inner_read)
     {
         return Err(format!(
             "Body IR did not retain both canonical shadow locals, got {locals:?}"
@@ -2734,39 +2722,35 @@ fn verify_mut_shadow(graph: &CheckedIdentityGraph) -> Result<IdentityAssertions,
 }
 
 fn verify_generic_binder(graph: &CheckedIdentityGraph) -> Result<IdentityAssertions, String> {
-    let declaration = graph.resolved_identity("identity_generic", "T", 0)?;
+    // The binder token introduces a declaration, so it deliberately does not appear in the
+    // checker-owned reference map. Its annotations are references to that declaration and carry
+    // the canonical GenericBinder identity into downstream consumers.
     let parameter = graph.resolved_identity("identity_generic", "T", 1)?;
     let return_type = graph.resolved_identity("identity_generic", "T", 2)?;
-    if declaration.kind != SemanticSourceTargetKind::GenericBinder {
+    if parameter.kind != SemanticSourceTargetKind::GenericBinder {
         return Err(format!(
-            "generic declaration did not retain a GenericBinder identity: {}",
-            declaration.render_compact()
+            "generic parameter annotation did not retain its GenericBinder identity: {}",
+            parameter.render_compact()
         ));
     }
     let mut checked_relations = Vec::new();
     require_same_identity(
-        "generic binder parameter annotation",
-        &declaration,
+        "generic binder annotations",
         &parameter,
-        &mut checked_relations,
-    )?;
-    require_same_identity(
-        "generic binder return annotation",
-        &declaration,
         &return_type,
         &mut checked_relations,
     )?;
     let concrete_int = graph.resolved_identity("identity_generic", "int", 1)?;
-    if concrete_int == declaration || concrete_int.kind == SemanticSourceTargetKind::GenericBinder {
+    if concrete_int == parameter || concrete_int.kind == SemanticSourceTargetKind::GenericBinder {
         return Err(format!(
             "generic binder collapsed into concrete `int`: binder={}, concrete={}",
-            declaration.render_compact(),
+            parameter.render_compact(),
             concrete_int.render_compact()
         ));
     }
     checked_relations.push(format!(
         "generic binder/concrete distinct: {} != {}",
-        declaration.render_compact(),
+        parameter.render_compact(),
         concrete_int.render_compact()
     ));
     let generic_function = graph.declaration_identity(
@@ -3576,6 +3560,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: HASHED_MEMBERSHIP_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "membership",
                 arguments: Vec::new,
@@ -3592,6 +3577,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: STRING_HELPER_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "string_helpers",
                 arguments: Vec::new,
@@ -3608,6 +3594,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: REPLACEMENT_BODY_V0_022_SRC,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "scalar_conversions",
                 arguments: replacement_body_v0_022_arguments,
@@ -3625,6 +3612,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: REPLACEMENT_BODY_V0_023_SRC,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "enumerate_zip_profile",
                 arguments: replacement_body_v0_023_arguments,
@@ -3641,6 +3629,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: STRING_LEN_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "string_len",
                 arguments: Vec::new,
@@ -3657,6 +3646,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: JSON_STRINGIFY_SCALARS_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "observe",
                 arguments: Vec::new,
@@ -3673,6 +3663,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: COLLECTION_LEN_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "collection_len",
                 arguments: Vec::new,
@@ -3689,6 +3680,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: BOOL_TRUTHINESS_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "bool_truthiness",
                 arguments: Vec::new,
@@ -3705,6 +3697,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: SORTED_INT_LIST_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "sorted_int_list",
                 arguments: Vec::new,
@@ -3721,6 +3714,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: REPLACEMENT_BODY_V0_029_SRC,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "typed_numeric_profile",
                 arguments: Vec::new,
@@ -3737,6 +3731,7 @@ fn seed_corpus() -> Vec<ParityCase> {
             disposition: Disposition::Preserved,
             source: ISINSTANCE_TARGETS_SOURCE,
             evaluate: None,
+            identity_conformance: None,
             replacement_execution: Some(parity_corpus::ReplacementExecutionPlan {
                 function: "isinstance_targets",
                 arguments: Vec::new,
@@ -4121,7 +4116,13 @@ fn rfc_120_rows_publish_real_conformance_evidence_without_fabricating_legacy_exe
         .collect::<Vec<_>>();
     assert_eq!(rows.len(), 6, "the stable RFC 120 corpus rows must remain complete");
     for row in &rows {
-        assert_eq!(row.overall_state, OverallState::NonGreenShadowUnavailable);
+        assert_eq!(
+            row.overall_state,
+            OverallState::NonGreenShadowUnavailable,
+            "{} produced the wrong state from {:?}",
+            row.id,
+            row.behavior_outcome
+        );
         let ReceiptRef::IdentityConformanceObserved {
             replacement_receipt_identity,
             evidence_identity,
@@ -4265,11 +4266,15 @@ fn rfc_120_expected_value_mismatch_retains_the_observed_replacement_receipt_and_
     };
     let report = parity_corpus::evaluate_case(&case);
     assert_eq!(report.overall_state, OverallState::NonGreenBehavior);
-    assert!(matches!(
-        report.behavior_outcome,
-        ComparisonOutcome::Mismatch { ref detail }
-            if detail.contains("returned Int(42), expected Int(3)")
-    ));
+    assert!(
+        matches!(
+            report.behavior_outcome,
+            ComparisonOutcome::Mismatch { ref detail }
+                if detail.contains("returned Int(42), expected Int(3)")
+        ),
+        "unexpected mismatch outcome: {:?}",
+        report.behavior_outcome
+    );
     assert!(matches!(
         report.receipt,
         ReceiptRef::IdentityConformanceObserved {

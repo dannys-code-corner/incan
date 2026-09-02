@@ -39,6 +39,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::surface::types as surface_types;
 use incan_core::lang::testing::{self, TestingAssertHelperId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
+use incan_semantics_core::{SemanticSourceTargetKind, SymbolOrigin};
 
 const TYPE_CONSTRUCTOR_HOOK: &str = "__incan_new";
 const API_CRATE_ROOT_SEGMENT: &str = "crate";
@@ -366,6 +367,35 @@ impl AstLowering {
 
     /// Resolve the canonical imported callee path for identifier and module-qualified calls.
     fn imported_callee_path_for_expr(&self, expr: &ast::Spanned<ast::Expr>) -> Option<Vec<String>> {
+        let is_import_reference = match &expr.node {
+            ast::Expr::Ident(name) => self.import_aliases.contains_key(name),
+            ast::Expr::Field(object, _) => self.imported_field_base_path(&object.node).is_some(),
+            _ => false,
+        };
+        if is_import_reference
+            && let Some(identity) = self
+                .type_info
+                .as_ref()
+                .and_then(|info| info.resolved_identity(expr.span))
+            && matches!(
+                identity.kind,
+                SemanticSourceTargetKind::Function | SemanticSourceTargetKind::Partial
+            )
+        {
+            let mut path = match &identity.origin {
+                SymbolOrigin::Module(module_path) => module_path.clone(),
+                SymbolOrigin::Package { library, module_path } => {
+                    let mut path = vec!["pub".to_string(), library.clone()];
+                    path.extend(module_path.iter().cloned());
+                    path
+                }
+                SymbolOrigin::RustCrate(_) | SymbolOrigin::Builtin => Vec::new(),
+            };
+            if !path.is_empty() {
+                path.push(identity.declaration_name.clone());
+                return Some(path);
+            }
+        }
         if let Some(target) = self.type_info.as_ref().and_then(|info| info.source_target(expr.span))
             && target.module_path.first().map(String::as_str) == Some("pub")
         {
@@ -399,11 +429,13 @@ impl AstLowering {
         }
     }
 
-    /// Resolve `module.function(...)` syntax when the receiver is an imported stdlib or public dependency module.
+    /// Resolve `module.function(...)` syntax when the receiver is an imported module and the checker proved that the
+    /// call selects a function declaration rather than an object method.
     pub(in crate::backend::ir::lower) fn imported_module_function_callee_path(
         &self,
         receiver: &ast::Expr,
         method_name: &str,
+        call_span: ast::Span,
     ) -> Option<Vec<String>> {
         let mut path = self.imported_field_base_path(receiver)?;
         match path.first().map(String::as_str) {
@@ -414,7 +446,24 @@ impl AstLowering {
                 public_path.push(method_name.to_string());
                 self.pub_function_export_for_path(library, &public_path)?;
             }
-            _ => return None,
+            _ => {
+                let identity = self
+                    .type_info
+                    .as_ref()?
+                    .resolved_identity(call_span)
+                    .filter(|identity| {
+                        matches!(
+                            identity.kind,
+                            SemanticSourceTargetKind::Function | SemanticSourceTargetKind::Partial
+                        ) && matches!(identity.origin, SymbolOrigin::Module(_))
+                    })?;
+                let SymbolOrigin::Module(module_path) = &identity.origin else {
+                    return None;
+                };
+                path = module_path.clone();
+                path.push(identity.declaration_name.clone());
+                return Some(path);
+            }
         }
         path.push(method_name.to_string());
         Some(path)
@@ -4090,7 +4139,11 @@ mod tests {
         );
 
         assert_eq!(
-            lowering.imported_module_function_callee_path(&Expr::Ident("hyperquant".to_string()), "default_index"),
+            lowering.imported_module_function_callee_path(
+                &Expr::Ident("hyperquant".to_string()),
+                "default_index",
+                Span::default(),
+            ),
             Some(vec![
                 "pub".to_string(),
                 "modulelib".to_string(),
@@ -4186,7 +4239,11 @@ mod tests {
             vec!["std".to_string(), "artifact_only".to_string()],
         );
         assert_eq!(
-            lowering.imported_module_function_callee_path(&Expr::Ident("artifact".to_string()), "consume"),
+            lowering.imported_module_function_callee_path(
+                &Expr::Ident("artifact".to_string()),
+                "consume",
+                Span::default(),
+            ),
             Some(vec![
                 "std".to_string(),
                 "artifact_only".to_string(),
