@@ -48,7 +48,7 @@ use crate::oven::loaf::OVEN_LOAF_ENV;
 use crate::provider::{ProviderPlan, SDK_PROVIDER_BUILD_ENV};
 use incan_core::lang::{rust_keywords, stdlib};
 
-use super::decl::{IrTraitBoundOrigin, IrTypeParam};
+use super::decl::{IrTraitBoundOrigin, IrTypeParam, Visibility};
 use super::emit::CallableNameResolution;
 use super::scanners::{
     check_for_this_import as scan_check_for_this_import, collect_rust_crates as scan_collect_rust_crates,
@@ -181,6 +181,14 @@ type NestedLibraryGeneration = ((String, HashMap<Vec<String>, String>), IrGenera
 struct CapturedImplementationBoundRequirement {
     module_path: Vec<String>,
     requirement: super::trait_bound_inference::ImplementationBoundRequirement,
+    target_visibility: CapturedImplementationTargetVisibility,
+}
+
+/// Visibility of an implementation target resolved within the IR program that owns the implementation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CapturedImplementationTargetVisibility {
+    SameProgram(Visibility),
+    Unknown,
 }
 
 /// Compiler-owned metadata discovered while lowering and inferring one generated library.
@@ -273,6 +281,17 @@ impl IrGenerationMetadata {
                         &implementation_type_params,
                     )?;
                 }
+            }
+
+            // A private same-program target has no manifest surface by construction. Public aliases were tried above,
+            // so suppress only a still-unmatched target whose private visibility was retained directly from this IR.
+            if !matched
+                && matches!(
+                    captured.target_visibility,
+                    CapturedImplementationTargetVisibility::SameProgram(Visibility::Private)
+                )
+            {
+                continue;
             }
 
             if !matched {
@@ -574,9 +593,24 @@ impl<'a> IrCodegen<'a> {
     /// Capture bound-bearing implementation headers from one inferred IR module.
     fn capture_implementation_bound_requirements(&mut self, module_path: Vec<String>, program: &IrProgram) {
         for requirement in super::trait_bound_inference::collect_local_implementation_bound_requirements(program) {
+            let target_visibility = program
+                .declarations
+                .iter()
+                .find_map(|declaration| match &declaration.kind {
+                    super::decl::IrDeclKind::Struct(target) if target.name == requirement.target_type => {
+                        Some(target.visibility)
+                    }
+                    super::decl::IrDeclKind::Enum(target) if target.name == requirement.target_type => {
+                        Some(target.visibility)
+                    }
+                    _ => None,
+                })
+                .map(CapturedImplementationTargetVisibility::SameProgram)
+                .unwrap_or(CapturedImplementationTargetVisibility::Unknown);
             let captured = CapturedImplementationBoundRequirement {
                 module_path: module_path.clone(),
                 requirement,
+                target_visibility,
             };
             if !self.implementation_bound_requirements.contains(&captured) {
                 self.implementation_bound_requirements.push(captured);
@@ -2369,6 +2403,7 @@ pub model Stream[R] with Walk:
         assert!(metadata.implementation_bound_requirements.iter().any(|captured| {
             captured.module_path == root_module_path
                 && captured.requirement.target_type == "Stream"
+                && captured.target_visibility == CapturedImplementationTargetVisibility::SameProgram(Visibility::Public)
                 && captured.requirement.type_params.iter().any(|type_param| {
                     type_param
                         .bounds
@@ -2409,6 +2444,52 @@ pub model Stream[R] with Walk:
             })),
             "the checked root adoption must receive its inferred implementation header"
         );
+    }
+
+    #[test]
+    fn private_implementation_metadata_is_omitted_but_unknown_visibility_fails_closed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let source = r#"
+trait Walk:
+    def copy(self) -> Self: ...
+
+model PrivateStream[R] with Walk:
+    value: R
+
+    def copy(self) -> Self:
+        return self
+"#;
+        let tokens = lexer::lex(source).map_err(|errors| format!("lex errors: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parse errors: {errors:?}"))?;
+        let module_path = vec!["private_impl".to_string()];
+        let (_code, metadata) = IrCodegen::new().try_generate_with_metadata(&ast, &module_path)?;
+        let captured = metadata
+            .implementation_bound_requirements
+            .iter()
+            .find(|captured| captured.requirement.target_type == "PrivateStream")
+            .ok_or("private implementation should retain its inferred requirement internally")?;
+        assert_eq!(
+            captured.target_visibility,
+            CapturedImplementationTargetVisibility::SameProgram(Visibility::Private)
+        );
+
+        let mut private_manifest = LibraryManifest::new("private_impl", "0.1.0");
+        metadata.apply_to_library_manifest(&mut private_manifest)?;
+
+        let mut unknown_requirement = captured.clone();
+        unknown_requirement.target_visibility = CapturedImplementationTargetVisibility::Unknown;
+        let unknown_metadata = IrGenerationMetadata {
+            implementation_bound_requirements: vec![unknown_requirement],
+        };
+        let mut unknown_manifest = LibraryManifest::new("unknown_impl", "0.1.0");
+        let Err(error) = unknown_metadata.apply_to_library_manifest(&mut unknown_manifest) else {
+            return Err("an unknown implementation target must remain fail-closed".into());
+        };
+        assert!(
+            error.contains("had no checked manifest adoption"),
+            "unexpected unknown-target diagnostic: {error}"
+        );
+        Ok(())
     }
 
     #[test]
@@ -6143,8 +6224,10 @@ pub def translate(time: f32, velocity: f32) -> f32:
 
         assert!(
             code.contains("pub fn translate(time: f32, velocity: f32) -> f32")
-                && code.contains("accept_f32(-time + time * velocity)"),
-            "expected f32 arithmetic to cross the imported Rust f32 boundary without widening, got:\n{code}"
+                && code.contains("accept_f32(")
+                && code.matches("incan_stdlib::num::require_finite_f32").count() == 6,
+            "expected exact f32 arithmetic to retain its width and finite invariant across the imported Rust f32 \
+             boundary, got:\n{code}"
         );
         Ok(())
     }

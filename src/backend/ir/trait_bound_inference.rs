@@ -3509,7 +3509,7 @@ mod tests {
 
     /// Implementation-bound propagation must match the checked trait declaration and instantiation, not a spelling.
     #[test]
-    fn implementation_bound_matching_is_canonical_and_instantiation_exact() {
+    fn implementation_bound_matching_is_canonical_and_instantiation_exact() -> Result<(), Box<dyn std::error::Error>> {
         let requirement = ImplementationBoundRequirement {
             target_type: "Stream".to_string(),
             type_params: vec![IrTypeParam {
@@ -3542,9 +3542,9 @@ mod tests {
             std::slice::from_ref(&requirement),
             &mut matched,
         );
-        let Some((required_bounds, mapping)) = matched.first() else {
-            panic!("the exact checked implementation identity should match")
-        };
+        let (required_bounds, mapping) = matched
+            .first()
+            .ok_or_else(|| std::io::Error::other("the exact checked implementation identity should match"))?;
         assert_eq!(mapping.get("R").map(String::as_str), Some("T"));
         assert!(required_bounds.iter().any(|type_param| {
             type_param.name == "R" && type_param.bounds.iter().any(|bound| bound.trait_path == tb::CLONE)
@@ -3570,6 +3570,7 @@ mod tests {
                 "a different canonical owner or trait instantiation must not inherit implementation bounds"
             );
         }
+        Ok(())
     }
 
     /// Cloning a concrete value or function pointer does not clone its surrounding generic parameters.

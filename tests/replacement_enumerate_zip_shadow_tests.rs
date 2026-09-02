@@ -3,9 +3,9 @@
 use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy, ShadowComparisonState};
 use incan::backend::shadow::{
-    FunctionResultKind, RouteEvidence, ShadowComparison, ShadowComparisonProfile, SourceObservable,
-    TypedFunctionResult, compare_source_observable,
+    FunctionResultKind, RouteEvidence, ShadowComparison, ShadowComparisonProfile, SourceObservable, TypedFunctionResult,
 };
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;

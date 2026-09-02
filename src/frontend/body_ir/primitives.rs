@@ -219,12 +219,18 @@ pub(super) fn lower_checked_literal(lit: &ast::Literal, ty: &IncanType) -> bir::
                     value: value.magnitude,
                 }),
                 NumericFamily::BinaryFloat => match kind {
-                    NumericTypeId::F32 => Some(bir::TypedNumericConstant::F32 {
-                        bits: (value.magnitude as f32).to_bits(),
-                    }),
-                    NumericTypeId::F64 => Some(bir::TypedNumericConstant::F64 {
-                        bits: (value.magnitude as f64).to_bits(),
-                    }),
+                    NumericTypeId::F32 => {
+                        let value = value.magnitude as f32;
+                        value
+                            .is_finite()
+                            .then_some(bir::TypedNumericConstant::F32 { bits: value.to_bits() })
+                    }
+                    NumericTypeId::F64 => {
+                        let value = value.magnitude as f64;
+                        value
+                            .is_finite()
+                            .then_some(bir::TypedNumericConstant::F64 { bits: value.to_bits() })
+                    }
                     _ => None,
                 },
                 NumericFamily::Bool => None,
@@ -235,10 +241,11 @@ pub(super) fn lower_checked_literal(lit: &ast::Literal, ty: &IncanType) -> bir::
             normalized
                 .parse::<f32>()
                 .ok()
+                .filter(|value| value.is_finite())
                 .map(|value| bir::TypedNumericConstant::F32 { bits: value.to_bits() })
         }
         (ast::Literal::Float(value), IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::F64))) => {
-            Some(bir::TypedNumericConstant::F64 {
+            value.value.is_finite().then_some(bir::TypedNumericConstant::F64 {
                 bits: value.value.to_bits(),
             })
         }
@@ -296,15 +303,16 @@ pub(super) fn lower_checked_negative_literal(lit: &ast::Literal, ty: &IncanType)
         }
         (ast::Literal::Float(value), IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::F32))) => {
             let normalized = value.repr.replace('_', "");
-            let value = normalized.parse::<f32>().ok()?;
-            bir::TypedNumericConstant::F32 {
-                bits: (-value).to_bits(),
-            }
+            let value = -normalized.parse::<f32>().ok()?;
+            value
+                .is_finite()
+                .then_some(bir::TypedNumericConstant::F32 { bits: value.to_bits() })?
         }
         (ast::Literal::Float(value), IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::F64))) => {
-            bir::TypedNumericConstant::F64 {
-                bits: (-value.value).to_bits(),
-            }
+            let value = -value.value;
+            value
+                .is_finite()
+                .then_some(bir::TypedNumericConstant::F64 { bits: value.to_bits() })?
         }
         _ => return None,
     };

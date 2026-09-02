@@ -7,7 +7,9 @@ mod testing_asserts;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::super::super::conversions::{BinOpEmitKind, determine_binop_plan};
+use super::super::super::conversions::{
+    BinOpEmitKind, NumericConversion, determine_binop_plan, exact_float_value_validation,
+};
 use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{BinOp, IrCallArg, IrCallArgKind, IrExprKind, TypedExpr, VarRefKind};
 use super::super::super::ownership::{ArgumentPassingPlan, ValueUseSite};
@@ -1337,15 +1339,36 @@ impl<'a> IrEmitter<'a> {
             return Ok(tokens);
         }
 
-        let l_raw = self.emit_expr(left)?;
-        let r_raw = self.emit_expr(right)?;
+        let mut l_raw = self.emit_expr(left)?;
+        let mut r_raw = self.emit_expr(right)?;
+
+        // Comparison is an observation boundary for exact floats. Validate the source operands before any concrete
+        // f32-to-f64 widening so values injected through a public Rust surface cannot silently compare as IEEE
+        // infinity or NaN. Ordinary `float` operands deliberately remain untouched.
+        let is_comparison = matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        );
+        if is_comparison {
+            l_raw = exact_float_value_validation(&left.ty).apply(l_raw);
+            r_raw = exact_float_value_validation(&right.ty).apply(r_raw);
+        }
 
         // Determine binop plan (conversions + emit strategy)
         let plan = determine_binop_plan(op, left, right);
         let mut l = plan.lhs_conv.apply(l_raw);
         let mut r = plan.rhs_conv.apply(r_raw);
+        let result_validation = plan.result_validation();
+        if is_comparison {
+            if matches!(plan.lhs_conv, NumericConversion::ToFloat) {
+                l = quote! { (#l) };
+            }
+            if matches!(plan.rhs_conv, NumericConversion::ToFloat) {
+                r = quote! { (#r) };
+            }
+        }
 
-        match plan.emit {
+        let emitted = match plan.emit {
             BinOpEmitKind::StdlibCall { path, borrow_args } => {
                 if borrow_args {
                     Ok(quote! { #path(&#l, &#r) })
@@ -1374,11 +1397,6 @@ impl<'a> IrEmitter<'a> {
                 }
 
                 // Handle reference vs value comparisons
-                let is_comparison = matches!(
-                    op,
-                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-                );
-
                 if is_comparison {
                     let left_is_ref = matches!(&left.ty, IrType::Ref(_) | IrType::RefMut(_));
                     let right_is_value = !matches!(&right.ty, IrType::Ref(_) | IrType::RefMut(_));
@@ -1390,7 +1408,8 @@ impl<'a> IrEmitter<'a> {
 
                 Ok(quote! { #l #op_tokens #r })
             }
-        }
+        }?;
+        Ok(result_validation.apply(emitted))
     }
 
     /// Return whether a nested binary operand must be parenthesized to preserve Incan precedence.

@@ -278,6 +278,19 @@ fn lowers_the_power_operator_as_a_primitive_keeping_the_checked_float_promotion(
 }
 
 #[test]
+fn exact_binary_float_arithmetic_keeps_the_checked_body_ir_width() -> Result<(), Box<dyn std::error::Error>> {
+    for kind in ["f32", "f64"] {
+        let source = format!("def f(left: {kind}, right: {kind}) -> {kind}:\n  return left * right\n");
+        let rendered = rendered_f(&source, &format!("exact_{kind}"))?;
+        assert!(
+            rendered.contains(&format!("local 2 <tmp> : {kind}")),
+            "{kind} multiplication must retain its checked exact result in Body IR: {rendered}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn lowers_the_bitwise_and_shift_operators_as_primitives_keeping_the_checked_int_result()
 -> Result<(), Box<dyn std::error::Error>> {
     for (spelling, module_leaf) in [

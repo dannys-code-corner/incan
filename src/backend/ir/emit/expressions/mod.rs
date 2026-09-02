@@ -54,6 +54,7 @@ use proc_macro2::{Literal, TokenStream};
 use quote::{ToTokens, format_ident, quote};
 use std::sync::LazyLock;
 
+use super::super::conversions::exact_float_value_validation;
 use super::super::decl::IrInteropAdapterKind;
 use super::super::expr::{
     CollectionMethodKind, IrDictEntry, IrExprKind, IrInteropCoercionKind, IrListEntry, IrMethodDispatch,
@@ -720,7 +721,8 @@ impl<'a> IrEmitter<'a> {
                 } else {
                     self.emit_expr(inner)?
                 };
-                return Ok(quote! { #inner_tokens? });
+                let emitted = quote! { #inner_tokens? };
+                return Ok(exact_float_value_validation(&expr.ty).apply(emitted));
             }
             IrExprKind::MethodCall {
                 receiver,
@@ -741,6 +743,7 @@ impl<'a> IrEmitter<'a> {
                     *arg_policy,
                     site,
                 )?;
+                let emitted = exact_float_value_validation(&expr.ty).apply(emitted);
                 let emitted = plan_value_use(expr, site).apply(emitted);
                 if let Some(target_ty) = resolved_target_ty.as_ref() {
                     let (source_ty, source_qualifier) = self.list_element_widening_source_for_expr(expr);
@@ -786,6 +789,7 @@ impl<'a> IrEmitter<'a> {
                     canonical_path.as_deref(),
                     target_site,
                 )?;
+                let emitted = exact_float_value_validation(&expr.ty).apply(emitted);
                 let emitted = plan_value_use(expr, site).apply(emitted);
                 if let Some(target_ty) = resolved_target_ty.as_ref() {
                     let (source_ty, source_qualifier) = self.list_element_widening_source_for_expr(expr);
@@ -1190,13 +1194,16 @@ impl<'a> IrEmitter<'a> {
                 args,
                 callable_signature,
                 canonical_path,
-            } => self.emit_call_expr(
-                func,
-                type_args,
-                args,
-                callable_signature.as_ref(),
-                canonical_path.as_deref(),
-            ),
+            } => {
+                let emitted = self.emit_call_expr(
+                    func,
+                    type_args,
+                    args,
+                    callable_signature.as_ref(),
+                    canonical_path.as_deref(),
+                )?;
+                Ok(exact_float_value_validation(&expr.ty).apply(emitted))
+            }
             IrExprKind::BuiltinCall { func, args } => self.emit_builtin_call(func, args),
             IrExprKind::MethodCall {
                 receiver,
@@ -1206,19 +1213,31 @@ impl<'a> IrEmitter<'a> {
                 args,
                 callable_signature,
                 arg_policy,
-            } => self.emit_method_call_expr(
-                receiver,
-                method,
-                dispatch.as_ref(),
-                type_args,
-                args,
-                callable_signature.as_ref(),
-                *arg_policy,
-            ),
-            IrExprKind::KnownMethodCall { receiver, kind, args } => self.emit_known_method_call(receiver, kind, args),
+            } => {
+                let emitted = self.emit_method_call_expr(
+                    receiver,
+                    method,
+                    dispatch.as_ref(),
+                    type_args,
+                    args,
+                    callable_signature.as_ref(),
+                    *arg_policy,
+                )?;
+                Ok(exact_float_value_validation(&expr.ty).apply(emitted))
+            }
+            IrExprKind::KnownMethodCall { receiver, kind, args } => {
+                let emitted = self.emit_known_method_call(receiver, kind, args)?;
+                Ok(exact_float_value_validation(&expr.ty).apply(emitted))
+            }
 
-            IrExprKind::Field { object, field } => self.emit_field_expr(object, field),
-            IrExprKind::Index { object, index } => self.emit_index_expr(object, index),
+            IrExprKind::Field { object, field } => {
+                let emitted = self.emit_field_expr(object, field)?;
+                Ok(exact_float_value_validation(&expr.ty).apply(emitted))
+            }
+            IrExprKind::Index { object, index } => {
+                let emitted = self.emit_index_expr(object, index)?;
+                Ok(exact_float_value_validation(&expr.ty).apply(emitted))
+            }
             IrExprKind::Slice {
                 target,
                 start,
@@ -4198,6 +4217,51 @@ mod tests {
             rendered, "child . as_ref ()",
             "a match scrutinee must not clone a borrowed as_ref() result it can bind directly, got `{rendered}`"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn exact_float_rust_call_results_are_guarded_without_changing_ordinary_float() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let rust_call = |name: &str, return_ty: IrType| {
+            let func = TypedExpr::new(
+                IrExprKind::Var {
+                    name: name.to_string(),
+                    access: VarAccess::Copy,
+                    ref_kind: VarRefKind::ExternalRustName,
+                },
+                IrType::Function {
+                    params: Vec::new(),
+                    ret: Box::new(return_ty.clone()),
+                },
+            );
+            TypedExpr::new(
+                IrExprKind::Call {
+                    func: Box::new(func),
+                    type_args: Vec::new(),
+                    args: Vec::new(),
+                    callable_signature: None,
+                    canonical_path: None,
+                },
+                return_ty,
+            )
+        };
+
+        let exact = emitter
+            .emit_expr(&rust_call("read_exact", IrType::Numeric(NumericTypeId::F32)))
+            .map_err(|err| format!("expected exact Rust call emission, got {err:?}"))?
+            .to_string();
+        assert_eq!(
+            exact, "incan_stdlib :: num :: require_finite_f32 (read_exact ())",
+            "an exact Rust result must be validated at ingress"
+        );
+
+        let ordinary = emitter
+            .emit_expr(&rust_call("read_ieee", IrType::Float))
+            .map_err(|err| format!("expected ordinary Rust call emission, got {err:?}"))?
+            .to_string();
+        assert_eq!(ordinary, "read_ieee ()", "ordinary float must retain IEEE behavior");
         Ok(())
     }
 

@@ -372,6 +372,23 @@ fn coerce_value_to_checked_type(
             span,
         )
     })?;
+    if matches!(target, IncanType::Primitive(IncanPrimitiveType::Numeric(_))) {
+        match &widened {
+            ReplacementNumericValue::F32(value) if !value.is_finite() => {
+                return Err(runtime_failure(
+                    IncanError::non_finite_exact_float("f32").to_string(),
+                    span,
+                ));
+            }
+            ReplacementNumericValue::F64(value) if !value.is_finite() => {
+                return Err(runtime_failure(
+                    IncanError::non_finite_exact_float("f64").to_string(),
+                    span,
+                ));
+            }
+            _ => validate_numeric_value(&widened, span)?,
+        }
+    }
     match target {
         IncanType::Primitive(IncanPrimitiveType::Int) => match widened {
             ReplacementNumericValue::Signed { value, .. } => i64::try_from(value)
@@ -1353,24 +1370,27 @@ pub fn execute_prevalidated_free_function_with_io(
     let body = named_free_function(execution.module, &execution.name)?;
     let checkpoint = io.checkpoint();
     let mut executor = BodyExecutor::new(execution.module, body, execution.args, execution.providers.clone(), io)?;
-    let value = if body.is_async {
+    let (value, result_span) = if body.is_async {
         let task = executor.construct_task(body.clone(), executor.locals.clone(), body.span)?;
-        executor.drive_task(&task, body.span)?
+        (executor.drive_task(&task, body.span)?, body.span)
     } else {
         let flow = executor.execute_block(&body.block)?;
         match flow {
-            Flow::Return(value) => match value {
-                Some(value) => value,
-                None => ReplacementValue::Unit,
-            },
-            Flow::Next => ReplacementValue::Unit,
+            Flow::Return(value, span) => (
+                match value {
+                    Some(value) => value,
+                    None => ReplacementValue::Unit,
+                },
+                span,
+            ),
+            Flow::Next => (ReplacementValue::Unit, body.span),
             Flow::Break | Flow::Continue => {
                 return Err(unsupported("loop control outside a normalized loop", body.span));
             }
         }
     };
-    let value = coerce_value_to_checked_type(value, &body.return_type, body.span)?;
-    ensure_scalar_result(&value, &body.return_type, body.span)?;
+    let value = coerce_value_to_checked_type(value, &body.return_type, result_span)?;
+    ensure_scalar_result(&value, &body.return_type, result_span)?;
     let body_snapshot = executor.body_snapshot();
     let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
     let requirements_summary = canonical_runtime_requirements_summary(&executor.runtime_requirements);
@@ -3722,8 +3742,10 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             child.active_task = Some(id);
             child.record_body(&body);
             child.execute_block(&body.block).and_then(|flow| match flow {
-                Flow::Return(Some(value)) => Ok(value),
-                Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
+                Flow::Return(Some(value), return_span) => {
+                    coerce_value_to_checked_type(value, &body.return_type, return_span)
+                }
+                Flow::Return(None, _) | Flow::Next => Ok(ReplacementValue::Unit),
                 Flow::Break | Flow::Continue => Err(unsupported("loop control outside a direct task loop", body.span)),
             })
         });
@@ -3935,7 +3957,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 for statement in &computation.stmts {
                     match default_executor.execute_statement(statement)? {
                         Flow::Next => {}
-                        Flow::Return(_) | Flow::Break | Flow::Continue => {
+                        Flow::Return(..) | Flow::Break | Flow::Continue => {
                             return Err(unsupported(
                                 "control flow in a callable default computation",
                                 statement.span,
@@ -4013,6 +4035,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     .as_ref()
                     .map(|value| self.evaluate_operand(value, statement.span))
                     .transpose()?,
+                statement.span,
             )),
             StatementKind::Assert {
                 kind: AssertionKind::Condition { cond },
@@ -4384,7 +4407,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             for statement in &callable.body.stmts {
                 match child.execute_statement(statement)? {
                     Flow::Next => {}
-                    Flow::Return(_) | Flow::Break | Flow::Continue => {
+                    Flow::Return(..) | Flow::Break | Flow::Continue => {
                         return Err(unsupported(
                             "control flow in a callable expression body",
                             statement.span,
@@ -4445,8 +4468,10 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         self.execute_child(locals, self.steps, |child| {
             child.record_body(&body);
             match child.execute_block(&body.block)? {
-                Flow::Return(Some(value)) => Ok(value),
-                Flow::Return(None) | Flow::Next => Ok(ReplacementValue::Unit),
+                Flow::Return(Some(value), return_span) => {
+                    coerce_value_to_checked_type(value, &body.return_type, return_span)
+                }
+                Flow::Return(None, _) | Flow::Next => Ok(ReplacementValue::Unit),
                 Flow::Break | Flow::Continue => {
                     Err(unsupported("loop control outside a nested callable loop", body.span))
                 }
@@ -4571,7 +4596,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             match self.execute_block(body)? {
                 Flow::Next | Flow::Continue => {}
                 Flow::Break => return Ok(Flow::Next),
-                Flow::Return(value) => return Ok(Flow::Return(value)),
+                Flow::Return(value, return_span) => return Ok(Flow::Return(value, return_span)),
             }
             if self.steps >= MAX_EXECUTION_STEPS {
                 return Err(runtime_failure(
@@ -5221,7 +5246,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     Flow::Next => {}
                     Flow::Break => self.break_generator_loop(frame, statement.span)?,
                     Flow::Continue => self.continue_generator_loop(frame, statement.span)?,
-                    Flow::Return(_) => {
+                    Flow::Return(..) => {
                         return Err(unsupported("unsupported generator return flow", statement.span));
                     }
                 },
@@ -6134,12 +6159,15 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     "executed Result try route=err span={}..{}",
                     span.start, span.end
                 ));
-                Ok(Flow::Return(Some(ReplacementValue::Result {
-                    kind: ResultVariantKind::Err,
-                    payload,
-                    ok_type,
-                    error_type: carrier_error_type,
-                })))
+                Ok(Flow::Return(
+                    Some(ReplacementValue::Result {
+                        kind: ResultVariantKind::Err,
+                        payload,
+                        ok_type,
+                        error_type: carrier_error_type,
+                    }),
+                    span,
+                ))
             }
         }
     }
@@ -6645,7 +6673,7 @@ enum Flow {
     /// Continue the innermost normalized loop.
     Continue,
     /// Return from the selected free function.
-    Return(Option<ReplacementValue>),
+    Return(Option<ReplacementValue>, HirSourceSpan),
 }
 
 /// Return one bare local id, refusing fields, indexes, and slices in the first profile.

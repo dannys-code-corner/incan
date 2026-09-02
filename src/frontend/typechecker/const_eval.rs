@@ -116,19 +116,16 @@ impl TypeChecker {
         if let Some(ann) = &konst.ty {
             let resolved = self.resolve_type_checked(ann);
             let expected = self.freeze_const_annotation(resolved);
-            if self.types_compatible(&result.ty, &expected) {
-                result.ty = expected;
-            } else {
-                match self.const_numeric_value_checked_against_numeric_expected(&result, &expected, konst.value.span) {
-                    Some(true) => result.ty = expected,
-                    Some(false) => {}
-                    None => {
-                        self.errors.push(errors::type_mismatch(
-                            &expected.to_string(),
-                            &result.ty.to_string(),
-                            konst.value.span,
-                        ));
-                    }
+            match self.const_numeric_value_checked_against_numeric_expected(&result, &expected, konst.value.span) {
+                Some(true) => result.ty = expected,
+                Some(false) => {}
+                None if self.types_compatible(&result.ty, &expected) => result.ty = expected,
+                None => {
+                    self.errors.push(errors::type_mismatch(
+                        &expected.to_string(),
+                        &result.ty.to_string(),
+                        konst.value.span,
+                    ));
                 }
             }
         } else if matches!(result.ty, ResolvedType::Unknown) {
@@ -183,20 +180,18 @@ impl TypeChecker {
         }
 
         let value = result.value.as_ref().and_then(const_float)?;
-        match target {
-            NumericTypeId::F32 => {
-                if value.is_finite() && value.abs() > f64::from(f32::MAX) {
-                    self.errors.push(CompileError::type_error(
-                        format!("Float literal {value} does not fit in {expected}"),
-                        span,
-                    ));
-                    return Some(false);
-                }
-                Some(true)
-            }
-            NumericTypeId::F64 => Some(true),
-            _ => None,
+        let fits = match expected {
+            ResolvedType::Numeric(NumericTypeId::F32) => value.is_finite() && value.abs() <= f64::from(f32::MAX),
+            ResolvedType::Numeric(NumericTypeId::F64) => value.is_finite(),
+            _ => return None,
+        };
+        if !fits {
+            self.errors.push(CompileError::type_error(
+                format!("Constant value {value} does not fit in {expected}"),
+                span,
+            ));
         }
+        Some(fits)
     }
 
     fn eval_const_by_name(&mut self, name: &str, stack: &mut Vec<String>) -> Option<ConstEvalResult> {

@@ -1,4 +1,4 @@
-"""Exercise the selected global enumerate and Zip list contracts through one visible program stream."""
+"""Exercise the selected global enumerate and zip list contracts through one visible program stream."""
 
 
 def left_values() -> list[int]:
@@ -14,7 +14,7 @@ def right_values() -> list[int]:
 
 
 def enumerate_zip_profile() -> int:
-    """Combine stored enumeration with shortest-side Zip and retain their written evaluation order."""
+    """Combine stored enumeration with shortest-side zip and retain their written evaluation order."""
     values = left_values()
     enumerated = enumerate(values)
     enumerated_alias = enumerated

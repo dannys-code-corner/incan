@@ -817,6 +817,10 @@ pub enum RuntimeFailureClass {
     IntConversion,
     /// The canonical `float(str)` parser rejected its input.
     FloatConversion,
+    /// A non-finite value attempted to cross into exact `f32`.
+    NonFiniteExactF32,
+    /// A non-finite value attempted to cross into exact `f64`.
+    NonFiniteExactF64,
 }
 
 impl RuntimeFailureClass {
@@ -829,6 +833,8 @@ impl RuntimeFailureClass {
             Self::ArithmeticOverflow => "arithmetic-overflow",
             Self::IntConversion => "conversion-int",
             Self::FloatConversion => "conversion-float",
+            Self::NonFiniteExactF32 => "non-finite-exact-f32",
+            Self::NonFiniteExactF64 => "non-finite-exact-f64",
         }
     }
 }
@@ -1042,62 +1048,11 @@ impl ShadowComparison {
     }
 }
 
-/// Run one bounded shadow comparison and bind every route that executed to its own #986 receipt.
-///
-/// Both routes run independently: neither reads the other's artifacts, and neither is derived from the other's
-/// result. The comparison constructs its provider projection from the exact profile source inside the caller-owned
-/// `workspace`, then selects the staged Oven receipt whose immutable build inputs match that projection. `capability`
-/// names the Oven store, receipt intent, and compiler that authorize the legacy route; `workspace` is also where the
-/// legacy route may write its generated project and produced program into.
-///
-/// This is total by design. Every failure — an out-of-profile source, an unstaged Oven capability, a legacy build
-/// failure, an unclassifiable runtime failure, even a backend-selection error — becomes a recorded
-/// [`ShadowComparisonState::Unavailable`] with a concrete reason, because a comparison that silently disappears
-/// is indistinguishable from one that passed. Evidence from whichever route *did* run is retained alongside it.
-#[must_use]
-pub fn compare_source_observable(
-    profile: &ShadowComparisonProfile,
-    capability: &legacy_oven::LegacyOvenCapability,
-    workspace: &Path,
-) -> ShadowComparison {
-    if let Err(unavailable) = PreparedShadowProfile::new(profile) {
-        return assemble_comparison(
-            profile,
-            profile.profile_identity(),
-            Err(unavailable.clone()),
-            Err(unavailable),
-        );
-    }
-    let materialization = match materialize_profile_source_session(profile, workspace) {
-        Ok(materialization) => materialization,
-        Err(unavailable) => {
-            return assemble_comparison(
-                profile,
-                profile.profile_identity(),
-                Err(unavailable.clone()),
-                Err(unavailable),
-            );
-        }
-    };
-    let capability = match capability.select_for_materialization(&materialization) {
-        Ok(capability) => capability,
-        Err(unavailable) => {
-            return assemble_comparison(
-                profile,
-                profile.profile_identity(),
-                Err(unavailable.clone()),
-                Err(unavailable),
-            );
-        }
-    };
-    compare_source_observable_with_materialization(profile, &materialization, &capability, workspace)
-}
-
 /// Compare a profile using a source session that has already selected its provider projection.
 ///
 /// This remains crate-private so the public comparison API cannot accept provider or receipt data detached from the
 /// source it observes. Unit tests use it only to exercise refusal edges with deliberately forged materialization
-/// facts; production callers must enter through [`compare_source_observable`].
+/// facts; production callers must supply materialization selected from the exact source session they observe.
 #[must_use]
 pub(crate) fn compare_source_observable_with_materialization(
     profile: &ShadowComparisonProfile,
@@ -1153,39 +1108,31 @@ pub(crate) fn compare_source_observable_with_materialization(
     assemble_comparison(profile, profile.profile_identity(), replacement, legacy)
 }
 
-/// Resolve the compiler-owned provider closure for the exact source text the comparison will observe.
+/// Validate the source-observable profile before a caller prepares external execution authority.
 ///
-/// The public comparison profile intentionally stores source text rather than a project path. Materializing that text
-/// at a private, deterministic path below the caller-owned workspace gives the CLI session resolver the same source
-/// bytes while keeping its provider plan, build-input identity, and receipt selection internal to this module.
-fn materialize_profile_source_session(
+/// Keeping this preflight in the backend ensures invalid source refuses before the CLI adapter materializes files or
+/// resolves providers, while the backend remains independent of CLI session construction.
+pub(crate) fn validate_source_observable_profile(profile: &ShadowComparisonProfile) -> Result<(), ShadowUnavailable> {
+    PreparedShadowProfile::new(profile).map(|_| ())
+}
+
+/// Record a pre-execution refusal for both routes without manufacturing execution evidence.
+#[must_use]
+pub(crate) fn unavailable_source_observable_comparison(
     profile: &ShadowComparisonProfile,
-    workspace: &Path,
-) -> Result<ShadowLegacyMaterialization, ShadowUnavailable> {
-    let source_directory = workspace.join("shadow-source-session");
-    std::fs::create_dir_all(&source_directory).map_err(|error| {
-        ShadowUnavailable::new(format!(
-            "the legacy comparison could not create its source-session directory {}: {error}",
-            source_directory.display()
-        ))
-    })?;
-    let source_path = source_directory.join("profile.incn");
-    std::fs::write(&source_path, profile.source()).map_err(|error| {
-        ShadowUnavailable::new(format!(
-            "the legacy comparison could not materialize its exact source session at {}: {error}",
-            source_path.display()
-        ))
-    })?;
-    crate::cli::commands::shadow_support::prepare_shadow_legacy_materialization(
-        &source_path,
-        &crate::provider::FeatureSelection::default(),
-        None,
+    unavailable: ShadowUnavailable,
+) -> ShadowComparison {
+    assemble_comparison(
+        profile,
+        profile.profile_identity(),
+        Err(unavailable.clone()),
+        Err(unavailable),
     )
 }
 
 /// Fold both routes' results into one comparison, retaining every route that actually executed.
 ///
-/// Separated from [`compare_source_observable`] so the assembly rules — classification, receipt binding, and
+/// Separated from the source-session adapter so the assembly rules — classification, receipt binding, and
 /// partial-evidence retention — stay testable without staging an Oven capability.
 fn assemble_comparison(
     profile: &ShadowComparisonProfile,
@@ -1720,6 +1667,9 @@ fn result_transport_failure_reason(exit_code: Option<i32>) -> Option<&'static st
 /// diagnostic words. Overflow is tested before division because a division-overflow panic also names division.
 /// An unrecognized failure is unavailable, not a shared failure observation.
 fn classify_legacy_failure(stderr: &str) -> Result<RuntimeFailureClass, ShadowUnavailable> {
+    if let Some(failure) = classify_canonical_exact_float_failure(stderr) {
+        return Ok(failure);
+    }
     if let Some(failure) = classify_canonical_conversion_failure(stderr) {
         return Ok(failure);
     }
@@ -1748,6 +1698,9 @@ fn classify_legacy_failure(stderr: &str) -> Result<RuntimeFailureClass, ShadowUn
 /// Other failures retain the same ordering as the legacy route: an "integer division overflow" is an overflow,
 /// not a division by zero.
 fn classify_replacement_failure(detail: &str) -> Result<RuntimeFailureClass, ShadowUnavailable> {
+    if let Some(failure) = classify_canonical_exact_float_failure(detail) {
+        return Ok(failure);
+    }
     if let Some(failure) = classify_canonical_conversion_failure(detail) {
         return Ok(failure);
     }
@@ -1765,6 +1718,15 @@ fn classify_replacement_failure(detail: &str) -> Result<RuntimeFailureClass, Sha
         "the replacement route failed in a way this profile cannot classify, so agreement cannot be claimed: \
          {detail}"
     )))
+}
+
+/// Recognize the finite-only boundary shared by generated Rust and direct execution.
+fn classify_canonical_exact_float_failure(detail: &str) -> Option<RuntimeFailureClass> {
+    match detail.strip_suffix('\n').unwrap_or(detail) {
+        "ValueError: non-finite float cannot initialize exact f32" => Some(RuntimeFailureClass::NonFiniteExactF32),
+        "ValueError: non-finite float cannot initialize exact f64" => Some(RuntimeFailureClass::NonFiniteExactF64),
+        _ => None,
+    }
 }
 
 /// Recognize one complete canonical scalar-conversion payload before inspecting its rejected input for heuristic words.

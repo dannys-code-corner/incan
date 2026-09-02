@@ -3,7 +3,8 @@
 
 use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy};
-use incan::backend::shadow::{ShadowComparisonProfile, compare_source_observable};
+use incan::backend::shadow::ShadowComparisonProfile;
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;

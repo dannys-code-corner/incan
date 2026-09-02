@@ -355,8 +355,8 @@ impl TypeChecker {
             }
             (Expr::Literal(Literal::Float(_)), Some(expected_ty))
                 if matches!(
-                    super::numeric_type_id_for_compat(expected_ty),
-                    Some(
+                    expected_ty,
+                    ResolvedType::Numeric(
                         incan_core::lang::types::numerics::NumericTypeId::F32
                             | incan_core::lang::types::numerics::NumericTypeId::F64
                     )
@@ -374,6 +374,18 @@ impl TypeChecker {
             }
             (Expr::Binary(left, op, right), Some(expected_ty)) => {
                 self.check_binary_with_expected(left, *op, right, expr.span, Some(expected_ty))
+            }
+            (Expr::Unary(UnaryOp::Neg, operand), Some(expected_ty))
+                if matches!(
+                    expected_ty,
+                    ResolvedType::Numeric(
+                        incan_core::lang::types::numerics::NumericTypeId::F32
+                            | incan_core::lang::types::numerics::NumericTypeId::F64
+                    )
+                ) && matches!(operand.node, Expr::Literal(Literal::Float(_))) =>
+            {
+                self.check_expr_with_expected(operand, Some(expected_ty));
+                expected_ty.clone()
             }
             (Expr::Unary(op, operand), Some(expected_ty)) => {
                 self.check_unary_with_expected(*op, operand, expr.span, Some(expected_ty))
@@ -426,12 +438,12 @@ impl TypeChecker {
                 Some(value) => match target {
                     incan_core::lang::types::numerics::NumericTypeId::F32 => (value as f32).is_finite(),
                     incan_core::lang::types::numerics::NumericTypeId::F64 => (value as f64).is_finite(),
-                    _ => unreachable!("guard proves a binary-float target"),
+                    _ => false,
                 },
                 None => unsigned_int_literal_magnitude(expr).is_some_and(|value| match target {
                     incan_core::lang::types::numerics::NumericTypeId::F32 => (value as f32).is_finite(),
                     incan_core::lang::types::numerics::NumericTypeId::F64 => (value as f64).is_finite(),
-                    _ => unreachable!("guard proves a binary-float target"),
+                    _ => false,
                 }),
             };
             if !finite {
@@ -470,18 +482,69 @@ impl TypeChecker {
         let Expr::Literal(Literal::Float(value)) = &expr.node else {
             return self.check_expr(expr);
         };
-        if matches!(
-            super::numeric_type_id_for_compat(expected_ty),
-            Some(incan_core::lang::types::numerics::NumericTypeId::F32)
-        ) && value.value.is_finite()
-            && value.value.abs() > f64::from(f32::MAX)
-        {
+        let fits = match expected_ty {
+            ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::F32) => {
+                value.value.is_finite() && value.value.abs() <= f64::from(f32::MAX)
+            }
+            ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::F64) => value.value.is_finite(),
+            _ => true,
+        };
+        if !fits {
             self.errors.push(CompileError::type_error(
                 format!("Float literal {} does not fit in {expected_ty}", value.repr),
                 expr.span,
             ));
         }
         expected_ty.clone()
+    }
+
+    /// Reject an out-of-domain float literal nested beneath an exact-float arithmetic destination.
+    ///
+    /// Binary operands are otherwise checked independently, so the enclosing destination does not reach a literal
+    /// such as `1e9999` in `1e9999 + 0.0`. This validation deliberately records no inferred type and does not make
+    /// ordinary `float` finite-only; it only preserves the exact destination's literal-domain check and literal span.
+    pub(in crate::frontend::typechecker::check_expr) fn validate_exact_float_literals_in_arithmetic(
+        &mut self,
+        expr: &Spanned<Expr>,
+        expected_ty: &ResolvedType,
+    ) {
+        match &expr.node {
+            Expr::Literal(Literal::Float(value)) => {
+                let fits = match expected_ty {
+                    ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::F32) => {
+                        value.value.is_finite() && value.value.abs() <= f64::from(f32::MAX)
+                    }
+                    ResolvedType::Numeric(incan_core::lang::types::numerics::NumericTypeId::F64) => {
+                        value.value.is_finite()
+                    }
+                    _ => return,
+                };
+                if !fits {
+                    self.errors.push(CompileError::type_error(
+                        format!("Float literal {} does not fit in {expected_ty}", value.repr),
+                        expr.span,
+                    ));
+                }
+            }
+            Expr::Unary(UnaryOp::Neg, inner) | Expr::Paren(inner) => {
+                self.validate_exact_float_literals_in_arithmetic(inner, expected_ty);
+            }
+            Expr::Binary(
+                left,
+                BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::FloorDiv
+                | BinaryOp::Mod
+                | BinaryOp::Pow,
+                right,
+            ) => {
+                self.validate_exact_float_literals_in_arithmetic(left, expected_ty);
+                self.validate_exact_float_literals_in_arithmetic(right, expected_ty);
+            }
+            _ => {}
+        }
     }
 
     /// Validate a decimal literal against a known decimal precision and scale.

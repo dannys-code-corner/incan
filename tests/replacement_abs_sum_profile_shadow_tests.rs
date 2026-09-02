@@ -11,8 +11,8 @@ use incan::backend::replacement::ReplacementValue;
 use incan::backend::selection::ShadowComparisonState;
 use incan::backend::shadow::{
     RouteEvidence, RuntimeFailureClass, ShadowComparison, ShadowComparisonProfile, SourceObservable,
-    compare_source_observable,
 };
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -55,7 +55,7 @@ impl OverflowCase {
     }
 }
 
-/// Run the public paired comparator while turning any direct-route panic into a test error.
+/// Run the CLI-owned paired comparator while turning any direct-route panic into a test error.
 fn compare_without_direct_panic(
     profile: &ShadowComparisonProfile,
     capability: &incan::backend::shadow::legacy_oven::LegacyOvenCapability,

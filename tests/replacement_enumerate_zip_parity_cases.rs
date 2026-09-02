@@ -1,9 +1,8 @@
 //! Native comparison cases for canonical list enumeration and shortest-side Zip polling.
 
 use incan::backend::selection::{BackendKind, FallbackOutcome};
-use incan::backend::shadow::{
-    FunctionResultKind, ShadowComparisonProfile, SourceObservable, TypedFunctionResult, compare_source_observable,
-};
+use incan::backend::shadow::{FunctionResultKind, ShadowComparisonProfile, SourceObservable, TypedFunctionResult};
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;

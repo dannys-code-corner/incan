@@ -1386,7 +1386,8 @@ def main() -> None:
 }
 
 #[test]
-fn compiled_provider_consumer_inherits_manifest_implementation_bounds_issue1280() {
+fn compiled_provider_consumer_inherits_manifest_implementation_bounds_issue1280()
+-> Result<(), Box<dyn std::error::Error>> {
     use incan::frontend::library_manifest_index::{
         LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
     };
@@ -1457,15 +1458,14 @@ def main() -> None:
     )]));
     let mut codegen = codegen_with_builtin_stdlib_inventory();
     codegen.set_library_manifest_index(index);
-    let rust_code = codegen
-        .try_generate(&ast)
-        .unwrap_or_else(|error| panic!("compiled-provider consumer must typecheck and lower: {error:?}"));
+    let rust_code = codegen.try_generate(&ast)?;
     let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
 
     assert!(
         compact.contains("pubfndrain<R:Clone>(stream:Stream<R>)->Result<i64,String>"),
         "a manifest-only consumer must inherit the exact implementation requirement:\n{rust_code}"
     );
+    Ok(())
 }
 
 #[test]
@@ -2537,6 +2537,212 @@ def main() -> None:
         compact.contains("return((base)asf64).powf((exponent)asf64);"),
         "coerced power receiver must be parenthesized before the method call; generated:\n{rust_code}"
     );
+}
+
+#[test]
+fn exact_float_boundaries_emit_finite_guards_without_changing_ordinary_float() {
+    let source = r#"
+pub def parsed_exact(value: str) -> f64:
+    return float(value)
+
+pub def widened_exact(value: f32) -> f64:
+    return value
+
+pub def exact_f32(value: f32) -> f32:
+    return value
+
+pub def ordinary(value: str) -> float:
+    return float(value)
+"#;
+    let rust_code = generate_rust(source);
+    assert_eq!(
+        rust_code.matches("incan_stdlib::num::require_finite_f64").count(),
+        2,
+        "ordinary float must remain unguarded while exact f64 returns and f32 widening are guarded:\n{rust_code}"
+    );
+    assert_eq!(
+        rust_code.matches("incan_stdlib::num::require_finite_f32").count(),
+        3,
+        "public exact f32 inputs and exact f32 returns must be guarded:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_arithmetic_is_validated_before_every_observable_use() {
+    let source = r#"
+pub def returned_f32(left: f32, right: f32) -> f32:
+    return left * right
+
+pub def stored_f64(left: f64, right: f64) -> f64:
+    value: f64 = left * right
+    return value
+
+pub def compared_f32(left: f32, right: f32) -> bool:
+    return left * right > left
+
+pub def printed_f64(left: f64, right: f64) -> None:
+    println(left * right)
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    assert!(
+        compact.contains("require_finite_f32(left*right)"),
+        "exact f32 arithmetic must be checked before return or comparison:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("require_finite_f64(left*right)"),
+        "exact f64 arithmetic must be checked before storage or printing:\n{rust_code}"
+    );
+    assert!(
+        compact.contains(
+            "println!(\"{}\",incan_stdlib::num::require_finite_f64(incan_stdlib::num::require_finite_f64(left*right)))"
+        ),
+        "print must not observe a non-finite exact f64 arithmetic result:\n{rust_code}"
+    );
+    assert!(
+        compact.contains(">incan_stdlib::num::require_finite_f32(left)"),
+        "comparison must not observe a non-finite exact f32 arithmetic result:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_public_and_rust_ingress_is_guarded_before_observation() {
+    let source = r#"
+rust.module("incan_stdlib::num")
+
+@rust.extern
+pub def require_finite_f32(value: f32) -> f32:
+    ...
+
+pub def observe_exact(left: f32, right: f64) -> bool:
+    println(left)
+    rendered = str(right)
+    formatted = f"{left}"
+    return left < right
+
+pub def observe_ieee(value: float) -> bool:
+    println(value)
+    return value < value
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "let_=incan_stdlib::num::require_finite_f32(value);",
+        "incan_stdlib::num::require_finite_f32(incan_stdlib::num::require_finite_f32(value))",
+        "let_=incan_stdlib::num::require_finite_f32(left);",
+        "let_=incan_stdlib::num::require_finite_f64(right);",
+        "println!(\"{}\",incan_stdlib::num::require_finite_f32(left))",
+        "incan_stdlib::num::require_finite_f64(right).to_string()",
+        "format!(\"{}\",incan_stdlib::num::require_finite_f32(left))",
+        "((incan_stdlib::num::require_finite_f32(left))asf64)<incan_stdlib::num::require_finite_f64(right)",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "exact public/Rust ingress and observation must be finite-checked ({expected}); generated:\n{rust_code}"
+        );
+    }
+    assert!(
+        compact.contains("pubfnobserve_ieee(value:f64)->bool{let_=println!(\"{}\",value);returnvalue<value;"),
+        "ordinary float must retain unguarded IEEE observation behavior:\n{rust_code}"
+    );
+}
+
+#[test]
+fn exact_float_scalars_extracted_from_aggregates_are_guarded_before_use() {
+    let source = r#"
+rust.module("incan_stdlib::num")
+
+@rust.extern
+def consume_exact(value: f32) -> f32:
+    ...
+
+pub model ExactSamples:
+    pub narrow: f32
+    pub wide: f64
+    pub maybe: Option[f32]
+
+pub def observe_aggregate(samples: ExactSamples, values: list[f64]) -> bool:
+    forwarded = consume_exact(samples.narrow)
+    return not samples.narrow.is_nan() and values[0].is_finite() and samples.wide.is_finite() and forwarded.is_finite()
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "require_finite_f32(samples.narrow).is_nan()",
+        "require_finite_f64(*incan_stdlib::collections::list_get(&values,(0)asi64)",
+        "require_finite_f64(samples.wide).is_finite()",
+        "consume_exact(incan_stdlib::num::require_finite_f32",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "exact aggregate scalar use must retain its finite guard ({expected}); generated:\n{rust_code}"
+        );
+    }
+    assert_eq!(
+        compact.matches("require_finite_f32(self.narrow)").count(),
+        2,
+        "field value reflection and field-item reflection must guard exact f32 values:\n{rust_code}"
+    );
+    assert_eq!(
+        compact.matches("require_finite_f64(self.wide)").count(),
+        2,
+        "field value reflection and field-item reflection must guard exact f64 values:\n{rust_code}"
+    );
+    assert_eq!(
+        compact.matches("require_finite_f32(*value)").count(),
+        2,
+        "optional exact field reflection must guard each present value:\n{rust_code}"
+    );
+}
+
+#[test]
+fn mixed_f32_arithmetic_widens_operands_for_f64_codegen() {
+    let source = r#"
+pub def with_f64(left: f32, right: f64) -> float:
+    added = left + right
+    divided = left / right
+    floored = left // right
+    remainder = left % right
+    return left ** right
+
+pub def with_float(left: f32, right: float) -> float:
+    return left + right
+
+pub def with_int(left: f32, right: int) -> float:
+    return left + right
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+
+    for expected in [
+        "(left)asf64+right",
+        "incan_stdlib::num::py_div((left)asf64,right)",
+        "incan_stdlib::num::py_floor_div_f64((left)asf64,right)",
+        "incan_stdlib::num::py_mod_f64((left)asf64,right)",
+        "((left)asf64).powf(right)",
+        "return(left)asf64+right;",
+        "return(left)asf64+(right)asf64;",
+    ] {
+        assert!(
+            compact.contains(expected),
+            "mixed exact/broad arithmetic must emit concrete f64 operands ({expected}); generated:\n{rust_code}"
+        );
+    }
 }
 
 #[test]

@@ -142,6 +142,22 @@ pub enum IrType {
     Unknown,
 }
 
+/// Return the shared exact binary-float type when both operands have the same exact width.
+///
+/// The general numeric policy deliberately collapses exact integers and floats into broad promotion classes. Native
+/// lowering and emission must consult this narrower identity first so an `f32` or `f64` arithmetic result does not
+/// silently become ordinary `float` between the typechecker and a finite-only runtime boundary.
+pub(crate) fn same_exact_binary_float_type(left: &IrType, right: &IrType) -> Option<IrType> {
+    match (left, right) {
+        (IrType::Numeric(left), IrType::Numeric(right))
+            if left == right && matches!(left, NumericTypeId::F32 | NumericTypeId::F64) =>
+        {
+            Some(IrType::Numeric(*left))
+        }
+        _ => None,
+    }
+}
+
 impl IrType {
     /// Return the canonical element and iteration plan for one accepted `Set` constructor source.
     pub(crate) fn set_constructor_source(&self) -> Option<(&IrType, SetConstructorIteration)> {

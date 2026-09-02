@@ -69,17 +69,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 bir::Operand::place(place, fact, last_use)
             }
             ast::Expr::Slice(base, slice) => self.lower_slice(base, slice, expr.span, scope, out),
-            ast::Expr::Unary(ast::UnaryOp::Neg, inner)
-                if matches!(
-                    &inner.node,
-                    ast::Expr::Literal(ast::Literal::Int(_) | ast::Literal::Float(_))
-                ) =>
-            {
+            ast::Expr::Unary(ast::UnaryOp::Neg, inner) => {
                 let ty = self.resolve_ty(expr.span);
-                let ast::Expr::Literal(literal) = &inner.node else {
-                    unreachable!("guard proves literal")
-                };
-                if let Some(constant) = lower_checked_negative_literal(literal, &ty) {
+                if let ast::Expr::Literal(literal) = &inner.node
+                    && let Some(constant) = lower_checked_negative_literal(literal, &ty)
+                {
                     bir::Operand::Constant(constant)
                 } else {
                     let operand = self.lower_expr_to_operand(inner, scope, out);

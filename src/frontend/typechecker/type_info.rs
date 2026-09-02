@@ -2153,14 +2153,15 @@ pub(crate) fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
         ResolvedType::Unit => IncanType::Primitive(IncanPrimitiveType::Unit),
         ResolvedType::Named(name) => IncanType::Named(name.clone()),
         ResolvedType::Generic(base, args)
-            if incan_core::lang::types::numerics::decimal_constructor_from_str(base).is_some()
-                && matches!(args.as_slice(), [ResolvedType::TypeVar(_), ResolvedType::TypeVar(_)]) =>
+            if incan_core::lang::types::numerics::decimal_constructor_from_str(base).is_some() =>
         {
-            let [ResolvedType::TypeVar(precision), ResolvedType::TypeVar(scale)] = args.as_slice() else {
-                unreachable!("guard proves decimal type arguments")
-            };
-            match (precision.parse(), scale.parse()) {
-                (Ok(precision), Ok(scale)) => IncanType::Decimal { precision, scale },
+            match args.as_slice() {
+                [ResolvedType::TypeVar(precision), ResolvedType::TypeVar(scale)] => {
+                    match (precision.parse(), scale.parse()) {
+                        (Ok(precision), Ok(scale)) => IncanType::Decimal { precision, scale },
+                        _ => IncanType::Unknown,
+                    }
+                }
                 _ => IncanType::Unknown,
             }
         }

@@ -61,6 +61,7 @@ pub use oven::{
     oven_publish_direct_rustc_plan, oven_run, oven_run_compiler_libtests, oven_test, prune_oven_store,
 };
 pub use provider_inspect::{ProviderInspectionFormat, inspect_features, inspect_providers};
+pub use shadow_support::compare_source_observable;
 pub use tools::{
     ToolsDoctorFormat, ToolsMetadataFormat, ToolsModelMetadataFormat, tools_doctor, tools_metadata_api,
     tools_metadata_model,

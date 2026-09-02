@@ -14110,6 +14110,7 @@ fn run_oven_prepared_project(prepared: OvenPreparedProject, profile: &str) -> Cl
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::api_metadata::ApiDeclaration;
     use crate::frontend::body_ir;
     use crate::frontend::lexer;
     use crate::frontend::library_exports::CheckedExportIdentity;
@@ -17810,6 +17811,95 @@ impl ChildId {
         assert!(
             !generated_flat_dataset.exists(),
             "stale flat dataset.rs should not exist after nested library build"
+        );
+
+        Ok(())
+    }
+
+    /// Exercise the artifact-only `incan build --lib` publisher without mutating its process-wide internal mode flag.
+    #[test]
+    fn build_library_omits_private_generic_implementation_requirements_issue1280()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let tmp = tempfile::tempdir()?;
+        let project_root = tmp.path();
+        let src_dir = project_root.join("src");
+        std::fs::create_dir_all(&src_dir)?;
+
+        std::fs::write(
+            project_root.join("incan.toml"),
+            "[project]\nname = \"privateimpl\"\nversion = \"0.1.0\"\n",
+        )?;
+        std::fs::write(
+            src_dir.join("lib.incn"),
+            r#"
+"""Exercise a private generic implementation without publishing its compiler metadata."""
+
+trait Copyable:
+    def copy(self) -> Self: ...
+
+model PrivateValue[T] with Copyable:
+    value: T
+
+    def copy(self) -> Self:
+        return self
+
+pub def answer() -> int:
+    """Return the public library value."""
+    return 42
+"#,
+        )?;
+
+        let cargo_lock_payload = std::fs::read_to_string(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.lock"))?;
+        let fingerprint = compute_deps_fingerprint(&[], &[], &CargoFeatureSelection::default(), Some(project_root));
+        let incan_lock = IncanLock::new(fingerprint, CargoFeatureSelection::default(), cargo_lock_payload);
+        incan_lock.write(&project_root.join("incan.lock"))?;
+
+        let lib_path = src_dir.join("lib.incn");
+        let lib_path_str = lib_path
+            .to_str()
+            .ok_or("lib path should be valid utf-8 for build_library test")?;
+        let mut prepared = prepare_library_project(
+            Some(lib_path_str),
+            None,
+            CargoPolicy::default(),
+            &FeatureSelection::default(),
+            None,
+            Vec::new(),
+            false,
+            false,
+            None,
+            false,
+            false,
+            OvenProjectPlanMode::ConsumeOnly,
+            None,
+            &BackendSelectionOptions::default(),
+        )?;
+        write_library_manifest_artifacts(&mut prepared)?;
+
+        let manifest_path = project_root.join("target/lib/privateimpl.incnlib");
+        let manifest = LibraryManifest::read_from_path(&manifest_path)?;
+        let checked_api = manifest
+            .contract_metadata
+            .api
+            .as_ref()
+            .ok_or("library should publish checked API metadata")?;
+        assert!(
+            !checked_api
+                .modules
+                .iter()
+                .flat_map(|module| &module.declarations)
+                .any(|declaration| {
+                    matches!(declaration, ApiDeclaration::Model(model) if model.name == "PrivateValue")
+                }),
+            "private implementation targets must not leak into checked API metadata"
+        );
+        assert!(
+            !manifest.exports.models.iter().any(|model| model.name == "PrivateValue"),
+            "private implementation targets must not leak into public model exports"
+        );
+        assert!(
+            !std::fs::read_to_string(manifest_path)?.contains("PrivateValue"),
+            "private implementation targets must not leak into the serialized library manifest"
         );
 
         Ok(())

@@ -7,12 +7,14 @@ use std::collections::{HashMap, HashSet};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use incan_core::lang::types::numerics::NumericTypeId;
 use incan_core::lang::{
     callables, conventions,
     traits::{self as core_traits, TraitId},
 };
 
-use super::super::super::decl::{IrRustAttrArg, IrRustLintAllow};
+use super::super::super::conversions::exact_float_value_validation;
+use super::super::super::decl::{IrRustAttrArg, IrRustLintAllow, Visibility};
 use super::super::super::expr::{
     IrCallArg, IrDictEntry, IrExprKind, IrGeneratorClause, IrListEntry, MatchArm, Pattern,
 };
@@ -22,6 +24,51 @@ use super::super::{EmitError, IrEmitter};
 use super::{ZEN_TEXT, join_path_tokens};
 
 impl<'a> IrEmitter<'a> {
+    /// Return the exact floating parameters that form a public Rust ingress boundary.
+    fn exact_float_ingress_param_names(
+        func: &super::super::super::decl::IrFunction,
+        boundary_is_public: bool,
+    ) -> HashSet<String> {
+        if !boundary_is_public {
+            return HashSet::new();
+        }
+        func.params
+            .iter()
+            .filter(|param| {
+                !param.is_self && matches!(param.ty, IrType::Numeric(NumericTypeId::F32 | NumericTypeId::F64))
+            })
+            .map(|param| param.name.clone())
+            .collect()
+    }
+
+    /// Validate exact floating arguments as soon as control crosses a public generated Rust boundary.
+    fn emit_exact_float_ingress_validations(
+        &self,
+        func: &super::super::super::decl::IrFunction,
+        exact_params: &HashSet<String>,
+        mutated_params: &HashSet<String>,
+        mutable_params_are_borrowed: bool,
+    ) -> Vec<TokenStream> {
+        func.params
+            .iter()
+            .filter(|param| exact_params.contains(&param.name))
+            .map(|param| {
+                let name = Self::rust_ident(&param.name);
+                let is_borrowed = mutable_params_are_borrowed
+                    && !matches!(param.mutability, super::super::super::types::Mutability::OwnedMutable)
+                    && (mutated_params.contains(&param.name)
+                        || matches!(param.mutability, super::super::super::types::Mutability::Mutable));
+                let value = if is_borrowed {
+                    quote! { *#name }
+                } else {
+                    quote! { #name }
+                };
+                let validated = exact_float_value_validation(&param.ty).apply(value);
+                quote! { let _ = #validated; }
+            })
+            .collect()
+    }
+
     /// Emit the native-function bridge owned by a canonical `std.traits.callable.CallableN` declaration.
     ///
     /// The source trait remains the public generic contract. This local blanket implementation makes Rust function
@@ -537,7 +584,12 @@ impl<'a> IrEmitter<'a> {
         let name = Self::rust_ident(&func.name);
         let is_main = func.name == conventions::ENTRYPOINT_NAME;
         let mutated_params = self.collect_mutated_params(func);
-        let used_names = Self::collect_function_used_names(func);
+        let exact_ingress_params =
+            Self::exact_float_ingress_param_names(func, !is_main && matches!(func.visibility, Visibility::Public));
+        let mut used_names = Self::collect_function_used_names(func);
+        used_names.extend(exact_ingress_params.iter().cloned());
+        let exact_ingress_stmts =
+            self.emit_exact_float_ingress_validations(func, &exact_ingress_params, &mutated_params, true);
 
         let vis = if is_main {
             quote! {}
@@ -634,6 +686,7 @@ impl<'a> IrEmitter<'a> {
                     #static_init_stmt
                     #panic_hook_stmt
                     #zen_stmt
+                    #(#exact_ingress_stmts)*
                     if let Err(error) = incan_stdlib::r#async::runtime::block_on(async move {
                         #(#body_stmts)*
                     }) {
@@ -652,6 +705,7 @@ impl<'a> IrEmitter<'a> {
                 #(#rust_attrs)*
                 #vis fn #name #generics (#(#params),*) -> #ret_ty {
                     #static_init_stmt
+                    #(#exact_ingress_stmts)*
                     incan_stdlib::iter::Generator::spawn(move |__incan_yield| {
                         #(#body_stmts)*
                     })
@@ -673,6 +727,7 @@ impl<'a> IrEmitter<'a> {
                     #static_init_stmt
                     #panic_hook_stmt
                     #zen_stmt
+                    #(#exact_ingress_stmts)*
                     #(#body_stmts)*
                 }
             })
@@ -686,6 +741,7 @@ impl<'a> IrEmitter<'a> {
                     #static_init_stmt
                     #panic_hook_stmt
                     #zen_stmt
+                    #(#exact_ingress_stmts)*
                     #(#body_stmts)*
                 }
             })
@@ -711,6 +767,10 @@ impl<'a> IrEmitter<'a> {
 
         let name = Self::rust_ident(&func.name);
         let vis = self.emit_visibility(&func.visibility);
+        let exact_ingress_params =
+            Self::exact_float_ingress_param_names(func, matches!(func.visibility, Visibility::Public));
+        let exact_ingress_stmts =
+            self.emit_exact_float_ingress_validations(func, &exact_ingress_params, &HashSet::new(), false);
 
         // Build parameter list (same as normal functions, but simpler: no mutation tracking needed).
         let params: Vec<TokenStream> = func
@@ -818,6 +878,7 @@ impl<'a> IrEmitter<'a> {
                 .collect();
             quote! { :: < #(#tp_idents),* > }
         };
+        let delegated_call = quote! { #call_path #turbofish (#(#args),*) #await_kw };
 
         let ret_ty_is_unit = matches!(func.return_type, IrType::Unit);
         if ret_ty_is_unit {
@@ -826,17 +887,20 @@ impl<'a> IrEmitter<'a> {
                 #(#lint_allows)*
                 #vis #async_kw fn #name #generics (#(#params),*) {
                     #static_init_stmt
-                    #call_path #turbofish (#(#args),*) #await_kw
+                    #(#exact_ingress_stmts)*
+                    #delegated_call
                 }
             })
         } else {
             let ret_ty = self.emit_type(&func.return_type);
+            let validated_return = exact_float_value_validation(&func.return_type).apply(delegated_call);
             Ok(quote! {
                 #(#doc_attrs)*
                 #(#lint_allows)*
                 #vis #async_kw fn #name #generics (#(#params),*) -> #ret_ty {
                     #static_init_stmt
-                    #call_path #turbofish (#(#args),*) #await_kw
+                    #(#exact_ingress_stmts)*
+                    #validated_return
                 }
             })
         }
@@ -855,7 +919,12 @@ impl<'a> IrEmitter<'a> {
         let name = Self::rust_ident(&func.name);
         let vis = self.emit_visibility(&func.visibility);
         let mutated_params = self.collect_mutated_params(func);
-        let used_names = Self::collect_function_used_names(func);
+        let exact_ingress_params =
+            Self::exact_float_ingress_param_names(func, matches!(func.visibility, Visibility::Public));
+        let mut used_names = Self::collect_function_used_names(func);
+        used_names.extend(exact_ingress_params.iter().cloned());
+        let exact_ingress_stmts =
+            self.emit_exact_float_ingress_validations(func, &exact_ingress_params, &mutated_params, true);
 
         let params: Vec<TokenStream> = func
             .params
@@ -930,6 +999,7 @@ impl<'a> IrEmitter<'a> {
             #(#rust_attrs)*
             #vis #async_kw fn #name #generics (#(#params),*) #ret {
                 #static_init_stmt
+                #(#exact_ingress_stmts)*
                 #(#body_stmts)*
             }
         })
@@ -950,6 +1020,10 @@ impl<'a> IrEmitter<'a> {
         let name = Self::rust_ident(&func.name);
         let vis = self.emit_visibility(&func.visibility);
         let mutated_params = self.collect_mutated_params(func);
+        let exact_ingress_params =
+            Self::exact_float_ingress_param_names(func, matches!(func.visibility, Visibility::Public));
+        let exact_ingress_stmts =
+            self.emit_exact_float_ingress_validations(func, &exact_ingress_params, &mutated_params, true);
 
         let params: Vec<TokenStream> = func
             .params
@@ -1037,6 +1111,7 @@ impl<'a> IrEmitter<'a> {
                 .collect();
             quote! { :: < #(#tp_idents),* > }
         };
+        let delegated_call = quote! { #call_path #turbofish (#(#args),*) #await_kw };
 
         let ret_ty_is_unit = matches!(func.return_type, IrType::Unit);
         if ret_ty_is_unit {
@@ -1045,17 +1120,20 @@ impl<'a> IrEmitter<'a> {
                 #(#lint_allows)*
                 #vis #async_kw fn #name #generics (#(#params),*) {
                     #static_init_stmt
-                    #call_path #turbofish (#(#args),*) #await_kw
+                    #(#exact_ingress_stmts)*
+                    #delegated_call
                 }
             })
         } else {
             let ret_ty = self.emit_type(&func.return_type);
+            let validated_return = exact_float_value_validation(&func.return_type).apply(delegated_call);
             Ok(quote! {
                 #(#doc_attrs)*
                 #(#lint_allows)*
                 #vis #async_kw fn #name #generics (#(#params),*) -> #ret_ty {
                     #static_init_stmt
-                    #call_path #turbofish (#(#args),*) #await_kw
+                    #(#exact_ingress_stmts)*
+                    #validated_return
                 }
             })
         }
@@ -1141,7 +1219,11 @@ impl<'a> IrEmitter<'a> {
         extra_where_bound: Option<TokenStream>,
     ) -> Result<TokenStream, EmitError> {
         let name = Self::rust_ident(&func.name);
-        let used_names = Self::collect_function_used_names(func);
+        let exact_ingress_params = Self::exact_float_ingress_param_names(func, !func.body.is_empty());
+        let mut used_names = Self::collect_function_used_names(func);
+        used_names.extend(exact_ingress_params.iter().cloned());
+        let exact_ingress_stmts =
+            self.emit_exact_float_ingress_validations(func, &exact_ingress_params, &HashSet::new(), false);
 
         let params: Vec<TokenStream> = func
             .params
@@ -1210,6 +1292,7 @@ impl<'a> IrEmitter<'a> {
                 #(#doc_attrs)*
                 #(#lint_allows)*
                 fn #name #generics (#(#params),*) #ret #where_clause {
+                    #(#exact_ingress_stmts)*
                     #(#body_stmts)*
                 }
             })

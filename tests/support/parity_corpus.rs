@@ -48,9 +48,8 @@ use incan::backend::selection::{
     ShadowComparisonState, digest_output, finalize_receipt, resolve_execution, select_backend,
     unavailable_shadow_comparison,
 };
-use incan::backend::shadow::{
-    LegacyExecutionAuthority, ShadowComparison, ShadowComparisonProfile, compare_source_observable,
-};
+use incan::backend::shadow::{LegacyExecutionAuthority, ShadowComparison, ShadowComparisonProfile};
+use incan::cli::commands::compare_source_observable;
 use incan::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
 use incan::frontend::typechecker::TypeChecker;

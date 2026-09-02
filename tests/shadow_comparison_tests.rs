@@ -19,8 +19,9 @@ use incan::backend::selection::{BackendKind, FallbackOutcome, FallbackPolicy, Sh
 use incan::backend::shadow::legacy_oven::LegacyOvenCapability;
 use incan::backend::shadow::{
     FunctionResultKind, PROGRAM_ENTRYPOINT_UNAVAILABLE_REASON, RouteEvidence, RuntimeFailureClass, ShadowComparison,
-    ShadowComparisonProfile, ShadowUnavailable, SourceObservable, TypedFunctionResult, compare_source_observable,
+    ShadowComparisonProfile, ShadowUnavailable, SourceObservable, TypedFunctionResult,
 };
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;

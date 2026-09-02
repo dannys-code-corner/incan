@@ -7,6 +7,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use super::super::super::conversions::exact_float_value_validation;
 use super::super::super::expr::{BuiltinFn, IrExprKind, Pattern, TypedExpr};
 use super::super::super::ownership::ValueUseSite;
 use super::super::super::types::{
@@ -304,7 +305,10 @@ impl<'a> IrEmitter<'a> {
         }
         let rendered = args
             .iter()
-            .map(|arg| self.emit_expr(arg))
+            .map(|arg| {
+                let emitted = self.emit_expr(arg)?;
+                Ok(exact_float_value_validation(&arg.ty).apply(emitted))
+            })
             .collect::<Result<Vec<_>, _>>()?;
         // One `{}` per argument, joined by the separator. Built here rather than in `quote!` because the format
         // string must reach the macro as a literal, not as a runtime `&str`.
@@ -410,7 +414,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFn::Str => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
+                    let a = exact_float_value_validation(&arg.ty).apply(self.emit_expr(arg)?);
                     Ok(quote! { #a.to_string() })
                 } else {
                     Ok(quote! { String::new() })
@@ -663,7 +667,7 @@ impl<'a> IrEmitter<'a> {
             }
             BuiltinFnId::Str => {
                 if let Some(arg) = args.first() {
-                    let a = self.emit_expr(arg)?;
+                    let a = exact_float_value_validation(&arg.ty).apply(self.emit_expr(arg)?);
                     Ok(Some(quote! { #a.to_string() }))
                 } else {
                     Ok(None)

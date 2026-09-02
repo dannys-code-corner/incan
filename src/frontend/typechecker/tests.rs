@@ -1684,24 +1684,140 @@ def main(data: bytes) -> None:
 }
 
 #[test]
-fn rfc009_binary_float_literals_are_checked_for_f32_targets() {
+fn rfc009_binary_float_literals_are_checked_for_f32_targets() -> Result<(), String> {
     let ok = r#"
 def main() -> None:
   value: f32 = 1.5
 "#;
-    check_str(ok).unwrap_or_else(|errs| panic!("expected f32 literal to typecheck: {errs:?}"));
+    check_str(ok).map_err(|errs| format!("expected f32 literal to typecheck: {errs:?}"))?;
 
     let too_large = r#"
 def main() -> None:
   value: f32 = 1e100
 "#;
-    let errors = check_str_err(too_large, "expected out-of-range f32 literal to fail");
+    let errors = check_str(too_large)
+        .err()
+        .ok_or_else(|| "expected out-of-range f32 literal to fail".to_string())?;
     assert!(
         errors
             .iter()
             .any(|err| err.message.contains("Float literal 1e100 does not fit in f32")),
         "expected f32 range diagnostic, got: {errors:?}"
     );
+    Ok(())
+}
+
+#[test]
+fn rfc009_non_finite_exact_float_literals_are_rejected_with_source_spans() -> Result<(), String> {
+    let cases = [
+        (
+            "positive f32 local",
+            "def main() -> None:\n  value: f32 = 1e9999\n",
+            "f32",
+            "1e9999",
+        ),
+        (
+            "negative f32 local",
+            "def main() -> None:\n  value: f32 = -1e9999\n",
+            "f32",
+            "1e9999",
+        ),
+        (
+            "positive f64 local",
+            "def main() -> None:\n  value: f64 = 1e9999\n",
+            "f64",
+            "1e9999",
+        ),
+        (
+            "negative f64 local",
+            "def main() -> None:\n  value: f64 = -1e9999\n",
+            "f64",
+            "1e9999",
+        ),
+        ("positive f32 const", "const VALUE: f32 = 1e9999\n", "f32", "1e9999"),
+        ("negative f32 const", "const VALUE: f32 = -1e9999\n", "f32", "-1e9999"),
+        ("positive f64 const", "const VALUE: f64 = 1e9999\n", "f64", "1e9999"),
+        ("negative f64 const", "const VALUE: f64 = -1e9999\n", "f64", "-1e9999"),
+    ];
+
+    for (case, source, target, expected_span) in cases {
+        let errors = check_str(source)
+            .err()
+            .ok_or_else(|| format!("expected {case} to be rejected"))?;
+        let error = errors
+            .iter()
+            .find(|error| error.message.contains(&format!("does not fit in {target}")))
+            .ok_or_else(|| format!("expected a finite-only {target} diagnostic for {case}, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid diagnostic span {:?} for {case}", error.span))?;
+        assert_eq!(actual_span, expected_span, "wrong source span for {case}");
+    }
+    Ok(())
+}
+
+#[test]
+fn non_finite_exact_float_literals_nested_in_arithmetic_keep_literal_spans() -> Result<(), String> {
+    let cases = [
+        ("f32", "1e9999 + 0.0", "1e9999"),
+        ("f64", "0.0 + -1e9999", "1e9999"),
+        ("f64", "(0.0 + (1e9999 * 1.0))", "1e9999"),
+    ];
+    for (target, expression, expected_span) in cases {
+        let source = format!("def main() -> None:\n  value: {target} = {expression}\n");
+        let errors = check_str(&source)
+            .err()
+            .ok_or_else(|| format!("expected nested {target} non-finite literal to fail"))?;
+        let error = errors
+            .iter()
+            .find(|error| {
+                error.message.contains("Float literal") && error.message.contains(&format!("does not fit in {target}"))
+            })
+            .ok_or_else(|| format!("expected a nested exact-float diagnostic, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid diagnostic span {:?}", error.span))?;
+        assert_eq!(actual_span, expected_span, "wrong nested literal span for {target}");
+    }
+    Ok(())
+}
+
+#[test]
+fn folded_non_finite_exact_float_const_reports_a_constant_value() -> Result<(), String> {
+    let source = "const VALUE: f64 = -1e9999\n";
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "expected folded non-finite f64 const to fail".to_string())?;
+    let error = errors
+        .iter()
+        .find(|error| error.message.contains("Constant value") && error.message.contains("does not fit in f64"))
+        .ok_or_else(|| format!("expected a folded-constant diagnostic, got {errors:?}"))?;
+    let actual_span = source
+        .get(error.span.start..error.span.end)
+        .ok_or_else(|| format!("invalid folded-constant diagnostic span {:?}", error.span))?;
+    assert_eq!(actual_span, "-1e9999");
+    Ok(())
+}
+
+#[test]
+fn ordinary_float_literals_remain_ieee_non_finite() -> Result<(), String> {
+    let source = "const VALUE: float = 1e9999\n\ndef main() -> None:\n  value: float = -1e9999\n";
+    check_str(source).map_err(|errors| format!("ordinary float must retain IEEE non-finite values: {errors:?}"))
+}
+
+#[test]
+fn ordinary_float_values_cannot_narrow_to_exact_f32() -> Result<(), String> {
+    let source = "def exact(value: str) -> f32:\n  return float(value)\n";
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "ordinary float must not narrow to exact f32".to_string())?;
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Return type mismatch: expected 'f32', found 'float'")),
+        "expected the exact-f32 return boundary to reject ordinary float, got {errors:?}"
+    );
+    Ok(())
 }
 
 #[test]
@@ -1740,15 +1856,18 @@ def distance(time: f32) -> f32:
 }
 
 #[test]
-fn exact_width_float_const_literals_reject_out_of_range_f32_issue1219() {
+fn exact_width_float_const_literals_reject_out_of_range_f32_issue1219() -> Result<(), String> {
     let source = r#"
 const TOO_LARGE: f32 = 1e100
 "#;
-    let errors = check_str_err(source, "expected out-of-range f32 const literal to fail");
+    let errors = check_str(source)
+        .err()
+        .ok_or_else(|| "expected out-of-range f32 const literal to fail".to_string())?;
     assert!(
         errors.iter().any(|error| error.message.contains("does not fit in f32")),
         "expected an f32 range diagnostic, got: {errors:?}"
     );
+    Ok(())
 }
 
 #[cfg(feature = "rust_inspect")]
@@ -13186,14 +13305,18 @@ fn builtin_json_stringify_requires_exactly_one_operand_at_the_call_span() -> Res
             "json_stringify() expects 1 argument(s), got 2",
         ),
     ] {
-        let errors = check_str_err(source, "json_stringify arity mismatch should fail");
+        let errors = check_str(source)
+            .err()
+            .ok_or_else(|| "json_stringify arity mismatch should fail".to_string())?;
         let error = errors
             .iter()
             .find(|error| error.message == expected)
             .ok_or_else(|| format!("expected {expected:?}, got {errors:?}"))?;
+        let actual_span = source
+            .get(error.span.start..error.span.end)
+            .ok_or_else(|| format!("invalid json_stringify diagnostic span {:?}", error.span))?;
         assert_eq!(
-            &source[error.span.start..error.span.end],
-            call,
+            actual_span, call,
             "the arity diagnostic must own the complete source call"
         );
     }
@@ -13201,7 +13324,7 @@ fn builtin_json_stringify_requires_exactly_one_operand_at_the_call_span() -> Res
 }
 
 #[test]
-fn local_function_named_json_stringify_remains_an_ordinary_lexical_binding() {
+fn local_function_named_json_stringify_remains_an_ordinary_lexical_binding() -> Result<(), String> {
     let source = r#"
 def json_stringify(value: int) -> int:
   return value + 1
@@ -13209,7 +13332,8 @@ def json_stringify(value: int) -> int:
 def main() -> int:
   return json_stringify(41)
 "#;
-    assert_check_ok(source);
+    check_str(source).map_err(|errors| format!("local json_stringify binding should typecheck: {errors:?}"))?;
+    Ok(())
 }
 
 #[test]

@@ -432,6 +432,48 @@ fn non_finite_exact_float_carriers_refuse_before_execution() -> Result<(), Box<d
     Ok(())
 }
 
+/// Ordinary float parsing may produce IEEE non-finite values, but those values cannot cross an exact-f64 boundary.
+#[test]
+fn runtime_non_finite_float_values_cannot_become_exact_f64() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def exact(value: str) -> f64:
+  return float(value)
+
+def ordinary(value: str) -> float:
+  return float(value)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    for input in ["NaN", "inf", "-inf", "1e9999"] {
+        let error = require_execution_error(
+            execute_free_function(&module, "exact", &[ReplacementValue::Str(input.to_string())]),
+            "a runtime non-finite ordinary float must not become exact f64",
+        )?;
+        assert!(
+            error
+                .to_string()
+                .contains("ValueError: non-finite float cannot initialize exact f64"),
+            "{input}: {error}"
+        );
+        let span = error
+            .primary_span()
+            .ok_or("the exact-f64 coercion refusal must retain its source span")?;
+        let spanned = source
+            .get(span.start..span.end)
+            .ok_or("the exact-f64 coercion refusal span must index the source")?;
+        assert_eq!(spanned.trim(), "return float(value)", "{input}: {span:?}");
+    }
+
+    let finite = execute_free_function(&module, "exact", &[ReplacementValue::Str("1.25".to_string())])?;
+    assert_eq!(
+        finite.value,
+        ReplacementValue::Numeric(ReplacementNumericValue::F64(1.25))
+    );
+
+    let ordinary = execute_free_function(&module, "ordinary", &[ReplacementValue::Str("NaN".to_string())])?;
+    assert!(matches!(ordinary.value, ReplacementValue::Float(value) if value.is_nan()));
+    Ok(())
+}
+
 /// Malformed integer and decimal carriers must refuse during preflight.
 #[test]
 fn malformed_or_out_of_range_direct_numeric_carriers_refuse_before_execution() -> Result<(), Box<dyn std::error::Error>>

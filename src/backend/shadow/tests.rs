@@ -48,6 +48,55 @@ fn replacement_shadow_observation_does_not_leak_program_output() -> Result<(), B
     Ok(())
 }
 
+/// Shadow preparation may admit ordinary float parsing, but the direct route must classify non-finite exact results.
+#[test]
+fn replacement_shadow_route_classifies_runtime_non_finite_exact_f64_results() -> Result<(), Box<dyn std::error::Error>>
+{
+    let source = "def exact(value: str) -> f64:\n    return float(value)\n";
+    for input in ["NaN", "inf", "-inf", "1e9999"] {
+        let profile = ShadowComparisonProfile::new(source, "exact", vec![ReplacementValue::Str(input.to_string())]);
+        let prepared = PreparedShadowProfile::new(&profile)?;
+        let observed = observe_replacement_route(&profile, &prepared)?;
+
+        assert!(
+            observed.execution.is_none(),
+            "{input} must not produce direct execution evidence"
+        );
+        assert_eq!(
+            observed.observation.as_ref().map(|observation| &observation.observable),
+            Some(&SourceObservable::Failed {
+                failure: RuntimeFailureClass::NonFiniteExactF64,
+            }),
+            "{input} must retain the exact-float failure class"
+        );
+        assert!(observed.output.stdout().is_empty(), "{input} unexpectedly wrote stdout");
+        assert!(observed.output.stderr().is_empty(), "{input} unexpectedly wrote stderr");
+        assert!(
+            observed.unavailable_reason.is_none(),
+            "{input}: classified failure became unavailable"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn exact_float_failure_payloads_are_classified_without_heuristics() -> Result<(), Box<dyn std::error::Error>> {
+    for (detail, expected) in [
+        (
+            "ValueError: non-finite float cannot initialize exact f32",
+            RuntimeFailureClass::NonFiniteExactF32,
+        ),
+        (
+            "ValueError: non-finite float cannot initialize exact f64\n",
+            RuntimeFailureClass::NonFiniteExactF64,
+        ),
+    ] {
+        assert_eq!(classify_replacement_failure(detail)?, expected);
+        assert_eq!(classify_legacy_failure(detail)?, expected);
+    }
+    Ok(())
+}
+
 fn profile() -> ShadowComparisonProfile {
     ShadowComparisonProfile::new(
         "def add(x: int, y: int) -> int:\n    return x + y\n",

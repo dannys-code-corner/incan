@@ -1,7 +1,8 @@
 //! Same-source native/direct proof for Unicode-scalar string length.
 
 use incan::backend::replacement::ReplacementValue;
-use incan::backend::shadow::{ShadowComparisonProfile, compare_source_observable};
+use incan::backend::shadow::ShadowComparisonProfile;
+use incan::cli::commands::compare_source_observable;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
