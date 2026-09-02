@@ -85,7 +85,7 @@ The key design constraint is usability. This RFC must not turn ordinary Incan in
 - This RFC does not define global CLI flags unrelated to capability grants and reports, such as verbosity, color, or profile selection.
 - This RFC does not define a secret-value type; it only requires receipts to preserve sensitivity and redaction metadata from the owning subsystem.
 - This RFC does not make local runtime evidence equivalent to independent proof that an untrusted external system performed an effect.
-- This RFC does not define a general key-management, remote-attestation, or secret-reveal system.
+- This RFC does not define how signing keys are issued, distributed, stored, or rotated by a host or signer, nor how a verifier's trust roots or revocation policy are configured; it requires only that signed receipt and report-anchor evidence retain enough metadata (issuer identity, key id and generation, algorithm, signing time, verification material) to remain historically verifiable across rotation. This RFC does not define a general-purpose remote-attestation protocol for claims outside receipt and report-anchor evidence, and it does not define a secret-reveal system.
 
 ## Guide-level explanation
 
@@ -235,6 +235,8 @@ The runtime should support at least these conceptual modes:
 - `observe`: operations run normally and receipts are emitted.
 - `governed`: operations require granted capabilities and receipts are emitted.
 
+`observe` and `governed` are collectively the reporting modes: both retain a receipt for every attempted operation, including denials. `permissive` is not a reporting mode and remains receipt-free.
+
 The user-facing shape is:
 
 ```text
@@ -330,7 +332,7 @@ Attestation has two independent scopes that must not be collapsed into one stron
 
 Every run report with authority reporting enabled must separately carry a report-anchor authentication. It must name the report identity, the canonical ordered receipt-set commitment, and the exact receipt identities and execution-evidence bindings that anchor covers. It is either `local`, meaning the local runtime recorded the anchor, or `host-signed`, meaning a configured host attestation identity signed that stated coverage. A host-signed anchor must retain the same signed-evidence fields as a boundary-attested receipt. A report-anchor authentication establishes the integrity of that set and its ordering; it must not upgrade a receipt with local execution attestation into a boundary-attested receipt, or imply that every receipt in the set has the same external proof.
 
-Signer metadata identifies attestation only; it is not an authority grant or a second source of policy. A signer key rotation creates a new immutable key generation and does not alter evidence signed under an earlier generation. A verifier may evaluate revocation or trust-policy changes using the evidence's signing time and a separately recorded verification result that identifies the verifier policy and check time. That result may change the verifier's current trust judgement, but must not rewrite the receipt identity, signed evidence, authority decision, or execution outcome. This RFC requires these durable bindings without defining a general key-management or remote-attestation system.
+Signer metadata identifies attestation only; it is not an authority grant or a second source of policy. A signer key rotation creates a new immutable key generation and does not alter evidence signed under an earlier generation. A verifier may evaluate revocation or trust-policy changes using the evidence's signing time and a separately recorded verification result that identifies the verifier policy and check time. That result may change the verifier's current trust judgement, but must not rewrite the receipt identity, signed evidence, authority decision, or execution outcome. This RFC requires these durable bindings without defining how signing keys are issued, distributed, stored, or rotated, or how a verifier's trust roots or revocation policy are configured -- see Non-Goals.
 
 At either scope, `local` evidence is re-derivable by an authorized reviewer from available inputs, but carries no independent proof for an untrusted reviewer. A boundary-attested receipt proves only what its attesting boundary asserts. A locally attested receipt or host-signed report anchor must not be represented as independently proving that an untrusted external system performed an effect.
 
@@ -475,7 +477,7 @@ Static declarations and runtime receipts should be compared where possible. If a
 
 ### Compatibility
 
-This RFC is additive. Existing programs can continue to run in permissive mode. Governed mode may reveal hidden authority assumptions in existing programs, but those failures are the point of governed execution and must be diagnosable.
+This RFC is additive. Existing programs continue to run without new failures: the default `observe` mode records local authority facts but denies nothing, and `permissive` mode remains available for callers that want receipt emission fully disabled. Governed mode may reveal hidden authority assumptions in existing programs, but those failures are the point of governed execution and must be diagnosable.
 
 Stdlib APIs that already perform authority-bearing operations should be updated to emit receipts and enforce grants in governed mode. Libraries may opt in incrementally by publishing capability descriptors and using the public receipt surface.
 
@@ -524,7 +526,8 @@ Generated build artifacts and run reports should be ordinary artifacts that RFC 
 ## Layers affected
 
 - **Stdlib / Runtime (`incan_stdlib`)**: host-boundary modules need capability checks, receipt emission, redaction handling, and report integration.
-- **Tooling / CLI**: run, test, action, and build commands need report output, governed-mode grants, denial diagnostics, machine-readable schemas, and host-ceiling resolution.
+- **Runtime attestation and redaction commitments**: signing and verifying boundary-attested receipts and host-signed report anchors (signer key id/generation, algorithm, signature, verification material) and generating/verifying keyed redaction commitments or encrypted audit envelopes needs dedicated cryptographic primitives, likely a distinct crate boundary from ordinary receipt emission.
+- **Tooling / CLI**: run, test, action, and build commands need report output, governed-mode grants, denial diagnostics, machine-readable schemas, host-ceiling resolution, and a verification surface for signed receipt/report evidence and redaction commitments.
 - **Package metadata**: packages need a way to publish capability declarations and receipt schemas.
 - **Typechecker / Semantic metadata**: static capability declarations and action requirements should be exposed as checked metadata where available.
 - **IR Lowering / Backend**: source spans and semantic identities should be preserved well enough for receipts to point back to source and semantic objects.
