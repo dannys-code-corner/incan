@@ -1449,6 +1449,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "POLICY".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::FrozenStr,
         );
@@ -1554,6 +1555,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "PREFIX".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );
@@ -1568,6 +1570,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "MARKER".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::Int,
         );
@@ -1685,6 +1688,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "MARKER".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::Int,
         );
@@ -1736,6 +1740,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "PREFIX".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );
@@ -2073,6 +2078,7 @@ mod tests {
         let expr = IrExpr::new(
             IrExprKind::StaticRead {
                 name: "OPTION_NAME".to_string(),
+                reference_kind: super::expr::IrStaticReferenceKind::Source,
             },
             IrType::StaticStr,
         );

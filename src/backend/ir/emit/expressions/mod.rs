@@ -58,7 +58,7 @@ use super::super::conversions::exact_float_value_validation;
 use super::super::decl::IrInteropAdapterKind;
 use super::super::expr::{
     CollectionMethodKind, IrDictEntry, IrExprKind, IrInteropCoercionKind, IrListEntry, IrMethodDispatch,
-    Literal as IrLiteral, MethodKind, NumericResizePolicy, TypedExpr, UnaryOp, VarRefKind,
+    IrStaticReferenceKind, Literal as IrLiteral, MethodKind, NumericResizePolicy, TypedExpr, UnaryOp, VarRefKind,
 };
 use super::super::types::IrType;
 use super::{EmitError, IrEmitter};
@@ -69,7 +69,10 @@ use incan_core::lang::types::collections::{self, CollectionTypeId};
 #[derive(Debug, Clone)]
 pub(super) enum StorageRoot {
     /// A module-level static storage slot.
-    Static(String),
+    Static {
+        name: String,
+        reference_kind: IrStaticReferenceKind,
+    },
     /// A local alias that wraps static storage in the current emitted statement slice.
     Binding(String),
 }
@@ -191,7 +194,7 @@ impl<'a> IrEmitter<'a> {
                 "generic decorated function cache requires a function pointer type".to_string(),
             ));
         }
-        let cache_ident = Self::rust_static_ident(&format!("__incan_generic_decorated_{cache_name}"));
+        let cache_ident = Self::rust_generated_static_ident(&format!("__incan_generic_decorated_{cache_name}"));
         let fn_ty = self.emit_type(&value.ty);
         let value_tokens = self.emit_expr(value)?;
         let type_key_parts = type_param_names
@@ -911,7 +914,10 @@ impl<'a> IrEmitter<'a> {
 
     pub(super) fn expr_storage_root(expr: &TypedExpr) -> Option<StorageRoot> {
         match &expr.kind {
-            IrExprKind::StaticRead { name } => Some(StorageRoot::Static(name.clone())),
+            IrExprKind::StaticRead { name, reference_kind } => Some(StorageRoot::Static {
+                name: name.clone(),
+                reference_kind: *reference_kind,
+            }),
             IrExprKind::Var {
                 name,
                 ref_kind: VarRefKind::StaticBinding,
@@ -985,13 +991,14 @@ impl<'a> IrEmitter<'a> {
     pub(super) fn emit_storage_with_ref(&self, expr: &TypedExpr, body: TokenStream) -> Result<TokenStream, EmitError> {
         let local_name = format_ident!("__incan_static_value");
         match Self::expr_storage_root(expr) {
-            Some(StorageRoot::Static(name)) => {
-                let ident = Self::rust_static_ident(&name);
-                let init_call = if *self.in_static_initializer.borrow() && !self.static_needs_imported_init_call(&name)
+            Some(StorageRoot::Static { name, reference_kind }) => {
+                let ident = self.rust_static_reference_ident(&name, reference_kind)?;
+                let init_call = if *self.in_static_initializer.borrow()
+                    && !self.static_reference_needs_imported_init_call(&name, reference_kind)
                 {
                     quote! {}
                 } else {
-                    self.emit_static_init_call_for_static(&name)
+                    self.emit_static_init_call_for_reference(&name, reference_kind)
                 };
                 Ok(quote! {{
                     #init_call
@@ -1010,13 +1017,14 @@ impl<'a> IrEmitter<'a> {
     pub(super) fn emit_storage_with_mut(&self, expr: &TypedExpr, body: TokenStream) -> Result<TokenStream, EmitError> {
         let local_name = format_ident!("__incan_static_value");
         match Self::expr_storage_root(expr) {
-            Some(StorageRoot::Static(name)) => {
-                let ident = Self::rust_static_ident(&name);
-                let init_call = if *self.in_static_initializer.borrow() && !self.static_needs_imported_init_call(&name)
+            Some(StorageRoot::Static { name, reference_kind }) => {
+                let ident = self.rust_static_reference_ident(&name, reference_kind)?;
+                let init_call = if *self.in_static_initializer.borrow()
+                    && !self.static_reference_needs_imported_init_call(&name, reference_kind)
                 {
                     quote! {}
                 } else {
-                    self.emit_static_init_call_for_static(&name)
+                    self.emit_static_init_call_for_reference(&name, reference_kind)
                 };
                 Ok(quote! {{
                     #init_call
@@ -1115,12 +1123,14 @@ impl<'a> IrEmitter<'a> {
                 Ok(quote! { incan_stdlib::reflection::TypeToken::<#token_ty>::new() })
             }
 
-            IrExprKind::StaticRead { name } => {
-                let n = Self::rust_static_ident(name);
-                if *self.in_static_initializer.borrow() && !self.static_needs_imported_init_call(name) {
+            IrExprKind::StaticRead { name, reference_kind } => {
+                let n = self.rust_static_reference_ident(name, *reference_kind)?;
+                if *self.in_static_initializer.borrow()
+                    && !self.static_reference_needs_imported_init_call(name, *reference_kind)
+                {
                     Ok(quote! { #n.get() })
                 } else {
-                    let init_call = self.emit_static_init_call_for_static(name);
+                    let init_call = self.emit_static_init_call_for_reference(name, *reference_kind);
                     Ok(quote! {{
                         #init_call
                         #n.get()
@@ -1128,12 +1138,14 @@ impl<'a> IrEmitter<'a> {
                 }
             }
 
-            IrExprKind::StaticBinding { name } => {
-                let n = Self::rust_static_ident(name);
-                if *self.in_static_initializer.borrow() && !self.static_needs_imported_init_call(name) {
+            IrExprKind::StaticBinding { name, reference_kind } => {
+                let n = self.rust_static_reference_ident(name, *reference_kind)?;
+                if *self.in_static_initializer.borrow()
+                    && !self.static_reference_needs_imported_init_call(name, *reference_kind)
+                {
                     Ok(quote! { incan_stdlib::storage::StaticBinding::from_static(&#n) })
                 } else {
-                    let init_call = self.emit_static_init_call_for_static(name);
+                    let init_call = self.emit_static_init_call_for_reference(name, *reference_kind);
                     Ok(quote! {{
                         #init_call
                         incan_stdlib::storage::StaticBinding::from_static(&#n)
@@ -1156,7 +1168,7 @@ impl<'a> IrEmitter<'a> {
             }
 
             IrExprKind::FunctionItem { name, type_args } => {
-                let ident = Self::rust_ident(name);
+                let ident = self.rust_function_ident(name);
                 if type_args.is_empty() {
                     Ok(quote! { #ident })
                 } else {
