@@ -16,6 +16,9 @@ def repo_root() -> Path:
 
 
 def pep440_version(version: str) -> str:
+    dev = re.fullmatch(r"(.+)-dev\.(\d+)\.(\d+)", version)
+    if dev:
+        return f"{dev.group(1)}.dev{dev.group(2)}+{dev.group(3)}"
     normalized = version.replace("-dev.", ".dev")
     return re.sub(r"-(a|b|rc)(\d+)$", r"\1\2", normalized)
 
@@ -45,6 +48,11 @@ def prepare_package(dist_dir: Path, skip_build: bool = False) -> None:
 
     package_version = pep440_version(version)
     replace_line(stage_dir / "pyproject.toml", r'^version = ".*"$', f'version = "{package_version}"')
+    replace_line(
+        stage_dir / "src/incan_toolchain/__init__.py",
+        r'^__release_version__ = ".*"$',
+        f'__release_version__ = "{version}"',
+    )
     replace_line(stage_dir / "src/incan_toolchain/__init__.py", r'^__version__ = ".*"$', f'__version__ = "{package_version}"')
 
     if not skip_build:

@@ -5596,6 +5596,9 @@ fn prepare_oven_project(
     generator.set_provider_plan(&provider_plan);
     generator.set_sdk_path_dependencies(project_requirements.sdk_path_dependencies.clone());
     generator.set_stdlib_features(project_requirements.stdlib_features.clone());
+    if oven_plan_mode == OvenProjectPlanMode::InteropBootstrap {
+        generator.enable_companion_library_target();
+    }
     // An interop bootstrap must generate the exact normal executable source closure. It is allowed to publish that
     // closure through the named compatibility boundary, but it cannot pull in publisher-only development inputs or
     // its pre-interop receipt would not be selectable by the later normal direct-rustc consumer.
@@ -5818,8 +5821,9 @@ fn prepare_oven_project(
         receipt_request = receipt_request.with_build_unit_input(name.clone(), value.clone());
     }
     let receipt = receipt_generated_project(&receipt_request).map_err(|error| CliError::failure(error.to_string()))?;
-    write_receipt(&receipt, crate::oven::default_receipt_path(&project_root))
-        .map_err(|error| CliError::failure(error.to_string()))?;
+    let receipt_path =
+        prepared_oven_receipt_path(&project_root, oven_plan_mode, &receipt.intent.target, path, profile)?;
+    write_receipt(&receipt, &receipt_path).map_err(|error| CliError::failure(error.to_string()))?;
     let required_registry_dependencies = format_oven_registry_dependency_requirements(&oven_plan_dependencies);
     // An imported package Loaf is sufficient only for consume-only commands. The explicit baker must publish the
     // consumer's own direct registry roots with its complete generated source closure; otherwise the provider's
@@ -5857,7 +5861,7 @@ fn prepare_oven_project(
             required_registry_dependencies,
             receipt.identity,
             generator.output_dir().display(),
-            crate::oven::default_receipt_path(&project_root).display(),
+            receipt_path.display(),
         ))
     })?;
     let plan_selection = plan_preparation.plan_selection;
@@ -5978,15 +5982,7 @@ pub(crate) fn prepare_oven_interop_bootstrap(
         ))
     })?;
     let project_root = resolve_library_project_root(Some(project))?;
-    let targets = discover_oven_bake_project_targets(&project_root)?;
-    let (kind, entrypoint) = targets
-        .into_iter()
-        .find(|(kind, _)| *kind == OvenBakeProjectTarget::Executable)
-        .ok_or_else(|| {
-            CliError::failure(
-                "Oven interop bootstrap currently requires src/main.incn or one declared [project.scripts] executable entrypoint",
-            )
-        })?;
+    let (kind, entrypoint) = sole_oven_interop_executable_target(discover_oven_bake_project_targets(&project_root)?)?;
     let entrypoint_text = entrypoint.to_str().ok_or_else(|| {
         CliError::failure(format!(
             "Oven interop entrypoint is not valid UTF-8: {}",
@@ -6013,9 +6009,44 @@ pub(crate) fn prepare_oven_interop_bootstrap(
             prepared.receipt.intent.target
         )));
     }
-    let receipt_path = project_bake_receipt_path(&project_root, kind, &entrypoint, "debug")?;
-    write_receipt(&prepared.receipt, &receipt_path).map_err(|error| CliError::failure(error.to_string()))?;
+    let receipt_path = interop_bootstrap_receipt_path(
+        &project_root,
+        &prepared.receipt.intent.target,
+        kind,
+        &entrypoint,
+        "debug",
+    )?;
     Ok((prepared.receipt, receipt_path, prepared.cargo_process_started))
+}
+
+/// Select the one executable an automatic interop bootstrap may prepare.
+///
+/// An explicit `--base-receipt` remains available for packages whose author intentionally selects one of several
+/// scripts. Automatic selection must fail closed rather than letting filesystem or manifest discovery order decide
+/// which generated root becomes native-plan authority.
+fn sole_oven_interop_executable_target(
+    targets: Vec<(OvenBakeProjectTarget, PathBuf)>,
+) -> CliResult<(OvenBakeProjectTarget, PathBuf)> {
+    let executable_targets = targets
+        .into_iter()
+        .filter(|(kind, _)| *kind == OvenBakeProjectTarget::Executable)
+        .collect::<Vec<_>>();
+    match executable_targets.as_slice() {
+        [(kind, entrypoint)] => Ok((*kind, entrypoint.clone())),
+        [] => Err(CliError::failure(
+            "Oven interop bootstrap currently requires src/main.incn or one declared [project.scripts] executable entrypoint",
+        )),
+        _ => {
+            let entrypoints = executable_targets
+                .iter()
+                .map(|(_, entrypoint)| entrypoint.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(CliError::failure(format!(
+                "Oven interop bootstrap requires one executable entrypoint, but this package declares: {entrypoints}; provide an explicit base receipt for the intended entrypoint",
+            )))
+        }
+    }
 }
 
 /// Return whether an explicit Loaf publisher is constructing its compiler-owned source closure.
@@ -6197,6 +6228,7 @@ fn bake_generated_project_compatibility_plan(
     rustc: &Path,
     base_loaf: Option<&OvenToolchainLoaf>,
     source_compiler_vocab_support: bool,
+    publication_kind: OvenLegacyCargoPublicationKind,
 ) -> CliResult<OvenToolchainMaterialization> {
     let compile_environment = direct_rustc_reusable_project_plan_environment(generated_project, generated_root)
         .map_err(|error| CliError::failure(error.to_string()))?;
@@ -6210,7 +6242,7 @@ fn bake_generated_project_compatibility_plan(
         sdk_inventory: None,
         compiler_loaf_root: None,
         domain: format!("incan-release-{INCAN_VERSION}"),
-        publication_kind: OvenLegacyCargoPublicationKind::Executable,
+        publication_kind,
         source_evidence_key: "generated-root".to_string(),
         compile_environment,
         // A project Loaf is the complete exact closure for its generated project, including caller-owned `pub::`
@@ -6632,6 +6664,11 @@ fn select_or_bake_generated_project_plan(
             rustc,
             base_loaf.as_ref(),
             source_compiler_vocab_support,
+            if mode == OvenProjectPlanMode::InteropBootstrap {
+                OvenLegacyCargoPublicationKind::InteropBootstrap
+            } else {
+                OvenLegacyCargoPublicationKind::Executable
+            },
         )?;
         let mut prepared = select_published_project_plan(store, receipt, materialization)?.ok_or_else(|| {
             CliError::failure("the explicit Oven project bake completed without a receipt-compatible direct-rustc plan")
@@ -12246,6 +12283,46 @@ fn project_bake_receipt_path(
     Ok(crate::oven::default_receipt_path(project_root).with_file_name(file_name))
 }
 
+/// Return the private pre-interop receipt path for one Rust target, entrypoint, and profile.
+///
+/// This never shares the ordinary explicit-bake receipt namespace: the automatic bootstrap deliberately excludes
+/// publisher-only development dependencies and is valid only as the base later extended by a selected native plan.
+fn interop_bootstrap_receipt_path(
+    project_root: &Path,
+    rust_target: &str,
+    target: OvenBakeProjectTarget,
+    entrypoint: &Path,
+    profile: &str,
+) -> CliResult<PathBuf> {
+    let target_identity = oven_bake_project_target_identity(project_root, target, entrypoint)?;
+    let identity = digest_bytes(format!("{rust_target}\0{target_identity}").as_bytes())
+        .trim_start_matches("sha256:")
+        .to_string();
+    Ok(crate::oven::default_receipt_path(project_root)
+        .with_file_name(format!("interop-bootstrap-{identity}-{profile}-receipt.json")))
+}
+
+/// Return the durable receipt path appropriate to one prepared Oven command mode.
+fn prepared_oven_receipt_path(
+    project_root: &Path,
+    mode: OvenProjectPlanMode,
+    rust_target: &str,
+    entrypoint: &Path,
+    profile: &str,
+) -> CliResult<PathBuf> {
+    if mode == OvenProjectPlanMode::InteropBootstrap {
+        interop_bootstrap_receipt_path(
+            project_root,
+            rust_target,
+            OvenBakeProjectTarget::Executable,
+            entrypoint,
+            profile,
+        )
+    } else {
+        Ok(crate::oven::default_receipt_path(project_root))
+    }
+}
+
 /// Restore and validate the portable package handoff carried by reused library outputs.
 fn restore_reused_library_package(
     project_root: &Path,
@@ -17523,6 +17600,53 @@ impl ChildId {
         assert_eq!(
             targets,
             vec![(OvenBakeProjectTarget::Executable, project.path().join("src/main.incn"))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn oven_interop_bootstrap_selects_only_one_declared_executable() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let main = project.path().join("src/main.incn");
+        let extra = project.path().join("src/extra.incn");
+
+        let selected = sole_oven_interop_executable_target(vec![
+            (OvenBakeProjectTarget::Library, project.path().join("src/lib.incn")),
+            (OvenBakeProjectTarget::Executable, main.clone()),
+        ])?;
+        assert_eq!(selected, (OvenBakeProjectTarget::Executable, main));
+
+        let error = sole_oven_interop_executable_target(vec![
+            (OvenBakeProjectTarget::Executable, project.path().join("src/main.incn")),
+            (OvenBakeProjectTarget::Executable, extra),
+        ])
+        .expect_err("automatic interop bootstrap must not select one of several scripts");
+        assert!(error.to_string().contains("provide an explicit base receipt"));
+        Ok(())
+    }
+
+    #[test]
+    fn oven_interop_bootstrap_receipt_isolated_from_explicit_bake_receipts() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("src/main.incn");
+        let explicit =
+            project_bake_receipt_path(project.path(), OvenBakeProjectTarget::Executable, &entrypoint, "debug")?;
+        let bootstrap = interop_bootstrap_receipt_path(
+            project.path(),
+            "aarch64-apple-darwin",
+            OvenBakeProjectTarget::Executable,
+            &entrypoint,
+            "debug",
+        )?;
+
+        assert_ne!(bootstrap, explicit);
+        assert!(
+            bootstrap
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("interop-bootstrap-") && name.ends_with("-debug-receipt.json")),
+            "unexpected bootstrap receipt path: {}",
+            bootstrap.display()
         );
         Ok(())
     }

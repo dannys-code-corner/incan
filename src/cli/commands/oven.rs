@@ -582,7 +582,7 @@ struct OvenInteropBakeReport {
     bundles: Vec<String>,
     /// Whether this command reused an existing verified interop plan without starting a native tool.
     reused: bool,
-    /// The baker never invokes Cargo.
+    /// Whether an automatic base bootstrap invoked the named compatibility publisher.
     cargo_process_started: bool,
 }
 
@@ -665,15 +665,25 @@ pub fn oven_interop_bake(options: OvenInteropBakeCommandOptions) -> CliResult<Ex
         cargo_process_started,
     };
     match options.format {
-        OvenOutputFormat::Text => println!(
-            "{} Oven interop target {} direct-rustc plan {} without Cargo.",
-            if report.reused { "Reused" } else { "Baked" },
-            report.target,
-            report.plan_identity
-        ),
+        OvenOutputFormat::Text => println!("{}", interop_bake_terminal_message(&report)),
         OvenOutputFormat::Json => print_json(&report)?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Render process-authority evidence for one explicit native interop bake.
+fn interop_bake_terminal_message(report: &OvenInteropBakeReport) -> String {
+    format!(
+        "{} Oven interop target {} direct-rustc plan {}{}.",
+        if report.reused { "Reused" } else { "Baked" },
+        report.target,
+        report.plan_identity,
+        if report.cargo_process_started {
+            " after preparing its Rust-only base through the named compatibility publisher"
+        } else {
+            " without invoking Cargo"
+        }
+    )
 }
 
 /// Stage one already baked selected interop plan in a fixed caller-owned Android or iOS layout.
@@ -5895,9 +5905,9 @@ mod tests {
         compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
         compiler_suite_selection_context, compiler_suite_selection_report, compiler_suite_temporary_directory,
         compiler_suite_uses_indexed_foundations, compiler_suite_workspace_library_dependency_closure,
-        default_rustup_home, default_store_root, loaf_envelope_default_limits, loaf_envelope_evidence,
-        native_test_failure_summary, oven_import, oven_publish_direct_rustc_plan, oven_run, oven_test,
-        parse_named_path, prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults,
+        default_rustup_home, default_store_root, interop_bake_terminal_message, loaf_envelope_default_limits,
+        loaf_envelope_evidence, native_test_failure_summary, oven_import, oven_publish_direct_rustc_plan, oven_run,
+        oven_test, parse_named_path, prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults,
         reuse_complete_loaf_envelope, run_compiler_suite_children_with_leases_retained,
         run_prepared_compiler_suite_children, select_compiler_suite_shards, write_compiler_suite_report,
         write_native_test_failure_transcript,
@@ -5933,6 +5943,32 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::Instant;
+
+    #[test]
+    fn interop_bake_text_evidence_distinguishes_automatic_bootstrap_cargo() {
+        let report = super::OvenInteropBakeReport {
+            target: "aarch64-apple-darwin".to_string(),
+            base_receipt: PathBuf::from("base-receipt.json"),
+            bootstrap_prepared: true,
+            execution_receipt: PathBuf::from("execution-receipt.json"),
+            execution_receipt_identity: "sha256:execution".to_string(),
+            plan_identity: "sha256:plan".to_string(),
+            final_receipt_identity: "sha256:final".to_string(),
+            archives: Vec::new(),
+            bundles: Vec::new(),
+            reused: false,
+            cargo_process_started: true,
+        };
+
+        let message = interop_bake_terminal_message(&report);
+
+        assert!(message.contains("named compatibility publisher"));
+        assert!(!message.contains("without invoking Cargo"));
+        assert_eq!(
+            serde_json::to_value(&report).expect("interop report must serialize")["cargo_process_started"],
+            true
+        );
+    }
 
     #[test]
     fn loaf_fixture_probe_pins_the_explicit_baker_authorities() {
