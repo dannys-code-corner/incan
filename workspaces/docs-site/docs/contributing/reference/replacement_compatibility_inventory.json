@@ -3370,7 +3370,8 @@
                   "replacement-body-v0-001",
                   "replacement-body-v0-002",
                   "replacement-body-v0-003",
-                  "replacement-body-v0-005"
+                  "replacement-body-v0-005",
+                  "replacement-body-v0-022"
                 ],
                 "anchor": {
                   "surface": "ParityCorpus",
@@ -3431,6 +3432,38 @@
                       "selector": "fn the_compared_row_carries_two_route_receipts_and_its_oven_authority",
                       "owner_issue": null,
                       "note": "#1146 records the matched two-route source observable for replacement-body-v0-001."
+                    }
+                  }
+                }
+              },
+              {
+                "case_id": "replacement-body-v0-022",
+                "state": "ComparedMatch",
+                "evidence": {
+                  "Paired": {
+                    "legacy_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_conversions_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the legacy Oven route receipt for replacement-body-v0-022."
+                    },
+                    "replacement_receipt": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_conversions_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 verifies the direct replacement route receipt for replacement-body-v0-022."
+                    },
+                    "comparison_record": {
+                      "surface": "IndependentComparison",
+                      "status": "Observed",
+                      "repository_path": "tests/parity_corpus_tests.rs",
+                      "selector": "fn the_scalar_conversions_row_carries_two_route_receipts_and_exact_output",
+                      "owner_issue": null,
+                      "note": "#1249 records the matched typed result and exact streams for replacement-body-v0-022."
                     }
                   }
                 }
@@ -4860,7 +4893,7 @@
               "status": "Planned",
               "repository_path": "src/frontend/body_ir.rs",
               "selector": "fn lower_binary",
-              "owner_issue": 1154,
+              "owner_issue": 1279,
               "note": "The Body-IR lowering boundary is the materialization point for the planned source contract."
             },
             "replacement_executor": {
@@ -4868,7 +4901,7 @@
               "status": "Planned",
               "repository_path": "src/backend/replacement/mod.rs",
               "selector": "fn evaluate_binary",
-              "owner_issue": 1154,
+              "owner_issue": 1279,
               "note": "The direct replacement call boundary remains planned or intentionally refused until this feature's requirements land."
             },
             "parity_corpus": {
@@ -4900,7 +4933,7 @@
                 },
                 "outstanding_evidence": {
                   "Scheduled": {
-                    "owner_issue": 1154,
+                    "owner_issue": 1279,
                     "note": "The feature/runtime owner must add receipt-bound comparison evidence after its direct profile is materialized."
                   }
                 }
@@ -4910,8 +4943,8 @@
           }
         },
         "disposition": "Planned",
-        "owner_issue": 1154,
-        "migration_or_blocker": "The current direct profile is intentionally scalar-bounded; #1154 owns the shared direct value model required for remaining numeric forms."
+        "owner_issue": 1279,
+        "migration_or_blocker": "The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms."
       },
       {
         "id": "language.strings-and-format",
