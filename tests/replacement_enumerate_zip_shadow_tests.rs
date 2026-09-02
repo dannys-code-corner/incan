@@ -110,7 +110,7 @@ fn selected_enumerate_and_zip_match_through_the_staged_legacy_route() -> Result<
         process
             .result_report
             .as_deref()
-            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v1:int:41")),
+            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v2:int:41")),
         "legacy result transport must remain separate from program stdout"
     );
 

@@ -13,11 +13,11 @@ mod patterns;
 
 use std::collections::HashMap;
 
-use super::super::decl::FunctionParamDefault;
+use super::super::decl::{FunctionParamDefault, IrTraitBound, IrTraitBoundOrigin, IrTypeParam};
 use super::super::expr::{
     BuiltinFn, CollectionMethodKind, IrCallArg, IrCallArgKind, IrDictEntry, IrExpr, IrExprKind, IrListEntry,
-    IrMethodDispatch, Literal as IrLiteral, MethodCallArgPolicy, MethodKind, NumericResizePolicy, RaceArm, UnaryOp,
-    VarAccess, VarRefKind,
+    IrMethodDispatch, IrTraitDispatch, Literal as IrLiteral, MethodCallArgPolicy, MethodKind, NumericResizePolicy,
+    RaceArm, UnaryOp, VarAccess, VarRefKind,
 };
 use super::super::types::IrType;
 use super::super::{IrCheckedCFunction, IrCheckedCType, IrStmt, IrStmtKind, Mutability, TypedExpr};
@@ -26,12 +26,13 @@ use super::errors::LoweringError;
 use crate::frontend::ast::{self, Spanned};
 use crate::frontend::library_manifest_index::LibraryManifestIndexEntry;
 use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_args};
-use crate::frontend::symbols::ResolvedType;
+use crate::frontend::symbols::{ImplementationTraitBoundOriginInfo, ImplementationTypeParamInfo, ResolvedType};
 use crate::frontend::typechecker::{
     CAbiSpanAccessKind, IdentKind, PartialProjectionTargetKind, ResolvedMethodDispatch, ResolvedOperatorKind,
     RustArgCoercionKind,
 };
 use incan_core::interop::RustCollectionFamily;
+use incan_core::lang::builtins::BuiltinFnId;
 use incan_core::lang::magic_methods::{self, MagicMethodId};
 use incan_core::lang::surface::collection_helpers::{self, BuiltinCollectionHelperId};
 use incan_core::lang::surface::result_methods::ResultMethodId;
@@ -520,8 +521,11 @@ impl AstLowering {
                 trait_name,
                 module_path,
                 type_args,
+                implementation_type_params,
                 receiver_is_mutable,
             } => {
+                let trait_source_name = trait_name.clone();
+                let trait_module_path = module_path.clone();
                 let stdlib_module = module_path
                     .as_deref()
                     .filter(|segments| segments.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT));
@@ -552,16 +556,51 @@ impl AstLowering {
                 } else {
                     trait_name
                 };
-                IrMethodDispatch::Trait {
+                IrMethodDispatch::Trait(Box::new(IrTraitDispatch {
+                    trait_source_name,
+                    trait_module_path,
+                    implementation_type_params: self.lower_implementation_type_params(&implementation_type_params),
                     trait_path,
                     type_args: type_args
                         .iter()
                         .map(|ty| self.lower_resolved_method_type_arg(ty))
                         .collect(),
                     receiver_is_mutable,
-                }
+                }))
             }
         }
+    }
+
+    /// Lower checked implementation-header parameters into dispatch-owned IR metadata.
+    fn lower_implementation_type_params(&self, type_params: &[ImplementationTypeParamInfo]) -> Vec<IrTypeParam> {
+        type_params
+            .iter()
+            .map(|type_param| IrTypeParam {
+                name: type_param.name.clone(),
+                bounds: type_param
+                    .bounds
+                    .iter()
+                    .map(|bound| IrTraitBound {
+                        trait_path: bound.trait_path.clone(),
+                        type_args: bound
+                            .type_args
+                            .iter()
+                            .map(|ty| self.lower_resolved_method_type_arg(ty))
+                            .collect(),
+                        assoc_types: bound
+                            .associated_types
+                            .iter()
+                            .map(|(name, ty)| (name.clone(), self.lower_resolved_method_type_arg(ty)))
+                            .collect(),
+                        origin: match bound.origin {
+                            ImplementationTraitBoundOriginInfo::Standard => IrTraitBoundOrigin::Standard,
+                            ImplementationTraitBoundOriginInfo::RustCapability => IrTraitBoundOrigin::RustCapability,
+                            ImplementationTraitBoundOriginInfo::SourceCallable => IrTraitBoundOrigin::SourceCallable,
+                        },
+                    })
+                    .collect(),
+            })
+            .collect()
     }
 
     /// Resolve one source-owned stdlib trait through the provider, public package, or provider-local facade that owns
@@ -1528,6 +1567,17 @@ impl AstLowering {
             ast::Expr::MethodCall(o, m, type_args, args) => {
                 if let Some(lowered) = self.lower_checked_c_method_call(expr_span, o, m, type_args, args)? {
                     return Ok(lowered);
+                }
+                if self
+                    .type_info
+                    .as_ref()
+                    .and_then(|info| info.resolved_builtin_call(expr_span))
+                    == Some(BuiltinFnId::IsInstance)
+                {
+                    let callee = ast::Spanned::new(ast::Expr::Field(o.clone(), m.clone()), expr_span);
+                    return self
+                        .lower_call_expr(&callee, type_args, args, expr_span)
+                        .map(|(kind, ty)| TypedExpr::new(kind, ty));
                 }
                 let is_public_module_constructor = self
                     .type_info
@@ -2503,6 +2553,7 @@ mod tests {
                     crate::frontend::symbols::ResolvedType::Int,
                     crate::frontend::symbols::ResolvedType::Str,
                 ],
+                implementation_type_params: Vec::new(),
                 receiver_is_mutable: false,
             },
             &method_chain,
@@ -2510,8 +2561,8 @@ mod tests {
 
         assert!(matches!(
             dispatch,
-            IrMethodDispatch::Trait { trait_path, .. }
-                if trait_path
+            IrMethodDispatch::Trait(dispatch)
+                if dispatch.trait_path
                     == "fallible_streams::__incan_std::derives::collection::FallibleIterator"
         ));
     }
@@ -2531,6 +2582,7 @@ mod tests {
                     crate::frontend::symbols::ResolvedType::Int,
                     crate::frontend::symbols::ResolvedType::Str,
                 ],
+                implementation_type_params: Vec::new(),
                 receiver_is_mutable: false,
             },
             &receiver,
@@ -2538,8 +2590,8 @@ mod tests {
 
         assert!(matches!(
             dispatch,
-            IrMethodDispatch::Trait { trait_path, .. }
-                if trait_path == "crate::__incan_std::derives::collection::FallibleIterator"
+            IrMethodDispatch::Trait(dispatch)
+                if dispatch.trait_path == "crate::__incan_std::derives::collection::FallibleIterator"
         ));
     }
 
@@ -2555,6 +2607,7 @@ mod tests {
                 trait_name: clone_trait.to_string(),
                 module_path: Some(vec!["std".to_string(), "derives".to_string(), "copying".to_string()]),
                 type_args: Vec::new(),
+                implementation_type_params: Vec::new(),
                 receiver_is_mutable: false,
             },
             &receiver,
@@ -2562,7 +2615,7 @@ mod tests {
 
         assert!(matches!(
             dispatch,
-            IrMethodDispatch::Trait { trait_path, .. } if trait_path == clone_trait
+            IrMethodDispatch::Trait(dispatch) if dispatch.trait_path == clone_trait
         ));
     }
 
@@ -2578,6 +2631,7 @@ mod tests {
                     trait_name: trait_name.to_string(),
                     module_path: Some(vec!["std".to_string(), "serde".to_string(), "json".to_string()]),
                     type_args: Vec::new(),
+                    implementation_type_params: Vec::new(),
                     receiver_is_mutable: false,
                 },
                 &receiver,
@@ -2585,8 +2639,8 @@ mod tests {
 
             assert!(matches!(
                 dispatch,
-                IrMethodDispatch::Trait { trait_path, .. }
-                    if trait_path == "crate::__incan_std::serde::json::Serialize"
+                IrMethodDispatch::Trait(dispatch)
+                    if dispatch.trait_path == "crate::__incan_std::serde::json::Serialize"
             ));
         }
     }
@@ -2602,6 +2656,7 @@ mod tests {
                 trait_name: "Serialize".to_string(),
                 module_path: None,
                 type_args: Vec::new(),
+                implementation_type_params: Vec::new(),
                 receiver_is_mutable: false,
             },
             &receiver,
@@ -2609,7 +2664,7 @@ mod tests {
 
         assert!(matches!(
             dispatch,
-            IrMethodDispatch::Trait { trait_path, .. } if trait_path == "Serialize"
+            IrMethodDispatch::Trait(dispatch) if dispatch.trait_path == "Serialize"
         ));
     }
 
@@ -2623,6 +2678,7 @@ mod tests {
                 trait_name: "json.Serialize".to_string(),
                 module_path: None,
                 type_args: Vec::new(),
+                implementation_type_params: Vec::new(),
                 receiver_is_mutable: false,
             },
             &receiver,
@@ -2630,7 +2686,7 @@ mod tests {
 
         assert!(matches!(
             dispatch,
-            IrMethodDispatch::Trait { trait_path, .. } if trait_path == "json::Serialize"
+            IrMethodDispatch::Trait(dispatch) if dispatch.trait_path == "json::Serialize"
         ));
     }
 }

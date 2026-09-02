@@ -1,6 +1,7 @@
-//! Pre-execution provider-host availability across retained Body-IR computations.
+//! Pre-execution reachability and provider-host availability across retained Body-IR computations.
 //!
-//! This pass checks availability, not authority. It never runs a default, polls a generator or task, or invokes a
+//! This pass validates the structural execution profile of every reachable same-module body and checks provider-host
+//! availability, but not provider authority. It never runs a default, polls a generator or task, or invokes a
 //! provider. Named calls use the same exact declaration resolver as runtime dispatch; unrelated module bodies and
 //! imported targets are not an excuse to infer new execution support.
 
@@ -13,19 +14,19 @@ use incan_semantics_core::body_ir::{
 
 use super::{
     ReplacementExecutionError, named_callable_body, provider::ProviderRuntime, unsupported,
-    validate_argument_binding_profile,
+    validate_argument_binding_profile, validate_direct_body_profile,
 };
 
-/// Refuse missing hosts in the selected body's nested computations and reachable same-module callees.
+/// Refuse unsupported body profiles and missing hosts across the selected reachable computation.
 ///
-/// Availability is conservative, like structural admission: defaults, untaken branches and unpolled frames are
-/// inspected without being executed. A worklist breaks recursive call cycles without omitting the rest of a body.
+/// Preflight is conservative: defaults, untaken branches and unpolled frames are inspected without being executed. A
+/// worklist breaks recursive call cycles without omitting the rest of a body.
 pub(super) fn validate(
     module: &BodyIrModule,
     entry: &Body,
     providers: Option<&ProviderRuntime>,
 ) -> Result<(), ReplacementExecutionError> {
-    let mut preflight = ProviderHostPreflight {
+    let mut preflight = ExecutionPreflight {
         module,
         providers,
         pending: vec![entry],
@@ -33,6 +34,7 @@ pub(super) fn validate(
     };
     while let Some(body) = preflight.pending.pop() {
         if preflight.visited.insert(&body.direct_call_id) {
+            validate_direct_body_profile(body)?;
             preflight.parameters(&body.params)?;
             preflight.statements(&body.block.stmts)?;
         }
@@ -41,14 +43,14 @@ pub(super) fn validate(
 }
 
 /// Borrowed traversal state; visited declaration identities bound recursion without storing runtime evidence.
-struct ProviderHostPreflight<'module, 'runtime> {
+struct ExecutionPreflight<'module, 'runtime> {
     module: &'module BodyIrModule,
     providers: Option<&'runtime ProviderRuntime>,
     pending: Vec<&'module Body>,
     visited: BTreeSet<&'module CompilerNodeId>,
 }
 
-impl<'module> ProviderHostPreflight<'module, '_> {
+impl<'module> ExecutionPreflight<'module, '_> {
     /// Inspect retained source defaults without evaluating them or substituting partial presets.
     fn parameters(&mut self, params: &'module [CallableParam]) -> Result<(), ReplacementExecutionError> {
         for parameter in params {
@@ -139,6 +141,7 @@ impl<'module> ProviderHostPreflight<'module, '_> {
             Rvalue::Use(_)
             | Rvalue::UnaryOp(..)
             | Rvalue::BinaryOp(..)
+            | Rvalue::IsInstance { .. }
             | Rvalue::Aggregate(..)
             | Rvalue::Dict(_)
             | Rvalue::ValueEnumVariant(_)

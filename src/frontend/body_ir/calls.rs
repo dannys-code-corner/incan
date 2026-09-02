@@ -3,6 +3,7 @@
 use super::args::*;
 use super::primitives::*;
 use super::*;
+use incan_core::lang::builtins::BuiltinFnId;
 
 impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     /// Lower planned call arguments in written source order, then place them into declaration-slot order.
@@ -479,6 +480,66 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         })
     }
 
+    /// Lower one compiler-owned `isinstance` call from the typechecker's retained builtin and target facts.
+    fn lower_checked_isinstance_call(
+        &mut self,
+        type_args: &[ast::Spanned<ast::Type>],
+        args: &[ast::CallArg],
+        span: ast::Span,
+        scope: bir::ScopeId,
+        out: &mut Vec<bir::Statement>,
+    ) -> bir::Operand {
+        let call_span = hir_span(span);
+        let [ast::CallArg::Positional(value), ast::CallArg::Positional(target_expr)] = args else {
+            return self.unsupported_operand(
+                "isinstance outside the positional checked-target profile".to_string(),
+                scope,
+                call_span,
+                out,
+            );
+        };
+        if !type_args.is_empty() {
+            return self.unsupported_operand(
+                "isinstance with explicit call-site type arguments".to_string(),
+                scope,
+                call_span,
+                out,
+            );
+        }
+        let Some(target) = self.type_info.isinstance_target(span) else {
+            return self.unsupported_operand(
+                "isinstance without checked target evidence".to_string(),
+                scope,
+                hir_span(target_expr.span),
+                out,
+            );
+        };
+        let target_span = hir_span(target.span);
+        let target_span = if target_span.start >= call_span.start && target_span.end <= call_span.end {
+            target_span
+        } else {
+            call_span
+        };
+        let value_ty = self.resolve_ty(value.span);
+        let value = self.lower_expr_to_operand(value, scope, out);
+        let ty = self.resolve_ty(span);
+        self.push_assign_temp(
+            bir::Rvalue::IsInstance {
+                value,
+                value_ty,
+                target: bir::IsInstanceTarget {
+                    ty: semantic_type_from_resolved(&target.ty),
+                    canonical: target.canonical.clone(),
+                    span: target_span,
+                },
+            },
+            ty,
+            scope,
+            call_span,
+            out,
+        )
+    }
+
     /// Lower a call to a locally held callable value, a nominal construction, or a direct named function.
     ///
     /// A bare identifier that resolves to one of this body's locals is deliberately a
@@ -508,6 +569,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let hir_span_value = hir_span(span);
+        if self.type_info.resolved_builtin_call(span) == Some(BuiltinFnId::IsInstance) {
+            return self.lower_checked_isinstance_call(type_args, args, span, scope, out);
+        }
         let ast::Expr::Ident(name) = &callee.node else {
             return self.unsupported_operand("indirect call target".to_string(), scope, hir_span_value, out);
         };
@@ -717,6 +781,9 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         out: &mut Vec<bir::Statement>,
     ) -> bir::Operand {
         let hir_span_value = hir_span(span);
+        if self.type_info.resolved_builtin_call(span) == Some(BuiltinFnId::IsInstance) {
+            return self.lower_checked_isinstance_call(type_args, args, span, scope, out);
+        }
         let helper = match self.checked_string_helper_for_method_call(recv, name, span) {
             Ok(helper) => helper,
             Err(description) => return self.unsupported_operand(description, scope, hir_span_value, out),

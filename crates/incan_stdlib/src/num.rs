@@ -36,7 +36,10 @@
 /// ```
 use crate::errors::{raise_value_error, raise_zero_division};
 use core::fmt;
-use incan_core::{python_floor_div_i64, python_mod_i64};
+use incan_core::{
+    numeric_values::{format_decimal_value, parse_decimal_literal_body},
+    python_floor_div_i64, python_mod_i64,
+};
 
 #[inline]
 fn py_mod_f64_impl(a: f64, b: f64) -> f64 {
@@ -513,55 +516,18 @@ impl Decimal128 {
     /// Parse a compiler-validated decimal literal spelling into the runtime representation.
     pub fn from_literal(literal: &str) -> Self {
         let body = literal.strip_suffix('d').unwrap_or(literal);
-        let Some((coefficient, scale)) = parse_decimal_literal_body(body) else {
+        let Some(parsed) = parse_decimal_literal_body(body) else {
             raise_value_error(&format!("invalid decimal literal `{literal}`"));
         };
-        Self::new(coefficient, scale)
+        Self::new(parsed.coefficient, parsed.literal_scale)
     }
 }
 
 impl fmt::Display for Decimal128 {
     /// Format the decimal using its stored scale.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.scale == 0 {
-            return write!(f, "{}", self.coefficient);
-        }
-        let negative = self.coefficient < 0;
-        let digits = self.coefficient.unsigned_abs().to_string();
-        let scale = usize::from(self.scale);
-        if digits.len() <= scale {
-            if negative {
-                write!(f, "-")?;
-            }
-            write!(f, "0.")?;
-            for _ in 0..(scale - digits.len()) {
-                write!(f, "0")?;
-            }
-            write!(f, "{digits}")
-        } else {
-            let split = digits.len() - scale;
-            if negative {
-                write!(f, "-")?;
-            }
-            write!(f, "{}.{}", &digits[..split], &digits[split..])
-        }
+        f.write_str(&format_decimal_value(self.coefficient, self.scale))
     }
-}
-
-/// Parse the decimal literal body after the optional `d` suffix has been removed.
-fn parse_decimal_literal_body(body: &str) -> Option<(i128, u8)> {
-    if body.is_empty() || body.contains('e') || body.contains('E') {
-        return None;
-    }
-    let (integer, fractional) = body.split_once('.').unwrap_or((body, ""));
-    if integer.is_empty() && fractional.is_empty() {
-        return None;
-    }
-    let scale = u8::try_from(fractional.len()).ok()?;
-    let mut coefficient = String::with_capacity(integer.len() + fractional.len());
-    coefficient.push_str(if integer.is_empty() { "0" } else { integer });
-    coefficient.push_str(fractional);
-    coefficient.parse::<i128>().ok().map(|value| (value, scale))
 }
 
 pub trait IncanTryResize<T> {

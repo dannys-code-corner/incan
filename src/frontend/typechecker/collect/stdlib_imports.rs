@@ -30,10 +30,10 @@ use crate::frontend::typechecker::{
 };
 use crate::library_manifest::{
     AliasExport, ClassExport, ConstExport, EnumExport, EnumValueExport, EnumValueTypeExport, FieldExport,
-    FunctionExport, LibraryManifest, MethodExport, ModelExport, NewtypeExport, ParamDefaultExport, ParamExport,
-    ParamKindExport, PartialExport, PartialTargetKindExport, PresetValueExport, PropertyExport, ProviderFactKind,
-    ReceiverExport, StaticExport, TraitExport, TypeAliasExport, TypeBoundExport, TypeParamExport,
-    resolved_type_from_manifest_type_ref,
+    FunctionExport, ImplementationTraitBoundOriginExport, ImplementationTypeParamExport, LibraryManifest, MethodExport,
+    ModelExport, NewtypeExport, ParamDefaultExport, ParamExport, ParamKindExport, PartialExport,
+    PartialTargetKindExport, PresetValueExport, PropertyExport, ProviderFactKind, ReceiverExport, StaticExport,
+    TraitExport, TypeAliasExport, TypeBoundExport, TypeParamExport, resolved_type_from_manifest_type_ref,
 };
 use crate::provider::{ProviderModuleResolution, ProviderProvenance};
 use incan_core::interop::{RustItemKind, RustTraitAssoc, fallback_rust_trait_methods, is_rust_capability_bound};
@@ -3191,6 +3191,7 @@ impl TypeChecker {
                     source_name: None,
                     type_args: Vec::new(),
                     module_path: None,
+                    implementation_type_params: Vec::new(),
                 })
                 .collect();
         }
@@ -3206,6 +3207,54 @@ impl TypeChecker {
                     .map(resolved_type_from_manifest_type_ref)
                     .collect(),
                 module_path: bound.module_path.clone(),
+                implementation_type_params: Self::implementation_type_params_from_manifest(
+                    &bound.implementation_type_params,
+                ),
+            })
+            .collect()
+    }
+
+    /// Decode one manifest implementation header into frontend semantic types.
+    fn implementation_type_params_from_manifest(
+        type_params: &[ImplementationTypeParamExport],
+    ) -> Vec<ImplementationTypeParamInfo> {
+        type_params
+            .iter()
+            .map(|type_param| ImplementationTypeParamInfo {
+                name: type_param.name.clone(),
+                bounds: type_param
+                    .bounds
+                    .iter()
+                    .map(|bound| ImplementationTraitBoundInfo {
+                        trait_path: bound.trait_path.clone(),
+                        type_args: bound
+                            .type_args
+                            .iter()
+                            .map(resolved_type_from_manifest_type_ref)
+                            .collect(),
+                        associated_types: bound
+                            .associated_types
+                            .iter()
+                            .map(|associated| {
+                                (
+                                    associated.name.clone(),
+                                    resolved_type_from_manifest_type_ref(&associated.ty),
+                                )
+                            })
+                            .collect(),
+                        origin: match bound.origin {
+                            ImplementationTraitBoundOriginExport::Standard => {
+                                ImplementationTraitBoundOriginInfo::Standard
+                            }
+                            ImplementationTraitBoundOriginExport::RustCapability => {
+                                ImplementationTraitBoundOriginInfo::RustCapability
+                            }
+                            ImplementationTraitBoundOriginExport::SourceCallable => {
+                                ImplementationTraitBoundOriginInfo::SourceCallable
+                            }
+                        },
+                    })
+                    .collect(),
             })
             .collect()
     }
@@ -3439,6 +3488,9 @@ impl TypeChecker {
                                 .map(resolved_type_from_manifest_type_ref)
                                 .collect(),
                             module_path: bound.module_path.clone(),
+                            implementation_type_params: Self::implementation_type_params_from_manifest(
+                                &bound.implementation_type_params,
+                            ),
                         })
                         .collect(),
                 )
@@ -3579,6 +3631,9 @@ impl TypeChecker {
                                     .map(resolved_type_from_manifest_type_ref)
                                     .collect(),
                                 module_path: bound.module_path.clone(),
+                                implementation_type_params: Self::implementation_type_params_from_manifest(
+                                    &bound.implementation_type_params,
+                                ),
                             })
                             .collect(),
                     )

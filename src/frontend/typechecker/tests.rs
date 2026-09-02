@@ -3269,6 +3269,7 @@ fn library_index_with_rfc025_trait_adoptions() -> LibraryManifestIndex {
         type_args: vec![TypeRef::Named {
             name: "int".to_string(),
         }],
+        implementation_type_params: Vec::new(),
     };
     let convert_float = TypeBoundExport {
         name: "Convert".to_string(),
@@ -3277,6 +3278,7 @@ fn library_index_with_rfc025_trait_adoptions() -> LibraryManifestIndex {
         type_args: vec![TypeRef::Named {
             name: "float".to_string(),
         }],
+        implementation_type_params: Vec::new(),
     };
     let manifest = LibraryManifest {
         name: "mylib".to_string(),
@@ -3536,6 +3538,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: Vec::new(),
+                        implementation_type_params: Vec::new(),
                     }],
                     derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
@@ -3552,6 +3555,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: Vec::new(),
+                        implementation_type_params: Vec::new(),
                     }],
                     derives: vec![shadowed_trait_name()],
                     fields: Vec::new(),
@@ -3616,6 +3620,7 @@ fn library_index_with_pub_boundary_type_fidelity_exports() -> LibraryManifestInd
                         source_name: None,
                         module_path: None,
                         type_args: vec![TypeRef::TypeParam { name: "T".to_string() }],
+                        implementation_type_params: Vec::new(),
                     }],
                     requires: Vec::new(),
                     methods: Vec::new(),
@@ -4951,6 +4956,31 @@ def normalize(value: int | str | None) -> str:
       return value.upper()
 "#;
     assert!(check_str(source).is_ok());
+}
+
+#[test]
+fn explicit_builtin_isinstance_narrows_union_and_option_branches() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def normalize_union(value: int | str) -> str:
+  if std.builtins.isinstance(value, str):
+    return value.upper()
+  return "number"
+
+def normalize_option(value: int | str | None) -> str:
+  if std.builtins.isinstance(value, int):
+    return "number"
+  else:
+    if value is None:
+      return "missing"
+    else:
+      return value.upper()
+"#;
+    check_str(source).map_err(|errors| {
+        std::io::Error::other(format!(
+            "the explicit builtin identity must drive the same union and option narrowing as the ambient spelling: {errors:?}"
+        ))
+    })?;
+    Ok(())
 }
 
 #[test]
@@ -17313,6 +17343,7 @@ fn test_same_trait_adapter_chain_preserves_defining_module_dispatch() {
             trait_name: "Stream".to_string(),
             module_path: Some(vec!["streams".to_string()]),
             type_args: vec![ResolvedType::Int, ResolvedType::Str],
+            implementation_type_params: Vec::new(),
             receiver_is_mutable: false,
         },
     );
@@ -17323,6 +17354,7 @@ fn test_same_trait_adapter_chain_preserves_defining_module_dispatch() {
             trait_name: "Stream".to_string(),
             module_path: None,
             type_args: vec![ResolvedType::Int, ResolvedType::Str],
+            implementation_type_params: Vec::new(),
             receiver_is_mutable: false,
         },
     );
@@ -23625,4 +23657,77 @@ fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
         check_str(source).is_ok(),
         "plain chained assignment must resolve every target through the enclosing scope chain"
     );
+}
+
+// ---- #1281: retain checked `isinstance` target facts for Body IR ----
+
+#[test]
+fn isinstance_records_the_resolved_alias_target_and_original_target_span() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "type Text = str\n\ndef probe(value: int | str) -> bool:\n  return isinstance(value, Text)\n";
+    let info = typecheck_info_for_module(
+        source,
+        vec!["facts".to_string(), "isinstance".to_string()],
+        "checked isinstance target",
+    )?;
+
+    let targets = info.calls.isinstance_targets.values().collect::<Vec<_>>();
+    let [target] = targets.as_slice() else {
+        return Err("expected exactly one checked isinstance target".into());
+    };
+    let target_start = source.rfind("Text").ok_or("fixture must contain the target spelling")?;
+    assert_eq!(target.ty, ResolvedType::Str, "aliases must be expanded before lowering");
+    assert_eq!(target.span, Span::new(target_start, target_start + "Text".len()));
+    Ok(())
+}
+
+#[test]
+fn invalid_isinstance_target_does_not_create_checked_executable_evidence() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "def probe(value: int) -> bool:\n  return isinstance(value, 1)\n";
+    let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("{errors:?}")))?;
+    let mut checker = TypeChecker::new();
+    let errors = checker
+        .check_program(&ast)
+        .err()
+        .ok_or("a value must not typecheck as an isinstance type target")?;
+
+    assert!(
+        errors.iter().any(|error| error.message.contains("Type mismatch")),
+        "expected the existing type-target diagnostic, got {errors:?}"
+    );
+    assert!(
+        checker.type_info().calls.isinstance_targets.is_empty(),
+        "a rejected target must not leave executable checked evidence"
+    );
+    Ok(())
+}
+
+#[test]
+fn isinstance_retains_a_nominal_targets_canonical_declaration_identity() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "model Marker:\n  value: int\n\ntype Alias = Marker\n\ndef probe(value: Marker | str) -> bool:\n  return isinstance(value, Alias)\n";
+    let module_path = vec!["facts".to_string(), "nominal_isinstance".to_string()];
+    let info = typecheck_info_for_module(source, module_path.clone(), "nominal isinstance target")?;
+    let target = info
+        .calls
+        .isinstance_targets
+        .values()
+        .next()
+        .ok_or("fixture must retain its checked target")?;
+    let identity = target
+        .canonical
+        .as_ref()
+        .ok_or("a nominal target must retain its declaration identity")?;
+
+    assert_eq!(target.ty, ResolvedType::Named("Marker".to_string()));
+    assert_eq!(identity.module_path(), Some(module_path.as_slice()));
+    assert_eq!(identity.declaration_name, "Marker");
+    assert_eq!(identity.kind, incan_semantics_core::SemanticSourceTargetKind::Model);
+    let alias_target = source.rfind("Alias").ok_or("fixture must contain the target alias")?;
+    assert_eq!(target.span, Span::new(alias_target, alias_target + "Alias".len()));
+    assert_eq!(
+        source.get(target.span.start..target.span.end),
+        Some("Alias"),
+        "the target fact must retain the reference span, not the declaration span"
+    );
+    Ok(())
 }

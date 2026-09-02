@@ -10,7 +10,7 @@ use incan_core::lang::types::collections::{self as collections, CollectionTypeId
 use incan_core::lang::types::numerics::{self, NumericTypeId};
 
 /// Canonical IR generic name used for anonymous union types.
-pub const IR_UNION_TYPE_NAME: &str = "Union";
+pub const IR_UNION_TYPE_NAME: &str = incan_core::lang::types::UNION_TYPE_NAME;
 
 /// Ownership semantics for a value
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -464,13 +464,36 @@ impl IrType {
     }
 }
 
+/// Return whether an IR type is one of the native storage forms for the source `str` type.
+pub(crate) fn is_string_storage_type(ty: &IrType) -> bool {
+    matches!(
+        ty,
+        IrType::String | IrType::StaticStr | IrType::StrRef | IrType::FrozenStr
+    )
+}
+
+/// Return whether a checked value and target have the same source-level `isinstance` identity.
+///
+/// Storage distinctions are native lowering details, so every `str` storage form matches every other form. This
+/// relation is deliberately symmetric; ordinary union-carrier admission remains directional.
+pub(crate) fn isinstance_type_matches(value_ty: &IrType, target_ty: &IrType) -> bool {
+    value_ty == target_ty || (is_string_storage_type(value_ty) && is_string_storage_type(target_ty))
+}
+
+/// Return every source union variant whose semantic identity satisfies one retained `isinstance` target.
+pub(crate) fn isinstance_union_variant_indices(union_ty: &IrType, target_ty: &IrType) -> Option<Vec<usize>> {
+    let matches = union_ty
+        .union_members()?
+        .iter()
+        .enumerate()
+        .filter_map(|(index, member)| isinstance_type_matches(member, target_ty).then_some(index))
+        .collect::<Vec<_>>();
+    (!matches.is_empty()).then_some(matches)
+}
+
 /// Return whether a concrete value type can inhabit a normalized union member type.
-fn union_member_type_matches(member: &IrType, value_ty: &IrType) -> bool {
-    member == value_ty
-        || matches!(
-            (member, value_ty),
-            (IrType::String, IrType::StaticStr | IrType::StrRef | IrType::FrozenStr)
-        )
+pub(crate) fn union_member_type_matches(member: &IrType, value_ty: &IrType) -> bool {
+    member == value_ty || (matches!(member, IrType::String) && is_string_storage_type(value_ty))
 }
 
 /// Hash a union member-key into a deterministic generated Rust type suffix.
@@ -492,6 +515,28 @@ impl fmt::Display for IrType {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn isinstance_string_storage_identity_is_symmetric_without_widening_union_carriers() {
+        let storage_types = [IrType::String, IrType::StaticStr, IrType::StrRef, IrType::FrozenStr];
+        for value_ty in &storage_types {
+            for target_ty in &storage_types {
+                assert!(isinstance_type_matches(value_ty, target_ty));
+            }
+        }
+
+        assert!(union_member_type_matches(&IrType::String, &IrType::FrozenStr));
+        assert!(!union_member_type_matches(&IrType::FrozenStr, &IrType::String));
+
+        let mixed_storage_union = IrType::NamedGeneric(
+            IR_UNION_TYPE_NAME.to_string(),
+            vec![IrType::FrozenStr, IrType::String, IrType::Int],
+        );
+        assert_eq!(
+            isinstance_union_variant_indices(&mixed_storage_union, &IrType::String),
+            Some(vec![0, 1])
+        );
+    }
 
     // ============================================================================
     // CATEGORY 1: Simple Types

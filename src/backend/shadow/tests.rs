@@ -239,12 +239,62 @@ fn a_typed_result_report_round_trips_exactly() -> Result<(), ShadowUnavailable> 
 fn the_result_report_protocol_uses_literal_ascii_colon_delimiters() {
     assert_eq!(
         result_report_header(FunctionResultKind::Int).as_bytes(),
-        b"incan-shadow-result-v1:int:"
+        b"incan-shadow-result-v2:int:"
     );
     assert_eq!(
         report(FunctionResultKind::Str, "\nleading\ntrailing\n"),
-        b"incan-shadow-result-v1:str:\nleading\ntrailing\n"
+        b"incan-shadow-result-v2:str:\nleading\ntrailing\n"
     );
+}
+
+#[test]
+fn typed_numeric_result_reports_preserve_kind_and_validate_canonical_payloads() -> Result<(), ShadowUnavailable> {
+    for (kind, payload) in [
+        (FunctionResultKind::Float, "3.5"),
+        (FunctionResultKind::Numeric(NumericTypeId::F32), "3.5"),
+        (FunctionResultKind::Numeric(NumericTypeId::F64), "3.5"),
+        (
+            FunctionResultKind::Numeric(NumericTypeId::I128),
+            "-170141183460469231731687303715884105728",
+        ),
+        (
+            FunctionResultKind::Numeric(NumericTypeId::U128),
+            "340282366920938463463374607431768211455",
+        ),
+        (FunctionResultKind::Decimal { precision: 6, scale: 2 }, "19.90"),
+    ] {
+        assert_eq!(
+            decode_result_report(&report(kind, payload), kind)?,
+            TypedFunctionResult {
+                kind,
+                value: payload.to_string(),
+            }
+        );
+    }
+
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Numeric(NumericTypeId::U8), "256"),
+            FunctionResultKind::Numeric(NumericTypeId::U8)
+        )
+        .is_err()
+    );
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Numeric(NumericTypeId::F32), "NaN"),
+            FunctionResultKind::Numeric(NumericTypeId::F32)
+        )
+        .is_err()
+    );
+    assert!(decode_result_report(&report(FunctionResultKind::Float, "inf"), FunctionResultKind::Float).is_err());
+    assert!(
+        decode_result_report(
+            &report(FunctionResultKind::Decimal { precision: 5, scale: 2 }, "1234.5"),
+            FunctionResultKind::Decimal { precision: 5, scale: 2 }
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 #[test]
@@ -873,6 +923,84 @@ fn arguments_are_part_of_the_profile_identity() {
         second.source_identity(),
         "the same module must keep one source identity across argument lists"
     );
+}
+
+#[test]
+fn exact_numeric_argument_kind_is_part_of_the_profile_identity() {
+    let source = "def identity(value: f64) -> f64:\n    return value\n";
+    let f32_argument = ShadowComparisonProfile::new(
+        source,
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::F32(1.0))],
+    );
+    let f64_argument = ShadowComparisonProfile::new(
+        source,
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::F64(1.0))],
+    );
+    assert_ne!(f32_argument.profile_identity(), f64_argument.profile_identity());
+}
+
+#[test]
+fn typed_numeric_arguments_and_results_prepare_through_checked_types() -> Result<(), ShadowUnavailable> {
+    let cases = [
+        (
+            "def identity(value: f32) -> f32:\n    return value\n",
+            ReplacementNumericValue::F32(1.25),
+            FunctionResultKind::Numeric(NumericTypeId::F32),
+        ),
+        (
+            "def identity(value: u128) -> u128:\n    return value\n",
+            ReplacementNumericValue::Unsigned {
+                kind: NumericTypeId::U128,
+                value: u128::MAX,
+            },
+            FunctionResultKind::Numeric(NumericTypeId::U128),
+        ),
+        (
+            "def identity(value: decimal[6, 2]) -> decimal[6, 2]:\n    return value\n",
+            ReplacementNumericValue::Decimal {
+                precision: 6,
+                scale: 2,
+                coefficient: 1990,
+                literal_scale: 2,
+            },
+            FunctionResultKind::Decimal { precision: 6, scale: 2 },
+        ),
+    ];
+    for (source, argument, expected_kind) in cases {
+        let profile = ShadowComparisonProfile::new(source, "identity", vec![ReplacementValue::Numeric(argument)]);
+        let prepared = PreparedShadowProfile::new(&profile)?;
+        assert_eq!(prepared.result_kind, expected_kind);
+    }
+    Ok(())
+}
+
+#[test]
+fn malformed_typed_numeric_arguments_are_refused_before_source_synthesis() -> Result<(), ShadowUnavailable> {
+    let profile = ShadowComparisonProfile::new(
+        "def identity(value: decimal[5, 2]) -> decimal[5, 2]:\n    return value\n",
+        "identity",
+        vec![ReplacementValue::Numeric(ReplacementNumericValue::Decimal {
+            precision: 5,
+            scale: 2,
+            coefficient: 12345,
+            literal_scale: 0,
+        })],
+    );
+    let unavailable = match argument_literal(&profile.arguments[0]) {
+        Err(unavailable) => unavailable,
+        Ok(_) => {
+            return Err(ShadowUnavailable::new(
+                "a decimal exceeding its declared integer-width budget must be refused",
+            ));
+        }
+    };
+    assert!(
+        unavailable.reason.contains("malformed `decimal[5, 2]`"),
+        "{unavailable:?}"
+    );
+    Ok(())
 }
 
 #[test]

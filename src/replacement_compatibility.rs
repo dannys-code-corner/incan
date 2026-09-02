@@ -1808,6 +1808,8 @@ fn registered_parity_corpus_case_id(case_id: &str) -> bool {
             | "replacement-body-v0-026"
             | "replacement-body-v0-027"
             | "replacement-body-v0-028"
+            | "replacement-body-v0-030"
+            | "replacement-body-v0-029"
     )
 }
 
@@ -1922,7 +1924,7 @@ pub fn render_developer_projection(
         ));
     }
     output.push_str("\n## Remaining-work issue map\n\n");
-    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. Stable corpus rows `replacement-body-v0-001` and `replacement-body-v0-020` through `replacement-body-v0-028` have case-scoped paired matches, while all incomplete features and uncovered cases remain non-green.\n\n");
+    output.push_str("Every planned feature below has a currently open mechanism owner. #1146 is completed comparison infrastructure: it supplies reusable provenance, never ownership of missing comparison evidence. Scheduled evidence belongs to its feature/runtime owner; direct profiles without one carry explicit unscheduled evidence debt. Stable corpus rows `replacement-body-v0-001` and `replacement-body-v0-020` through `replacement-body-v0-030` have case-scoped paired matches, while all incomplete features and uncovered cases remain non-green.\n\n");
     let features_by_owner = features_by_owner(&registry.features);
     for (owner, features) in features_by_owner {
         output.push_str(&format!(
@@ -2370,8 +2372,8 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
         planned_feature(
             "call.named-and-variadic",
             "Named calls preserve resolved targets, generic arguments, positional/named binding, and spread diagnostics.",
-            1152,
-            "Call-frame and binder execution beyond the bounded scalar profile is owned by the callable runtime slice.",
+            988,
+            "Closed #1152 delivered the callable runtime substrate; open #988 owns broadening named, variadic, and spread execution with receipt-bound evidence.",
         ),
         planned_feature(
             "decorators.dsl-surfaces",
@@ -2388,62 +2390,56 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
         planned_feature(
             "error.result-and-try",
             "Result combinators and explicit propagation retain success, error, ordering, and diagnostic behavior.",
-            1154,
-            "Depends on #1101 for complete Body IR vocabulary; #1154 owns Result/error value routing.",
+            988,
+            "Closed #1101 delivered the Body IR vocabulary and closed #1154 delivered Result/error value routing; open #988 owns broadening and comparing the remaining execution profile.",
         ),
         planned_feature(
             "generator.expressions",
             "Generator expressions preserve construction-versus-consumption timing and lazy collection in the admitted profile.",
-            1152,
-            "The bounded generator-expression collect path exists, but broader consumption and comparison remain non-green.",
+            988,
+            "Closed #1152 delivered the bounded generator-expression collect path; open #988 owns broader consumption and comparison, which remain non-green.",
         ),
         planned_feature(
             "generator.functions",
             "Generator functions suspend and resume without replaying prior effects or losing local state.",
-            1152,
-            "Generator-function frames and resumption remain explicit replacement refusals.",
+            988,
+            "Closed #1152 delivered the callable/lazy-generator substrate; open #988 owns the generator-function frames and resumption forms that remain explicit replacement refusals.",
         ),
         planned_feature_with_bounded_cases(
             "iteration.protocol-and-adapters",
             "Iterator protocols, adapters, and consumers preserve lazy dispatch, callback timing, exhaustion, and errors.",
-            1152,
-            "The callable/lazy-generator runtime slice owns the first admitted adapter profile; general protocol dispatch remains blocked.",
+            988,
+            "Closed #1152 delivered the first callable/lazy-generator adapter profile; open #988 owns broader protocol dispatch, which remains blocked.",
         ),
         planned_feature(
             "iteration.user-and-fallible",
             "User-defined and fallible iteration preserve protocol calls, terminal behavior, and error routing.",
-            1101,
-            "Body IR protocol facts need a runtime dispatch and error-routing owner before the direct profile can admit these forms.",
+            988,
+            "Closed #1101 delivered the Body IR protocol vocabulary; open #988 owns the runtime dispatch and error-routing profile required to admit these forms.",
         ),
         planned_feature_with_bounded_cases(
             "language.aggregates-and-projections",
             "Tuple, list, dict, set, slice, projection, mutation, equality, and ordering retain source semantics.",
-            1154,
-            "Source-local scalar-key set/dict membership and entry count plus nonempty integer-list sorting execute directly. Standalone replacement-body-v0-020, replacement-body-v0-026 and replacement-body-v0-028 prove their exact streams and typed results across independent routes. These bounded proofs do not establish the full aggregate or ordering contract; #1154 owns remaining direct value storage, projection and mutation behavior.",
+            988,
+            "Source-local scalar-key set/dict membership and entry count plus nonempty integer-list sorting execute directly. Standalone replacement-body-v0-020, replacement-body-v0-026 and replacement-body-v0-028 prove their exact streams and typed results across independent routes. These bounded proofs do not establish the full aggregate or ordering contract. Closed #1154 delivered the direct value-state substrate; open #988 owns broadening storage, projection, mutation, equality, and ordering execution.",
         ),
         planned_feature(
             "language.control-flow-complete",
             "Control flow beyond the bounded scalar profile preserves value-carrying branches, pattern binding, loop results, and diagnostics.",
-            1154,
-            "The current direct profile covers only the bounded scalar subset; #1154 owns the required value and pattern runtime.",
+            988,
+            "The current direct profile covers only the bounded scalar subset. Closed #1154 delivered the value and pattern runtime substrate; open #988 owns the remaining control-flow execution and comparison profile.",
         ),
         planned_feature(
             "language.match-and-patterns",
             "Match, destructuring, alternation, guards, and exhaustiveness preserve branch selection and diagnostics.",
-            1154,
-            "Depends on #1101 for complete Body IR vocabulary; #1154 owns pattern dispatch over direct values.",
-        ),
-        planned_feature(
-            "language.numeric-complete",
-            "The full numeric contract preserves widths, literals, conversions, overflow, decimal behavior, and diagnostics beyond the scalar profile.",
-            1279,
-            "The current direct profile is intentionally scalar-bounded; #1279 owns the typed numeric carrier required for remaining numeric forms.",
+            988,
+            "Closed #1101 delivered the Body IR vocabulary and closed #1154 delivered pattern dispatch over direct values; open #988 owns broadening and comparing the remaining match surface.",
         ),
         planned_feature_with_bounded_cases(
             "language.strings-and-format",
             "String operators and formatting preserve interpolation order, conversions, and runtime failures.",
-            1101,
-            "String concatenation, bounded scalar interpolation, selected canonical string helpers and Unicode-scalar string length execute directly. The separate replacement-body-v0-021 and replacement-body-v0-024 corpus cases prove those bounded profiles, not this full formatting contract; broad feature parity remains non-green.",
+            988,
+            "String concatenation, bounded scalar interpolation, selected canonical string helpers and Unicode-scalar string length execute directly. Closed #1101 delivered the Body IR vocabulary. The separate replacement-body-v0-021 and replacement-body-v0-024 corpus cases prove those bounded profiles, not this full formatting contract; open #988 owns broader execution and feature parity remains non-green.",
         ),
         planned_feature(
             "module.identity-and-aliases",
@@ -2451,11 +2447,11 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
             1042,
             "Canonical source identity is a prerequisite for a replacement profile that crosses module boundaries.",
         ),
-        planned_feature(
+        planned_feature_with_bounded_cases(
             "nominal.models-unions-enums",
             "Models, unions, value enums, newtypes, computed properties, and static storage preserve construction and dispatch semantics.",
-            1154,
-            "Depends on #1101 for complete nominal Body IR; #1154 owns the direct nominal value representation.",
+            988,
+            "#1281 retains and executes the bounded checked int/bool/str/float `isinstance` target profile in replacement-body-v0-030. That case does not establish general runtime type values or the wider models/unions/enums/newtypes contract. Closed #1154 delivered the current direct nominal/value substrate; open #988 owns broadening the replacement execution profile.",
         ),
         planned_feature(
             "package.public-boundaries",
@@ -2466,20 +2462,20 @@ fn migration_bootstrap_compatibility_features() -> Vec<CompatibilityFeature> {
         planned_feature(
             "runtime.std-data-services",
             "Data-oriented stdlib services preserve their documented input, output, and error contracts.",
-            1156,
-            "#1156 owns checked provider-service dispatch; collection and nominal values remain a #1154 prerequisite.",
+            988,
+            "Closed #1156 delivered one checked provider-service dispatch and closed #1154 delivered its value-state prerequisite; open #988 owns broadening direct data-service execution and comparison.",
         ),
         planned_feature(
             "runtime.std-hosted-services",
             "Hosted filesystem, environment, I/O, web, temporary-resource, and process-adjacent services retain authority and lifecycle semantics.",
-            1156,
-            "#1156 owns checked provider-service dispatch and depends on authority/receipt facts from #662.",
+            988,
+            "Closed #1156 delivered one checked provider-service dispatch. Open #988 owns broader direct execution and comparison, with authority and receipt facts still supplied by #662.",
         ),
         planned_feature(
             "runtime.std-observability",
             "Logging, telemetry, registries, and metadata services preserve structured values and provider behavior.",
-            1156,
-            "#1156 owns checked provider-service dispatch; provider authority and receipts remain explicit prerequisites.",
+            988,
+            "Closed #1156 delivered one checked provider-service dispatch; open #988 owns broader direct observability execution and comparison, while provider authority and receipts remain explicit prerequisites.",
         ),
         planned_feature(
             "testing-and-tooling",
@@ -2802,6 +2798,59 @@ pub(crate) fn planned_feature_at_boundary(
     }
 }
 
+/// Build one partially materialized feature at the implementation boundary that owns its admitted subset.
+///
+/// Both compiler representation and direct execution have observed seams, but the feature-wide contract stays
+/// non-green and blocked on its named follow-up. Registered corpus comparisons prove only their bounded rows.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn partially_materialized_feature_at_boundary(
+    id: &'static str,
+    contract: &'static str,
+    owner_issue: u32,
+    blocker: &'static str,
+    typechecker_path: &'static str,
+    typechecker_selector: &'static str,
+    body_ir_path: &'static str,
+    body_ir_selector: &'static str,
+    replacement_executor_selector: &'static str,
+) -> CompatibilityFeature {
+    let mut feature = planned_feature_at_boundary(
+        id,
+        contract,
+        owner_issue,
+        blocker,
+        typechecker_path,
+        typechecker_selector,
+        body_ir_selector,
+        replacement_executor_selector,
+    );
+    let case_ids = registered_parity_case_ids(id);
+    let direct_selector = case_ids.first().copied().unwrap_or("fn seed_corpus");
+    feature.evidence.surfaces.body_ir = observed_anchor(
+        EvidenceSurface::BodyIr,
+        body_ir_path,
+        body_ir_selector,
+        "Body IR represents the admitted subset at this compiler-owned lowering seam.",
+    );
+    feature.evidence.surfaces.replacement_executor = observed_anchor(
+        EvidenceSurface::ReplacementExecutor,
+        "src/backend/replacement/mod.rs",
+        replacement_executor_selector,
+        "The replacement executor admits the bounded subset and refuses the remaining feature surface before effects.",
+    );
+    feature.evidence.surfaces.parity_corpus = ParityCorpusReference::Registered {
+        case_ids: case_ids.into_iter().map(str::to_string).collect(),
+        anchor: observed_anchor(
+            EvidenceSurface::ParityCorpus,
+            "tests/parity_corpus_tests.rs",
+            direct_selector,
+            "The stable #987 corpus registers only the bounded source-observable subset already executable here.",
+        ),
+    };
+    feature.evidence.surfaces.scoped_comparisons = scoped_comparisons(id);
+    feature
+}
+
 /// Build one bounded direct-execution feature at the direct implementation boundary that owns it.
 ///
 /// Direct execution remains separate from comparison. This factory never widens a feature to comparison-green; that
@@ -2935,6 +2984,11 @@ fn scoped_comparisons(feature_id: &str) -> Vec<CorpusCaseComparisonEvidence> {
                 "nonempty integer-list sorting",
             ),
         ],
+        "nominal.models-unions-enums" => vec![paired_scoped_comparison(
+            "replacement-body-v0-030",
+            "fn the_isinstance_targets_row_carries_two_route_receipts_and_exact_output",
+            "checked int/bool/str/float isinstance targets over source-local union values",
+        )],
         "language.strings-and-format" => vec![
             paired_scoped_comparison(
                 "replacement-body-v0-021",
@@ -3045,6 +3099,11 @@ fn scoped_comparisons(feature_id: &str) -> Vec<CorpusCaseComparisonEvidence> {
                 },
             },
         ],
+        "language.numeric-complete" => vec![paired_scoped_comparison(
+            "replacement-body-v0-029",
+            "fn the_typed_numeric_row_carries_exact_type_and_two_route_receipts",
+            "exact-width and decimal carrier transport",
+        )],
         _ => Vec::new(),
     }
 }
@@ -3104,12 +3163,14 @@ fn registered_parity_case_ids(feature_id: &str) -> Vec<&'static str> {
             "replacement-body-v0-025",
             "replacement-body-v0-027",
         ],
+        "language.numeric-complete" => vec!["replacement-body-v0-029"],
         "iteration.protocol-and-adapters" => vec!["replacement-body-v0-023"],
         "language.aggregates-and-projections" => vec![
             "replacement-body-v0-020",
             "replacement-body-v0-026",
             "replacement-body-v0-028",
         ],
+        "nominal.models-unions-enums" => vec!["replacement-body-v0-030"],
         "language.strings-and-format" => vec!["replacement-body-v0-021", "replacement-body-v0-024"],
         "async.tasks" => vec!["replacement-body-v0-018", "replacement-body-v0-019"],
         _ => Vec::new(),
@@ -3383,7 +3444,6 @@ fn migration_bootstrap_feature_requirement_links() -> Vec<FeatureRequirementLink
         req_link("language.control-flow-complete", "runtime.aggregate-store"),
         req_link("language.match-and-patterns", "patterns.dispatch"),
         req_link("language.match-and-patterns", "nominal.value-model"),
-        req_link("language.numeric-complete", "runtime.scalar-values"),
         req_link("language.numeric-complete", "runtime.aggregate-store"),
         req_link("language.strings-and-format", "runtime.scalar-values"),
         req_link("module.identity-and-aliases", "modules.canonical-identity"),

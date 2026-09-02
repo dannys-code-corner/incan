@@ -1346,6 +1346,129 @@ def main() -> Result[None, str]:
 }
 
 #[test]
+fn generic_fallible_iterator_consumer_inherits_implementation_bounds_issue1280() {
+    let source = r#"
+from std.derives.collection import FallibleIterator
+
+model Stream[R] with FallibleIterator[int, str]:
+    value: R
+
+    def __next__(mut self) -> Result[Option[int], str]:
+        return Ok(None)
+
+pub def drain[R](value: R) -> Result[int, str]:
+    mut count = 0
+    for _item in Stream[R](value=value)?:
+        count += 1
+    return Ok(count)
+
+pub def relay[R](value: R) -> Result[int, str]:
+    return drain(value)
+
+def main() -> None:
+    return
+"#;
+    let rust_code = generate_rust(source);
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+    assert!(
+        compact.contains("impl<R:Clone>FallibleIterator<i64,String>forStream<R>"),
+        "the generic trait implementation must retain its backend-inferred Clone requirement:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("pubfndrain<R:Clone>(value:R)->Result<i64,String>"),
+        "a generic caller consuming that implementation must inherit the same Clone requirement:\n{rust_code}"
+    );
+    assert!(
+        compact.contains("pubfnrelay<R:Clone>(value:R)->Result<i64,String>"),
+        "ordinary transitive callers must inherit the implementation requirement at the same fixed point:\n{rust_code}"
+    );
+}
+
+#[test]
+fn compiled_provider_consumer_inherits_manifest_implementation_bounds_issue1280() {
+    use incan::frontend::library_manifest_index::{
+        LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
+    };
+    use incan::library_manifest::{
+        ImplementationTraitBoundExport, ImplementationTraitBoundOriginExport, ImplementationTypeParamExport,
+        LibraryManifest, ModelExport, TypeBoundExport, TypeParamExport, TypeRef,
+    };
+    use std::collections::HashMap;
+
+    let source = r#"
+from pub::streams import Stream
+
+pub def drain[R](stream: Stream[R]) -> Result[int, str]:
+    mut count = 0
+    for _item in stream?:
+        count += 1
+    return Ok(count)
+
+def main() -> None:
+    return
+"#;
+    let ast = parse_incan_program(source, "compiled provider implementation-bound consumer");
+    let mut manifest = LibraryManifest::new("streams_core", "0.1.0");
+    manifest.exports.models.push(ModelExport {
+        name: "Stream".to_string(),
+        type_params: vec![TypeParamExport {
+            name: "R".to_string(),
+            bounds: Vec::new(),
+        }],
+        traits: vec!["FallibleIterator".to_string()],
+        trait_adoptions: vec![TypeBoundExport {
+            name: "FallibleIterator".to_string(),
+            source_name: Some("FallibleIterator".to_string()),
+            module_path: Some(vec!["std".to_string(), "derives".to_string(), "collection".to_string()]),
+            type_args: vec![
+                TypeRef::Named {
+                    name: "int".to_string(),
+                },
+                TypeRef::Named {
+                    name: "str".to_string(),
+                },
+            ],
+            implementation_type_params: vec![ImplementationTypeParamExport {
+                name: "R".to_string(),
+                bounds: vec![ImplementationTraitBoundExport {
+                    trait_path: "Clone".to_string(),
+                    type_args: Vec::new(),
+                    associated_types: Vec::new(),
+                    origin: ImplementationTraitBoundOriginExport::Standard,
+                }],
+            }],
+        }],
+        derives: Vec::new(),
+        fields: Vec::new(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+    });
+    let index = LibraryManifestIndex::from_entries(HashMap::from([(
+        "streams".to_string(),
+        LibraryManifestIndexEntry::Loaded {
+            manifest: Box::new(manifest),
+            metadata: LibraryArtifactMetadata::from_crate_root(
+                "streams",
+                "streams_core",
+                std::env::temp_dir().join("incan_test_streams_artifacts"),
+            ),
+        },
+    )]));
+    let mut codegen = codegen_with_builtin_stdlib_inventory();
+    codegen.set_library_manifest_index(index);
+    let rust_code = codegen
+        .try_generate(&ast)
+        .unwrap_or_else(|error| panic!("compiled-provider consumer must typecheck and lower: {error:?}"));
+    let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
+
+    assert!(
+        compact.contains("pubfndrain<R:Clone>(stream:Stream<R>)->Result<i64,String>"),
+        "a manifest-only consumer must inherit the exact implementation requirement:\n{rust_code}"
+    );
+}
+
+#[test]
 fn test_std_fallible_adapter_loop_inherits_qualified_trait_dispatch_codegen() {
     let source = r#"
 from std.io import BinaryReader
@@ -1881,6 +2004,120 @@ fn test_rfc029_union_types_codegen() {
         "union isinstance chains must fully lower before Rust emission:\n{rust_code}"
     );
     insta::assert_snapshot!("rfc029_union_types", rust_code);
+}
+
+#[test]
+fn isinstance_alias_target_uses_the_typecheckers_resolved_target_in_native_lowering()
+-> Result<(), Box<dyn std::error::Error>> {
+    let rust_code = generate_rust(
+        r#"
+type Whole = int
+
+const STATIC_TEXT: str = "static text"
+
+def isinstance(value: int, target: int) -> bool:
+  return false
+
+pub def probe(value: int | str) -> bool:
+  return std.builtins.isinstance(value, Whole)
+
+pub def narrow_union(value: int | str) -> str:
+  if std.builtins.isinstance(value, str):
+    return value.upper()
+  return "number"
+
+pub def narrow_option(value: int | str | None) -> str:
+  if std.builtins.isinstance(value, int):
+    return "number"
+  else:
+    if value is None:
+      return "missing"
+    else:
+      return value.upper()
+
+pub def static_text_is_str() -> bool:
+  return std.builtins.isinstance(STATIC_TEXT, str)
+
+pub def frozen_union_kind(value: FrozenStr | int) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "number"
+
+pub def frozen_option_kind(value: FrozenStr | None) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "missing"
+
+pub def frozen_option_union_kind(value: Option[FrozenStr | int]) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "other"
+
+pub def mixed_string_union_kind(value: FrozenStr | str | int) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "number"
+
+pub def mixed_string_option_union_kind(value: Option[FrozenStr | str | int]) -> str:
+  if std.builtins.isinstance(value, str):
+    return str(value)
+  return "other"
+"#,
+    );
+    assert!(
+        !rust_code.contains("isinstance("),
+        "the native expression route must consume the retained alias-expanded target rather than emit a raw call:\n{rust_code}"
+    );
+    assert!(
+        rust_code.contains("matches!(value"),
+        "the checked explicit builtin expression must lower to native union dispatch:\n{rust_code}"
+    );
+    let compact = rust_code
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect::<String>();
+    assert!(
+        compact.contains("let_=STATIC_TEXT;true"),
+        "semantic str matching must normalize the native const/static-string storage form:\n{rust_code}"
+    );
+    let (_, frozen_shapes) = compact
+        .split_once("pubfnfrozen_union_kind")
+        .ok_or("missing frozen-union isinstance regression function")?;
+    let (frozen_union, frozen_options) = frozen_shapes
+        .split_once("pubfnfrozen_option_kind")
+        .ok_or("missing frozen-option isinstance regression function")?;
+    assert!(
+        frozen_union.contains("matchvalue") && frozen_union.contains("::V0(value)=>"),
+        "frozen-string union statement lowering must select and bind its semantic str variant:\n{rust_code}"
+    );
+    let (frozen_option, frozen_option_union) = frozen_options
+        .split_once("pubfnfrozen_option_union_kind")
+        .ok_or("missing frozen option-union isinstance regression function")?;
+    assert!(
+        frozen_option.contains("matchvalue{Some(value)=>"),
+        "optional frozen string must select its semantic str payload:\n{rust_code}"
+    );
+    assert!(
+        frozen_option_union.contains("Some(__IncanUnion") && frozen_option_union.contains("::V0(value))=>"),
+        "optional frozen-string union statement lowering must select and bind its semantic str variant:\n{rust_code}"
+    );
+    let (_, mixed_string_shapes) = compact
+        .split_once("pubfnmixed_string_union_kind")
+        .ok_or("missing mixed string-storage union isinstance regression function")?;
+    let (mixed_string_union, mixed_string_option_union) = mixed_string_shapes
+        .split_once("pubfnmixed_string_option_union_kind")
+        .ok_or("missing optional mixed string-storage union isinstance regression function")?;
+    assert_eq!(
+        mixed_string_union.matches("returnvalue.to_string()").count(),
+        2,
+        "every matching string-storage union variant must execute the true branch:\n{rust_code}"
+    );
+    assert_eq!(
+        mixed_string_option_union.matches("returnvalue.to_string()").count(),
+        2,
+        "every matching optional string-storage union variant must execute the true branch:\n{rust_code}"
+    );
+    Ok(())
 }
 
 #[test]

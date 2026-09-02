@@ -144,13 +144,17 @@ fn construction_refuses_a_non_scalar_element_or_key() {
     };
     assert_eq!(
         ReplacementSet::from_elements([list_element]),
-        Err(NonScalarKey { kind: "list" })
+        Err(NonScalarKey {
+            kind: "list".to_string()
+        })
     );
 
     let tuple_key = ReplacementValue::Tuple(vec![ReplacementValue::Int(1)]);
     assert_eq!(
         ReplacementDict::from_entries([(tuple_key, ReplacementValue::Int(1))]),
-        Err(NonScalarKey { kind: "tuple" })
+        Err(NonScalarKey {
+            kind: "tuple".to_string()
+        })
     );
 }
 
@@ -176,11 +180,15 @@ fn a_non_scalar_needle_refuses_even_over_an_empty_container() {
     let needle = ReplacementValue::Tuple(vec![]);
     assert_eq!(
         ReplacementSet::empty().contains(needle.clone()),
-        Err(NonScalarKey { kind: "tuple" })
+        Err(NonScalarKey {
+            kind: "tuple".to_string()
+        })
     );
     assert_eq!(
         ReplacementDict::empty().contains_key(needle),
-        Err(NonScalarKey { kind: "tuple" })
+        Err(NonScalarKey {
+            kind: "tuple".to_string()
+        })
     );
 }
 
@@ -191,15 +199,21 @@ fn float_stays_outside_the_hashed_key_domain() {
     let float = ReplacementValue::Float(1.5);
     assert_eq!(
         ReplacementSet::from_elements([float.clone()]),
-        Err(NonScalarKey { kind: "float" })
+        Err(NonScalarKey {
+            kind: "float".to_string()
+        })
     );
     assert_eq!(
         ReplacementDict::from_entries([(float.clone(), ReplacementValue::Int(1))]),
-        Err(NonScalarKey { kind: "float" })
+        Err(NonScalarKey {
+            kind: "float".to_string()
+        })
     );
     assert_eq!(
         ReplacementSet::empty().contains(float),
-        Err(NonScalarKey { kind: "float" })
+        Err(NonScalarKey {
+            kind: "float".to_string()
+        })
     );
 }
 

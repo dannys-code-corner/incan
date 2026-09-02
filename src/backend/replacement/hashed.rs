@@ -45,7 +45,7 @@ use super::{ReplacementValue, value_kind};
 #[error("a {kind} value cannot key a hashed container in the replacement profile")]
 pub struct NonScalarKey {
     /// Short kind label of the refused value, for refusal messages.
-    pub kind: &'static str,
+    pub kind: String,
 }
 
 /// One hashed-container key in the replacement profile's collection-scalar domain.

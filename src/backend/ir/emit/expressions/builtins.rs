@@ -7,12 +7,15 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::super::super::expr::{BuiltinFn, IrExprKind, TypedExpr};
+use super::super::super::expr::{BuiltinFn, IrExprKind, Pattern, TypedExpr};
 use super::super::super::ownership::ValueUseSite;
-use super::super::super::types::{IrType, SetConstructorIteration};
+use super::super::super::types::{
+    IR_UNION_TYPE_NAME, IrType, SetConstructorIteration, isinstance_type_matches, isinstance_union_variant_indices,
+};
 use super::super::{EmitError, IrEmitter};
 use super::methods::iterator_methods::emit_iter_receiver;
 use incan_core::lang::builtins::{self, BuiltinFnId};
+use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
 
 /// Get the element type of a list.
@@ -105,6 +108,91 @@ fn emit_json_stringify(emitter: &IrEmitter<'_>, args: &[TypedExpr]) -> Result<To
             std::any::type_name_of_val(__incan_json_value),
         )
     }})
+}
+
+/// Build the exact generated-union variant pattern for one checked member index.
+fn isinstance_union_pattern(union_ty: &IrType, variant_index: usize) -> Result<Pattern, EmitError> {
+    let variant = union_ty.union_variant_path(variant_index).ok_or_else(|| {
+        EmitError::InternalInvariant("checked isinstance union lost its generated variant identity".to_string())
+    })?;
+    Ok(Pattern::Enum {
+        name: union_ty
+            .union_type_name()
+            .unwrap_or_else(|| IR_UNION_TYPE_NAME.to_string()),
+        variant,
+        fields: vec![Pattern::Wildcard],
+    })
+}
+
+/// Build every source-union variant pattern whose semantic identity satisfies one retained target.
+fn isinstance_union_patterns(union_ty: &IrType, target_ty: &IrType) -> Result<Option<Vec<Pattern>>, EmitError> {
+    let Some(indices) = isinstance_union_variant_indices(union_ty, target_ty) else {
+        return Ok(None);
+    };
+    indices
+        .into_iter()
+        .map(|index| isinstance_union_pattern(union_ty, index))
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
+}
+
+/// Collapse one or more matching alternatives into a single IR pattern.
+fn isinstance_alternatives(mut patterns: Vec<Pattern>) -> Pattern {
+    if patterns.len() == 1 {
+        patterns.remove(0)
+    } else {
+        Pattern::Or(patterns)
+    }
+}
+
+/// Emit a checked `isinstance(value, Target)` expression without materializing `Target` at runtime.
+fn emit_isinstance(emitter: &IrEmitter<'_>, args: &[TypedExpr]) -> Result<TokenStream, EmitError> {
+    let [value, target] = args else {
+        return Err(EmitError::InternalInvariant(format!(
+            "checked isinstance reached emission with {} operands instead of two",
+            args.len()
+        )));
+    };
+    let IrExprKind::TypeToken { ty: target_ty } = &target.kind else {
+        return Err(EmitError::InternalInvariant(
+            "checked isinstance reached emission without its retained target token".to_string(),
+        ));
+    };
+    let value_tokens = emitter.emit_expr(value)?;
+
+    let pattern = if let Some(patterns) = isinstance_union_patterns(&value.ty, target_ty)? {
+        Some(isinstance_alternatives(patterns))
+    } else if let IrType::Option(inner) = &value.ty {
+        if let Some(patterns) = isinstance_union_patterns(inner, target_ty)? {
+            let patterns = patterns
+                .into_iter()
+                .map(|pattern| Pattern::Enum {
+                    name: "Option".to_string(),
+                    variant: constructors::as_str(ConstructorId::Some).to_string(),
+                    fields: vec![pattern],
+                })
+                .collect();
+            Some(isinstance_alternatives(patterns))
+        } else if isinstance_type_matches(inner, target_ty) {
+            Some(Pattern::Enum {
+                name: "Option".to_string(),
+                variant: constructors::as_str(ConstructorId::Some).to_string(),
+                fields: vec![Pattern::Wildcard],
+            })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    if let Some(pattern) = pattern {
+        let pattern = emitter.emit_pattern(&pattern);
+        Ok(quote! { matches!(#value_tokens, #pattern) })
+    } else {
+        let result = isinstance_type_matches(&value.ty, target_ty);
+        Ok(quote! {{ let _ = #value_tokens; #result }})
+    }
 }
 
 /// Emit the builtin `zip(left, right)` as the same source-owned iterator model used by `.zip()`.
@@ -272,6 +360,7 @@ impl<'a> IrEmitter<'a> {
         args: &[TypedExpr],
     ) -> Result<TokenStream, EmitError> {
         match func {
+            BuiltinFn::IsInstance => emit_isinstance(self, args),
             BuiltinFn::Print => self.emit_print_call(args),
             BuiltinFn::Len => {
                 if let Some(arg) = args.first() {
@@ -783,6 +872,67 @@ mod tests {
             IrType::Int,
         ])));
         assert!(!enumerate_elem_can_copy(&IrType::Option(Box::new(IrType::Int))));
+    }
+
+    #[test]
+    fn checked_isinstance_matches_string_storage_in_direct_union_and_option_shapes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let frozen_union = IrType::NamedGeneric(IR_UNION_TYPE_NAME.to_string(), vec![IrType::FrozenStr, IrType::Int]);
+        let mixed_string_union = IrType::NamedGeneric(
+            IR_UNION_TYPE_NAME.to_string(),
+            vec![IrType::FrozenStr, IrType::String, IrType::Int],
+        );
+        let cases = [
+            ("direct_frozen", IrType::FrozenStr, false, 0),
+            ("direct_static", IrType::StaticStr, false, 0),
+            ("frozen_union", frozen_union.clone(), true, 1),
+            ("optional_frozen", IrType::Option(Box::new(IrType::FrozenStr)), true, 0),
+            ("optional_frozen_union", IrType::Option(Box::new(frozen_union)), true, 1),
+            ("mixed_string_union", mixed_string_union.clone(), true, 2),
+            (
+                "optional_mixed_string_union",
+                IrType::Option(Box::new(mixed_string_union)),
+                true,
+                2,
+            ),
+        ];
+
+        for (name, value_ty, expects_pattern, expected_union_variants) in cases {
+            let value = TypedExpr::new(
+                IrExprKind::Var {
+                    name: name.to_string(),
+                    access: VarAccess::Read,
+                    ref_kind: VarRefKind::Value,
+                },
+                value_ty,
+            );
+            let target = TypedExpr::new(
+                IrExprKind::TypeToken { ty: IrType::String },
+                IrType::TypeToken(Box::new(IrType::String)),
+            );
+            let rendered = emitter
+                .emit_builtin_call(&BuiltinFn::IsInstance, &[value, target])?
+                .to_string()
+                .split_whitespace()
+                .collect::<String>();
+            assert!(
+                !rendered.contains("false"),
+                "{name} disagreed with source str identity: {rendered}"
+            );
+            assert_eq!(
+                rendered.contains("matches!"),
+                expects_pattern,
+                "unexpected {name} shape: {rendered}"
+            );
+            assert_eq!(
+                rendered.matches("::V").count(),
+                expected_union_variants,
+                "{name} omitted or invented a semantically matching union variant: {rendered}"
+            );
+        }
+        Ok(())
     }
 
     /// The explicit canonical and retained legacy identities both emit a value matching `list[tuple[int, T]]`.

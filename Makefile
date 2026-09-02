@@ -426,7 +426,9 @@ shadow-comparison-evidence: test-prewarm-sdk
 		done; \
 		$(SHADOW_TEST_ENV) INCAN_SHADOW_OVEN_RECEIPT="$$core_receipt$(SHADOW_RECEIPT_PATH_SEPARATOR)$$json_receipt" \
 			cargo test --test shadow_comparison_tests --test parity_corpus_tests \
-				--test replacement_enumerate_zip_shadow_tests --test replacement_enumerate_zip_parity_cases
+				--test replacement_enumerate_zip_shadow_tests --test replacement_enumerate_zip_parity_cases \
+				--test replacement_scalar_conversion_shadow_tests \
+				--test replacement_isinstance_shadow_tests
 	@echo "\033[32m✓ the #1146 comparison ran under Oven authority and its corpus row is green\033[0m"
 
 # Oven home the staged comparison publishes its direct-rustc plan into, kept out of the developer's own store.

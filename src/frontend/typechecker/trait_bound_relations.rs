@@ -315,6 +315,7 @@ impl TypeChecker {
                         .map(|arg| substitute_resolved_type(arg, &substitutions))
                         .collect(),
                     module_path,
+                    implementation_type_params: Vec::new(),
                 };
                 self.type_bound_names_match(&candidate, required)
                     && self.type_bound_args_match(&candidate, required, bindings)
@@ -813,6 +814,7 @@ impl TypeChecker {
                     .map(|segment| (*segment).to_string())
                     .collect(),
             ),
+            implementation_type_params: Vec::new(),
         };
         adoptions
             .iter()

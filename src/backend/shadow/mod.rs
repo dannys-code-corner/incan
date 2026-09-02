@@ -78,28 +78,30 @@ use incan_core::lang::surface::constructors::{ConstructorId, as_str as construct
 
 use crate::backend::IrCodegen;
 use crate::backend::replacement::{
-    ProgramIo, ProgramOutput, ReplacementExecution, ReplacementExecutionError, ReplacementValue,
-    execute_prevalidated_free_function_with_io, prepare_free_function_execution,
+    ProgramIo, ProgramOutput, ReplacementExecution, ReplacementExecutionError, ReplacementNumericValue,
+    ReplacementValue, execute_prevalidated_free_function_with_io, prepare_free_function_execution,
 };
 use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackPolicy, ShadowComparisonState, digest_output,
     finalize_receipt, resolve_execution, select_backend,
 };
 use incan_semantics_core::body_ir::BodyIrModule;
+use incan_semantics_core::{IncanPrimitiveType, IncanType};
 
 use crate::frontend::body_ir::{apply_body_ir_input_contract, build_body_ir_module_v0};
 use crate::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION;
-use crate::frontend::symbols::ResolvedType;
 use crate::frontend::typechecker::TypeChecker;
 use crate::frontend::{lexer, parser};
 use crate::provider::ProviderPlan;
+use incan_core::lang::types::numerics::{self, NumericTypeId};
+use incan_core::numeric_values::{decimal_value_fits, format_decimal_value, parse_decimal_literal_body};
 
 /// Content-stable identity of the one comparison profile this module implements.
 ///
 /// Recorded inside [`ShadowComparisonState::Matched`] and [`ShadowComparisonState::Diverged`] so a later reader
 /// can tell *which* comparison a receipt is claiming, and so widening the profile forces a new identity rather
 /// than silently reinterpreting old evidence.
-pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_scalar_free_function.v1";
+pub const SHADOW_COMPARISON_PROFILE_ID: &str = "incan.shadow_comparison.direct_scalar_free_function.v2";
 
 /// Reason a shadow request over a program entrypoint falls outside this profile.
 ///
@@ -168,7 +170,7 @@ impl ShadowLegacyMaterialization {
 }
 
 /// Exact first token in a source-authored typed result report.
-const RESULT_REPORT_VERSION: &str = "incan-shadow-result-v1";
+const RESULT_REPORT_VERSION: &str = "incan-shadow-result-v2";
 
 /// Fresh root bindings for one generated legacy result-report wrapper.
 ///
@@ -250,6 +252,12 @@ const REPLACEMENT_FAILURE_IDENTITY_TAG: &str = "incan.shadow_comparison.replacem
 pub enum FunctionResultKind {
     /// An Incan `int` result.
     Int,
+    /// An ordinary Incan `float` result.
+    Float,
+    /// An explicit canonical sized numeric result.
+    Numeric(NumericTypeId),
+    /// A checked fixed-scale decimal result.
+    Decimal { precision: u8, scale: u8 },
     /// An Incan `bool` result.
     Bool,
     /// An owned Incan `str` result.
@@ -260,12 +268,15 @@ pub enum FunctionResultKind {
 
 impl FunctionResultKind {
     /// The stable report label for this checked scalar kind.
-    fn report_label(self) -> &'static str {
+    fn report_label(self) -> String {
         match self {
-            Self::Int => "int",
-            Self::Bool => "bool",
-            Self::Str => "str",
-            Self::Unit => "none",
+            Self::Int => "int".to_string(),
+            Self::Float => "float".to_string(),
+            Self::Numeric(kind) => numerics::as_str(kind).to_string(),
+            Self::Decimal { precision, scale } => format!("decimal[{precision},{scale}]"),
+            Self::Bool => "bool".to_string(),
+            Self::Str => "str".to_string(),
+            Self::Unit => "none".to_string(),
         }
     }
 
@@ -273,7 +284,9 @@ impl FunctionResultKind {
     fn report_expression(self, result_local: &str) -> String {
         let header = result_report_header(self);
         match self {
-            Self::Int | Self::Bool => format!("{header:?} + str({result_local})"),
+            Self::Int | Self::Float | Self::Numeric(_) | Self::Decimal { .. } | Self::Bool => {
+                format!("{header:?} + str({result_local})")
+            }
             Self::Str => format!("{header:?} + {result_local}"),
             Self::Unit => format!("{header:?}"),
         }
@@ -300,6 +313,9 @@ impl FunctionResultKind {
                 }
                 text.to_string()
             }
+            Self::Float => canonical_f64_payload(payload, "float")?,
+            Self::Numeric(kind) => canonical_numeric_payload(kind, payload)?,
+            Self::Decimal { precision, scale } => canonical_decimal_payload(payload, precision, scale)?,
             Self::Bool => match payload {
                 b"true" => "true".to_string(),
                 b"false" => "false".to_string(),
@@ -330,6 +346,19 @@ impl FunctionResultKind {
     fn observe_replacement_value(self, value: &ReplacementValue) -> Result<TypedFunctionResult, ShadowUnavailable> {
         let rendered = match (self, value) {
             (Self::Int, ReplacementValue::Int(value)) => value.to_string(),
+            (Self::Float, ReplacementValue::Float(value)) => value.to_string(),
+            (Self::Numeric(expected), ReplacementValue::Numeric(value))
+                if replacement_numeric_kind(value) == Some(expected) =>
+            {
+                value.observable_text()
+            }
+            (
+                Self::Decimal {
+                    precision: expected_precision,
+                    scale: expected_scale,
+                },
+                ReplacementValue::Numeric(ReplacementNumericValue::Decimal { precision, scale, .. }),
+            ) if *precision == expected_precision && *scale == expected_scale => value.observable_text(),
             (Self::Bool, ReplacementValue::Bool(value)) => value.to_string(),
             (Self::Str, ReplacementValue::Str(value)) => value.clone(),
             (Self::Unit, ReplacementValue::Unit) => constructor_name(ConstructorId::None).to_string(),
@@ -353,6 +382,123 @@ impl FunctionResultKind {
 /// this header and is otherwise preserved verbatim.
 fn result_report_header(kind: FunctionResultKind) -> String {
     format!("{RESULT_REPORT_VERSION}:{}:", kind.report_label())
+}
+
+/// Project a direct-route binary-numeric result to its exact checked kind.
+fn replacement_numeric_kind(value: &ReplacementNumericValue) -> Option<NumericTypeId> {
+    match value {
+        ReplacementNumericValue::Signed { kind, .. } | ReplacementNumericValue::Unsigned { kind, .. } => Some(*kind),
+        ReplacementNumericValue::F32(_) => Some(NumericTypeId::F32),
+        ReplacementNumericValue::F64(_) => Some(NumericTypeId::F64),
+        ReplacementNumericValue::Decimal { .. } => None,
+    }
+}
+
+/// Decode one typed result payload as strict UTF-8 while retaining its kind in diagnostics.
+fn payload_text<'payload>(payload: &'payload [u8], kind: &str) -> Result<&'payload str, ShadowUnavailable> {
+    std::str::from_utf8(payload).map_err(|error| {
+        ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not UTF-8, so it cannot be compared: {error}"
+        ))
+    })
+}
+
+/// Parse a payload and require the original bytes to equal that type's canonical Display spelling.
+fn canonical_display_payload<T>(payload: &[u8], kind: &str) -> Result<String, ShadowUnavailable>
+where
+    T: std::str::FromStr + ToString,
+    T::Err: std::fmt::Display,
+{
+    let text = payload_text(payload, kind)?;
+    let parsed = text.parse::<T>().map_err(|error| {
+        ShadowUnavailable::new(format!("the legacy `{kind}` result payload is not canonical: {error}"))
+    })?;
+    if parsed.to_string() != text {
+        return Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not its canonical Display spelling"
+        )));
+    }
+    Ok(text.to_string())
+}
+
+/// Decode one canonical finite f32 result payload.
+fn canonical_f32_payload(payload: &[u8], kind: &str) -> Result<String, ShadowUnavailable> {
+    let text = canonical_display_payload::<f32>(payload, kind)?;
+    if text.parse::<f32>().is_ok_and(f32::is_finite) {
+        Ok(text)
+    } else {
+        Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not a finite binary float"
+        )))
+    }
+}
+
+/// Decode one canonical finite f64 result payload.
+fn canonical_f64_payload(payload: &[u8], kind: &str) -> Result<String, ShadowUnavailable> {
+    let text = canonical_display_payload::<f64>(payload, kind)?;
+    if text.parse::<f64>().is_ok_and(f64::is_finite) {
+        Ok(text)
+    } else {
+        Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not a finite binary float"
+        )))
+    }
+}
+
+/// Decode an exact binary-numeric payload with the parser for its retained numeric identity.
+fn canonical_numeric_payload(kind: NumericTypeId, payload: &[u8]) -> Result<String, ShadowUnavailable> {
+    let label = numerics::as_str(kind);
+    match kind {
+        NumericTypeId::I8 => canonical_integer_payload::<i8>(payload, label),
+        NumericTypeId::I16 => canonical_integer_payload::<i16>(payload, label),
+        NumericTypeId::I32 => canonical_integer_payload::<i32>(payload, label),
+        NumericTypeId::I64 => canonical_integer_payload::<i64>(payload, label),
+        NumericTypeId::I128 => canonical_integer_payload::<i128>(payload, label),
+        NumericTypeId::ISize => canonical_integer_payload::<isize>(payload, label),
+        NumericTypeId::U8 => canonical_integer_payload::<u8>(payload, label),
+        NumericTypeId::U16 => canonical_integer_payload::<u16>(payload, label),
+        NumericTypeId::U32 => canonical_integer_payload::<u32>(payload, label),
+        NumericTypeId::U64 => canonical_integer_payload::<u64>(payload, label),
+        NumericTypeId::U128 => canonical_integer_payload::<u128>(payload, label),
+        NumericTypeId::USize => canonical_integer_payload::<usize>(payload, label),
+        NumericTypeId::F32 => canonical_f32_payload(payload, label),
+        NumericTypeId::F64 => canonical_f64_payload(payload, label),
+        NumericTypeId::Bool => Err(ShadowUnavailable::new(
+            "bool reached the typed numeric result-report channel",
+        )),
+    }
+}
+
+/// Decode one exact integer payload and enforce its target type's range and canonical spelling.
+fn canonical_integer_payload<T>(payload: &[u8], kind: &str) -> Result<String, ShadowUnavailable>
+where
+    T: std::str::FromStr + ToString,
+    T::Err: std::fmt::Display,
+{
+    canonical_display_payload::<T>(payload, kind)
+}
+
+/// Decode a decimal payload while enforcing checked precision, scale, range, and Display spelling.
+fn canonical_decimal_payload(payload: &[u8], precision: u8, scale: u8) -> Result<String, ShadowUnavailable> {
+    let kind = format!("decimal[{precision},{scale}]");
+    let text = payload_text(payload, &kind)?;
+    let Some(parsed) = parse_decimal_literal_body(text) else {
+        return Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not a canonical in-range decimal spelling"
+        )));
+    };
+    if !decimal_value_fits(precision, scale, parsed.coefficient, parsed.literal_scale) {
+        return Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not a canonical in-range decimal spelling"
+        )));
+    }
+    let canonical = format_decimal_value(parsed.coefficient, parsed.literal_scale);
+    if canonical != text {
+        return Err(ShadowUnavailable::new(format!(
+            "the legacy `{kind}` result payload is not its canonical Display spelling"
+        )));
+    }
+    Ok(text.to_string())
 }
 
 /// One typed result recovered through the separate source-authored report channel.
@@ -442,7 +588,15 @@ impl ShadowComparisonProfile {
     #[must_use]
     pub fn profile_identity(&self) -> String {
         let arguments = match self.argument_literals() {
-            Ok(literals) => literals.join(", "),
+            Ok(_) => {
+                let identities = self
+                    .arguments
+                    .iter()
+                    .map(ReplacementValue::receipt_identity_text)
+                    .collect::<Vec<_>>();
+                let identity_parts = identities.iter().map(String::as_str).collect::<Vec<_>>();
+                digest_output(&identity_parts)
+            }
             Err(_) => "<unrepresentable arguments>".to_string(),
         };
         digest_output(&[
@@ -534,19 +688,60 @@ impl ShadowComparisonProfile {
 
 /// Render one scalar argument as an Incan source literal.
 ///
-/// Only the scalars the profile can spell in source are accepted. A collection, tuple, range, float, or unit
+/// Only the scalars the profile can spell in source are accepted. A collection, tuple, range, or unit
 /// argument has no literal form this profile is willing to synthesize, so it becomes an explicit unavailable
 /// reason rather than a guessed spelling that would silently change what was executed.
 fn argument_literal(value: &ReplacementValue) -> Result<String, ShadowUnavailable> {
     match value {
         ReplacementValue::Int(value) => Ok(value.to_string()),
+        ReplacementValue::Float(value) => finite_float_literal(*value, "float"),
+        ReplacementValue::Numeric(value) => numeric_argument_literal(value),
         ReplacementValue::Bool(value) => Ok(value.to_string()),
         ReplacementValue::Str(value) => incan_string_literal(value),
         other => Err(ShadowUnavailable::new(format!(
-            "the bounded source-observable comparison profile can only pass `int`, `bool`, and `str` arguments as \
+            "the bounded source-observable comparison profile can only pass checked scalar arguments as \
              source literals; got {other:?}"
         ))),
     }
+}
+
+/// Render one finite binary float as a source token that cannot be reclassified as an integer literal.
+fn finite_float_literal<T>(value: T, kind: &str) -> Result<String, ShadowUnavailable>
+where
+    T: Copy + std::fmt::Display + Into<f64>,
+{
+    if !value.into().is_finite() {
+        return Err(ShadowUnavailable::new(format!(
+            "the bounded source-observable comparison profile refuses a non-finite `{kind}` argument"
+        )));
+    }
+    let mut literal = value.to_string();
+    if !literal.contains(['.', 'e', 'E']) {
+        literal.push_str(".0");
+    }
+    Ok(literal)
+}
+
+/// Render one checked exact numeric through the source spelling its declared parameter type will contextualize.
+fn numeric_argument_literal(value: &ReplacementNumericValue) -> Result<String, ShadowUnavailable> {
+    if !value.is_valid() {
+        return Err(malformed_numeric_argument(value));
+    }
+    match value {
+        ReplacementNumericValue::Signed { value, .. } => Ok(value.to_string()),
+        ReplacementNumericValue::Unsigned { value, .. } => Ok(value.to_string()),
+        ReplacementNumericValue::F32(value) => finite_float_literal(*value, "f32"),
+        ReplacementNumericValue::F64(value) => finite_float_literal(*value, "f64"),
+        ReplacementNumericValue::Decimal { .. } => Ok(format!("{}d", value.observable_text())),
+    }
+}
+
+/// Build the comparison-profile refusal for a malformed direct typed-numeric argument.
+fn malformed_numeric_argument(value: &ReplacementNumericValue) -> ShadowUnavailable {
+    ShadowUnavailable::new(format!(
+        "the bounded source-observable comparison profile refuses a malformed `{}` argument",
+        value.type_name()
+    ))
 }
 
 /// Escape one string argument into an Incan double-quoted literal.
@@ -1213,38 +1408,49 @@ impl PreparedShadowProfile {
             .map_err(|errors| ShadowUnavailable::new(format!("comparison source did not typecheck: {errors:?}")))?;
         refuse_source_main(&checker)?;
         let wrapper_identifiers = GeneratedWrapperIdentifiers::fresh_from_checked_source(&checker)?;
-        let binding = checker
-            .type_info()
-            .declarations
-            .function_bindings_by_span
-            .get(&(function_declaration.span.start, function_declaration.span.end))
-            .ok_or_else(|| {
-                ShadowUnavailable::new(format!(
-                    "the typechecker did not retain a return binding for comparison function `{}`",
-                    profile.function
-                ))
-            })?;
-        let result_kind = match &binding.return_type {
-            ResolvedType::Int => FunctionResultKind::Int,
-            ResolvedType::Bool => FunctionResultKind::Bool,
-            ResolvedType::Str => FunctionResultKind::Str,
-            ResolvedType::Unit => FunctionResultKind::Unit,
-            other => {
-                return Err(ShadowUnavailable::new(format!(
-                    "the bounded source-observable comparison profile requires a checked `int`, `bool`, `str`, \
-                     or `None` return type; `{}` returns {other:?}",
-                    profile.function
-                )));
-            }
-        };
         let body_ir = build_body_ir_module_v0(&program, &module_path, checker.type_info());
         prepare_free_function_execution(&body_ir, profile.function(), &profile.arguments)
             .map_err(replacement_profile_unavailable)?;
+        let selected_body = body_ir
+            .bodies
+            .iter()
+            .find(|body| {
+                body.span.start == function_declaration.span.start && body.span.end == function_declaration.span.end
+            })
+            .ok_or_else(|| {
+                ShadowUnavailable::new(format!(
+                    "Body IR did not retain the checked declaration for comparison function `{}`",
+                    profile.function
+                ))
+            })?;
+        let result_kind = function_result_kind(&selected_body.return_type, &profile.function)?;
         Ok(Self {
             body_ir,
             result_kind,
             wrapper_identifiers,
         })
+    }
+}
+
+/// Project the selected Body-IR declaration's checked return fact into the result-report grammar.
+fn function_result_kind(ty: &IncanType, function: &str) -> Result<FunctionResultKind, ShadowUnavailable> {
+    match ty {
+        IncanType::Primitive(IncanPrimitiveType::Int) => Ok(FunctionResultKind::Int),
+        IncanType::Primitive(IncanPrimitiveType::Float) => Ok(FunctionResultKind::Float),
+        IncanType::Primitive(IncanPrimitiveType::Numeric(kind)) if *kind != NumericTypeId::Bool => {
+            Ok(FunctionResultKind::Numeric(*kind))
+        }
+        IncanType::Decimal { precision, scale } => Ok(FunctionResultKind::Decimal {
+            precision: *precision,
+            scale: *scale,
+        }),
+        IncanType::Primitive(IncanPrimitiveType::Bool) => Ok(FunctionResultKind::Bool),
+        IncanType::Primitive(IncanPrimitiveType::Str) => Ok(FunctionResultKind::Str),
+        IncanType::Primitive(IncanPrimitiveType::Unit) => Ok(FunctionResultKind::Unit),
+        other => Err(ShadowUnavailable::new(format!(
+            "the bounded source-observable comparison profile requires a checked scalar or `None` return type; \
+             `{function}` returns {other:?}"
+        ))),
     }
 }
 

@@ -4,7 +4,7 @@ use super::super::super::TypedExpr;
 use super::super::super::expr::{
     IrCallArg, IrCallArgKind, IrExprKind, MatchArm, MatchArmBinding, Pattern, VarAccess, VarRefKind,
 };
-use super::super::super::types::IrType;
+use super::super::super::types::{IrType, union_member_type_matches};
 use super::super::AstLowering;
 use super::super::errors::LoweringError;
 use super::super::types::union_ir_type;
@@ -98,7 +98,7 @@ impl AstLowering {
             for (target_index, target_member) in target_members.iter().enumerate() {
                 let source_index = source_members
                     .iter()
-                    .position(|member| Self::match_union_member_matches(member, target_member))?;
+                    .position(|member| union_member_type_matches(member, target_member))?;
                 variants.push(UnionPatternVariant {
                     source_index,
                     target_index,
@@ -110,7 +110,7 @@ impl AstLowering {
 
         let source_index = source_members
             .iter()
-            .position(|member| Self::match_union_member_matches(member, &target_ty))?;
+            .position(|member| union_member_type_matches(member, &target_ty))?;
         Some(UnionPatternTarget {
             target_ty: source_members[source_index].clone(),
             variants: vec![UnionPatternVariant {
@@ -119,15 +119,6 @@ impl AstLowering {
                 source_ty: source_members[source_index].clone(),
             }],
         })
-    }
-
-    /// Return whether a union member can satisfy a target pattern type.
-    fn match_union_member_matches(member: &IrType, target_ty: &IrType) -> bool {
-        member == target_ty
-            || matches!(
-                (member, target_ty),
-                (IrType::String, IrType::StaticStr | IrType::StrRef | IrType::FrozenStr)
-            )
     }
 
     /// Return payload types for a constructor pattern when the scrutinee type is known.
@@ -208,7 +199,7 @@ impl AstLowering {
                         !target
                             .variants
                             .iter()
-                            .any(|variant| Self::match_union_member_matches(member, &variant.source_ty))
+                            .any(|variant| union_member_type_matches(member, &variant.source_ty))
                     });
                 }
             }

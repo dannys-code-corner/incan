@@ -4,13 +4,14 @@
 
 use std::path::Path;
 
-use incan::backend::replacement::ReplacementValue;
+use incan::backend::replacement::{ReplacementNumericValue, ReplacementValue};
 use incan::backend::selection::{FallbackOutcome, ShadowComparisonState};
 use incan::backend::shadow::legacy_oven::LegacyOvenCapability;
 use incan::backend::shadow::{
     FunctionResultKind, RouteEvidence, ShadowComparison, ShadowComparisonProfile, SourceObservable,
     TypedFunctionResult, compare_source_observable,
 };
+use incan_core::lang::types::numerics::NumericTypeId;
 
 #[path = "support/shadow_capability.rs"]
 mod shadow_capability;
@@ -20,6 +21,7 @@ const INT_CONVERSION_FAILURE_SRC: &str =
 const FLOAT_CONVERSION_FAILURE_SRC: &str = "def parse(value: str) -> str:\n    println(\"before conversion\")\n    parsed = float(value)\n    return str(parsed)\n";
 const FLOAT_LITERAL_DISPLAY_SRC: &str = "def render() -> str:\n    return f\"{str(1_000.50)} {str(1.25e2)}\"\n";
 const FLOAT_CAST_EDGE_SRC: &str = "def render() -> str:\n    nan = float(\"NaN\")\n    positive_infinity = float(\"inf\")\n    negative_infinity = float(\"-inf\")\n    out_of_range = float(\"1e9999\")\n    negative_fraction = float(\"-3.9\")\n    return f\"{int(nan)} {int(positive_infinity)} {int(negative_infinity)} {int(out_of_range)} {int(3.9)} {int(negative_fraction)}\"\n";
+const TYPED_CAST_EDGE_SRC: &str = "def minimum() -> i128:\n    return -170141183460469231731687303715884105728\n\ndef render() -> str:\n    low = minimum()\n    wide: u128 = 340282366920938463463374607431768211455\n    return f\"{low} {int(low)} {int(wide)} {float(low)} {float(wide)}\"\n";
 const ADVERSARIAL_PARSE_INPUT: &str = "AssertionError overflow division by zero";
 const SCALAR_CONVERSION_MATRIX_SRC: &str = r#"
 def convert() -> str:
@@ -182,6 +184,65 @@ fn ordinary_float_literal_display_matches_the_native_route() -> Result<(), Box<d
     Ok(())
 }
 
+/// Exact numeric arguments, result type, Display output, and typed result transport must agree with native code.
+#[test]
+fn typed_numeric_carriers_match_the_native_route_without_widening() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
+        eprintln!("skipping: {reason}");
+        return Ok(());
+    }
+    let rounded = 1.234_567_9_f32;
+    let cases = vec![
+        (
+            "def identity(value: f32) -> f32:\n    println(value)\n    return value\n",
+            ReplacementValue::Numeric(ReplacementNumericValue::F32(rounded)),
+            FunctionResultKind::Numeric(NumericTypeId::F32),
+            rounded.to_string(),
+        ),
+        (
+            "def identity(value: u128) -> u128:\n    println(value)\n    return value\n",
+            ReplacementValue::Numeric(ReplacementNumericValue::Unsigned {
+                kind: NumericTypeId::U128,
+                value: u128::MAX,
+            }),
+            FunctionResultKind::Numeric(NumericTypeId::U128),
+            u128::MAX.to_string(),
+        ),
+        (
+            "def identity(value: decimal[6, 2]) -> decimal[6, 2]:\n    println(value)\n    return value\n",
+            ReplacementValue::Numeric(ReplacementNumericValue::Decimal {
+                precision: 6,
+                scale: 2,
+                coefficient: 1990,
+                literal_scale: 2,
+            }),
+            FunctionResultKind::Decimal { precision: 6, scale: 2 },
+            "19.90".to_string(),
+        ),
+    ];
+
+    for (source, argument, kind, value) in cases {
+        let workspace = tempfile::tempdir()?;
+        let profile = ShadowComparisonProfile::new(source, "identity", vec![argument]);
+        let comparison = compare(&profile, workspace.path())?;
+        assert!(comparison.matched(), "{:?}", comparison.state);
+        let (legacy, replacement) = route_evidence(&comparison)?;
+        let expected = SourceObservable::Completed {
+            result: TypedFunctionResult {
+                kind,
+                value: value.clone(),
+            },
+        };
+        assert_eq!(legacy.observation.observable, expected);
+        assert_eq!(replacement.observation.observable, legacy.observation.observable);
+        assert_eq!(legacy.observation.stdout, format!("{value}\n").as_bytes());
+        assert_eq!(replacement.observation.stdout, legacy.observation.stdout);
+        assert!(legacy.observation.stderr.is_empty());
+        assert!(replacement.observation.stderr.is_empty());
+    }
+    Ok(())
+}
+
 /// Existing Rust parser and `as i64` edge behavior is observed through two independent routes, not redefined here.
 #[test]
 fn float_parser_and_int_cast_edges_match_the_native_route() -> Result<(), Box<dyn std::error::Error>> {
@@ -199,6 +260,41 @@ fn float_parser_and_int_cast_edges_match_the_native_route() -> Result<(), Box<dy
         result: TypedFunctionResult {
             kind: FunctionResultKind::Str,
             value: "0 9223372036854775807 -9223372036854775808 9223372036854775807 3 -3".to_string(),
+        },
+    };
+    assert_eq!(legacy.observation.observable, expected);
+    assert_eq!(replacement.observation.observable, legacy.observation.observable);
+    assert!(legacy.observation.stdout.is_empty());
+    assert!(replacement.observation.stdout.is_empty());
+    assert!(legacy.observation.stderr.is_empty());
+    assert!(replacement.observation.stderr.is_empty());
+    Ok(())
+}
+
+/// i128 minimum transport and typed integer-to-int/float casts must agree with the native emitter at its edges.
+#[test]
+fn typed_integer_transport_and_cast_edges_match_the_native_route() -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(reason) = shadow_capability::unstaged_legacy_route_reason()? {
+        eprintln!("skipping: {reason}");
+        return Ok(());
+    }
+    let workspace = tempfile::tempdir()?;
+    let profile = ShadowComparisonProfile::new(TYPED_CAST_EDGE_SRC, "render", vec![]);
+    let comparison = compare(&profile, workspace.path())?;
+
+    assert!(comparison.matched(), "{:?}", comparison.state);
+    let (legacy, replacement) = route_evidence(&comparison)?;
+    let expected = SourceObservable::Completed {
+        result: TypedFunctionResult {
+            kind: FunctionResultKind::Str,
+            value: format!(
+                "{} {} {} {} {}",
+                i128::MIN,
+                i128::MIN as i64,
+                u128::MAX as i64,
+                i128::MIN as f64,
+                u128::MAX as f64
+            ),
         },
     };
     assert_eq!(legacy.observation.observable, expected);

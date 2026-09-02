@@ -10,10 +10,12 @@ use sha2::{Digest, Sha256};
 use crate::frontend::ast::{Expr, ParamKind, Span, Spanned, Visibility};
 use crate::frontend::library_exports::{CheckedParamDefault, CheckedPresetValue};
 use crate::frontend::symbols::{
-    CallableParam, FunctionOverloadInfo, NewtypePrimitiveConstraint, ResolvedType, TypeBoundInfo,
+    CallableParam, FunctionOverloadInfo, ImplementationTypeParamInfo, NewtypePrimitiveConstraint, ResolvedType,
+    TypeBoundInfo,
 };
 use crate::frontend::testing_markers::TestingFixtureScope;
 use incan_core::interop::{CoercionPolicy, RustFunctionSig};
+use incan_core::lang::builtins::BuiltinFnId;
 use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId, link_capability_as_str, scalar_type_as_str};
 use incan_core::lang::surface::string_methods::StringMethodId;
 use incan_core::lang::types::collections::{self as collection_types, CollectionTypeId};
@@ -645,6 +647,11 @@ pub struct DerivationArtifacts {
 pub struct ExpressionArtifacts {
     /// Map from expression span (start,end) -> resolved type.
     pub expr_types: HashMap<(usize, usize), ResolvedType>,
+    /// Final checked type of an assignment binding, keyed by the assignment statement span.
+    ///
+    /// This differs from the initializer expression type when contextual numeric typing or a validated coercion
+    /// selects the annotated destination type. Body IR consumes this fact instead of reconstructing annotations.
+    pub assignment_binding_types: HashMap<(usize, usize), ResolvedType>,
     /// Type names that implement `Awaitable[T]` by delegating to one concrete awaitable field.
     ///
     /// Lowering consumes this so `await wrapper` and `race for` arms can emit `wrapper.<field>.await` instead of
@@ -1101,6 +1108,11 @@ pub enum PartialProjectionTargetKind {
 /// Call-site semantic decisions selected by the typechecker.
 #[derive(Debug, Default, Clone)]
 pub struct CallArtifacts {
+    /// Compiler-owned builtin selected for a call, keyed by the full call span.
+    ///
+    /// This distinguishes an explicit `std.builtins.name(...)` or unshadowed ambient builtin from a source/import
+    /// declaration with the same spelling without asking lowering to reconstruct name resolution.
+    pub resolved_builtin_calls: HashMap<(usize, usize), BuiltinFnId>,
     /// RFC 038: unpack operands whose static shape has been proven by call binding.
     ///
     /// Lowering consumes these plans to rewrite fixed/static unpack operands into ordinary IR call arguments. This
@@ -1118,6 +1130,12 @@ pub struct CallArtifacts {
     /// that [`AstLowering::lower_expr`](crate::backend::ir::lower::AstLowering::lower_expr) receives as `expr_span`
     /// for those nodes, so lookup stays consistent across phases without holding AST node identities.
     pub call_site_monomorph_type_args: HashMap<(usize, usize), Vec<ResolvedType>>,
+    /// Checked target facts for compiler-owned `isinstance(value, Target)` calls, keyed by the full call span.
+    ///
+    /// `Target` is source syntax for a type rather than a runtime argument. Retaining the resolved type, optional
+    /// declaration identity, and target-local span here lets Body IR represent the test without reparsing a name or
+    /// asking a runtime to materialize arbitrary type values.
+    pub isinstance_targets: HashMap<(usize, usize), IsInstanceTargetInfo>,
     /// RFC 038: Rest-aware callable signatures keyed by full call expression span.
     ///
     /// Function-value calls can recover this from the callee expression type, but method calls need a snapshot because
@@ -1162,6 +1180,20 @@ pub struct CallArtifacts {
     pub resolved_string_helper_calls: HashMap<(usize, usize), StringMethodId>,
     /// Direct closures whose contextual parameter types came from a canonical source `CallableN` bound.
     pub source_callable_closures: HashSet<(usize, usize)>,
+}
+
+/// Typechecker-owned meaning of one `isinstance` target expression.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IsInstanceTargetInfo {
+    /// Alias-expanded semantic target type.
+    pub ty: ResolvedType,
+    /// Canonical declaration identity for a nominal target, when resolution proved one.
+    ///
+    /// Compiler-owned primitives and aliases expanded to primitives need no declaration identity. An absent identity
+    /// on another target is a visible downstream refusal, never permission to dispatch from its source spelling.
+    pub canonical: Option<CanonicalSymbolId>,
+    /// Original source range of the target expression, including parentheses when they were written.
+    pub span: Span,
 }
 
 /// Test-runner and fixture metadata extracted during typechecking.
@@ -1238,6 +1270,8 @@ pub enum ResolvedMethodDispatch {
         module_path: Option<Vec<String>>,
         /// Concrete trait type arguments selected by overload resolution.
         type_args: Vec<ResolvedType>,
+        /// Compiler-resolved generic header attached to the exact selected implementation.
+        implementation_type_params: Vec<ImplementationTypeParamInfo>,
         /// Whether the selected trait method declares `mut self`.
         receiver_is_mutable: bool,
     },
@@ -1585,6 +1619,11 @@ impl TypeCheckInfo {
         self.expressions.expr_types.get(&(span.start, span.end))
     }
 
+    /// Return the final compiler-selected type of a binding introduced by an assignment statement.
+    pub fn assignment_binding_type(&self, span: Span) -> Option<&ResolvedType> {
+        self.expressions.assignment_binding_types.get(&(span.start, span.end))
+    }
+
     /// Return exact Rust parameter displays recorded for a closure expression, if any.
     pub fn closure_param_type_displays(&self, span: Span) -> Option<&[String]> {
         self.rust
@@ -1851,6 +1890,33 @@ impl TypeCheckInfo {
             .copied()
     }
 
+    /// Return the checked target fact for one compiler-owned `isinstance` call.
+    pub fn isinstance_target(&self, call_span: Span) -> Option<&IsInstanceTargetInfo> {
+        self.calls.isinstance_targets.get(&(call_span.start, call_span.end))
+    }
+
+    /// Return the compiler-owned builtin selected for one checked call.
+    pub fn resolved_builtin_call(&self, call_span: Span) -> Option<BuiltinFnId> {
+        self.calls
+            .resolved_builtin_calls
+            .get(&(call_span.start, call_span.end))
+            .copied()
+    }
+
+    /// Record the compiler-owned builtin selected for one checked call.
+    pub(crate) fn record_resolved_builtin_call(&mut self, call_span: Span, builtin: BuiltinFnId) {
+        self.calls
+            .resolved_builtin_calls
+            .insert((call_span.start, call_span.end), builtin);
+    }
+
+    /// Record the checked target fact for one compiler-owned `isinstance` call.
+    pub(crate) fn record_isinstance_target(&mut self, call_span: Span, target: IsInstanceTargetInfo) {
+        self.calls
+            .isinstance_targets
+            .insert((call_span.start, call_span.end), target);
+    }
+
     /// Record the canonical collection constructor selected for one source call.
     pub(crate) fn record_resolved_collection_constructor(&mut self, span: Span, constructor: CollectionTypeId) {
         self.calls
@@ -2066,7 +2132,7 @@ pub(crate) fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
         ResolvedType::Never => IncanType::Never,
         ResolvedType::Int => IncanType::Primitive(IncanPrimitiveType::Int),
         ResolvedType::Float => IncanType::Primitive(IncanPrimitiveType::Float),
-        ResolvedType::Numeric(_) => IncanType::Primitive(IncanPrimitiveType::Numeric(ty.to_string())),
+        ResolvedType::Numeric(id) => IncanType::Primitive(IncanPrimitiveType::Numeric(*id)),
         ResolvedType::Bool => IncanType::Primitive(IncanPrimitiveType::Bool),
         ResolvedType::Str => IncanType::Primitive(IncanPrimitiveType::Str),
         ResolvedType::Bytes => IncanType::Primitive(IncanPrimitiveType::Bytes),
@@ -2086,6 +2152,18 @@ pub(crate) fn semantic_type_from_resolved(ty: &ResolvedType) -> IncanType {
         },
         ResolvedType::Unit => IncanType::Primitive(IncanPrimitiveType::Unit),
         ResolvedType::Named(name) => IncanType::Named(name.clone()),
+        ResolvedType::Generic(base, args)
+            if incan_core::lang::types::numerics::decimal_constructor_from_str(base).is_some()
+                && matches!(args.as_slice(), [ResolvedType::TypeVar(_), ResolvedType::TypeVar(_)]) =>
+        {
+            let [ResolvedType::TypeVar(precision), ResolvedType::TypeVar(scale)] = args.as_slice() else {
+                unreachable!("guard proves decimal type arguments")
+            };
+            match (precision.parse(), scale.parse()) {
+                (Ok(precision), Ok(scale)) => IncanType::Decimal { precision, scale },
+                _ => IncanType::Unknown,
+            }
+        }
         ResolvedType::Generic(base, args) => IncanType::Generic {
             base: base.clone(),
             args: args.iter().map(semantic_type_from_resolved).collect(),

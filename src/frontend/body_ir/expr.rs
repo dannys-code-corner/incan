@@ -33,7 +33,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 let (fact, last_use) = self.ownership_fact_for_place(&place, &ty);
                 bir::Operand::place(place, fact, last_use)
             }
-            ast::Expr::Literal(lit) => bir::Operand::Constant(lower_literal(lit)),
+            ast::Expr::Literal(lit) => bir::Operand::Constant(lower_checked_literal(lit, &self.resolve_ty(expr.span))),
             ast::Expr::Paren(inner) => self.lower_expr_to_operand(inner, scope, out),
             ast::Expr::Field(base, name) => {
                 if let Some(target) = self.local_fieldless_enum_variant_target(base, name) {
@@ -69,6 +69,23 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
                 bir::Operand::place(place, fact, last_use)
             }
             ast::Expr::Slice(base, slice) => self.lower_slice(base, slice, expr.span, scope, out),
+            ast::Expr::Unary(ast::UnaryOp::Neg, inner)
+                if matches!(
+                    &inner.node,
+                    ast::Expr::Literal(ast::Literal::Int(_) | ast::Literal::Float(_))
+                ) =>
+            {
+                let ty = self.resolve_ty(expr.span);
+                let ast::Expr::Literal(literal) = &inner.node else {
+                    unreachable!("guard proves literal")
+                };
+                if let Some(constant) = lower_checked_negative_literal(literal, &ty) {
+                    bir::Operand::Constant(constant)
+                } else {
+                    let operand = self.lower_expr_to_operand(inner, scope, out);
+                    self.push_assign_temp(bir::Rvalue::UnaryOp(bir::UnOp::Neg, operand), ty, scope, span, out)
+                }
+            }
             ast::Expr::Unary(op, inner) => {
                 let un_op = lower_unary_op(*op);
                 let operand = self.lower_expr_to_operand(inner, scope, out);

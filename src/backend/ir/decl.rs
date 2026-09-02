@@ -533,7 +533,7 @@ impl IrTraitBound {
 /// A type parameter with its trait bounds in IR.
 ///
 /// RFC 023: Combines explicit `with` bounds from the source with bounds inferred from usage in the function body.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IrTypeParam {
     /// The type parameter name (e.g., `"T"`, `"E"`).
     pub name: String,

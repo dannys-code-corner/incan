@@ -225,6 +225,7 @@ fn method_info_from_decl(
                             })
                             .collect(),
                         module_path: checker.trait_bound_module_path(&bound.name),
+                        implementation_type_params: Vec::new(),
                     })
                     .collect(),
             )
@@ -260,6 +261,7 @@ fn method_info_from_decl(
             .map(|type_arg| resolve_declared_type(checker, type_arg, &active_type_params, owner_name, owner_self_ty))
             .collect(),
         module_path: checker.trait_bound_module_path(&target.node.name),
+        implementation_type_params: Vec::new(),
     });
     MethodInfo {
         type_params,

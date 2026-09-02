@@ -3813,6 +3813,42 @@ def main() -> None:
     }
 
     #[test]
+    fn generic_caller_inherits_selected_implementation_bounds_issue1280() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+from std.derives.collection import FallibleIterator
+
+model Stream[R] with FallibleIterator[int, str]:
+    value: R
+
+    def __next__(mut self) -> Result[Option[int], str]:
+        return Ok(None)
+
+pub def drain[R](value: R) -> Result[int, str]:
+    mut count = 0
+    for _item in Stream[R](value=value)?:
+        count += 1
+    return Ok(count)
+
+pub def relay[R](value: R) -> Result[int, str]:
+    return drain(value)
+
+def main() -> Result[None, str]:
+    println(relay("ready")?)
+    return Ok(None)
+"#,
+            "generic_implementation_bound_contract",
+        )?;
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec!["0"],
+            "unexpected generic implementation-bound output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn local_partial_runtime_preset_captures_at_construction_issue1124() -> Result<(), Box<dyn std::error::Error>> {
         let stdout = compile_and_run_local_partial_project(
             r#"
@@ -6293,6 +6329,59 @@ def main() -> None:
             lines,
             vec!["FROM-STRING", "from-path", "missing"],
             "unexpected Option[Union] narrowing output:\n{stdout}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn mixed_string_storage_isinstance_union_variants_compile_and_run() -> Result<(), Box<dyn std::error::Error>> {
+        let stdout = compile_and_run_local_partial_project(
+            r#"
+const FROZEN_TEXT: FrozenStr = "frozen"
+
+def is_string(value: FrozenStr | str | int) -> bool:
+    return std.builtins.isinstance(value, str)
+
+def optional_is_string(value: Option[FrozenStr | str | int]) -> bool:
+    return std.builtins.isinstance(value, str)
+
+def render_string(value: FrozenStr | str | int) -> str:
+    if std.builtins.isinstance(value, str):
+        return str(value)
+    return "number"
+
+def render_optional_string(value: Option[FrozenStr | str | int]) -> str:
+    if std.builtins.isinstance(value, str):
+        return str(value)
+    return "other"
+
+def main() -> None:
+    println(is_string(FROZEN_TEXT))
+    println(is_string("runtime"))
+    println(is_string(7))
+    println(optional_is_string(FROZEN_TEXT))
+    println(optional_is_string("runtime"))
+    println(optional_is_string(7))
+    println(optional_is_string(None))
+    println(render_string(FROZEN_TEXT))
+    println(render_string("runtime"))
+    println(render_string(7))
+    println(render_optional_string(FROZEN_TEXT))
+    println(render_optional_string("runtime"))
+    println(render_optional_string(7))
+    println(render_optional_string(None))
+"#,
+            "mixed_string_storage_isinstance_contract",
+        )?;
+
+        let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
+        assert_eq!(
+            lines,
+            vec![
+                "true", "true", "false", "true", "true", "false", "false", "frozen", "runtime", "number", "frozen",
+                "runtime", "other", "other",
+            ],
+            "unexpected mixed string-storage isinstance output:\n{stdout}"
         );
         Ok(())
     }

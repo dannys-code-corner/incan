@@ -33,22 +33,28 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use crate::frontend::api_metadata::ApiDeclaration;
 use crate::frontend::ast::{Declaration, ImportKind, Program};
 use crate::frontend::diagnostics::CompileError;
 use crate::frontend::library_manifest_index::LibraryManifestIndex;
 use crate::frontend::module::canonicalize_source_module_segments;
 use crate::frontend::typechecker::TypeCheckInfo;
 use crate::frontend::typechecker::stdlib_loader::StdlibAstCache;
-use crate::library_manifest::LibraryManifest;
+use crate::library_manifest::{
+    ExportIdentityKind, ImplementationAssociatedTypeExport, ImplementationTraitBoundExport,
+    ImplementationTraitBoundOriginExport, ImplementationTypeParamExport, LibraryManifest, TypeBoundExport, TypeRef,
+};
 use crate::oven::loaf::OVEN_LOAF_ENV;
 use crate::provider::{ProviderPlan, SDK_PROVIDER_BUILD_ENV};
 use incan_core::lang::{rust_keywords, stdlib};
 
+use super::decl::{IrTraitBoundOrigin, IrTypeParam};
 use super::emit::CallableNameResolution;
 use super::scanners::{
     check_for_this_import as scan_check_for_this_import, collect_rust_crates as scan_collect_rust_crates,
     detect_serde_usage,
 };
+use super::types::IrType;
 use super::{AstLowering, EmitError, EmitService, FunctionRegistry, IrEmitter, IrProgram, LoweringErrors};
 
 mod capability_bridge;
@@ -168,6 +174,271 @@ struct IrGenerationOptions<'a> {
 /// Lowered metadata-only modules whose generated Rust identity belongs to compiled SDK providers.
 type CompiledSdkMetadataPrograms = Vec<(Vec<String>, IrProgram)>;
 
+/// Generated root/module Rust plus the implementation metadata inferred from the same IR.
+type NestedLibraryGeneration = ((String, HashMap<Vec<String>, String>), IrGenerationMetadata);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CapturedImplementationBoundRequirement {
+    module_path: Vec<String>,
+    requirement: super::trait_bound_inference::ImplementationBoundRequirement,
+}
+
+/// Compiler-owned metadata discovered while lowering and inferring one generated library.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct IrGenerationMetadata {
+    implementation_bound_requirements: Vec<CapturedImplementationBoundRequirement>,
+}
+
+impl IrGenerationMetadata {
+    /// Publish exact implementation headers into the checked trait adoptions that consumers already resolve.
+    pub(crate) fn apply_to_library_manifest(&self, manifest: &mut LibraryManifest) -> Result<(), String> {
+        for captured in &self.implementation_bound_requirements {
+            let requirement = &captured.requirement;
+            let implementation_type_params = requirement
+                .type_params
+                .iter()
+                .map(implementation_type_param_export)
+                .collect::<Result<Vec<_>, _>>()?;
+            let trait_type_args = requirement
+                .trait_type_args
+                .iter()
+                .map(manifest_type_ref_from_ir)
+                .collect::<Result<Vec<_>, _>>()?;
+            let mut matched = false;
+
+            if let Some(api) = manifest.contract_metadata.api.as_mut() {
+                for module in &mut api.modules {
+                    if module.module_path != captured.module_path {
+                        continue;
+                    }
+                    for declaration in &mut module.declarations {
+                        let Some((name, adoptions)) = api_declaration_trait_adoptions_mut(declaration) else {
+                            continue;
+                        };
+                        if name == requirement.target_type {
+                            matched |= attach_implementation_type_params(
+                                adoptions,
+                                requirement,
+                                &trait_type_args,
+                                &implementation_type_params,
+                            )?;
+                        }
+                    }
+                }
+            }
+
+            let mut source_path = captured.module_path.clone();
+            source_path.push(requirement.target_type.clone());
+            let public_exports = manifest
+                .contract_metadata
+                .identity_graph
+                .exports
+                .iter()
+                .filter(|identity| identity.source_path == source_path)
+                .map(|identity| (identity.public_name.clone(), identity.kind))
+                .collect::<Vec<_>>();
+            for (public_name, kind) in public_exports {
+                let adoptions = match kind {
+                    ExportIdentityKind::Model => manifest
+                        .exports
+                        .models
+                        .iter_mut()
+                        .find(|export| export.name == public_name)
+                        .map(|export| &mut export.trait_adoptions),
+                    ExportIdentityKind::Class => manifest
+                        .exports
+                        .classes
+                        .iter_mut()
+                        .find(|export| export.name == public_name)
+                        .map(|export| &mut export.trait_adoptions),
+                    ExportIdentityKind::Enum => manifest
+                        .exports
+                        .enums
+                        .iter_mut()
+                        .find(|export| export.name == public_name)
+                        .map(|export| &mut export.trait_adoptions),
+                    ExportIdentityKind::Newtype => manifest
+                        .exports
+                        .newtypes
+                        .iter_mut()
+                        .find(|export| export.name == public_name)
+                        .map(|export| &mut export.trait_adoptions),
+                    _ => None,
+                };
+                if let Some(adoptions) = adoptions {
+                    matched |= attach_implementation_type_params(
+                        adoptions,
+                        requirement,
+                        &trait_type_args,
+                        &implementation_type_params,
+                    )?;
+                }
+            }
+
+            if !matched {
+                return Err(format!(
+                    "inferred implementation requirement for `{}::{}` and trait `{}` had no checked manifest adoption",
+                    captured.module_path.join("::"),
+                    requirement.target_type,
+                    requirement.trait_source_name,
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Return the adopted-trait surface for a manifest declaration that can own implementations.
+fn api_declaration_trait_adoptions_mut(declaration: &mut ApiDeclaration) -> Option<(&str, &mut Vec<TypeBoundExport>)> {
+    match declaration {
+        ApiDeclaration::Model(model) => Some((&model.name, &mut model.trait_adoptions)),
+        ApiDeclaration::Class(class) => Some((&class.name, &mut class.trait_adoptions)),
+        ApiDeclaration::Enum(enum_decl) => Some((&enum_decl.name, &mut enum_decl.trait_adoptions)),
+        ApiDeclaration::Newtype(newtype) => Some((&newtype.name, &mut newtype.trait_adoptions)),
+        _ => None,
+    }
+}
+
+/// Attach one exact implementation header to its canonically matching checked trait adoption.
+fn attach_implementation_type_params(
+    adoptions: &mut [TypeBoundExport],
+    requirement: &super::trait_bound_inference::ImplementationBoundRequirement,
+    trait_type_args: &[TypeRef],
+    implementation_type_params: &[ImplementationTypeParamExport],
+) -> Result<bool, String> {
+    let mut matched = false;
+    for adoption in adoptions {
+        let source_name = adoption.source_name.as_deref().unwrap_or(adoption.name.as_str());
+        if source_name != requirement.trait_source_name
+            || adoption.module_path != requirement.trait_module_path
+            || adoption.type_args != trait_type_args
+        {
+            continue;
+        }
+        if !adoption.implementation_type_params.is_empty()
+            && adoption.implementation_type_params != implementation_type_params
+        {
+            return Err(format!(
+                "checked trait adoption `{}` carries conflicting implementation requirements",
+                adoption.name
+            ));
+        }
+        adoption.implementation_type_params = implementation_type_params.to_vec();
+        matched = true;
+    }
+    Ok(matched)
+}
+
+/// Convert one inferred IR implementation parameter into stable manifest metadata.
+fn implementation_type_param_export(type_param: &IrTypeParam) -> Result<ImplementationTypeParamExport, String> {
+    Ok(ImplementationTypeParamExport {
+        name: type_param.name.clone(),
+        bounds: type_param
+            .bounds
+            .iter()
+            .map(|bound| {
+                Ok(ImplementationTraitBoundExport {
+                    trait_path: bound.trait_path.clone(),
+                    type_args: bound
+                        .type_args
+                        .iter()
+                        .map(manifest_type_ref_from_ir)
+                        .collect::<Result<Vec<_>, _>>()?,
+                    associated_types: bound
+                        .assoc_types
+                        .iter()
+                        .map(|(name, ty)| {
+                            Ok(ImplementationAssociatedTypeExport {
+                                name: name.clone(),
+                                ty: manifest_type_ref_from_ir(ty)?,
+                            })
+                        })
+                        .collect::<Result<Vec<_>, String>>()?,
+                    origin: match bound.origin {
+                        IrTraitBoundOrigin::Standard => ImplementationTraitBoundOriginExport::Standard,
+                        IrTraitBoundOrigin::RustCapability => ImplementationTraitBoundOriginExport::RustCapability,
+                        IrTraitBoundOrigin::SourceCallable => ImplementationTraitBoundOriginExport::SourceCallable,
+                    },
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    })
+}
+
+/// Convert an IR type used by implementation metadata into its checked manifest representation.
+fn manifest_type_ref_from_ir(ty: &IrType) -> Result<TypeRef, String> {
+    let named = |name: &str| TypeRef::Named { name: name.to_string() };
+    let applied = |name: &str, args: &[IrType]| -> Result<TypeRef, String> {
+        Ok(TypeRef::Applied {
+            name: name.to_string(),
+            args: args
+                .iter()
+                .map(manifest_type_ref_from_ir)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    };
+    match ty {
+        IrType::Unit => Ok(named(incan_core::lang::conventions::UNIT_TYPE_NAME)),
+        IrType::Bool => Ok(named("bool")),
+        IrType::Int => Ok(named("int")),
+        IrType::Float => Ok(named("float")),
+        IrType::Numeric(id) => Ok(named(incan_core::lang::types::numerics::as_str(*id))),
+        IrType::String | IrType::StaticStr | IrType::StrRef => Ok(named("str")),
+        IrType::Bytes | IrType::StaticBytes => Ok(named("bytes")),
+        IrType::FrozenStr => Ok(named("FrozenStr")),
+        IrType::FrozenBytes => Ok(named("FrozenBytes")),
+        IrType::List(inner) => applied("List", std::slice::from_ref(inner.as_ref())),
+        IrType::Dict(key, value) => applied("Dict", &[key.as_ref().clone(), value.as_ref().clone()]),
+        IrType::Set(inner) => applied("Set", std::slice::from_ref(inner.as_ref())),
+        // Source tuple annotations are checked as the canonical `Tuple[...]` generic even though lowering gives
+        // codegen the dedicated IR tuple shape. Preserve the checked manifest spelling so exact trait-adoption
+        // matching does not mistake those two internal representations for different instantiations.
+        IrType::Tuple(elements) => applied("Tuple", elements),
+        IrType::Option(inner) => applied("Option", std::slice::from_ref(inner.as_ref())),
+        IrType::Result(ok, err) => applied("Result", &[ok.as_ref().clone(), err.as_ref().clone()]),
+        IrType::Struct(name) | IrType::Enum(name) | IrType::Trait(name) => Ok(named(name)),
+        IrType::NamedGeneric(name, args) => applied(name, args),
+        IrType::TypeToken(inner) => Ok(TypeRef::TypeToken {
+            inner: Box::new(manifest_type_ref_from_ir(inner)?),
+        }),
+        IrType::RustDisplay(path) => Ok(TypeRef::RustPath { path: path.clone() }),
+        IrType::ExternalUnion { union, .. } => manifest_type_ref_from_ir(union),
+        IrType::ImplTrait(bound) => applied(&bound.trait_path, &bound.type_args),
+        IrType::Function { params, ret } => Ok(TypeRef::Function {
+            params: params
+                .iter()
+                .map(manifest_type_ref_from_ir)
+                .collect::<Result<Vec<_>, _>>()?,
+            return_type: Box::new(manifest_type_ref_from_ir(ret)?),
+        }),
+        IrType::Generic(name) => Ok(TypeRef::TypeParam { name: name.clone() }),
+        IrType::SelfType => Ok(TypeRef::SelfType),
+        IrType::Ref(inner) | IrType::RefMut(inner) => Ok(TypeRef::Ref {
+            inner: Box::new(manifest_type_ref_from_ir(inner)?),
+        }),
+        IrType::Decimal { precision, scale } => Ok(TypeRef::Applied {
+            name: "decimal".to_string(),
+            args: vec![
+                TypeRef::TypeParam {
+                    name: precision.to_string(),
+                },
+                TypeRef::TypeParam {
+                    name: scale.to_string(),
+                },
+            ],
+        }),
+        IrType::Unknown => Err("cannot publish unknown implementation-bound type metadata".to_string()),
+    }
+}
+
+/// Split a canonical dotted source-module name into manifest path segments.
+fn source_module_path_segments(name: &str) -> Vec<String> {
+    name.split('.')
+        .filter(|segment| !segment.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 impl IrGenerationOptions<'_> {
     /// Build options for an ordinary single-program generation pass.
     fn ordinary() -> Self {
@@ -248,6 +519,10 @@ pub struct IrCodegen<'a> {
     prechecked_main_type_info: Option<TypeCheckInfo>,
     /// Dependency facts from the same session analysis, keyed by module identity.
     prechecked_dependency_type_info: HashMap<Vec<String>, TypeCheckInfo>,
+    /// Bound-bearing implementation headers resolved from the exact IR emitted for this compilation.
+    implementation_bound_requirements: Vec<CapturedImplementationBoundRequirement>,
+    /// Authoritative checked-API path for a library root while collecting manifest metadata.
+    metadata_root_module_path: Option<Vec<String>>,
     /// Manifest/workspace root for rust-inspect-backed typechecking during IR generation.
     #[cfg(feature = "rust_inspect")]
     rust_inspect_manifest_dir: Option<PathBuf>,
@@ -280,6 +555,8 @@ impl<'a> IrCodegen<'a> {
             stdlib_cache: StdlibAstCache::new(),
             prechecked_main_type_info: None,
             prechecked_dependency_type_info: HashMap::new(),
+            implementation_bound_requirements: Vec::new(),
+            metadata_root_module_path: None,
             #[cfg(feature = "rust_inspect")]
             rust_inspect_manifest_dir: None,
         }
@@ -292,6 +569,29 @@ impl<'a> IrCodegen<'a> {
             .map(canonicalize_source_module_segments)
             .map(|segments| segments.join("_"))
             .unwrap_or_else(|| name.to_string())
+    }
+
+    /// Capture bound-bearing implementation headers from one inferred IR module.
+    fn capture_implementation_bound_requirements(&mut self, module_path: Vec<String>, program: &IrProgram) {
+        for requirement in super::trait_bound_inference::collect_local_implementation_bound_requirements(program) {
+            let captured = CapturedImplementationBoundRequirement {
+                module_path: module_path.clone(),
+                requirement,
+            };
+            if !self.implementation_bound_requirements.contains(&captured) {
+                self.implementation_bound_requirements.push(captured);
+            }
+        }
+        self.implementation_bound_requirements.sort_by(|left, right| {
+            left.module_path
+                .cmp(&right.module_path)
+                .then(left.requirement.target_type.cmp(&right.requirement.target_type))
+                .then(
+                    left.requirement
+                        .trait_source_name
+                        .cmp(&right.requirement.trait_source_name),
+                )
+        });
     }
 
     /// Return the transitive local source dependency subset needed to typecheck one program.
@@ -1007,9 +1307,26 @@ impl<'a> IrCodegen<'a> {
         self.try_generate_internal(program)
     }
 
+    /// Generate one library root and return the compiler metadata inferred from the same lowered IR.
+    pub(crate) fn try_generate_with_metadata(
+        mut self,
+        program: &'a Program,
+        root_module_path: &[String],
+    ) -> Result<(String, IrGenerationMetadata), GenerationError> {
+        self.metadata_root_module_path = Some(root_module_path.to_vec());
+        let code = self.try_generate_internal(program)?;
+        Ok((
+            code,
+            IrGenerationMetadata {
+                implementation_bound_requirements: std::mem::take(&mut self.implementation_bound_requirements),
+            },
+        ))
+    }
+
     /// Internal implementation of try_generate (takes &mut self)
     fn try_generate_internal(&mut self, program: &'a Program) -> Result<String, GenerationError> {
         self.current_program = Some(program);
+        self.implementation_bound_requirements.clear();
 
         // Scan for emission-relevant features
         self.update_serde_requirement(program);
@@ -1178,6 +1495,17 @@ impl<'a> IrCodegen<'a> {
             .map(|(_, dep_ir)| dep_ir)
             .collect::<Vec<_>>();
         super::trait_bound_inference::propagate_trait_bounds_from_programs(&mut ir_program, &dependency_programs);
+        let root_module_path = self.metadata_root_module_path.clone().unwrap_or_else(|| {
+            ir_program
+                .source_module_name
+                .as_deref()
+                .map(source_module_path_segments)
+                .unwrap_or_default()
+        });
+        self.capture_implementation_bound_requirements(root_module_path, &ir_program);
+        for (module_path, dependency_program) in &dependency_ir_programs {
+            self.capture_implementation_bound_requirements(module_path.clone(), dependency_program);
+        }
         let source_module_paths = dependency_ir_programs
             .iter()
             .map(|(module_path, _)| module_path.clone())
@@ -1681,6 +2009,23 @@ impl<'a> IrCodegen<'a> {
         self.try_generate_multi_file_nested_internal(program, module_paths)
     }
 
+    /// Generate a nested library project and return metadata inferred from the same lowered IR.
+    pub(crate) fn try_generate_multi_file_nested_with_metadata(
+        mut self,
+        program: &'a Program,
+        module_paths: &[Vec<String>],
+        root_module_path: &[String],
+    ) -> Result<NestedLibraryGeneration, GenerationError> {
+        self.metadata_root_module_path = Some(root_module_path.to_vec());
+        let generated = self.try_generate_multi_file_nested_internal(program, module_paths)?;
+        Ok((
+            generated,
+            IrGenerationMetadata {
+                implementation_bound_requirements: std::mem::take(&mut self.implementation_bound_requirements),
+            },
+        ))
+    }
+
     /// Generate nested dependency modules with generated-use pruning.
     ///
     /// Dependency modules keep imported/reachable declarations for binary-style emission and can preserve non-stdlib
@@ -1692,6 +2037,7 @@ impl<'a> IrCodegen<'a> {
     ) -> Result<(String, HashMap<Vec<String>, String>), GenerationError> {
         self.current_program = Some(program);
         self.source_dependency_module_paths.clear();
+        self.implementation_bound_requirements.clear();
 
         // Backfill nested module path segments for dependency modules when they were registered
         // via the legacy `add_module()` API (flat names only).
@@ -1996,6 +2342,90 @@ mod tests {
         assert!(!code.contains("#[allow(dead_code)]"), "{code}");
         assert!(!code.contains("#[allow(unused_imports)]"), "{code}");
         assert!(!code.contains("#[allow(dead_code, unused_variables)]"), "{code}");
+    }
+
+    #[test]
+    fn library_generation_metadata_uses_checked_root_module_path() {
+        use crate::frontend::api_metadata::{
+            CHECKED_API_METADATA_SCHEMA_VERSION, CheckedApiMetadataPackage, collect_checked_api_metadata,
+        };
+        use crate::frontend::typechecker::TypeChecker;
+
+        let source = r#"
+trait Walk:
+    def copy(self) -> Self: ...
+
+pub model Stream[R] with Walk:
+    value: R
+
+    def copy(self) -> Self:
+        return self
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+        let root_module_path = vec!["main".to_string()];
+        let (_code, metadata) = must_ok(IrCodegen::new().try_generate_with_metadata(&ast, &root_module_path));
+
+        assert!(metadata.implementation_bound_requirements.iter().any(|captured| {
+            captured.module_path == root_module_path
+                && captured.requirement.target_type == "Stream"
+                && captured.requirement.type_params.iter().any(|type_param| {
+                    type_param
+                        .bounds
+                        .iter()
+                        .any(|bound| bound.trait_path == incan_core::lang::trait_bounds::rust::CLONE)
+                })
+        }));
+
+        let mut checker = TypeChecker::new();
+        must_ok(checker.check_program(&ast));
+        let mut manifest = LibraryManifest::new("root_impl", "0.1.0");
+        manifest.contract_metadata.api = Some(CheckedApiMetadataPackage {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            package: None,
+            modules: vec![collect_checked_api_metadata(&ast, &checker, root_module_path)],
+            public_namespaces: Vec::new(),
+        });
+        must_ok(metadata.apply_to_library_manifest(&mut manifest));
+        let implementation_type_params = manifest
+            .contract_metadata
+            .api
+            .as_ref()
+            .and_then(|api| api.modules.first())
+            .and_then(|module| {
+                module.declarations.iter().find_map(|declaration| match declaration {
+                    ApiDeclaration::Model(model) if model.name == "Stream" => model.trait_adoptions.first(),
+                    _ => None,
+                })
+            })
+            .map(|adoption| adoption.implementation_type_params.as_slice());
+        assert!(
+            implementation_type_params.is_some_and(|type_params| type_params.iter().any(|type_param| {
+                type_param.name == "R"
+                    && type_param
+                        .bounds
+                        .iter()
+                        .any(|bound| bound.trait_path == incan_core::lang::trait_bounds::rust::CLONE)
+            })),
+            "the checked root adoption must receive its inferred implementation header"
+        );
+    }
+
+    #[test]
+    fn implementation_metadata_preserves_decimal_type_arguments() {
+        assert_eq!(
+            must_ok(manifest_type_ref_from_ir(&IrType::Decimal {
+                precision: 18,
+                scale: 4,
+            })),
+            TypeRef::Applied {
+                name: "decimal".to_string(),
+                args: vec![
+                    TypeRef::TypeParam { name: "18".to_string() },
+                    TypeRef::TypeParam { name: "4".to_string() },
+                ],
+            }
+        );
     }
 
     #[test]

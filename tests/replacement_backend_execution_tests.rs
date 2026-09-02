@@ -2380,11 +2380,12 @@ fn replacement_cli_json_report_projects_canonical_execution_evidence() -> Result
     );
     let report: serde_json::Value =
         serde_json::from_slice(&fs::read(temporary.path().join("replacement-report.json"))?)?;
-    assert_eq!(report["schema_version"], "incan.replacement_execution.v0");
+    assert_eq!(report["schema_version"], "incan.replacement_execution.v1");
     assert_eq!(report["status"], "success");
     assert_eq!(report["mode"], "executable");
     assert_eq!(report["backend"]["executed_backend"], "replacement");
     assert_eq!(report["replacement_execution"]["result"], "42");
+    assert_eq!(report["replacement_execution"]["result_type"], "int");
     assert_eq!(
         report["replacement_execution"]["emitted_output"],
         serde_json::json!(["answer follows"])

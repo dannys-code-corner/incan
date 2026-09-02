@@ -94,6 +94,7 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
         vec![
             "language.control-flow".to_string(),
             "language.numeric-and-scalar".to_string(),
+            "language.numeric-complete".to_string(),
             "async.tasks".to_string(),
         ]
     );
@@ -103,7 +104,7 @@ fn registry_covers_the_baseline_without_claiming_parity() -> Result<(), Box<dyn 
         .find(|source| source.id == "replacement-compatibility.migration-bootstrap")
         .ok_or("missing migration bootstrap registration source")?;
     assert_eq!(bootstrap.lifecycle.as_str(), "MigrationBootstrap");
-    assert_eq!(bootstrap.feature_ids.len(), 22);
+    assert_eq!(bootstrap.feature_ids.len(), 21);
     assert!(
         bootstrap
             .retirement_condition
@@ -255,6 +256,44 @@ fn hashed_bounded_evidence_does_not_invent_a_frozen_capability() -> Result<(), B
     Ok(())
 }
 
+/// A bounded checked type-test match must not promote the broad nominal/union feature family.
+#[test]
+fn checked_isinstance_evidence_remains_case_scoped_and_non_green() -> Result<(), Box<dyn std::error::Error>> {
+    let registry = replacement_compatibility_registry();
+    let feature = registry
+        .features
+        .iter()
+        .find(|feature| feature.id == "nominal.models-unions-enums")
+        .ok_or("missing broad nominal/union feature")?;
+
+    assert!(!feature.evidence.is_parity_green());
+    assert_eq!(feature.evidence.body_ir.as_str(), "Partial");
+    assert_eq!(feature.evidence.direct_replacement.as_str(), "BlockedByRequirements");
+    assert_eq!(
+        feature.evidence.independent_comparison.as_str(),
+        "NonGreenShadowUnavailable"
+    );
+    assert_eq!(feature.disposition.as_str(), "Planned");
+    assert_eq!(feature.owner_issue, Some(988));
+    assert_eq!(
+        feature
+            .evidence
+            .surfaces
+            .scoped_comparisons
+            .iter()
+            .map(|comparison| comparison.case_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["replacement-body-v0-030"]
+    );
+    assert!(feature.migration_or_blocker.as_deref().is_some_and(|note| {
+        note.contains("#1281")
+            && note.contains("replacement-body-v0-030")
+            && note.contains("Closed #1154")
+            && note.contains("open #988")
+    }));
+    Ok(())
+}
+
 #[test]
 fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Result<(), Box<dyn std::error::Error>> {
     let baseline = checked_v0_5_public_capability_baseline()?;
@@ -280,14 +319,17 @@ fn joined_projection_is_deterministic_and_exposes_the_callable_boundary() -> Res
         "replacement-body-v0-024",
         "replacement-body-v0-026",
         "replacement-body-v0-028",
+        "replacement-body-v0-029",
+        "replacement-body-v0-030",
     ] {
         assert!(projection.contains(&format!("Case `{case_id}` (ComparedMatch)")));
     }
-    assert!(projection.contains("replacement-body-v0-020` through `replacement-body-v0-028"));
+    assert!(projection.contains("replacement-body-v0-020` through `replacement-body-v0-030"));
     assert!(projection.contains("legacy_receipt_identity"));
     assert!(projection.contains("replacement_receipt_identity"));
     assert!(projection.contains("completed comparison infrastructure #1146"));
-    assert!(projection.contains("outstanding evidence owner #1152"));
+    assert!(projection.contains("Closed #1152"));
+    assert!(projection.contains("outstanding evidence owner #988"));
     assert!(projection.contains("unscheduled evidence debt"));
     assert!(!projection.contains("unavailable via #1146"));
     assert!(

@@ -45,6 +45,7 @@ use incan_core::errors::ErrorKind;
 use incan_core::lang::builtins::BuiltinFnId;
 use incan_core::lang::errors;
 use incan_core::lang::surface::string_methods::StringMethodId;
+use incan_core::lang::types::numerics::NumericTypeId;
 
 use crate::{
     AbiV0RuntimeRequirement, CanonicalSymbolId, CompilerNodeId, HirSourceSpan, IncanType, module_identity_for_path,
@@ -282,6 +283,8 @@ pub struct Body {
     pub name: String,
     /// Full source span of the declaration this body was lowered from.
     pub span: HirSourceSpan,
+    /// Fully resolved source return type used to validate direct-execution results.
+    pub return_type: IncanType,
     /// Every local (parameter, user binding, or compiler-introduced temporary) declared in this body, in
     /// declaration order. Referenced elsewhere by [`LocalId`] index.
     pub locals: Vec<LocalDecl>,
@@ -663,6 +666,8 @@ pub struct PlaceOperand {
 pub enum Constant {
     Int(i64),
     Float(String),
+    /// A compiler-typed numeric constant whose canonical kind and full-width payload survived lowering.
+    TypedNumeric(TypedNumericConstant),
     Bool(bool),
     Str(String),
     /// A `b"..."` byte-string literal, represented as an **owned buffer** rather than a borrowed slice.
@@ -686,6 +691,60 @@ pub enum Constant {
     None,
 }
 
+/// One exact numeric constant retained in Body IR without collapsing its checked type or value domain.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TypedNumericConstant {
+    /// An exact signed integer constant with its canonical checked identity.
+    Signed {
+        /// Canonical signed integer kind selected by the typechecker.
+        kind: NumericTypeId,
+        /// Exact signed payload, already checked against `kind`'s range.
+        value: i128,
+    },
+    /// An exact unsigned integer constant with its canonical checked identity.
+    Unsigned {
+        /// Canonical unsigned integer kind selected by the typechecker.
+        kind: NumericTypeId,
+        /// Exact unsigned payload, already checked against `kind`'s range.
+        value: u128,
+    },
+    /// An exact IEEE-754 binary32 constant retained by its bit representation.
+    F32 {
+        /// Raw binary32 bits after source literal parsing and f32 rounding.
+        bits: u32,
+    },
+    /// An exact IEEE-754 binary64 constant retained by its bit representation.
+    F64 {
+        /// Raw binary64 bits after source literal parsing.
+        bits: u64,
+    },
+    /// A fixed-scale decimal constant retaining its checked type and written scale.
+    Decimal {
+        /// Checked decimal precision in the supported range `1..=38`.
+        precision: u8,
+        /// Checked maximum fractional scale, no greater than `precision`.
+        scale: u8,
+        /// Signed literal digits with the decimal point removed.
+        coefficient: i128,
+        /// Fractional digits written by the source literal, no greater than `scale`.
+        literal_scale: u8,
+    },
+}
+
+impl TypedNumericConstant {
+    /// Return the canonical checked kind retained by this constant.
+    pub fn type_name(&self) -> String {
+        match self {
+            Self::Signed { kind, .. } | Self::Unsigned { kind, .. } => {
+                incan_core::lang::types::numerics::as_str(*kind).to_string()
+            }
+            Self::F32 { .. } => "f32".to_string(),
+            Self::F64 { .. } => "f64".to_string(),
+            Self::Decimal { precision, scale, .. } => format!("decimal[{precision}, {scale}]"),
+        }
+    }
+}
+
 impl Constant {
     /// Render a deterministic maintainer-facing spelling for this constant.
     ///
@@ -695,6 +754,7 @@ impl Constant {
         match self {
             Self::Int(v) => format!("const({v})"),
             Self::Float(v) => format!("const({v})"),
+            Self::TypedNumeric(value) => format!("const<{}>({value:?})", value.type_name()),
             Self::Bool(v) => format!("const({v})"),
             Self::Str(v) => format!("const({v:?})"),
             Self::Bytes(bytes) => {
@@ -758,6 +818,19 @@ pub enum Rvalue {
     Use(Operand),
     UnaryOp(UnOp, Operand),
     BinaryOp(BinOp, Operand, Operand),
+    /// Test one runtime value against a type target resolved and retained by the source checker.
+    ///
+    /// The target is not a runtime operand. Keeping this operation distinct prevents an executor from reparsing a
+    /// source type name or treating arbitrary type expressions as first-class runtime values.
+    IsInstance {
+        value: Operand,
+        /// Alias-expanded checked type of the tested value.
+        ///
+        /// This lets a bounded executor validate the whole admitted type-test profile before effects instead of
+        /// accidentally accepting every runtime carrier that happens to produce `false` for one primitive target.
+        value_ty: IncanType,
+        target: IsInstanceTarget,
+    },
     /// Build a tuple, list, or nominal-constructor value from its element/field operands.
     Aggregate(AggregateKind, Vec<ArgumentElement>),
     /// `{k: v, ...}` dict literal, as an ordered list of entries.
@@ -881,6 +954,18 @@ impl Rvalue {
             Self::BinaryOp(op, lhs, rhs) => {
                 format!("{} {} {}", lhs.render_snapshot(), op.as_str(), rhs.render_snapshot())
             }
+            Self::IsInstance {
+                value,
+                value_ty,
+                target,
+            } => {
+                format!(
+                    "isinstance({}: {}, {})",
+                    value.render_snapshot(),
+                    value_ty,
+                    target.render_snapshot()
+                )
+            }
             Self::Dict(entries) => {
                 let rendered: Vec<String> = entries.iter().map(DictEntry::render_snapshot).collect();
                 format!("dict[{}]", rendered.join(", "))
@@ -928,6 +1013,37 @@ impl Rvalue {
                 format!("match {} {{ {} }}", scrutinee.render_snapshot(), arms_str.join(", "))
             }
         }
+    }
+}
+
+/// Exact checked target carried by a Body-IR `isinstance` operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IsInstanceTarget {
+    /// Alias-expanded semantic target type.
+    pub ty: IncanType,
+    /// Canonical declaration identity for a nominal target, when the typechecker proved one.
+    pub canonical: Option<CanonicalSymbolId>,
+    /// Original source range of the target expression.
+    pub span: HirSourceSpan,
+}
+
+impl IsInstanceTarget {
+    /// Render the retained target type, source span, and optional nominal identity for deterministic Body-IR evidence.
+    fn render_snapshot(&self) -> String {
+        let canonical = self.canonical.as_ref().map_or_else(String::new, |identity| {
+            let origin = identity
+                .module_path()
+                .map(|path| path.join("::"))
+                .unwrap_or_else(|| "<non-module>".to_string());
+            format!(
+                ", canonical={origin}::{}:{}@{}..{}",
+                identity.declaration_name,
+                identity.kind,
+                identity.declaration_span.start,
+                identity.declaration_span.end
+            )
+        });
+        format!("target={}@{}..{}{}", self.ty, self.span.start, self.span.end, canonical)
     }
 }
 
@@ -3026,6 +3142,7 @@ mod tests {
             direct_call_id,
             name: "add".to_string(),
             span: HirSourceSpan::new(0, 30),
+            return_type: IncanType::Primitive(IncanPrimitiveType::Int),
             locals: vec![
                 LocalDecl {
                     id: local_x,

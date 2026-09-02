@@ -1203,6 +1203,7 @@ impl TypeChecker {
         trait_name: &str,
         type_args: Vec<ResolvedType>,
         origin_module_path: Option<&[String]>,
+        implementation_type_params: Vec<ImplementationTypeParamInfo>,
         receiver_is_mutable: bool,
     ) -> crate::frontend::typechecker::ResolvedMethodDispatch {
         let module_path = origin_module_path
@@ -1212,6 +1213,7 @@ impl TypeChecker {
             trait_name: trait_name.to_string(),
             module_path,
             type_args,
+            implementation_type_params,
             receiver_is_mutable,
         }
     }
@@ -1302,7 +1304,7 @@ impl TypeChecker {
         );
         match policy {
             NumericResizeMethodPolicy::Lossless => {
-                if !super::super::numeric_type_losslessly_widens_to(source, target) {
+                if !incan_core::numeric_values::numeric_type_losslessly_widens_to(source, target) {
                     self.errors.push(
                         errors::type_mismatch("lossless numeric resize target", &target_ty.to_string(), span)
                             .with_hint(
@@ -2669,6 +2671,7 @@ impl TypeChecker {
                 trait_name,
                 module_path,
                 type_args,
+                implementation_type_params,
                 receiver_is_mutable,
             } => crate::frontend::typechecker::ResolvedMethodDispatch::Trait {
                 trait_name,
@@ -2676,6 +2679,30 @@ impl TypeChecker {
                 type_args: type_args
                     .into_iter()
                     .map(|ty| self.substitute_self_in_resolved_type(ty, receiver))
+                    .collect(),
+                implementation_type_params: implementation_type_params
+                    .into_iter()
+                    .map(|type_param| ImplementationTypeParamInfo {
+                        name: type_param.name,
+                        bounds: type_param
+                            .bounds
+                            .into_iter()
+                            .map(|bound| ImplementationTraitBoundInfo {
+                                trait_path: bound.trait_path,
+                                type_args: bound
+                                    .type_args
+                                    .into_iter()
+                                    .map(|ty| self.substitute_self_in_resolved_type(ty, receiver))
+                                    .collect(),
+                                associated_types: bound
+                                    .associated_types
+                                    .into_iter()
+                                    .map(|(name, ty)| (name, self.substitute_self_in_resolved_type(ty, receiver)))
+                                    .collect(),
+                                origin: bound.origin,
+                            })
+                            .collect(),
+                    })
                     .collect(),
                 receiver_is_mutable,
             },
@@ -2759,6 +2786,7 @@ impl TypeChecker {
                                 &entry.origin_trait,
                                 entry.origin_type_args.clone(),
                                 entry.origin_module_path.as_deref(),
+                                entry.implementation_type_params.clone(),
                                 entry.info.receiver == Some(Receiver::Mutable),
                             )
                         });
@@ -2796,6 +2824,7 @@ impl TypeChecker {
                         &entry.origin_trait,
                         entry.origin_type_args.clone(),
                         entry.origin_module_path.as_deref(),
+                        entry.implementation_type_params.clone(),
                         entry.info.receiver == Some(Receiver::Mutable),
                     );
                     candidates.push(MethodCandidate {
@@ -2954,6 +2983,7 @@ impl TypeChecker {
                 source_name: None,
                 type_args: trait_args,
                 module_path: None,
+                implementation_type_params: Vec::new(),
             };
             return self
                 .resolve_unambiguous_adopted_trait_method_without_arg_prepass(std::slice::from_ref(&adoption), &call);
@@ -3057,6 +3087,7 @@ impl TypeChecker {
             &candidate.origin_trait,
             candidate.origin_type_args.clone(),
             candidate.origin_module_path.as_deref(),
+            candidate.implementation_type_params.clone(),
             candidate.info.receiver == Some(Receiver::Mutable),
         );
         let dispatch = self.method_dispatch_substituting_call_site_self(dispatch, call.receiver_ty);
@@ -3229,6 +3260,7 @@ impl TypeChecker {
                     &entry.origin_trait,
                     entry.origin_type_args.clone(),
                     entry.origin_module_path.as_deref(),
+                    entry.implementation_type_params.clone(),
                     entry.info.receiver == Some(Receiver::Mutable),
                 );
                 candidates.push(MethodCandidate {
@@ -3280,6 +3312,7 @@ impl TypeChecker {
             source_name: None,
             type_args: trait_args,
             module_path: None,
+            implementation_type_params: Vec::new(),
         };
         self.resolve_named_method(
             &std::collections::HashMap::new(),
@@ -5060,6 +5093,7 @@ impl TypeChecker {
             source_name: None,
             type_args: Vec::new(),
             module_path: None,
+            implementation_type_params: Vec::new(),
         };
         let method_info = self.trait_method_info_resolved_for_adoption(&adoption, method, span)?;
         if !self.is_clone_type(receiver_ty) {

@@ -6,7 +6,6 @@ use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::*;
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved};
-use incan_core::lang::builtins::{self as core_builtins, BuiltinFnId};
 use incan_core::lang::errors as runtime_errors;
 use incan_core::lang::keywords;
 use incan_core::lang::surface::constructors::{self, ConstructorId};
@@ -747,6 +746,8 @@ impl TypeChecker {
             value_ty
         };
 
+        self.record_assignment_binding_type(span, ty.clone());
+
         self.validate_protected_builtin_binding(&assign.name, span);
         self.symbols.define(Symbol {
             name: assign.name.clone(),
@@ -947,15 +948,50 @@ impl TypeChecker {
         }
     }
 
+    /// Return the canonical declaration identity for a nominal type name, when resolution proved one.
+    fn canonical_isinstance_target_identity(&self, name: &str) -> Option<incan_semantics_core::CanonicalSymbolId> {
+        let imported = self.type_info.resolved_import_identity(name).cloned();
+        let local = self.lookup_symbol(name).and_then(|symbol| {
+            let target = self.source_target_for_symbol(name, &symbol.kind)?;
+            let kind = incan_semantics_core::SemanticSourceTargetKind::from_kind_str(&target.kind);
+            Some(incan_semantics_core::CanonicalSymbolId::module_declaration(
+                target.module_path,
+                target.name,
+                kind,
+                incan_semantics_core::HirSourceSpan::new(symbol.span.start, symbol.span.end),
+            ))
+        });
+        imported.or(local)
+    }
+
     /// Resolve the type argument used by a narrowing expression.
-    fn resolve_narrowing_type_expr(&self, expr: &Spanned<Expr>) -> Option<ResolvedType> {
-        match &expr.node {
-            Expr::Ident(name) => {
-                Some(self.expand_type_aliases(resolve_type(&Type::Simple(name.clone()), &self.symbols)))
+    pub(in crate::frontend::typechecker) fn resolve_isinstance_target(
+        &mut self,
+        expr: &Spanned<Expr>,
+    ) -> Option<super::type_info::IsInstanceTargetInfo> {
+        let name = match &expr.node {
+            Expr::Ident(name) => name,
+            Expr::Paren(inner) => {
+                let mut target = self.resolve_isinstance_target(inner)?;
+                target.span = expr.span;
+                return Some(target);
             }
-            Expr::Paren(inner) => self.resolve_narrowing_type_expr(inner),
-            _ => None,
+            _ => return None,
+        };
+        let source_type = Spanned::new(Type::Simple(name.clone()), expr.span);
+        let ty = self.resolve_type_checked(&source_type);
+        if ty == ResolvedType::Unknown {
+            return None;
         }
+        let canonical = self.canonical_isinstance_target_identity(name).or_else(|| match &ty {
+            ResolvedType::Named(resolved_name) => self.canonical_isinstance_target_identity(resolved_name),
+            _ => None,
+        });
+        Some(super::type_info::IsInstanceTargetInfo {
+            ty,
+            canonical,
+            span: expr.span,
+        })
     }
 
     /// Return whether two union member candidates are equivalent for narrowing.
@@ -1037,15 +1073,18 @@ impl TypeChecker {
         self.none_check_branch_narrowing(expr)
     }
 
+    /// Return the value arguments of either source spelling for one checked builtin call.
+    fn checked_isinstance_condition_args(expr: &Spanned<Expr>) -> Option<&[CallArg]> {
+        match &expr.node {
+            Expr::Call(_, _, args) | Expr::MethodCall(_, _, _, args) => Some(args),
+            _ => None,
+        }
+    }
+
     /// Determine branch-local narrowing introduced by `isinstance`.
     fn isinstance_branch_narrowing(&self, expr: &Spanned<Expr>) -> Option<BranchNarrowing> {
-        let Expr::Call(callee, _, args) = &expr.node else {
-            return None;
-        };
-        let Expr::Ident(call_name) = &callee.node else {
-            return None;
-        };
-        if core_builtins::from_str(call_name) != Some(BuiltinFnId::IsInstance) || args.len() != 2 {
+        let args = Self::checked_isinstance_condition_args(expr)?;
+        if args.len() != 2 {
             return None;
         }
         let value_expr = match &args[0] {
@@ -1056,14 +1095,10 @@ impl TypeChecker {
             return None;
         };
 
-        let target_expr = match &args[1] {
-            CallArg::Positional(expr) => expr,
-            _ => return None,
-        };
-        let target_ty = self.resolve_narrowing_type_expr(target_expr)?;
+        let target_ty = &self.type_info.isinstance_target(expr.span)?.ty;
         let var_info = self.lookup_variable_info(var_name)?;
-        let true_ty = self.narrowed_type_for_isinstance(&var_info.ty, &target_ty)?;
-        let false_ty = self.else_type_for_isinstance(&var_info.ty, &target_ty);
+        let true_ty = self.narrowed_type_for_isinstance(&var_info.ty, target_ty)?;
+        let false_ty = self.else_type_for_isinstance(&var_info.ty, target_ty);
 
         Some(BranchNarrowing {
             name: var_name.clone(),

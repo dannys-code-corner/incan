@@ -638,6 +638,11 @@ pub enum Pattern {
 /// 3. Update `emit_builtin_call()` in `expressions/builtins.rs` to emit the Rust code
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuiltinFn {
+    /// Compiler-owned `isinstance(value, Target)` with a retained checked target token.
+    ///
+    /// `from_name` never constructs this variant; lowering may select it only from the typechecker's call-site
+    /// builtin identity and checked target fact.
+    IsInstance,
     /// `print(x)` / `println(x)` → `println!("{}", x)`
     Print,
     /// `len(x)` → the type-selected string or collection length operation
@@ -711,13 +716,26 @@ impl BuiltinFn {
 #[derive(Debug, Clone, PartialEq)]
 pub enum IrMethodDispatch {
     /// Preserve the selected trait owner and, when required, emit a fully-qualified trait method call.
-    Trait {
-        trait_path: String,
-        type_args: Vec<IrType>,
-        receiver_is_mutable: bool,
-    },
+    Trait(Box<IrTraitDispatch>),
     /// Keep the emitted call as regular Rust method lookup while retaining this extension-trait import binding.
     RustExtensionTraitImport { binding: String },
+}
+
+/// Compiler-owned semantics and emission data for one selected trait dispatch.
+#[derive(Debug, Clone, PartialEq)]
+pub struct IrTraitDispatch {
+    /// Canonical source declaration name selected by the typechecker, before backend path rewriting.
+    pub trait_source_name: String,
+    /// Canonical source module that owns the selected trait, when semantic resolution crossed an import boundary.
+    pub trait_module_path: Option<Vec<String>>,
+    /// Compiler-resolved generic header attached to the exact selected implementation.
+    pub implementation_type_params: Vec<super::decl::IrTypeParam>,
+    /// Rust-visible path used only for emission.
+    pub trait_path: String,
+    /// Checked trait instantiation used by both propagation and emission.
+    pub type_args: Vec<IrType>,
+    /// Whether the selected trait method takes a mutable receiver.
+    pub receiver_is_mutable: bool,
 }
 
 /// Known method kinds recognized by the Incan compiler.

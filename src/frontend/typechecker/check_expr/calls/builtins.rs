@@ -212,6 +212,7 @@ impl TypeChecker {
             if has_call_root_binding {
                 return None;
             }
+            self.type_info.record_resolved_builtin_call(call_span, bid);
             return match bid {
                 BuiltinFnId::IsInstance => {
                     if args.len() != 2 {
@@ -225,7 +226,11 @@ impl TypeChecker {
 
                     let target_expr = Self::call_arg_expr(&args[1]);
                     match &target_expr.node {
-                        Expr::Ident(_) | Expr::Paren(_) => {}
+                        Expr::Ident(_) | Expr::Paren(_) => {
+                            if let Some(target) = self.resolve_isinstance_target(target_expr) {
+                                self.type_info.record_isinstance_target(call_span, target);
+                            }
+                        }
                         _ => {
                             self.check_expr(target_expr);
                             self.errors

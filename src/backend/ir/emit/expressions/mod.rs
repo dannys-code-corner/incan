@@ -98,10 +98,7 @@ pub(in crate::backend::ir::emit) fn method_kind_uses_mutable_receiver(kind: &Met
 pub(in crate::backend::ir::emit) fn method_dispatch_uses_mutable_receiver(dispatch: Option<&IrMethodDispatch>) -> bool {
     matches!(
         dispatch,
-        Some(IrMethodDispatch::Trait {
-            receiver_is_mutable: true,
-            ..
-        })
+        Some(IrMethodDispatch::Trait(dispatch)) if dispatch.receiver_is_mutable
     )
 }
 
@@ -3896,11 +3893,20 @@ mod tests {
                     IrType::Struct("Stream".to_string()),
                 )),
                 method: "take".to_string(),
-                dispatch: Some(IrMethodDispatch::Trait {
-                    trait_path: "crate::__incan_std::derives::collection::FallibleIterator".to_string(),
-                    type_args: vec![IrType::Int, IrType::String],
-                    receiver_is_mutable: false,
-                }),
+                dispatch: Some(IrMethodDispatch::Trait(Box::new(
+                    crate::backend::ir::expr::IrTraitDispatch {
+                        trait_source_name: "FallibleIterator".to_string(),
+                        trait_module_path: Some(vec![
+                            "std".to_string(),
+                            "derives".to_string(),
+                            "collection".to_string(),
+                        ]),
+                        implementation_type_params: Vec::new(),
+                        trait_path: "crate::__incan_std::derives::collection::FallibleIterator".to_string(),
+                        type_args: vec![IrType::Int, IrType::String],
+                        receiver_is_mutable: false,
+                    },
+                ))),
                 type_args: Vec::new(),
                 args: vec![IrCallArg {
                     name: None,

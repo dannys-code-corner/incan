@@ -11,7 +11,7 @@ use super::super::super::conversions::{BinOpEmitKind, determine_binop_plan};
 use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{BinOp, IrCallArg, IrCallArgKind, IrExprKind, TypedExpr, VarRefKind};
 use super::super::super::ownership::{ArgumentPassingPlan, ValueUseSite};
-use super::super::super::types::IrType;
+use super::super::super::types::{IrType, union_member_type_matches};
 use super::super::super::{FunctionRegistry, FunctionSignature};
 use super::super::{EmitError, IrEmitter};
 use crate::frontend::ast::ParamKind;
@@ -149,11 +149,7 @@ impl<'a> IrEmitter<'a> {
 
     /// Return whether an argument can be wrapped directly as `Some(inner)`.
     fn option_payload_type_matches(arg_ty: &IrType, inner_ty: &IrType) -> bool {
-        arg_ty == inner_ty
-            || matches!(
-                (inner_ty, arg_ty),
-                (IrType::String, IrType::StaticStr | IrType::StrRef | IrType::FrozenStr)
-            )
+        union_member_type_matches(inner_ty, arg_ty)
     }
 
     /// Emit a concrete payload argument for an `Option[T]` parameter as `Some(...)`.

@@ -12,6 +12,7 @@ use crate::frontend::diagnostics::{CompileError, errors};
 use crate::frontend::symbols::{FieldInfo, FunctionInfo, ResolvedType, SymbolKind, VariableInfo};
 use crate::frontend::typechecker::helpers::{is_frozen_bytes, is_frozen_str};
 use incan_core::lang::keywords;
+use incan_core::numeric_values::{IntegerBounds, integer_bounds};
 use incan_semantics_core::SurfaceExprTypeCheck;
 use std::collections::HashMap;
 
@@ -416,16 +417,50 @@ impl TypeChecker {
             ));
             return expected_ty.clone();
         }
+        if matches!(
+            target,
+            incan_core::lang::types::numerics::NumericTypeId::F32
+                | incan_core::lang::types::numerics::NumericTypeId::F64
+        ) {
+            let finite = match signed_int_literal_value(expr) {
+                Some(value) => match target {
+                    incan_core::lang::types::numerics::NumericTypeId::F32 => (value as f32).is_finite(),
+                    incan_core::lang::types::numerics::NumericTypeId::F64 => (value as f64).is_finite(),
+                    _ => unreachable!("guard proves a binary-float target"),
+                },
+                None => unsigned_int_literal_magnitude(expr).is_some_and(|value| match target {
+                    incan_core::lang::types::numerics::NumericTypeId::F32 => (value as f32).is_finite(),
+                    incan_core::lang::types::numerics::NumericTypeId::F64 => (value as f64).is_finite(),
+                    _ => unreachable!("guard proves a binary-float target"),
+                }),
+            };
+            if !finite {
+                self.errors.push(CompileError::type_error(
+                    format!("Integer literal does not fit in {expected_ty}"),
+                    expr.span,
+                ));
+            }
+            return expected_ty.clone();
+        }
         let Some(value) = signed_int_literal_value(expr) else {
             return self.check_expr(expr);
         };
-        if let Some((min, max)) = integer_literal_bounds(target)
-            && (value < min || value > max)
-        {
-            self.errors.push(CompileError::type_error(
-                format!("Integer literal {value} does not fit in {expected_ty}; valid range is {min}..={max}"),
-                expr.span,
-            ));
+        match integer_bounds(target) {
+            Some(IntegerBounds::Signed { minimum, maximum }) if value < minimum || value > maximum => {
+                self.errors.push(CompileError::type_error(
+                    format!(
+                        "Integer literal {value} does not fit in {expected_ty}; valid range is {minimum}..={maximum}"
+                    ),
+                    expr.span,
+                ));
+            }
+            Some(IntegerBounds::Unsigned { maximum }) if value < 0 || (value as u128) > maximum => {
+                self.errors.push(CompileError::type_error(
+                    format!("Integer literal {value} does not fit in {expected_ty}; valid range is 0..={maximum}"),
+                    expr.span,
+                ));
+            }
+            _ => {}
         }
         expected_ty.clone()
     }
@@ -572,6 +607,7 @@ fn signed_int_literal_value(expr: &Spanned<Expr>) -> Option<i128> {
     match &expr.node {
         Expr::Literal(Literal::Int(value)) => i128::try_from(value.magnitude).ok(),
         Expr::Unary(UnaryOp::Neg, inner) => match &inner.node {
+            Expr::Literal(Literal::Int(value)) if value.magnitude == (1_u128 << 127) => Some(i128::MIN),
             Expr::Literal(Literal::Int(value)) => i128::try_from(value.magnitude).ok().map(|value| -value),
             _ => None,
         },
@@ -584,26 +620,5 @@ fn unsigned_int_literal_magnitude(expr: &Spanned<Expr>) -> Option<u128> {
     match &expr.node {
         Expr::Literal(Literal::Int(value)) => Some(value.magnitude),
         _ => None,
-    }
-}
-
-/// Return inclusive literal bounds for exact-width integer numeric targets.
-fn integer_literal_bounds(id: incan_core::lang::types::numerics::NumericTypeId) -> Option<(i128, i128)> {
-    use incan_core::lang::types::numerics::NumericTypeId;
-
-    match id {
-        NumericTypeId::I8 => Some((i128::from(i8::MIN), i128::from(i8::MAX))),
-        NumericTypeId::I16 => Some((i128::from(i16::MIN), i128::from(i16::MAX))),
-        NumericTypeId::I32 => Some((i128::from(i32::MIN), i128::from(i32::MAX))),
-        NumericTypeId::I64 => Some((i128::from(i64::MIN), i128::from(i64::MAX))),
-        NumericTypeId::I128 => Some((i128::MIN, i128::MAX)),
-        NumericTypeId::U8 => Some((0, i128::from(u8::MAX))),
-        NumericTypeId::U16 => Some((0, i128::from(u16::MAX))),
-        NumericTypeId::U32 => Some((0, i128::from(u32::MAX))),
-        NumericTypeId::U64 => Some((0, i128::from(u64::MAX))),
-        NumericTypeId::U128 => Some((0, i128::MAX)),
-        NumericTypeId::ISize => Some((isize::MIN as i128, isize::MAX as i128)),
-        NumericTypeId::USize => Some((0, usize::MAX as i128)),
-        NumericTypeId::F32 | NumericTypeId::F64 | NumericTypeId::Bool => None,
     }
 }

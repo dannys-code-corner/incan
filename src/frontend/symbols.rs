@@ -23,7 +23,7 @@ use incan_core::lang::types::stringlike::StringLikeId;
 pub type SymbolId = usize;
 
 /// Canonical semantic name for anonymous union types (RFC 029).
-pub const UNION_TYPE_NAME: &str = "Union";
+pub const UNION_TYPE_NAME: &str = incan_core::lang::types::UNION_TYPE_NAME;
 
 /// Separator used in generated Rust symbols for source overload implementations.
 const OVERLOAD_EMITTED_NAME_SEPARATOR: &str = "_overload_";
@@ -1000,6 +1000,32 @@ pub struct TypeBoundInfo {
     pub source_name: Option<String>,
     pub type_args: Vec<ResolvedType>,
     pub module_path: Option<Vec<String>>,
+    /// Compiler-resolved generic header attached to this exact adopted-trait implementation.
+    pub implementation_type_params: Vec<ImplementationTypeParamInfo>,
+}
+
+/// One implementation-header type parameter retained from checked library metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplementationTypeParamInfo {
+    pub name: String,
+    pub bounds: Vec<ImplementationTraitBoundInfo>,
+}
+
+/// One exact implementation requirement retained from checked library metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImplementationTraitBoundInfo {
+    pub trait_path: String,
+    pub type_args: Vec<ResolvedType>,
+    pub associated_types: Vec<(String, ResolvedType)>,
+    pub origin: ImplementationTraitBoundOriginInfo,
+}
+
+/// Origin classification for an implementation-only bound before IR lowering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImplementationTraitBoundOriginInfo {
+    Standard,
+    RustCapability,
+    SourceCallable,
 }
 
 /// Resolved type (after type checking)

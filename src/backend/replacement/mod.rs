@@ -22,11 +22,11 @@
 //! this module supplies it with evaluated operands and refuses an unresolved, inactive, or unauthorized operation
 //! at the original source span.
 
+mod execution_preflight;
 pub mod hashed;
 mod list_iteration;
 pub mod program_io;
 pub mod provider;
-mod provider_preflight;
 
 pub use program_io::{ProgramIo, ProgramIoError, ProgramOutput};
 
@@ -41,7 +41,9 @@ use incan_core::{
     errors::IncanError,
     lang::surface::constructors::{ConstructorId, as_str as constructor_name},
     lang::types::collections::{self, CollectionTypeId},
+    lang::types::numerics::{self, NumericTypeId},
     numeric_strings::{parse_float_string, parse_int_string},
+    numeric_values::{IntegerBounds, decimal_value_fits, format_decimal_value, integer_bounds},
     python_floor_div_i64, python_mod_i64,
 };
 use incan_semantics_core::body_ir::{
@@ -51,8 +53,8 @@ use incan_semantics_core::body_ir::{
     FormatStyle, GeneratorBody, HelperOp, IterProtocol, LocalCallableTarget, LocalId, LocalOrigin, MatchArm,
     NamedCallableTarget, NominalDeclaration, NominalPatternTarget, Operand, OwnershipFact, Pattern, PatternBinding,
     Place, PlaceElem, ProviderActivationState, ProviderOperationPlan, ResultVariant, ResultVariantKind, Rvalue,
-    ScopeId, Statement, StatementKind, TryErrorRouting, UnOp, ValueEnumBacking, ValueEnumDeclaration,
-    ValueEnumVariantDeclaration, ValueEnumVariantTarget,
+    ScopeId, Statement, StatementKind, TryErrorRouting, TypedNumericConstant, UnOp, ValueEnumBacking,
+    ValueEnumDeclaration, ValueEnumVariantDeclaration, ValueEnumVariantTarget,
 };
 use incan_semantics_core::{
     AbiV0RuntimeRequirement, CompilerNodeId, CompilerNodeKind, HirSourceSpan, IncanPrimitiveType, IncanType,
@@ -80,9 +82,9 @@ pub enum ReplacementValue {
     /// An owned Incan `str` value.
     Str(String),
     /// An ordinary Incan binary float, normalized to the `f64` carrier the Rust-emission path uses.
-    ///
-    /// Checked f32/f64/sized numeric values remain outside this carrier and are refused before execution.
     Float(f64),
+    /// A compiler-typed exact numeric or decimal value whose source type is part of its runtime identity.
+    Numeric(ReplacementNumericValue),
     /// An Incan `None`/unit value.
     Unit,
     /// A normalized runtime range iterator for the selected `range` source-spelling control-flow case.
@@ -168,6 +170,309 @@ pub enum ReplacementValue {
         elements: Vec<ReplacementValue>,
         next: usize,
     },
+}
+
+/// Exact numeric payloads admitted by replacement execution.
+///
+/// The signed/unsigned forms carry a canonical registry id so source aliases normalize once in the compiler. Direct
+/// API callers may construct this enum, so entrypoint validation rechecks the id family and range before execution.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReplacementNumericValue {
+    /// A signed integer with its canonical signed registry identity and a value inside that identity's range.
+    Signed {
+        /// Canonical signed integer kind; unsigned, float, and bool ids are malformed here.
+        kind: NumericTypeId,
+        /// Exact signed payload, constrained to `kind`'s inclusive bounds.
+        value: i128,
+    },
+    /// An unsigned integer with its canonical unsigned registry identity and a value inside that identity's range.
+    Unsigned {
+        /// Canonical unsigned integer kind; signed, float, and bool ids are malformed here.
+        kind: NumericTypeId,
+        /// Exact unsigned payload, constrained to zero through `kind`'s inclusive maximum.
+        value: u128,
+    },
+    /// A finite IEEE-754 binary32 value; non-finite direct carriers are malformed.
+    F32(f32),
+    /// A finite IEEE-754 binary64 value; non-finite direct carriers are malformed.
+    F64(f64),
+    /// A checked fixed-scale decimal retaining both its declared type and written fractional width.
+    Decimal {
+        /// Declared decimal precision in the supported range `1..=38`.
+        precision: u8,
+        /// Declared maximum fractional scale, no greater than `precision`.
+        scale: u8,
+        /// Signed literal digits with the decimal point removed.
+        coefficient: i128,
+        /// Fractional digits written in the source value, no greater than `scale`.
+        literal_scale: u8,
+    },
+}
+
+impl ReplacementNumericValue {
+    /// Canonical checked type spelling retained for diagnostics and typed result transport.
+    #[must_use]
+    pub fn type_name(&self) -> String {
+        match self {
+            Self::Signed { kind, .. } | Self::Unsigned { kind, .. } => numerics::as_str(*kind).to_string(),
+            Self::F32(_) => "f32".to_string(),
+            Self::F64(_) => "f64".to_string(),
+            Self::Decimal { precision, scale, .. } => format!("decimal[{precision}, {scale}]"),
+        }
+    }
+
+    /// Native Display spelling for source output and scalar `str` conversion.
+    #[must_use]
+    pub fn observable_text(&self) -> String {
+        match self {
+            Self::Signed { value, .. } => value.to_string(),
+            Self::Unsigned { value, .. } => value.to_string(),
+            Self::F32(value) => value.to_string(),
+            Self::F64(value) => value.to_string(),
+            Self::Decimal {
+                coefficient,
+                literal_scale,
+                ..
+            } => format_decimal_value(*coefficient, *literal_scale),
+        }
+    }
+
+    /// Typed payload used in receipt identity independently from source-observable Display.
+    pub(crate) fn receipt_identity_text(&self) -> String {
+        match self {
+            Self::Signed { kind, value } => format!("{}:signed:{value}", numerics::as_str(*kind)),
+            Self::Unsigned { kind, value } => format!("{}:unsigned:{value}", numerics::as_str(*kind)),
+            Self::F32(value) => format!("f32:bits:{:08x}", value.to_bits()),
+            Self::F64(value) => format!("f64:bits:{:016x}", value.to_bits()),
+            Self::Decimal {
+                precision,
+                scale,
+                coefficient,
+                literal_scale,
+            } => format!(
+                "decimal[{precision},{scale}]:coefficient={}:literal_scale={}",
+                coefficient, literal_scale
+            ),
+        }
+    }
+
+    /// Recheck the public carrier against its compiler-owned family and declared range.
+    pub(crate) fn is_valid(&self) -> bool {
+        match self {
+            Self::Signed { kind, value } => {
+                matches!(
+                    integer_bounds(*kind),
+                    Some(IntegerBounds::Signed { minimum, maximum }) if *value >= minimum && *value <= maximum
+                )
+            }
+            Self::Unsigned { kind, value } => {
+                matches!(integer_bounds(*kind), Some(IntegerBounds::Unsigned { maximum }) if *value <= maximum)
+            }
+            Self::F32(value) => value.is_finite(),
+            Self::F64(value) => value.is_finite(),
+            Self::Decimal {
+                precision,
+                scale,
+                coefficient,
+                literal_scale,
+            } => decimal_value_fits(*precision, *scale, *coefficient, *literal_scale),
+        }
+    }
+}
+
+/// Validate a direct or lowered typed-numeric carrier against its canonical family and target range.
+fn validate_numeric_value(
+    value: &ReplacementNumericValue,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if value.is_valid() {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("malformed typed numeric carrier for `{}`", value.type_name()),
+            span,
+        ))
+    }
+}
+
+/// Return whether one typed carrier exactly satisfies a checked semantic type.
+fn numeric_value_matches_type(value: &ReplacementNumericValue, ty: &IncanType) -> bool {
+    match (value, ty) {
+        (
+            ReplacementNumericValue::Signed { kind: actual, .. }
+            | ReplacementNumericValue::Unsigned { kind: actual, .. },
+            IncanType::Primitive(IncanPrimitiveType::Numeric(expected)),
+        ) => actual == expected,
+        (ReplacementNumericValue::F32(_), IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::F32)))
+        | (ReplacementNumericValue::F64(_), IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::F64))) => {
+            true
+        }
+        (
+            ReplacementNumericValue::Decimal {
+                precision: actual_precision,
+                scale: actual_scale,
+                ..
+            },
+            IncanType::Decimal {
+                precision: expected_precision,
+                scale: expected_scale,
+            },
+        ) => actual_precision == expected_precision && actual_scale == expected_scale,
+        _ => false,
+    }
+}
+
+/// Apply the typechecker's lossless numeric-widening contract at a Body-IR value boundary.
+///
+/// The target type decides the resulting carrier. In particular, widening `f32` to explicit `f64` produces an
+/// `F64` carrier, while widening it to ordinary `float` produces the ordinary `Float` carrier. Keeping the source
+/// tag after a checked widening would make later output and receipt evidence describe the wrong program type.
+fn coerce_value_to_checked_type(
+    value: ReplacementValue,
+    target: &IncanType,
+    span: HirSourceSpan,
+) -> Result<ReplacementValue, ReplacementExecutionError> {
+    let source_is_numeric = replacement_numeric_type_id(&value).is_some()
+        || matches!(
+            &value,
+            ReplacementValue::Numeric(ReplacementNumericValue::Decimal { .. })
+        );
+    let target_is_numeric = checked_numeric_type_id(target).is_some() || matches!(target, IncanType::Decimal { .. });
+    // Some normalized Body-IR temporaries intentionally carry task/generator frames in a slot whose source-level
+    // type names the value eventually produced by that frame. Numeric coercion applies only at an actual
+    // numeric-to-numeric boundary; nonnumeric internal carriers keep their established runtime representation.
+    if !source_is_numeric || !target_is_numeric {
+        return Ok(value);
+    }
+
+    if let (ReplacementValue::Numeric(decimal @ ReplacementNumericValue::Decimal { .. }), IncanType::Decimal { .. }) =
+        (&value, target)
+        && numeric_value_matches_type(decimal, target)
+    {
+        return Ok(value);
+    }
+
+    let Some(source) = replacement_numeric_type_id(&value) else {
+        return Err(numeric_type_mismatch(&value, target, span));
+    };
+    let Some(target_id) = checked_numeric_type_id(target) else {
+        return Err(numeric_type_mismatch(&value, target, span));
+    };
+    if !incan_core::numeric_values::numeric_type_losslessly_widens_to(source, target_id) {
+        return Err(numeric_type_mismatch(&value, target, span));
+    }
+
+    let widened = widen_numeric_carrier(value, target_id).ok_or_else(|| {
+        unsupported(
+            format!(
+                "typed numeric carrier could not realize checked lossless widening from `{}` to `{}`",
+                numerics::as_str(source),
+                target
+            ),
+            span,
+        )
+    })?;
+    match target {
+        IncanType::Primitive(IncanPrimitiveType::Int) => match widened {
+            ReplacementNumericValue::Signed { value, .. } => i64::try_from(value)
+                .map(ReplacementValue::Int)
+                .map_err(|_| unsupported("lossless widening produced an out-of-range ordinary int", span)),
+            _ => Err(unsupported(
+                "lossless widening produced a non-integer ordinary int",
+                span,
+            )),
+        },
+        IncanType::Primitive(IncanPrimitiveType::Float) => match widened {
+            ReplacementNumericValue::F64(value) => Ok(ReplacementValue::Float(value)),
+            _ => Err(unsupported("lossless widening produced a non-f64 ordinary float", span)),
+        },
+        IncanType::Primitive(IncanPrimitiveType::Numeric(_)) => Ok(ReplacementValue::Numeric(widened)),
+        _ => Err(numeric_type_mismatch(&ReplacementValue::Numeric(widened), target, span)),
+    }
+}
+
+/// Build the canonical source-span refusal for a runtime carrier that contradicts its checked numeric destination.
+fn numeric_type_mismatch(
+    value: &ReplacementValue,
+    target: &IncanType,
+    span: HirSourceSpan,
+) -> ReplacementExecutionError {
+    unsupported(
+        format!(
+            "{} carrier contradicts checked numeric destination type `{target}`",
+            value_kind(value)
+        ),
+        span,
+    )
+}
+
+/// Project a runtime binary-numeric carrier to its canonical compiler-owned numeric identity.
+fn replacement_numeric_type_id(value: &ReplacementValue) -> Option<NumericTypeId> {
+    match value {
+        ReplacementValue::Int(_) => Some(NumericTypeId::I64),
+        ReplacementValue::Float(_) => Some(NumericTypeId::F64),
+        ReplacementValue::Numeric(ReplacementNumericValue::Signed { kind, .. })
+        | ReplacementValue::Numeric(ReplacementNumericValue::Unsigned { kind, .. }) => Some(*kind),
+        ReplacementValue::Numeric(ReplacementNumericValue::F32(_)) => Some(NumericTypeId::F32),
+        ReplacementValue::Numeric(ReplacementNumericValue::F64(_)) => Some(NumericTypeId::F64),
+        _ => None,
+    }
+}
+
+/// Project a checked ordinary or exact binary-numeric type to its canonical numeric identity.
+fn checked_numeric_type_id(ty: &IncanType) -> Option<NumericTypeId> {
+    match ty {
+        IncanType::Primitive(IncanPrimitiveType::Int) => Some(NumericTypeId::I64),
+        IncanType::Primitive(IncanPrimitiveType::Float) => Some(NumericTypeId::F64),
+        IncanType::Primitive(IncanPrimitiveType::Numeric(kind)) if *kind != NumericTypeId::Bool => Some(*kind),
+        _ => None,
+    }
+}
+
+/// Materialize the target carrier after the typechecker has approved one lossless numeric widening.
+fn widen_numeric_carrier(value: ReplacementValue, target: NumericTypeId) -> Option<ReplacementNumericValue> {
+    match target {
+        NumericTypeId::I8
+        | NumericTypeId::I16
+        | NumericTypeId::I32
+        | NumericTypeId::I64
+        | NumericTypeId::I128
+        | NumericTypeId::ISize => {
+            let value = match value {
+                ReplacementValue::Int(value) => i128::from(value),
+                ReplacementValue::Numeric(ReplacementNumericValue::Signed { value, .. }) => value,
+                ReplacementValue::Numeric(ReplacementNumericValue::Unsigned { value, .. }) => {
+                    i128::try_from(value).ok()?
+                }
+                _ => return None,
+            };
+            Some(ReplacementNumericValue::Signed { kind: target, value })
+        }
+        NumericTypeId::U8
+        | NumericTypeId::U16
+        | NumericTypeId::U32
+        | NumericTypeId::U64
+        | NumericTypeId::U128
+        | NumericTypeId::USize => match value {
+            ReplacementValue::Numeric(ReplacementNumericValue::Unsigned { value, .. }) => {
+                Some(ReplacementNumericValue::Unsigned { kind: target, value })
+            }
+            _ => None,
+        },
+        NumericTypeId::F32 => match value {
+            ReplacementValue::Numeric(ReplacementNumericValue::F32(value)) => Some(ReplacementNumericValue::F32(value)),
+            _ => None,
+        },
+        NumericTypeId::F64 => match value {
+            ReplacementValue::Float(value) => Some(ReplacementNumericValue::F64(value)),
+            ReplacementValue::Numeric(ReplacementNumericValue::F32(value)) => {
+                Some(ReplacementNumericValue::F64(f64::from(value)))
+            }
+            ReplacementValue::Numeric(ReplacementNumericValue::F64(value)) => Some(ReplacementNumericValue::F64(value)),
+            _ => None,
+        },
+        NumericTypeId::Bool => None,
+    }
 }
 
 /// Private list cursors for one compiler-selected Zip invocation.
@@ -364,6 +669,7 @@ impl ReplacementValue {
             Self::Bool(value) => value.to_string(),
             Self::Str(value) => value.clone(),
             Self::Float(value) => value.to_string(),
+            Self::Numeric(value) => value.observable_text(),
             Self::Unit => constructor_name(ConstructorId::None).to_string(),
             Self::Range { next, end, step } => format!("range({next}, {end}, {step})"),
             Self::List { elements, .. } => format!(
@@ -417,6 +723,28 @@ impl ReplacementValue {
                     .collect::<Vec<_>>()
                     .join(", ")
             ),
+        }
+    }
+
+    /// Return the exact checked scalar type carried across a direct entrypoint/report boundary.
+    #[must_use]
+    pub fn scalar_type_name(&self) -> Option<String> {
+        match self {
+            Self::Int(_) => Some("int".to_string()),
+            Self::Bool(_) => Some("bool".to_string()),
+            Self::Str(_) => Some("str".to_string()),
+            Self::Float(_) => Some("float".to_string()),
+            Self::Numeric(value) => Some(value.type_name()),
+            Self::Unit => Some(constructor_name(ConstructorId::None).to_string()),
+            _ => None,
+        }
+    }
+
+    /// Stable typed value projection used by receipt identity.
+    pub(crate) fn receipt_identity_text(&self) -> String {
+        match self {
+            Self::Numeric(value) => value.receipt_identity_text(),
+            _ => self.observable_text(),
         }
     }
 }
@@ -758,11 +1086,9 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
         });
     }
     validate_scalar_arguments(args, body.span)?;
-    validate_selected_float_parameter_arguments(&body.params, args)?;
-    // Preserve the selected body's numeric refusal before querying provider availability.
-    validate_nonordinary_numeric_locals(body)?;
-    provider_preflight::validate(module, body, providers.map(Rc::as_ref))?;
-    validate_direct_body_profile(body)?;
+    validate_selected_parameter_arguments(&body.params, args)?;
+    validate_reachable_typed_numeric_profile(module, body)?;
+    execution_preflight::validate(module, body, providers.map(Rc::as_ref))?;
     Ok(ValidatedFreeFunctionExecution {
         module,
         name: name.to_string(),
@@ -778,7 +1104,6 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
 /// runtime promises to refuse. Provider-host availability is checked separately across the reachable computation
 /// once during preparation; runtime invocation still rechecks the host and authority.
 fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionError> {
-    validate_nonordinary_numeric_locals(body)?;
     // An `async def` produces an awaitable even when its body has no explicit `await`. Executing its statements as
     // an ordinary scalar body would erase task construction, suspension, wake, cancellation, and receipt semantics
     // that belong to #1155. The stored declaration fact is therefore a direct profile boundary, not something this
@@ -1044,7 +1369,8 @@ pub fn execute_prevalidated_free_function_with_io(
             }
         }
     };
-    ensure_scalar_result(&value, body.span)?;
+    let value = coerce_value_to_checked_type(value, &body.return_type, body.span)?;
+    ensure_scalar_result(&value, &body.return_type, body.span)?;
     let body_snapshot = executor.body_snapshot();
     let ownership_summary = canonical_ownership_summary(&executor.ownership_reads);
     let requirements_summary = canonical_runtime_requirements_summary(&executor.runtime_requirements);
@@ -1064,7 +1390,7 @@ pub fn execute_prevalidated_free_function_with_io(
     );
     let output_identity = digest_output(&[
         body_snapshot.as_str(),
-        value.observable_text().as_str(),
+        value.receipt_identity_text().as_str(),
         ownership_summary.as_str(),
         requirements_summary.as_str(),
         task_summary.as_str(),
@@ -1098,39 +1424,69 @@ fn validate_scalar_arguments(args: &[ReplacementValue], span: HirSourceSpan) -> 
     for argument in args {
         if !matches!(
             argument,
-            ReplacementValue::Int(_) | ReplacementValue::Bool(_) | ReplacementValue::Str(_) | ReplacementValue::Unit
+            ReplacementValue::Int(_)
+                | ReplacementValue::Bool(_)
+                | ReplacementValue::Str(_)
+                | ReplacementValue::Float(_)
+                | ReplacementValue::Numeric(_)
+                | ReplacementValue::Unit
         ) {
             return Err(unsupported(
                 format!("{} argument in the scalar replacement profile", value_kind(argument)),
                 span,
             ));
         }
+        if let ReplacementValue::Numeric(value) = argument {
+            validate_numeric_value(value, span)?;
+        }
     }
     Ok(())
 }
 
-/// Keep a direct API caller from supplying an untyped carrier to a checked ordinary-float parameter.
+/// Keep a direct API caller from supplying a carrier that contradicts a checked parameter type.
 ///
 /// The selected replacement entrypoint accepts only direct profile carriers, not a source typechecker context. A
 /// supplied `Int` or `Str` therefore cannot stand in for a checked `float` parameter merely because the executor
 /// can materialize that carrier. This is deliberately an entrypoint-only boundary: source-resolved sibling calls
 /// keep their own checked call contract and must not be rejected by a whole-body parameter scan.
-fn validate_selected_float_parameter_arguments(
+fn validate_selected_parameter_arguments(
     params: &[CallableParam],
     args: &[ReplacementValue],
 ) -> Result<(), ReplacementExecutionError> {
-    for (parameter, _) in params.iter().zip(args) {
-        if matches!(&parameter.ty, IncanType::Primitive(IncanPrimitiveType::Float)) {
+    for (parameter, argument) in params.iter().zip(args) {
+        let matches = replacement_value_matches_checked_type(argument, &parameter.ty);
+        if !matches {
             return Err(unsupported(
                 format!(
-                    "direct argument supplied to checked float parameter `{}` outside the scalar replacement profile",
-                    parameter.name
+                    "direct {} argument does not satisfy checked parameter `{}` of type `{}`",
+                    value_kind(argument),
+                    parameter.name,
+                    parameter.ty
                 ),
                 parameter.span,
             ));
         }
     }
     Ok(())
+}
+
+/// Return whether one direct API carrier inhabits the checked parameter type selected by the frontend.
+fn replacement_value_matches_checked_type(value: &ReplacementValue, ty: &IncanType) -> bool {
+    match (ty, value) {
+        (IncanType::Primitive(IncanPrimitiveType::Int), ReplacementValue::Int(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Float), ReplacementValue::Float(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Bool), ReplacementValue::Bool(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Str), ReplacementValue::Str(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Unit), ReplacementValue::Unit) => true,
+        (ty, ReplacementValue::Numeric(value)) => numeric_value_matches_type(value, ty),
+        (IncanType::Generic { base, args }, value)
+            if base == incan_core::lang::types::UNION_TYPE_NAME && !args.is_empty() =>
+        {
+            args.iter()
+                .any(|member| replacement_value_matches_checked_type(value, member))
+        }
+        _ => false,
+    }
 }
 
 /// Refuse repeated user-binding spellings until Body IR carries an explicit binding-equivalence fact.
@@ -1159,24 +1515,472 @@ fn validate_binding_identity(body: &Body) -> Result<(), ReplacementExecutionErro
     Ok(())
 }
 
-/// Keep compiler-distinguished numeric locals outside the ordinary `int`/`float` carrier.
-///
-/// Body IR retains `f32`, `f64`, aliases such as `real`, and sized integers as
-/// [`IncanPrimitiveType::Numeric`] rather than collapsing them into the language's ordinary `int` or `float`.
-/// The replacement value model has no carrier that can preserve those distinctions. Refusing at the declaration's
-/// retained source span prevents a nested closure, generator, print, f-string, or scalar-conversion call from
-/// observing an accidentally widened value. The predicate consumes the checked enum fact directly; the rendered
-/// type appears only in the diagnostic.
-fn validate_nonordinary_numeric_locals(body: &Body) -> Result<(), ReplacementExecutionError> {
+/// Validate the closed typed-numeric type vocabulary before execution.
+fn validate_typed_numeric_types(body: &Body) -> Result<(), ReplacementExecutionError> {
     for local in &body.locals {
-        if matches!(local.ty, IncanType::Primitive(IncanPrimitiveType::Numeric(_))) {
+        if matches!(
+            local.ty,
+            IncanType::Primitive(IncanPrimitiveType::Numeric(NumericTypeId::Bool))
+        ) {
             return Err(unsupported(
-                format!("checked nonordinary numeric local has Body-IR type `{}`", local.ty),
+                "bool reached Body IR through the exact numeric type channel",
+                local.span,
+            ));
+        }
+        if let IncanType::Decimal { precision, scale } = local.ty
+            && (precision == 0 || precision > 38 || scale > precision)
+        {
+            return Err(unsupported(
+                format!("invalid checked decimal type `{}`", local.ty),
                 local.span,
             ));
         }
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TypedNumericProfileKind {
+    Binary(NumericTypeId),
+    Decimal,
+}
+
+impl TypedNumericProfileKind {
+    /// Render the source-facing numeric kind named by a profile refusal.
+    fn label(self) -> String {
+        match self {
+            Self::Binary(kind) => numerics::as_str(kind).to_string(),
+            Self::Decimal => "decimal".to_string(),
+        }
+    }
+
+    /// Return whether this profile kind is a fixed-scale decimal rather than a binary numeric.
+    const fn is_decimal(self) -> bool {
+        matches!(self, Self::Decimal)
+    }
+}
+
+/// Validate every typed-numeric operation reachable from the selected entrypoint before program output begins.
+///
+/// The carrier itself is admitted. Operations are a separate contract: this walk permits checked movement,
+/// lossless widening, direct calls, scalar conversions and Display output, while keeping arithmetic, Debug,
+/// aggregates, methods and other unproved behavior explicitly non-green under #988.
+fn validate_reachable_typed_numeric_profile(
+    module: &BodyIrModule,
+    root: &Body,
+) -> Result<(), ReplacementExecutionError> {
+    let mut visited = BTreeSet::new();
+    validate_typed_numeric_body_profile(module, root, &mut visited)
+}
+
+/// Validate one reachable body once, following its source defaults and identity-selected sibling calls.
+fn validate_typed_numeric_body_profile(
+    module: &BodyIrModule,
+    body: &Body,
+    visited: &mut BTreeSet<CompilerNodeId>,
+) -> Result<(), ReplacementExecutionError> {
+    if !visited.insert(body.direct_call_id.clone()) {
+        return Ok(());
+    }
+    validate_typed_numeric_types(body)?;
+    for parameter in &body.params {
+        if let CallableParamDefault::Source(computation) = &parameter.default {
+            validate_typed_numeric_statements(module, body, &computation.stmts, visited)?;
+            let _ = typed_numeric_operand_kind(body, &computation.result, computation.span)?;
+        }
+    }
+    validate_typed_numeric_statements(module, body, &body.block.stmts, visited)
+}
+
+/// Validate a statement sequence for typed-numeric carrier movement and explicit operation refusals.
+fn validate_typed_numeric_statements(
+    module: &BodyIrModule,
+    body: &Body,
+    statements: &[Statement],
+    visited: &mut BTreeSet<CompilerNodeId>,
+) -> Result<(), ReplacementExecutionError> {
+    for statement in statements {
+        validate_typed_numeric_statement(module, body, statement, visited)?;
+    }
+    Ok(())
+}
+
+/// Validate one normalized statement without executing its effects.
+fn validate_typed_numeric_statement(
+    module: &BodyIrModule,
+    body: &Body,
+    statement: &Statement,
+    visited: &mut BTreeSet<CompilerNodeId>,
+) -> Result<(), ReplacementExecutionError> {
+    match &statement.kind {
+        StatementKind::Assign { rvalue, .. } => {
+            validate_typed_numeric_rvalue(module, body, rvalue, statement.span, visited)
+        }
+        StatementKind::Call { callee, args, .. } => {
+            validate_typed_numeric_call(module, body, callee, args, statement.span, visited)
+        }
+        StatementKind::Drop { .. } | StatementKind::Continue | StatementKind::Unsupported { .. } => Ok(()),
+        StatementKind::If {
+            cond,
+            then_block,
+            else_block,
+        } => {
+            refuse_typed_numeric_operand(body, cond, statement.span, "condition")?;
+            validate_typed_numeric_statements(module, body, &then_block.stmts, visited)?;
+            if let Some(else_block) = else_block {
+                validate_typed_numeric_statements(module, body, &else_block.stmts, visited)?;
+            }
+            Ok(())
+        }
+        StatementKind::Loop { body: loop_body } => {
+            validate_typed_numeric_statements(module, body, &loop_body.stmts, visited)
+        }
+        StatementKind::Break { value } => {
+            if let Some(value) = value {
+                let _ = typed_numeric_operand_kind(body, value, statement.span)?;
+            }
+            Ok(())
+        }
+        StatementKind::Return { value } => {
+            if let Some(value) = value {
+                let _ = typed_numeric_operand_kind(body, value, statement.span)?;
+            }
+            Ok(())
+        }
+        StatementKind::Assert { kind, message, .. } => {
+            match kind {
+                AssertionKind::Condition { cond } => {
+                    refuse_typed_numeric_operand(body, cond, statement.span, "assertion condition")?;
+                }
+                AssertionKind::Pattern { scrutinee, pattern } => {
+                    refuse_typed_numeric_operand(body, scrutinee, statement.span, "pattern assertion")?;
+                    validate_typed_numeric_pattern(pattern, statement.span)?;
+                }
+                AssertionKind::Raises { call, .. } => {
+                    refuse_typed_numeric_operand(body, call, statement.span, "raises assertion")?;
+                }
+            }
+            if let Some(message) = message {
+                let _ = typed_numeric_operand_kind(body, message, statement.span)?;
+            }
+            Ok(())
+        }
+        StatementKind::Expr { value } => {
+            let _ = typed_numeric_operand_kind(body, value, statement.span)?;
+            Ok(())
+        }
+        StatementKind::IterNext { iterator, .. } => {
+            refuse_typed_numeric_operand(body, iterator, statement.span, "iteration")
+        }
+        StatementKind::Yield { value } => refuse_typed_numeric_operand(body, value, statement.span, "generator yield"),
+        StatementKind::TryPropagate { operand, .. } => {
+            refuse_typed_numeric_operand(body, operand, statement.span, "try propagation")
+        }
+        StatementKind::Await { awaited, .. } => refuse_typed_numeric_operand(body, awaited, statement.span, "await"),
+        StatementKind::Race { arms, .. } => {
+            for arm in arms {
+                refuse_typed_numeric_operand(body, &arm.awaitable, statement.span, "race awaitable")?;
+                validate_typed_numeric_statements(module, body, &arm.body.stmts, visited)?;
+                let _ = typed_numeric_operand_kind(body, &arm.result, statement.span)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Validate one rvalue, admitting carrier movement and refusing unproved typed-numeric operations.
+fn validate_typed_numeric_rvalue(
+    module: &BodyIrModule,
+    body: &Body,
+    rvalue: &Rvalue,
+    span: HirSourceSpan,
+    visited: &mut BTreeSet<CompilerNodeId>,
+) -> Result<(), ReplacementExecutionError> {
+    match rvalue {
+        Rvalue::Use(operand) => {
+            let _ = typed_numeric_operand_kind(body, operand, span)?;
+            Ok(())
+        }
+        Rvalue::UnaryOp(operator, operand) => {
+            if let Some(kind) = typed_numeric_operand_kind(body, operand, span)? {
+                return Err(typed_numeric_operation_refusal(
+                    kind,
+                    unary_label(*operator).to_string(),
+                    span,
+                ));
+            }
+            Ok(())
+        }
+        Rvalue::BinaryOp(operator, left, right) => {
+            let left_kind = typed_numeric_operand_kind(body, left, span)?;
+            let right_kind = typed_numeric_operand_kind(body, right, span)?;
+            if let Some(kind) = left_kind.or(right_kind) {
+                return Err(typed_numeric_operation_refusal(
+                    kind,
+                    binary_label(*operator).to_string(),
+                    span,
+                ));
+            }
+            Ok(())
+        }
+        Rvalue::IsInstance { value, .. } => refuse_typed_numeric_operand(body, value, span, "isinstance type test"),
+        Rvalue::Format(parts) => {
+            for part in parts {
+                let FormatPart::Expr { operand, style } = part else {
+                    continue;
+                };
+                if let Some(kind) = typed_numeric_operand_kind(body, operand, span)?
+                    && matches!(style, FormatStyle::Debug)
+                {
+                    return Err(typed_numeric_operation_refusal(kind, "Debug formatting", span));
+                }
+            }
+            Ok(())
+        }
+        Rvalue::Aggregate(_, operands) => {
+            for operand in argument_operands(operands) {
+                refuse_typed_numeric_operand(body, operand, span, "aggregate construction")?;
+            }
+            Ok(())
+        }
+        Rvalue::Dict(entries) => {
+            for entry in entries {
+                match entry {
+                    DictEntry::Pair(key, value) => {
+                        refuse_typed_numeric_operand(body, key, span, "dict construction")?;
+                        refuse_typed_numeric_operand(body, value, span, "dict construction")?;
+                    }
+                    DictEntry::Spread(spread) => {
+                        refuse_typed_numeric_operand(body, &spread.source, span, "dict spread")?;
+                    }
+                }
+            }
+            Ok(())
+        }
+        Rvalue::ResultVariant(variant) => {
+            refuse_typed_numeric_operand(body, &variant.payload, span, "Result construction")
+        }
+        Rvalue::Closure {
+            params,
+            captured_operands,
+            body: closure,
+        } => {
+            for operand in captured_operands {
+                let _ = typed_numeric_operand_kind(body, operand, span)?;
+            }
+            for parameter in params {
+                if let CallableParamDefault::Source(computation) = &parameter.default {
+                    validate_typed_numeric_statements(module, body, &computation.stmts, visited)?;
+                    let _ = typed_numeric_operand_kind(body, &computation.result, computation.span)?;
+                }
+            }
+            validate_typed_numeric_statements(module, body, &closure.stmts, visited)?;
+            let _ = typed_numeric_operand_kind(body, &closure.result, span)?;
+            Ok(())
+        }
+        Rvalue::Generator {
+            source,
+            captured_operands,
+            body: generator,
+        } => {
+            refuse_typed_numeric_operand(body, source, span, "generator source")?;
+            for operand in captured_operands {
+                let _ = typed_numeric_operand_kind(body, operand, span)?;
+            }
+            validate_typed_numeric_statements(module, body, &generator.stmts, visited)
+        }
+        Rvalue::Match { scrutinee, arms } => {
+            refuse_typed_numeric_operand(body, scrutinee, span, "match")?;
+            for arm in arms {
+                validate_typed_numeric_pattern(&arm.pattern, span)?;
+                validate_typed_numeric_statements(module, body, &arm.guard_stmts, visited)?;
+                if let Some(guard) = &arm.guard {
+                    refuse_typed_numeric_operand(body, guard, span, "match guard")?;
+                }
+                validate_typed_numeric_statements(module, body, &arm.body_stmts, visited)?;
+                let _ = typed_numeric_operand_kind(body, &arm.result, span)?;
+            }
+            Ok(())
+        }
+        Rvalue::FieldlessEnumVariant(_) | Rvalue::ValueEnumVariant(_) => Ok(()),
+    }
+}
+
+/// Validate one call that receives a typed-numeric operand and follow any retained same-module target.
+fn validate_typed_numeric_call(
+    module: &BodyIrModule,
+    body: &Body,
+    callee: &Callee,
+    args: &[ArgumentElement],
+    span: HirSourceSpan,
+    visited: &mut BTreeSet<CompilerNodeId>,
+) -> Result<(), ReplacementExecutionError> {
+    let kinds = argument_operands(args)
+        .map(|operand| typed_numeric_operand_kind(body, operand, span))
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+
+    if let Callee::Function(CallableTarget::Named(target)) = callee
+        && target.direct_call_id.is_some()
+        && target.builtin.is_none()
+    {
+        let called = named_callable_body(module, target, span)?;
+        validate_typed_numeric_body_profile(module, called, visited)?;
+    }
+    let Some(kind) = kinds.first().copied() else {
+        return Ok(());
+    };
+
+    match callee {
+        Callee::Function(CallableTarget::Named(target)) => match explicit_builtin(target) {
+            Some(BuiltinFnId::Print | BuiltinFnId::Str) => Ok(()),
+            Some(BuiltinFnId::Int | BuiltinFnId::Float) if !kinds.iter().any(|kind| kind.is_decimal()) => Ok(()),
+            Some(BuiltinFnId::Int | BuiltinFnId::Float) => Err(typed_numeric_operation_refusal(
+                kind,
+                format!("`{}` conversion", target.name),
+                span,
+            )),
+            None if target.direct_call_id.is_some() => Ok(()),
+            other => Err(typed_numeric_operation_refusal(
+                kind,
+                format!(
+                    "call to {}",
+                    other.map_or_else(|| target.name.clone(), |builtin| builtins::as_str(builtin).to_string())
+                ),
+                span,
+            )),
+        },
+        Callee::Function(CallableTarget::Local(_)) => Ok(()),
+        Callee::Method(target) => Err(typed_numeric_operation_refusal(
+            kind,
+            format!("method `{}`", target.name),
+            span,
+        )),
+        Callee::Helper(helper) => Err(typed_numeric_operation_refusal(
+            kind,
+            format!("helper `{}`", helper.as_str()),
+            span,
+        )),
+        Callee::ProviderOperation(plan) => Err(typed_numeric_operation_refusal(
+            kind,
+            format!("provider operation `{}`", plan.operation.declaration_name),
+            span,
+        )),
+    }
+}
+
+/// Iterate every operand represented by positional, named, or spread argument elements.
+fn argument_operands(elements: &[ArgumentElement]) -> impl Iterator<Item = &Operand> {
+    elements.iter().map(|element| match element {
+        ArgumentElement::One(operand) | ArgumentElement::Named { operand, .. } => operand,
+        ArgumentElement::Spread(spread) => &spread.source,
+    })
+}
+
+/// Resolve an operand's exact numeric profile kind from its constant or declared local type.
+fn typed_numeric_operand_kind(
+    body: &Body,
+    operand: &Operand,
+    span: HirSourceSpan,
+) -> Result<Option<TypedNumericProfileKind>, ReplacementExecutionError> {
+    match operand {
+        Operand::Constant(Constant::TypedNumeric(constant)) => {
+            let value = typed_numeric_constant_value(constant, span)?;
+            Ok(Some(match value {
+                ReplacementNumericValue::Signed { kind, .. } | ReplacementNumericValue::Unsigned { kind, .. } => {
+                    TypedNumericProfileKind::Binary(kind)
+                }
+                ReplacementNumericValue::F32(_) => TypedNumericProfileKind::Binary(NumericTypeId::F32),
+                ReplacementNumericValue::F64(_) => TypedNumericProfileKind::Binary(NumericTypeId::F64),
+                ReplacementNumericValue::Decimal { .. } => TypedNumericProfileKind::Decimal,
+            }))
+        }
+        Operand::Constant(_) => Ok(None),
+        Operand::Place(place) => Ok(typed_numeric_kind_from_type(declared_local_type(
+            body,
+            place.place.local,
+            span,
+        )?)),
+    }
+}
+
+/// Classify a checked exact binary-numeric or decimal type for the bounded execution profile.
+fn typed_numeric_kind_from_type(ty: &IncanType) -> Option<TypedNumericProfileKind> {
+    match ty {
+        IncanType::Primitive(IncanPrimitiveType::Numeric(kind)) if *kind != NumericTypeId::Bool => {
+            Some(TypedNumericProfileKind::Binary(*kind))
+        }
+        IncanType::Decimal { .. } => Some(TypedNumericProfileKind::Decimal),
+        _ => None,
+    }
+}
+
+/// Refuse an operand when it carries a typed numeric through an operation outside the admitted profile.
+fn refuse_typed_numeric_operand(
+    body: &Body,
+    operand: &Operand,
+    span: HirSourceSpan,
+    operation: &str,
+) -> Result<(), ReplacementExecutionError> {
+    if let Some(kind) = typed_numeric_operand_kind(body, operand, span)? {
+        Err(typed_numeric_operation_refusal(kind, operation, span))
+    } else {
+        Ok(())
+    }
+}
+
+/// Build the canonical #988-owned refusal for one unproved typed-numeric operation.
+fn typed_numeric_operation_refusal(
+    kind: TypedNumericProfileKind,
+    operation: impl std::fmt::Display,
+    span: HirSourceSpan,
+) -> ReplacementExecutionError {
+    unsupported(
+        format!(
+            "typed numeric `{}` {operation} is outside the admitted carrier profile (owned by #988)",
+            kind.label()
+        ),
+        span,
+    )
+}
+
+/// Walk a pattern and refuse any typed-numeric literal before match execution can produce effects.
+fn validate_typed_numeric_pattern(pattern: &Pattern, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
+    match pattern {
+        Pattern::Literal(Constant::TypedNumeric(constant)) => {
+            let value = typed_numeric_constant_value(constant, span)?;
+            let kind = match value {
+                ReplacementNumericValue::Signed { kind, .. } | ReplacementNumericValue::Unsigned { kind, .. } => {
+                    TypedNumericProfileKind::Binary(kind)
+                }
+                ReplacementNumericValue::F32(_) => TypedNumericProfileKind::Binary(NumericTypeId::F32),
+                ReplacementNumericValue::F64(_) => TypedNumericProfileKind::Binary(NumericTypeId::F64),
+                ReplacementNumericValue::Decimal { .. } => TypedNumericProfileKind::Decimal,
+            };
+            Err(typed_numeric_operation_refusal(kind, "pattern matching", span))
+        }
+        Pattern::Tuple(items) | Pattern::Or(items) => {
+            for item in items {
+                validate_typed_numeric_pattern(item, span)?;
+            }
+            Ok(())
+        }
+        Pattern::Struct { fields, .. } | Pattern::Nominal { fields, .. } => {
+            for (_, field) in fields {
+                validate_typed_numeric_pattern(field, span)?;
+            }
+            Ok(())
+        }
+        Pattern::Result { fields, .. } | Pattern::Enum { fields, .. } => {
+            for field in fields {
+                validate_typed_numeric_pattern(field, span)?;
+            }
+            Ok(())
+        }
+        Pattern::Wildcard | Pattern::Var(_) | Pattern::Literal(_) | Pattern::FieldlessEnumVariant(_) => Ok(()),
+    }
 }
 
 /// Validate the stored call-time default contracts without consulting source or declaration structures.
@@ -1645,6 +2449,7 @@ fn format_interpolation(
         (ReplacementValue::Str(text), FormatStyle::Display) => Ok(text.clone()),
         (ReplacementValue::Str(text), FormatStyle::Debug) => Ok(format!("{text:?}")),
         (ReplacementValue::Float(value), FormatStyle::Display) => Ok(value.to_string()),
+        (ReplacementValue::Numeric(value), FormatStyle::Display) => Ok(value.observable_text()),
         (other, _) => Err(unsupported(
             format!("f-string interpolation of {}", value_kind(other)),
             span,
@@ -2150,7 +2955,7 @@ fn validate_call_profile(
         }
         // An admitted provider operation is executable when its plan is: an active provider, an authority that
         // really names a capability, and one described input per evaluated argument. Whether *this run* has a host
-        // for it is a different question, answered by `provider_preflight` before execution starts.
+        // for it is a different question, answered by `execution_preflight` before execution starts.
         Callee::ProviderOperation(plan) => {
             if let Some(description) = unexecutable_provider_plan(plan, args.len()) {
                 return Err(unsupported(description, span));
@@ -2242,6 +3047,15 @@ fn validate_rvalue_profile(
             validate_operand_profile(left, span, tuple_iteration_locals)?;
             validate_operand_profile(right, span, tuple_iteration_locals)
         }
+        Rvalue::IsInstance {
+            value,
+            value_ty,
+            target,
+        } => {
+            validate_operand_profile(value, span, tuple_iteration_locals)?;
+            validate_isinstance_target_profile(target, span)?;
+            validate_isinstance_value_type_profile(value_ty, span)
+        }
         Rvalue::Dict(entries) => {
             for entry in entries {
                 let DictEntry::Pair(key, value) = entry else {
@@ -2290,6 +3104,68 @@ fn validate_rvalue_profile(
             validate_operand_profile(scrutinee, span, tuple_iteration_locals)?;
             validate_match_arms_profile(arms, span, tuple_iteration_locals, scalar_tuple_collection_locals)
         }
+    }
+}
+
+/// Validate that a checked `isinstance` value can only carry the four scalar tags proven by this bounded profile.
+fn validate_isinstance_value_type_profile(
+    value_ty: &IncanType,
+    call_span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    let admitted_scalar = |ty: &IncanType| {
+        matches!(
+            ty,
+            IncanType::Primitive(
+                IncanPrimitiveType::Int
+                    | IncanPrimitiveType::Bool
+                    | IncanPrimitiveType::Str
+                    | IncanPrimitiveType::Float
+            )
+        )
+    };
+    let admitted = admitted_scalar(value_ty)
+        || matches!(
+            value_ty,
+            IncanType::Generic { base, args }
+                if base == incan_core::lang::types::UNION_TYPE_NAME
+                    && !args.is_empty()
+                    && args.iter().all(admitted_scalar)
+        );
+    if admitted {
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!("isinstance value type `{value_ty}` outside the primitive replacement profile"),
+            call_span,
+        ))
+    }
+}
+
+/// Validate the bounded primitive `isinstance` target set before any program effect can run.
+fn validate_isinstance_target_profile(
+    target: &incan_semantics_core::body_ir::IsInstanceTarget,
+    call_span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    if target.span.start >= target.span.end || target.span.start < call_span.start || target.span.end > call_span.end {
+        return Err(unsupported(
+            "isinstance target with an invalid retained source span",
+            call_span,
+        ));
+    }
+    if target.canonical.is_some() {
+        return Err(unsupported(
+            "isinstance target with a declaration identity outside the primitive replacement profile",
+            target.span,
+        ));
+    }
+    match &target.ty {
+        IncanType::Primitive(
+            IncanPrimitiveType::Int | IncanPrimitiveType::Bool | IncanPrimitiveType::Str | IncanPrimitiveType::Float,
+        ) => Ok(()),
+        unsupported_target => Err(unsupported(
+            format!("isinstance target type `{unsupported_target}` outside the primitive replacement profile"),
+            target.span,
+        )),
     }
 }
 
@@ -2629,6 +3505,8 @@ fn validate_write_place(
 struct BodyExecutor<'run, 'writer> {
     module: BodyIrModule,
     locals: BTreeMap<LocalId, ReplacementValue>,
+    /// Checked local types for the currently selected declaration or its nested source-local frame.
+    local_types: BTreeMap<LocalId, IncanType>,
     ownership_reads: Vec<OwnershipRead>,
     runtime_requirements: Vec<AbiV0RuntimeRequirement>,
     body_snapshots: Vec<String>,
@@ -2666,6 +3544,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         let mut executor = Self {
             module: module.clone(),
             locals: BTreeMap::new(),
+            local_types: BTreeMap::new(),
             ownership_reads: Vec::new(),
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
@@ -2686,12 +3565,14 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     fn with_locals(
         module: &BodyIrModule,
         locals: BTreeMap<LocalId, ReplacementValue>,
+        local_types: BTreeMap<LocalId, IncanType>,
         steps: usize,
         io: &'run mut ProgramIo<'writer>,
     ) -> Self {
         Self {
             module: module.clone(),
             locals,
+            local_types,
             ownership_reads: Vec::new(),
             runtime_requirements: Vec::new(),
             body_snapshots: Vec::new(),
@@ -2708,6 +3589,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     /// Record a directly consumed declaration body as evidence and preserve its runtime requirements in first-seen
     /// order.
     fn record_body(&mut self, body: &Body) {
+        self.local_types = body.locals.iter().map(|local| (local.id, local.ty.clone())).collect();
         self.body_snapshots.push(body.render_snapshot());
         for requirement in &body.runtime_requirements {
             if !self.runtime_requirements.contains(requirement) {
@@ -2744,7 +3626,18 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         steps: usize,
         execute: impl FnOnce(&mut BodyExecutor<'_, 'writer>) -> Result<T, ReplacementExecutionError>,
     ) -> Result<T, ReplacementExecutionError> {
-        let mut child = BodyExecutor::with_locals(&self.module, locals, steps, self.io);
+        self.execute_child_with_local_types(locals, self.local_types.clone(), steps, execute)
+    }
+
+    /// Execute an isolated frame against the local-type table owned by that frame's declaration.
+    fn execute_child_with_local_types<T>(
+        &mut self,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        local_types: BTreeMap<LocalId, IncanType>,
+        steps: usize,
+        execute: impl FnOnce(&mut BodyExecutor<'_, 'writer>) -> Result<T, ReplacementExecutionError>,
+    ) -> Result<T, ReplacementExecutionError> {
+        let mut child = BodyExecutor::with_locals(&self.module, locals, local_types, steps, self.io);
         child.next_task_id = self.next_task_id;
         child.providers = self.providers.clone();
         let result = execute(&mut child);
@@ -2911,7 +3804,8 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
         let mut supplied = args.iter().cloned().map(Some).collect::<Vec<_>>();
         supplied.resize_with(body.params.len(), || None);
-        self.bind_parameter_values(&body.params, supplied, &BTreeMap::new(), body.span)
+        let local_types = self.local_types.clone();
+        self.bind_parameter_values(&body.params, supplied, &BTreeMap::new(), &local_types, body.span)
     }
 
     /// Evaluate a resolved call site's operands in written source order and bind them to declared parameter slots.
@@ -2921,6 +3815,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         args: &[&Operand],
         binding: &ArgumentBinding,
         captures: &BTreeMap<LocalId, ReplacementValue>,
+        local_types: &BTreeMap<LocalId, IncanType>,
         span: HirSourceSpan,
     ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
         let ArgumentBinding::Resolved {
@@ -2971,7 +3866,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         {
             return Err(unsupported("invalid defaulted callable parameter binding", span));
         }
-        self.bind_parameter_values(params, supplied, captures, span)
+        self.bind_parameter_values(params, supplied, captures, local_types, span)
     }
 
     /// Materialize supplied values, source defaults, and construction-time partial presets into one isolated frame.
@@ -2980,6 +3875,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         params: &[CallableParam],
         supplied: Vec<Option<ReplacementValue>>,
         captures: &BTreeMap<LocalId, ReplacementValue>,
+        local_types: &BTreeMap<LocalId, IncanType>,
         call_span: HirSourceSpan,
     ) -> Result<BTreeMap<LocalId, ReplacementValue>, ReplacementExecutionError> {
         if supplied.len() != params.len() {
@@ -2996,7 +3892,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                             call_span,
                         ));
                     }
-                    CallableParamDefault::Source(computation) => self.evaluate_default(computation)?,
+                    CallableParamDefault::Source(computation) => self.evaluate_default(computation, local_types)?,
                     CallableParamDefault::PartialPreset { capture } => {
                         captures.get(capture).cloned().ok_or_else(|| {
                             unsupported(
@@ -3013,6 +3909,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     }
                 },
             };
+            let value = coerce_value_to_checked_type(value, &parameter.ty, call_span)?;
             if locals.contains_key(&parameter.local) {
                 return Err(unsupported(
                     "callable parameter aliases a captured local",
@@ -3028,21 +3925,27 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     fn evaluate_default(
         &mut self,
         computation: &DefaultComputation,
+        local_types: &BTreeMap<LocalId, IncanType>,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let result = self.execute_child(BTreeMap::new(), self.steps, |default_executor| {
-            for statement in &computation.stmts {
-                match default_executor.execute_statement(statement)? {
-                    Flow::Next => {}
-                    Flow::Return(_) | Flow::Break | Flow::Continue => {
-                        return Err(unsupported(
-                            "control flow in a callable default computation",
-                            statement.span,
-                        ));
+        let result = self.execute_child_with_local_types(
+            BTreeMap::new(),
+            local_types.clone(),
+            self.steps,
+            |default_executor| {
+                for statement in &computation.stmts {
+                    match default_executor.execute_statement(statement)? {
+                        Flow::Next => {}
+                        Flow::Return(_) | Flow::Break | Flow::Continue => {
+                            return Err(unsupported(
+                                "control flow in a callable default computation",
+                                statement.span,
+                            ));
+                        }
                     }
                 }
-            }
-            default_executor.evaluate_operand(&computation.result, computation.span)
-        })?;
+                default_executor.evaluate_operand(&computation.result, computation.span)
+            },
+        )?;
         self.record_frame_evidence(format!(
             "executed source default frame span={}..{} statements={}",
             computation.span.start,
@@ -3294,7 +4197,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             Callee::ProviderOperation(plan) => self.execute_provider_operation(plan, args, span)?,
             _ => return Err(unsupported(format!("call to {}", callee_label(callee)), span)),
         };
-        self.assign_local(local, value);
+        self.assign_local(local, value, span)?;
         Ok(Flow::Next)
     }
 
@@ -3371,7 +4274,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         if let Some(task_id) = self.active_task {
             self.record_task_event(task_id, "await_resumed", span);
         }
-        self.assign_local(destination, value);
+        self.assign_local(destination, value, span)?;
         Ok(Flow::Next)
     }
 
@@ -3434,7 +4337,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
 
         let arm = &arms[winner_index];
         let prior_locals = self.locals.clone();
-        self.assign_local(arm.binding, winner_value);
+        self.assign_local(arm.binding, winner_value, span)?;
         let arm_outcome = (|| -> Result<Result<ReplacementValue, Flow>, ReplacementExecutionError> {
             match self.execute_block(&arm.body)? {
                 Flow::Next => Ok(Ok(self.evaluate_operand(&arm.result, span)?)),
@@ -3444,7 +4347,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         self.locals = prior_locals;
         match arm_outcome? {
             Ok(value) => {
-                self.assign_local(destination, value);
+                self.assign_local(destination, value, span)?;
                 Ok(Flow::Next)
             }
             Err(flow) => Ok(flow),
@@ -3463,7 +4366,9 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         if captures.len() != callable.captures.len() {
             return Err(unsupported("duplicate callable capture local", span));
         }
-        let locals = self.bind_call_arguments(&callable.params, args, &target.binding, &captures, span)?;
+        let local_types = self.local_types.clone();
+        let locals =
+            self.bind_call_arguments(&callable.params, args, &target.binding, &captures, &local_types, span)?;
         self.execute_callable_frame(&callable, locals, span, "stored callable")
     }
 
@@ -3512,7 +4417,15 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         if body.is_async && !target.type_args.is_empty() {
             return Err(unsupported("generic async callable target", span));
         }
-        let locals = self.bind_call_arguments(&body.params, args, &target.binding, &BTreeMap::new(), span)?;
+        let local_types = body.locals.iter().map(|local| (local.id, local.ty.clone())).collect();
+        let locals = self.bind_call_arguments(
+            &body.params,
+            args,
+            &target.binding,
+            &BTreeMap::new(),
+            &local_types,
+            span,
+        )?;
         if body.is_async {
             return self.construct_task(body, locals, span).map(ReplacementValue::Task);
         }
@@ -3624,7 +4537,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         let Some(value) = next else {
             return Ok(Flow::Break);
         };
-        self.assign_local(bare_local(destination, span)?, value);
+        self.assign_local(bare_local(destination, span)?, value, span)?;
         Ok(Flow::Next)
     }
 
@@ -3633,8 +4546,19 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     /// The profile preflight rejects repeated user-binding names rather than reconstructing scope equivalence from
     /// spelling. Reassignment is therefore refused until Body IR carries binding-equivalence facts; no name-based
     /// aliasing is permitted here.
-    fn assign_local(&mut self, local: LocalId, value: ReplacementValue) {
+    fn assign_local(
+        &mut self,
+        local: LocalId,
+        value: ReplacementValue,
+        span: HirSourceSpan,
+    ) -> Result<(), ReplacementExecutionError> {
+        let target = self
+            .local_types
+            .get(&local)
+            .ok_or_else(|| unsupported("Body-IR assignment destination without a declared type", span))?;
+        let value = coerce_value_to_checked_type(value, target, span)?;
         self.locals.insert(local, value);
+        Ok(())
     }
 
     /// Execute one normalized Body-IR loop and propagate only non-local control flow outward.
@@ -3714,14 +4638,14 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                     .ok_or_else(|| runtime_failure("integer overflow in builtin `abs`".to_string(), span)),
                 other => Err(unsupported(format!("`abs` of {}", value_kind(&other)), span)),
             },
-            // These pairs mirror the existing Rust emitter's narrowly evidenced scalar conversions. The checked
-            // Body-IR type gate rejects f32/f64/sized numeric locals before this value dispatch can flatten them
-            // into the ordinary `int`/`float` carriers.
+            // These pairs mirror the existing Rust emitter's scalar conversions. Typed source carriers retain
+            // their identity until this compiler-selected conversion explicitly produces an ordinary result.
             BuiltinFnId::Str => match value {
                 ReplacementValue::Int(value) => Ok(ReplacementValue::Str(value.to_string())),
                 ReplacementValue::Bool(value) => Ok(ReplacementValue::Str(value.to_string())),
                 ReplacementValue::Str(value) => Ok(ReplacementValue::Str(value)),
                 ReplacementValue::Float(value) => Ok(ReplacementValue::Str(value.to_string())),
+                ReplacementValue::Numeric(value) => Ok(ReplacementValue::Str(value.observable_text())),
                 other => Err(unsupported(format!("`str` of {}", value_kind(&other)), span)),
             },
             BuiltinFnId::Int => match value {
@@ -3729,12 +4653,14 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 ReplacementValue::Bool(value) => Ok(ReplacementValue::Int(i64::from(value))),
                 ReplacementValue::Str(value) => parse_int_conversion(&value, span),
                 ReplacementValue::Float(value) => Ok(ReplacementValue::Int(value as i64)),
+                ReplacementValue::Numeric(value) => numeric_to_int(value, span).map(ReplacementValue::Int),
                 other => Err(unsupported(format!("`int` of {}", value_kind(&other)), span)),
             },
             BuiltinFnId::Float => match value {
                 ReplacementValue::Int(value) => Ok(ReplacementValue::Float(value as f64)),
                 ReplacementValue::Str(value) => parse_float_conversion(&value, span),
                 ReplacementValue::Float(value) => Ok(ReplacementValue::Float(value)),
+                ReplacementValue::Numeric(value) => numeric_to_float(value, span).map(ReplacementValue::Float),
                 other => Err(unsupported(format!("`float` of {}", value_kind(&other)), span)),
             },
             // Checked integer accumulation, with bools counted as 1/0 exactly as the emitted Rust does.
@@ -3907,6 +4833,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             Rvalue::Use(operand) => self.evaluate_operand(operand, span),
             Rvalue::UnaryOp(operator, operand) => self.evaluate_unary(*operator, operand, span),
             Rvalue::BinaryOp(operator, left, right) => self.evaluate_binary(*operator, left, right, span),
+            Rvalue::IsInstance { value, target, .. } => self.evaluate_isinstance(value, target, span),
             Rvalue::Format(parts) => self.evaluate_format(parts, span),
             Rvalue::Dict(entries) => self.evaluate_dict(entries, span),
             Rvalue::Aggregate(kind, operands) => self.evaluate_aggregate(kind, operands, span),
@@ -3925,6 +4852,30 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
             } => self.construct_generator(source, captured_operands, body, span),
             Rvalue::Match { scrutinee, arms } => self.evaluate_match(scrutinee, arms, span),
         }
+    }
+
+    /// Evaluate one prevalidated compiler-owned primitive type test.
+    fn evaluate_isinstance(
+        &mut self,
+        value: &Operand,
+        target: &incan_semantics_core::body_ir::IsInstanceTarget,
+        span: HirSourceSpan,
+    ) -> Result<ReplacementValue, ReplacementExecutionError> {
+        let value = self.evaluate_operand(value, span)?;
+        let matches = matches!(
+            (&value, &target.ty),
+            (ReplacementValue::Int(_), IncanType::Primitive(IncanPrimitiveType::Int))
+                | (
+                    ReplacementValue::Bool(_),
+                    IncanType::Primitive(IncanPrimitiveType::Bool)
+                )
+                | (ReplacementValue::Str(_), IncanType::Primitive(IncanPrimitiveType::Str))
+                | (
+                    ReplacementValue::Float(_),
+                    IncanType::Primitive(IncanPrimitiveType::Float)
+                )
+        );
+        Ok(ReplacementValue::Bool(matches))
     }
 
     /// Materialize a dict in written key-then-value order, preserving the later-entry-wins construction rule.
@@ -4206,7 +5157,8 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         if captures.len() != callable.captures.len() {
             return Err(unsupported("duplicate callable capture local", span));
         }
-        let locals = self.bind_parameter_values(&callable.params, supplied, &captures, span)?;
+        let local_types = self.local_types.clone();
+        let locals = self.bind_parameter_values(&callable.params, supplied, &captures, &local_types, span)?;
         self.execute_callable_frame(callable, locals, span, "generator-adapter callback")
     }
 
@@ -5170,7 +6122,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         }
         match kind {
             ResultVariantKind::Ok => {
-                self.assign_local(destination, *payload);
+                self.assign_local(destination, *payload, span)?;
                 self.record_frame_evidence(format!(
                     "executed Result try route=ok span={}..{}",
                     span.start, span.end
@@ -5575,10 +6527,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         span: HirSourceSpan,
     ) -> Result<(), ReplacementExecutionError> {
         match place.projection.as_slice() {
-            [] => {
-                self.assign_local(place.local, value);
-                Ok(())
-            }
+            [] => self.assign_local(place.local, value, span),
             [PlaceElem::Index(index)] => {
                 if !value.is_direct_structural() {
                     return Err(unsupported("list assignment with a non-structural value", span));
@@ -5633,7 +6582,13 @@ impl ReplacementValue {
     const fn is_copy_shaped(&self) -> bool {
         matches!(
             self,
-            Self::Int(_) | Self::Bool(_) | Self::Float(_) | Self::Unit | Self::FieldlessEnum { .. } | Self::Task(_)
+            Self::Int(_)
+                | Self::Bool(_)
+                | Self::Float(_)
+                | Self::Numeric(_)
+                | Self::Unit
+                | Self::FieldlessEnum { .. }
+                | Self::Task(_)
         )
     }
 
@@ -5781,15 +6736,49 @@ fn checked_python_floor_division(
 }
 
 /// Reject a return value that would widen the first replacement profile beyond scalar source observables.
-fn ensure_scalar_result(value: &ReplacementValue, span: HirSourceSpan) -> Result<(), ReplacementExecutionError> {
-    match value {
-        ReplacementValue::Int(_) | ReplacementValue::Bool(_) | ReplacementValue::Str(_) | ReplacementValue::Unit => {
-            Ok(())
-        }
-        _ => Err(unsupported(
+fn ensure_scalar_result(
+    value: &ReplacementValue,
+    return_type: &IncanType,
+    span: HirSourceSpan,
+) -> Result<(), ReplacementExecutionError> {
+    let scalar = matches!(
+        value,
+        ReplacementValue::Int(_)
+            | ReplacementValue::Bool(_)
+            | ReplacementValue::Str(_)
+            | ReplacementValue::Float(_)
+            | ReplacementValue::Numeric(_)
+            | ReplacementValue::Unit
+    );
+    if !scalar {
+        return Err(unsupported(
             format!("returning {} from the scalar replacement profile", value_kind(value)),
             span,
-        )),
+        ));
+    }
+    let matches = match (return_type, value) {
+        (IncanType::Primitive(IncanPrimitiveType::Int), ReplacementValue::Int(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Float), ReplacementValue::Float(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Bool), ReplacementValue::Bool(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Str), ReplacementValue::Str(_))
+        | (IncanType::Primitive(IncanPrimitiveType::Unit), ReplacementValue::Unit) => true,
+        (ty, ReplacementValue::Numeric(value)) => numeric_value_matches_type(value, ty),
+        (IncanType::Unknown | IncanType::Infer, _) => true,
+        _ => false,
+    };
+    if matches {
+        if let ReplacementValue::Numeric(value) = value {
+            validate_numeric_value(value, span)?;
+        }
+        Ok(())
+    } else {
+        Err(unsupported(
+            format!(
+                "returned {} contradicts checked result type `{return_type}`",
+                value_kind(value)
+            ),
+            span,
+        ))
     }
 }
 
@@ -5964,7 +6953,7 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
 -> crate::replacement_compatibility::ReplacementCompatibilityContribution {
     use crate::replacement_compatibility::{
         ComparisonEvidence, OutstandingComparisonEvidence, feature_requirement_link, implementation_requirement,
-        local_implementation_contribution, preserved_feature_at_boundary,
+        local_implementation_contribution, partially_materialized_feature_at_boundary, preserved_feature_at_boundary,
     };
 
     let mut async_tasks = preserved_feature_at_boundary(
@@ -5975,9 +6964,9 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
         "fn lower_race_for",
         "fn execute_race",
     );
-    async_tasks.owner_issue = Some(1155);
+    async_tasks.owner_issue = Some(988);
     async_tasks.migration_or_blocker = Some(
-        "#1155 owns the bounded source-local task profile and its remaining paired source-observable comparison evidence."
+        "Closed #1155 delivered the bounded source-local task profile; open #988 owns its remaining paired source-observable comparison evidence."
             .to_string(),
     );
     if let ComparisonEvidence::Unavailable {
@@ -5985,8 +6974,8 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
     } = &mut async_tasks.evidence.surfaces.independent_comparison
     {
         *outstanding_evidence = OutstandingComparisonEvidence::Scheduled {
-            owner_issue: 1155,
-            note: "#1155 owns exact paired source-observable evidence through #1146's completed route; direct task execution alone remains non-green."
+            owner_issue: 988,
+            note: "Closed #1155 delivered direct task execution; open #988 owns exact paired source-observable evidence through #1146's completed route, so the broader async feature remains non-green."
                 .to_string(),
         };
     }
@@ -6011,6 +7000,17 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
                 "fn check_binary",
                 "fn lower_binary",
                 "fn evaluate_binary",
+            ),
+            partially_materialized_feature_at_boundary(
+                "language.numeric-complete",
+                "Exact signed and unsigned widths, finite f32/f64, and decimal values retain their checked carrier through literals, constants, locals, lossless widening, source-local calls, entry arguments and results, Display output, receipts, reports, and bounded source-observable comparison. Public direct and shadow exact-float carriers reject NaN and infinities; ordinary float parsing remains separately compared. Arithmetic, unary operations, resize methods, Debug formatting, aggregates, matching, and decimal scalar casts remain explicit pre-effect refusals owned by #988.",
+                988,
+                "#1279 materializes the typed carrier and bounded movement/output contract. #988 owns the explicitly refused numeric operations, overflow behavior, aggregate integration, Debug formatting, resize methods, and decimal scalar conversions required before the wider feature can become green.",
+                "src/frontend/typechecker/check_stmt.rs",
+                "fn check_assignment",
+                "src/frontend/body_ir/primitives.rs",
+                "fn lower_checked_literal",
+                "fn validate_reachable_typed_numeric_profile",
             ),
             async_tasks,
         ],
@@ -6041,6 +7041,7 @@ pub(crate) fn replacement_compatibility_direct_execution_contribution()
         vec![
             feature_requirement_link("language.control-flow", "control.normalized-flow"),
             feature_requirement_link("language.numeric-and-scalar", "runtime.scalar-values"),
+            feature_requirement_link("language.numeric-complete", "runtime.scalar-values"),
             feature_requirement_link("async.tasks", "async.runtime"),
             feature_requirement_link("async.tasks", "receipts.comparison"),
         ],
@@ -6085,28 +7086,29 @@ const fn binary_label(operator: BinOp) -> &'static str {
 }
 
 /// Render one replacement value's dynamic shape for an unsupported-operation diagnostic.
-const fn value_kind(value: &ReplacementValue) -> &'static str {
+fn value_kind(value: &ReplacementValue) -> String {
     match value {
-        ReplacementValue::Int(_) => "int",
-        ReplacementValue::Bool(_) => "bool",
-        ReplacementValue::Str(_) => "str",
-        ReplacementValue::Float(_) => "float",
-        ReplacementValue::Unit => "unit",
-        ReplacementValue::Range { .. } => "range",
-        ReplacementValue::List { .. } => "list",
-        ReplacementValue::Tuple(_) => "tuple",
-        ReplacementValue::Set(_) => "set",
-        ReplacementValue::Dict(_) => "dict",
-        ReplacementValue::Nominal { .. } => "nominal",
-        ReplacementValue::FieldlessEnum { .. } => "fieldless enum",
-        ReplacementValue::ValueEnum { .. } => "value enum",
-        ReplacementValue::Result { .. } => "Result",
-        ReplacementValue::Callable(_) => "callable",
-        ReplacementValue::Generator(_) => "generator",
-        ReplacementValue::Task(_) => "direct task",
-        ReplacementValue::Adapter(_) => "generator adapter",
-        ReplacementValue::Zip(_) => "Zip iterator",
-        ReplacementValue::CollectedGenerator { .. } => "collected generator list",
+        ReplacementValue::Int(_) => "int".to_string(),
+        ReplacementValue::Bool(_) => "bool".to_string(),
+        ReplacementValue::Str(_) => "str".to_string(),
+        ReplacementValue::Float(_) => "float".to_string(),
+        ReplacementValue::Numeric(value) => value.type_name(),
+        ReplacementValue::Unit => "unit".to_string(),
+        ReplacementValue::Range { .. } => "range".to_string(),
+        ReplacementValue::List { .. } => "list".to_string(),
+        ReplacementValue::Tuple(_) => "tuple".to_string(),
+        ReplacementValue::Set(_) => "set".to_string(),
+        ReplacementValue::Dict(_) => "dict".to_string(),
+        ReplacementValue::Nominal { .. } => "nominal".to_string(),
+        ReplacementValue::FieldlessEnum { .. } => "fieldless enum".to_string(),
+        ReplacementValue::ValueEnum { .. } => "value enum".to_string(),
+        ReplacementValue::Result { .. } => "Result".to_string(),
+        ReplacementValue::Callable(_) => "callable".to_string(),
+        ReplacementValue::Generator(_) => "generator".to_string(),
+        ReplacementValue::Task(_) => "direct task".to_string(),
+        ReplacementValue::Adapter(_) => "generator adapter".to_string(),
+        ReplacementValue::Zip(_) => "Zip iterator".to_string(),
+        ReplacementValue::CollectedGenerator { .. } => "collected generator list".to_string(),
     }
 }
 
@@ -6122,17 +7124,49 @@ fn constant_value(constant: &Constant, span: HirSourceSpan) -> Result<Replacemen
         Constant::Str(value) => Ok(ReplacementValue::Str(value.clone())),
         Constant::Unit | Constant::None => Ok(ReplacementValue::Unit),
         Constant::Float(value) => binary_float_literal_value(value, span),
+        Constant::TypedNumeric(value) => typed_numeric_constant_value(value, span).map(ReplacementValue::Numeric),
         Constant::Bytes(_) => Err(unsupported("byte-string literal", span)),
     }
+}
+
+/// Materialize and validate one exact typed-numeric Body-IR constant.
+fn typed_numeric_constant_value(
+    constant: &TypedNumericConstant,
+    span: HirSourceSpan,
+) -> Result<ReplacementNumericValue, ReplacementExecutionError> {
+    let value = match constant {
+        TypedNumericConstant::Signed { kind, value } => ReplacementNumericValue::Signed {
+            kind: *kind,
+            value: *value,
+        },
+        TypedNumericConstant::Unsigned { kind, value } => ReplacementNumericValue::Unsigned {
+            kind: *kind,
+            value: *value,
+        },
+        TypedNumericConstant::F32 { bits } => ReplacementNumericValue::F32(f32::from_bits(*bits)),
+        TypedNumericConstant::F64 { bits } => ReplacementNumericValue::F64(f64::from_bits(*bits)),
+        TypedNumericConstant::Decimal {
+            precision,
+            scale,
+            coefficient,
+            literal_scale,
+        } => ReplacementNumericValue::Decimal {
+            precision: *precision,
+            scale: *scale,
+            coefficient: *coefficient,
+            literal_scale: *literal_scale,
+        },
+    };
+    validate_numeric_value(&value, span)?;
+    Ok(value)
 }
 
 /// Materialize an ordinary binary-float Body-IR literal with the same value normalization as Rust emission.
 ///
 /// Body IR deliberately retains the lexical representation for diagnostics and snapshots. The lexer has already
 /// accepted that spelling as a binary float, but direct execution needs the value rather than its source text so
-/// `str(1_000.50)` and `str(1.0)` use ordinary `f64` Display. Decimal literals share this Body-IR constant variant
-/// but carry a `d` suffix; they remain outside the direct carrier rather than being silently parsed as binary
-/// floats.
+/// `str(1_000.50)` and `str(1.0)` use ordinary `f64` Display. A checked decimal uses `TypedNumeric`; a `d` suffix
+/// reaching this legacy variant is malformed Body IR and remains a visible refusal.
 fn binary_float_literal_value(repr: &str, span: HirSourceSpan) -> Result<ReplacementValue, ReplacementExecutionError> {
     if repr.ends_with('d') {
         return Err(unsupported("decimal literal", span));
@@ -6142,6 +7176,34 @@ fn binary_float_literal_value(repr: &str, span: HirSourceSpan) -> Result<Replace
         .parse::<f64>()
         .map(ReplacementValue::Float)
         .map_err(|_| unsupported("binary float literal outside the direct f64 carrier", span))
+}
+
+/// Apply the native emitter's explicit `as i64` scalar conversion to one typed binary numeric.
+fn numeric_to_int(value: ReplacementNumericValue, span: HirSourceSpan) -> Result<i64, ReplacementExecutionError> {
+    match value {
+        ReplacementNumericValue::Signed { value, .. } => Ok(value as i64),
+        ReplacementNumericValue::Unsigned { value, .. } => Ok(value as i64),
+        ReplacementNumericValue::F32(value) => Ok(value as i64),
+        ReplacementNumericValue::F64(value) => Ok(value as i64),
+        ReplacementNumericValue::Decimal { .. } => Err(unsupported(
+            "`int` of decimal has no admitted native scalar-cast contract",
+            span,
+        )),
+    }
+}
+
+/// Apply the native emitter's explicit `as f64` scalar conversion to one typed binary numeric.
+fn numeric_to_float(value: ReplacementNumericValue, span: HirSourceSpan) -> Result<f64, ReplacementExecutionError> {
+    match value {
+        ReplacementNumericValue::Signed { value, .. } => Ok(value as f64),
+        ReplacementNumericValue::Unsigned { value, .. } => Ok(value as f64),
+        ReplacementNumericValue::F32(value) => Ok(f64::from(value)),
+        ReplacementNumericValue::F64(value) => Ok(value),
+        ReplacementNumericValue::Decimal { .. } => Err(unsupported(
+            "`float` of decimal has no admitted native scalar-cast contract",
+            span,
+        )),
+    }
 }
 
 /// Execute the shared `int(str)` policy without exposing the native route's panic-based API to direct execution.
@@ -6168,6 +7230,10 @@ fn direct_pattern_constant(
             constant_value(constant, span)
         }
         Constant::Float(_) => Err(unsupported("floating-point match literal", span)),
+        Constant::TypedNumeric(value) => Err(unsupported(
+            format!("typed numeric `{}` match literal (owned by #988)", value.type_name()),
+            span,
+        )),
         Constant::Bytes(_) => Err(unsupported("byte-string match literal", span)),
     }
 }
@@ -6182,9 +7248,10 @@ mod tests {
     };
 
     use super::{
-        Body, BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, LocalId, MAX_EXECUTION_STEPS,
-        Operand, OwnershipFact, Place, ProgramIo, ReplacementExecutionError, ReplacementGenerator, ReplacementTask,
-        ReplacementTaskState, ReplacementValue, ScopeId, Statement, StatementKind,
+        Body, BodyExecutor, BodyIrModule, Constant, GeneratorFrame, HirSourceSpan, IncanPrimitiveType, IncanType,
+        LocalId, MAX_EXECUTION_STEPS, Operand, OwnershipFact, Place, ProgramIo, ReplacementExecutionError,
+        ReplacementGenerator, ReplacementTask, ReplacementTaskState, ReplacementValue, ScopeId, Statement,
+        StatementKind,
     };
 
     /// A resumed generator must retain the steps its parent spent before the first poll.
@@ -6201,7 +7268,8 @@ mod tests {
         let mut stdout = std::io::sink();
         let mut stderr = std::io::sink();
         let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-        let mut executor = BodyExecutor::with_locals(&module, BTreeMap::new(), MAX_EXECUTION_STEPS, &mut io);
+        let mut executor =
+            BodyExecutor::with_locals(&module, BTreeMap::new(), BTreeMap::new(), MAX_EXECUTION_STEPS, &mut io);
         let mut generator = ReplacementGenerator {
             frame: GeneratorFrame::new(
                 BTreeMap::new(),
@@ -6240,6 +7308,7 @@ mod tests {
             direct_call_id: CompilerNodeId::declaration_span("replacement.race_failure_test", span.start, span.end),
             name: "child".to_string(),
             span,
+            return_type: IncanType::Primitive(IncanPrimitiveType::Unit),
             locals: Vec::new(),
             params: Vec::new(),
             param_locals: Vec::new(),
@@ -6285,7 +7354,7 @@ mod tests {
         let mut stdout = std::io::sink();
         let mut stderr = std::io::sink();
         let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-        let mut executor = BodyExecutor::with_locals(&module, locals, 0, &mut io);
+        let mut executor = BodyExecutor::with_locals(&module, locals, BTreeMap::new(), 0, &mut io);
         let arms = [
             RaceArm {
                 awaitable: Operand::place(Place::from_local(winner_local), OwnershipFact::Borrow, false),

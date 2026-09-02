@@ -164,7 +164,7 @@ fn a_scalar_profile_compares_program_streams_and_typed_result() -> Result<(), Bo
         process
             .result_report
             .as_deref()
-            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v1:int:42")),
+            .is_some_and(|report| report.starts_with(b"incan-shadow-result-v2:int:42")),
         "the typed result must be out-of-band from program stdout"
     );
 
@@ -388,7 +388,7 @@ fn a_source_outside_the_replacement_profile_stays_unavailable() -> Result<(), Bo
         )
     })?;
     assert!(
-        reason.contains("requires a checked `int`, `bool`, `str`, or `None` return type"),
+        reason.contains("requires a checked scalar or `None` return type"),
         "{reason}"
     );
     assert!(!comparison.matched());

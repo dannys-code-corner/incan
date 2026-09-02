@@ -109,9 +109,10 @@ use incan_core::lang::surface::types::{SurfaceTypeId, SurfaceTypeKind};
 use incan_core::lang::trait_capabilities;
 use incan_core::lang::traits::{self as builtin_traits, TraitId};
 use incan_core::lang::types::collections::CollectionTypeId;
-use incan_core::lang::types::numerics::{self, NumericFamily, NumericTypeId};
+use incan_core::lang::types::numerics::{self, NumericTypeId};
 use incan_core::lang::types::stringlike::StringLikeId;
 use incan_core::lang::{builtins, conventions};
+use incan_core::numeric_values::numeric_type_losslessly_widens_to;
 use incan_semantics_core::{CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind};
 
 /// Type checker state.
@@ -2137,6 +2138,14 @@ impl TypeChecker {
         self.type_info.expressions.expr_types.insert((span.start, span.end), ty);
     }
 
+    /// Record the final checked type selected for one assignment binding.
+    pub(crate) fn record_assignment_binding_type(&mut self, span: Span, ty: ResolvedType) {
+        self.type_info
+            .expressions
+            .assignment_binding_types
+            .insert((span.start, span.end), ty);
+    }
+
     /// Record a source declaration target proven by normal typechecking.
     pub(crate) fn record_source_target(
         &mut self,
@@ -2475,6 +2484,7 @@ impl TypeChecker {
                     source_name: None,
                     type_args: Vec::new(),
                     module_path: None,
+                    implementation_type_params: Vec::new(),
                 });
             }
         }
@@ -7087,41 +7097,6 @@ pub(crate) fn numeric_type_id_for_compat(ty: &ResolvedType) -> Option<NumericTyp
         ResolvedType::Float => Some(NumericTypeId::F64),
         ResolvedType::Numeric(id) => Some(*id),
         _ => None,
-    }
-}
-
-/// Return whether one numeric id can widen to another without value loss under RFC 009 rules.
-pub(crate) fn numeric_type_losslessly_widens_to(actual: NumericTypeId, expected: NumericTypeId) -> bool {
-    if actual == expected {
-        return true;
-    }
-    let actual_info = numerics::info_for(actual);
-    let expected_info = numerics::info_for(expected);
-    match (actual_info.family, expected_info.family) {
-        (NumericFamily::SignedInteger, NumericFamily::SignedInteger) => {
-            width_at_least(expected_info.bit_width, actual_info.bit_width)
-        }
-        (NumericFamily::UnsignedInteger, NumericFamily::UnsignedInteger) => {
-            width_at_least(expected_info.bit_width, actual_info.bit_width)
-        }
-        (NumericFamily::UnsignedInteger, NumericFamily::SignedInteger) => {
-            match (actual_info.bit_width, expected_info.bit_width) {
-                (Some(actual_bits), Some(expected_bits)) => expected_bits > actual_bits,
-                _ => false,
-            }
-        }
-        (NumericFamily::BinaryFloat, NumericFamily::BinaryFloat) => {
-            width_at_least(expected_info.bit_width, actual_info.bit_width)
-        }
-        _ => false,
-    }
-}
-
-/// Compare optional bit widths for fixed-width widening decisions.
-fn width_at_least(expected: Option<u16>, actual: Option<u16>) -> bool {
-    match (expected, actual) {
-        (Some(expected), Some(actual)) => expected >= actual,
-        _ => false,
     }
 }
 

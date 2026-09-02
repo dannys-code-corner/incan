@@ -258,7 +258,7 @@ impl AstLowering {
             IrType::Float => NumericTypeId::F64,
             _ => return value,
         };
-        if !crate::frontend::typechecker::numeric_type_losslessly_widens_to(*actual, expected) {
+        if !incan_core::numeric_values::numeric_type_losslessly_widens_to(*actual, expected) {
             return value;
         }
         TypedExpr::new(
