@@ -339,8 +339,8 @@
     {
       "path": "src/frontend/typechecker/mod.rs",
       "category": "Rust display type parsing, provider ABI lookup, shared nominal String canonicalization, source type-name validation, stdlib derive compatibility, and dependency registry owner paths",
-      "expected_count": 40,
-      "expected_fingerprint": "0x4627108dc604cb6e"
+      "expected_count": 41,
+      "expected_fingerprint": "0xee39ad49bb04c5da"
     },
     {
       "path": "src/frontend/typechecker/stdlib_loader.rs",

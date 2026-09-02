@@ -23561,3 +23561,128 @@ fn plain_chained_assignment_reassigns_enclosing_mutable_bindings() {
         "plain chained assignment must resolve every target through the enclosing scope chain"
     );
 }
+
+/// A dependency that re-exports the `alloc` crate lets generated code spell `::carrier::alloc::boxed::Box<T>`.
+///
+/// That path is absolute. Joining it onto the owning module recorded a field type no consumer could name
+/// (`demo::proto::nested::carrier::alloc::boxed::Box`), which is the `Box` mismatch of incan#1229 and the reason
+/// rust-inspect prewarm had to stay disabled. This harness runs the source-level extractor, so it proves the property
+/// that matters — an absolute path is never joined onto the owning module — but not the HIR-only steps (following
+/// `carrier::alloc` to the `alloc` crate, stripping the `Box` carrier from a variant payload). Those are exercised by
+/// baking a real project against the semantic extractor.
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_inspect_records_absolute_reexport_paths_in_the_ancestral_namespace() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    for dir in ["src", "demo/src", "carrier/src"] {
+        fs::create_dir_all(root.join(dir))?;
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"ra_reexport_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ndemo = { path = \"demo\" }\n",
+    )?;
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn touch() { let _ = demo::proto::Inner; }\n",
+    )?;
+    fs::write(
+        root.join("demo/Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ncarrier = { path = \"../carrier\" }\n",
+    )?;
+    fs::write(
+        root.join("demo/src/lib.rs"),
+        "extern crate alloc;\npub mod proto {\n    pub struct Inner;\n    pub mod nested {\n        pub enum Wrap {\n            Boxed(::carrier::alloc::boxed::Box<super::Inner>),\n            Direct(::alloc::boxed::Box<super::Inner>),\n            Text(::std::string::String),\n        }\n    }\n}\n",
+    )?;
+    fs::write(
+        root.join("carrier/Cargo.toml"),
+        "[package]\nname = \"carrier\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("carrier/src/lib.rs"), "pub extern crate alloc;\n")?;
+    prewarm_metadata(root, &["demo::proto::nested::Wrap"])?;
+    let inspector = Inspector::new(InspectorConfig::new(root.to_path_buf()));
+    let result = inspector.get("demo::proto::nested::Wrap")?;
+    let incan_core::interop::RustItemKind::Type(info) = &result.metadata.kind else {
+        return Err("expected enum type metadata for demo::proto::nested::Wrap".into());
+    };
+    let rendered = |name: &str| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(info
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .ok_or_else(|| format!("missing {name} variant"))?
+            .fields
+            .iter()
+            .map(incan_core::interop::render_rust_type_shape)
+            .collect())
+    };
+    let (boxed, direct, text) = (rendered("Boxed")?, rendered("Direct")?, rendered("Text")?);
+    eprintln!("PROBE Boxed={boxed:?} Direct={direct:?} Text={text:?}");
+    for (name, fields) in [("Boxed", &boxed), ("Direct", &direct), ("Text", &text)] {
+        assert!(
+            fields.iter().all(|field| !field.contains("nested::")),
+            "{name}: an absolute path must never be joined onto the owning module, got {fields:?}"
+        );
+    }
+    assert_eq!(
+        direct,
+        vec!["alloc::boxed::Box<demo::proto::Inner>".to_string()],
+        "a direct absolute std path records the ancestral item, not an owner-relative one"
+    );
+    assert_eq!(text, vec!["String".to_string()]);
+    Ok(())
+}
+
+/// `Some(Box.new(v))` against a Rust field typed `Option<Box<T>>` must type-check.
+///
+/// Metadata records the field in the ancestral namespace (`core::option::Option<alloc::boxed::Box<T>>`), the source
+/// imports `std::boxed::Box`, and `Box::new` returns `Self`. Reconciling that `Self` with `Box<T>` needs the expected
+/// inner type to reach the call inside `Some(...)`, and the owner match to happen in the ancestral namespace.
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_struct_field_option_box_accepts_boxed_some_argument() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Holder, Item
+from rust::std::boxed import Box
+def f() -> None:
+  _ = Holder(inner=Some(Box.new(Item.new())))
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(root.join("demo/src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"ra_option_box_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ndemo = { path = \"demo\" }\n",
+    )?;
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn touch() { let _ = demo::Item::new(); }\n",
+    )?;
+    fs::write(
+        root.join("demo/Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        root.join("demo/src/lib.rs"),
+        "extern crate alloc;\npub struct Item;\nimpl Item {\n    pub fn new() -> Self {\n        Item\n    }\n}\npub struct Holder {\n    pub inner: ::core::option::Option<::alloc::boxed::Box<Item>>,\n}\n",
+    )?;
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(root.to_path_buf());
+    prewarm_metadata(
+        root,
+        &[
+            "demo::Holder",
+            "demo::Item",
+            "demo::Item::new",
+            "std::boxed::Box",
+            "std::boxed::Box::new",
+        ],
+    )?;
+    if let Err(errs) = checker.check_program(&ast) {
+        panic!("expected Some(Box.new(..)) to satisfy Option<Box<T>>, got {errs:?}");
+    }
+    Ok(())
+}

@@ -1799,3 +1799,150 @@ pub fn run_inline<D: FnMut(&mut Data, &OutputCallbackInfo)>(callback: D) {
         Ok(())
     }
 }
+
+/// `std` re-exports of items that `core` and `alloc` define.
+///
+/// Rust spells one item several ways: `std::boxed::Box`, `alloc::boxed::Box`, a prelude `Box`, and any crate that
+/// re-exports the standard library for `no_std` consumers (`prost::alloc::boxed::Box`). rust-analyzer resolves all of
+/// them to the defining crate, so metadata records the ancestral spelling; Incan source imports the `std` one. The two
+/// can only unify if comparison happens in the ancestral namespace, and this table is the whole of that knowledge —
+/// facts about the standard library, not a list of downstream crates. It mirrors the lookup aliases rust-inspect keeps.
+const STD_REEXPORT_ROOTS: &[(&str, &str)] = &[
+    ("std::option::", "core::option::"),
+    ("std::result::", "core::result::"),
+    ("std::boxed::", "alloc::boxed::"),
+    ("std::vec::", "alloc::vec::"),
+    ("std::string::", "alloc::string::"),
+    ("std::rc::", "alloc::rc::"),
+    ("std::cell::", "core::cell::"),
+    // Only the `alloc`-defined items of `std::sync`; `Mutex`, `RwLock`, and friends are `std`'s own.
+    ("std::sync::Arc", "alloc::sync::Arc"),
+    ("std::sync::Weak", "alloc::sync::Weak"),
+];
+
+/// Prelude spellings of the items in [`STD_REEXPORT_ROOTS`], as rust-analyzer displays them inside the crate that
+/// defines them and as generated Rust commonly writes them.
+const PRELUDE_ROOTS: &[(&str, &str)] = &[
+    ("Box", "alloc::boxed::Box"),
+    ("Option", "core::option::Option"),
+    ("Result", "core::result::Result"),
+    ("Vec", "alloc::vec::Vec"),
+    ("String", "alloc::string::String"),
+];
+
+/// Rewrite one Rust item path to the crate that defines it.
+///
+/// Strips Incan's synthetic `rust::` surface namespace first, then folds a `std` re-export onto its `core`/`alloc`
+/// origin. Paths that are already ancestral, or that name ordinary crates, pass through unchanged.
+#[must_use]
+pub fn ancestral_rust_path(path: &str) -> String {
+    let path = path.strip_prefix("rust::").unwrap_or(path);
+    // A bare prelude name is one more spelling of the same item: metadata that reads `Box<T>` names
+    // `alloc::boxed::Box<T>` exactly as a `std::boxed::Box` import does.
+    if let Some(ancestral) = PRELUDE_ROOTS
+        .iter()
+        .find_map(|(name, ancestral)| (*name == path).then_some(*ancestral))
+    {
+        return ancestral.to_string();
+    }
+    for (reexport, ancestral) in STD_REEXPORT_ROOTS {
+        if let Some(rest) = path.strip_prefix(reexport) {
+            return format!("{ancestral}{rest}");
+        }
+    }
+    path.to_string()
+}
+
+/// Rewrite every item path inside a Rust type display — generic arguments included — to its ancestral spelling.
+///
+/// `std::option::Option<std::boxed::Box<T>>` and `core::option::Option<alloc::boxed::Box<T>>` name the same type;
+/// nominal comparison of displays must see them as equal.
+#[must_use]
+pub fn ancestral_rust_display(display: &str) -> String {
+    // rust-analyzer spells the standard collections with their defaulted allocator (`Vec<T, alloc::Global>`,
+    // `Box<T, A = Global>` rendered as `Box<T, alloc::Global>`); written Rust and Incan source never do. The
+    // default is not part of the item's identity, so drop it before comparing.
+    let display = strip_defaulted_global_allocator(display);
+    let display = display.as_str();
+    let mut out = String::with_capacity(display.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, out: &mut String| {
+        if !token.is_empty() {
+            out.push_str(&ancestral_rust_path(token));
+            token.clear();
+        }
+    };
+    for ch in display.chars() {
+        if ch.is_ascii_alphanumeric() || ch == '_' || ch == ':' || ch == '#' {
+            token.push(ch);
+        } else {
+            flush(&mut token, &mut out);
+            out.push(ch);
+        }
+    }
+    flush(&mut token, &mut out);
+    out
+}
+
+/// Remove a trailing `, alloc::Global` / `, std::alloc::Global` generic argument wherever it appears in a display.
+fn strip_defaulted_global_allocator(display: &str) -> String {
+    let mut out = display.to_string();
+    for spelling in [
+        ", alloc::Global>",
+        ",alloc::Global>",
+        ", std::alloc::Global>",
+        ",std::alloc::Global>",
+    ] {
+        while let Some(index) = out.find(spelling) {
+            out.replace_range(index..index + spelling.len() - 1, "");
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod ancestral_path_tests {
+    use super::{ancestral_rust_display, ancestral_rust_path};
+
+    /// Every spelling of one standard item must fold onto the crate that defines it.
+    #[test]
+    fn std_reexports_fold_onto_their_defining_crate() {
+        assert_eq!(ancestral_rust_path("std::boxed::Box"), "alloc::boxed::Box");
+        assert_eq!(ancestral_rust_path("rust::std::boxed::Box"), "alloc::boxed::Box");
+        assert_eq!(ancestral_rust_path("alloc::boxed::Box"), "alloc::boxed::Box");
+        assert_eq!(ancestral_rust_path("std::option::Option"), "core::option::Option");
+        assert_eq!(ancestral_rust_path("std::rc::Rc"), "alloc::rc::Rc");
+        assert_eq!(ancestral_rust_path("std::sync::Arc"), "alloc::sync::Arc");
+        assert_eq!(ancestral_rust_path("std::sync::Mutex"), "std::sync::Mutex");
+        assert_eq!(ancestral_rust_path("std::cell::RefCell"), "core::cell::RefCell");
+        assert_eq!(ancestral_rust_path("Box"), "alloc::boxed::Box");
+        assert_eq!(ancestral_rust_path("rust::Box"), "alloc::boxed::Box");
+        assert_eq!(ancestral_rust_path("Boxed"), "Boxed");
+        assert_eq!(
+            ancestral_rust_path("datafusion::common::Column"),
+            "datafusion::common::Column"
+        );
+    }
+
+    /// Displays that differ only in re-export spelling compare equal after rewriting.
+    #[test]
+    fn displays_unify_across_reexport_spellings() {
+        assert_eq!(
+            ancestral_rust_display("std::option::Option<std::boxed::Box<substrait::proto::Type>>"),
+            ancestral_rust_display("core::option::Option<alloc::boxed::Box<substrait::proto::Type>>"),
+        );
+        assert_eq!(
+            ancestral_rust_display("&mut rust::std::vec::Vec<u8>"),
+            "&mut alloc::vec::Vec<u8>"
+        );
+        assert_eq!(
+            ancestral_rust_display("Box<datafusion_expr::expr::Expr>"),
+            ancestral_rust_display("std::boxed::Box<datafusion_expr::expr::Expr>"),
+        );
+        assert_eq!(
+            ancestral_rust_display("rust::alloc::rc::Rc<std::cell::RefCell<std::fs::File>,alloc::Global>"),
+            ancestral_rust_display("std::rc::Rc<std::cell::RefCell<std::fs::File>>"),
+        );
+        assert_eq!(ancestral_rust_display("Vec<u8, alloc::Global>"), "alloc::vec::Vec<u8>");
+    }
+}

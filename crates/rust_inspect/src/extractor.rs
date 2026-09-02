@@ -75,7 +75,13 @@ fn field_module(field: &ra_ap_hir::Field, db: &RootDatabase) -> Module {
 }
 
 fn resolve_relative_source_path(text: &str, crate_name: &str, module: Module, db: &RootDatabase) -> Option<String> {
-    let mut text = text.trim().trim_start_matches("::");
+    let text = text.trim();
+    if let Some(absolute) = text.strip_prefix("::") {
+        // Absolute paths are not this function's business; see `resolve_source_path`. Fail closed rather than
+        // join a global path onto the owning module.
+        return (!absolute.is_empty()).then(|| absolute.to_string());
+    }
+    let mut text = text;
     if text.is_empty() {
         return None;
     }
@@ -291,11 +297,17 @@ fn resolve_source_path(text: &str, crate_name: &str, module: Module, db: &RootDa
         return None;
     }
 
-    if text.starts_with("::")
-        || text.starts_with("crate::")
-        || text.starts_with("self::")
-        || text.starts_with("super::")
-    {
+    // A leading `::` is the *absolute* path form — the opposite of the `self::`/`super::` markers below — so it
+    // must never reach the owner-relative joiner. prost-generated code spells every standard type this way
+    // (`::prost::alloc::boxed::Box<T>`), and joining that onto the owning module recorded
+    // `substrait::proto::fetch_rel::prost::alloc::boxed::Box` as a field type: a path no consumer can ever
+    // name, so the type never unified with the caller's `Box`. Resolve it semantically instead; HIR follows the
+    // re-export to the crate that defines the item, which is the ancestral namespace every alias must record.
+    let (absolute, text) = match text.strip_prefix("::") {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, text),
+    };
+    if !absolute && (text.starts_with("crate::") || text.starts_with("self::") || text.starts_with("super::")) {
         return resolve_relative_source_path(text.as_str(), crate_name, module, db);
     }
 
@@ -310,6 +322,11 @@ fn resolve_source_path(text: &str, crate_name: &str, module: Module, db: &RootDa
         && let Some(path) = canonical_module_def_path(item.into_module_def(), db)
     {
         return Some(path);
+    }
+    if absolute {
+        // An absolute path that HIR cannot resolve is still absolute. Returning it as written keeps the identity
+        // stable across the lookup aliases in `cache.rs`; the one thing it must not become is owner-relative.
+        return Some(text);
     }
 
     if !text.contains("::") {

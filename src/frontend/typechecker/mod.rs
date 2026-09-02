@@ -1260,8 +1260,30 @@ impl TypeChecker {
     /// display projections; the Rust boundary still needs the canonical Rust identity so local/import/reexport
     /// paths do not diverge.
     fn unique_imported_rust_item_path_for_display_tail(&self, display_tail: &str) -> Option<String> {
-        if display_tail.is_empty() || display_tail.contains("::") {
+        if display_tail.is_empty() {
             return None;
+        }
+        // A qualified display names an item outright. Match it against the imported items by ancestral identity so
+        // metadata's `alloc::boxed::Box` finds a source-level `from rust::std::boxed import Box`, and hand back the
+        // import's own spelling so later nominal checks line up with the symbol the source actually bound.
+        if display_tail.contains("::") {
+            let wanted = incan_core::interop::ancestral_rust_path(display_tail);
+            let mut matches = HashSet::new();
+            for symbol in self.symbols.all_symbols() {
+                let SymbolKind::RustItem(info) = &symbol.kind else {
+                    continue;
+                };
+                if matches!(info.binding, RustImportBindingKind::CrateRoot) {
+                    continue;
+                }
+                let path = Self::normalize_rust_namespace_path(info.path.as_str()).to_string();
+                if incan_core::interop::ancestral_rust_path(path.as_str()) == wanted {
+                    matches.insert(path);
+                }
+            }
+            let mut iter = matches.into_iter();
+            let first = iter.next()?;
+            return if iter.next().is_none() { Some(first) } else { None };
         }
         let mut matches = HashSet::new();
         for symbol in self.symbols.all_symbols() {
@@ -1657,8 +1679,46 @@ impl TypeChecker {
     }
 
     /// Return compact Rust display text for comparison.
+    /// Bring a Rust type display into the one normal form every lookup and comparison in the checker uses.
+    ///
+    /// Lifetimes and formatting whitespace are removed, except the single space that follows a `dyn` or `impl`
+    /// token: that space is what distinguishes a trait object (`dyn Trait`) from an ordinary path, and generic
+    /// arguments are split from this string, so dropping it turns the `T` of `Arc<dyn Trait>` into `dynTrait`. Every
+    /// route that compacts a display must go through here; when parameters and arguments were normalised by
+    /// different routes, `Arc<dyn TableProvider>` stopped matching itself (#1229).
     fn compact_rust_display(rust_ty: &str) -> String {
-        Self::rust_display_without_lifetimes(rust_ty).replace(' ', "")
+        let display = Self::rust_display_without_lifetimes(rust_ty);
+        let display = display.as_str();
+        let mut out = String::with_capacity(display.len());
+        let mut word = String::new();
+        let flush = |word: &mut String, out: &mut String| {
+            if !word.is_empty() {
+                out.push_str(word);
+                word.clear();
+            }
+        };
+        let mut chars = display.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch == ' ' {
+                let keep = matches!(word.as_str(), "dyn" | "impl")
+                    && chars
+                        .peek()
+                        .is_some_and(|next| next.is_alphanumeric() || *next == '_' || *next == ':');
+                flush(&mut word, &mut out);
+                if keep {
+                    out.push(' ');
+                }
+                continue;
+            }
+            if ch.is_alphanumeric() || ch == '_' {
+                word.push(ch);
+            } else {
+                flush(&mut word, &mut out);
+                out.push(ch);
+            }
+        }
+        flush(&mut word, &mut out);
+        out
     }
 
     /// Split a Rust generic display type into base and arguments.
@@ -1836,7 +1896,7 @@ impl TypeChecker {
     pub(crate) fn resolved_type_from_rust_display(&self, rust_ty: &str) -> ResolvedType {
         let trimmed = rust_ty.trim();
         let display = Self::rust_display_without_lifetimes(trimmed);
-        let normalized = display.replace(' ', "");
+        let normalized = Self::compact_rust_display(display.as_str());
         if normalized == RUST_NEVER_TYPE_DISPLAY {
             return ResolvedType::Never;
         }
@@ -1946,11 +2006,11 @@ impl TypeChecker {
 
     /// Return a Rust generic parameter display when rust-analyzer reports a by-value generic boundary.
     ///
-    /// Plain type parameters appear as `T` or `U`. Anonymous `impl Trait` parameters can arrive with whitespace erased,
-    /// such as `implBuf` for `impl Buf`; those still carry by-value shape and must not be treated as borrowed Rust
-    /// boundary targets.
+    /// Plain type parameters appear as `T` or `U`. Anonymous `impl Trait` parameters arrive as `impl Buf` in the
+    /// checker's normal form, or with the whitespace erased (`implBuf`) when a caller compacted the display itself;
+    /// both still carry by-value shape and must not be treated as borrowed Rust boundary targets.
     pub(crate) fn rust_display_type_var_name(normalized: &str) -> Option<&str> {
-        if let Some(tail) = normalized.strip_prefix("impl")
+        if let Some(tail) = normalized.strip_prefix("impl").map(str::trim_start)
             && !tail.is_empty()
             && (tail.contains("::") || tail.chars().next().is_some_and(|ch| ch.is_ascii_uppercase()))
         {
@@ -1971,7 +2031,7 @@ impl TypeChecker {
     pub(crate) fn resolved_param_type_from_rust_display(&self, rust_ty: &str) -> ResolvedType {
         let trimmed = rust_ty.trim();
         let display = Self::rust_display_without_lifetimes(trimmed);
-        let normalized = display.replace(' ', "");
+        let normalized = Self::compact_rust_display(&display);
         if let Some(callable) = self.resolved_function_type_from_rust_callable_bound_display(display.as_str()) {
             return callable;
         }
@@ -2025,7 +2085,7 @@ impl TypeChecker {
     pub(crate) fn resolved_rust_boundary_target_from_param_display(&self, rust_ty: &str) -> ResolvedType {
         let trimmed = rust_ty.trim();
         let display = Self::rust_display_without_lifetimes(trimmed);
-        let normalized = display.replace(' ', "");
+        let normalized = Self::compact_rust_display(&display);
         if let Some(callable) = self.resolved_function_type_from_rust_callable_bound_display(display.as_str()) {
             return callable;
         }
@@ -6948,7 +7008,12 @@ impl TypeChecker {
             (ResolvedType::Tuple(e1), ResolvedType::Tuple(e2)) => {
                 e1.len() == e2.len() && e1.iter().zip(e2.iter()).all(|(t1, t2)| self.types_compatible(t1, t2))
             }
-            (ResolvedType::RustPath(a), ResolvedType::RustPath(b)) => a == b,
+            // Rust names one item several ways (`std::boxed::Box`, `alloc::boxed::Box`, a dependency's re-export of
+            // `alloc`). rust-inspect records the ancestral spelling; Incan source imports the `std` one. Compare in the
+            // ancestral namespace so every re-export of the same item is just another alias of it.
+            (ResolvedType::RustPath(a), ResolvedType::RustPath(b)) => {
+                incan_core::interop::ancestral_rust_display(a) == incan_core::interop::ancestral_rust_display(b)
+            }
             // Without full Rust type knowledge, treat any `RustPath` as compatible with non-Rust surfaces so mixed
             // Incan/Rust-typed expressions stay checkable (RFC 005/041 permissive model).
             (ResolvedType::RustPath(_), _) | (_, ResolvedType::RustPath(_)) => true,
