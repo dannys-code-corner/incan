@@ -377,7 +377,7 @@ fn source_route_records_boxed_variant_payloads_as_the_semantic_type_with_their_c
 
     let cache = RustMetadataCache::new();
     let hit = cache
-        .get_cached_or_extract_fast_with_registry_src_roots(&root, "inner::Expr", &[inner.clone()])?
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "inner::Expr", std::slice::from_ref(&inner))?
         .ok_or_else(|| std::io::Error::other("expected sealed source enum metadata"))?;
     let incan_core::interop::RustItemKind::Type(info) = &hit.metadata.kind else {
         return Err(std::io::Error::other("expected a type item").into());
@@ -408,6 +408,87 @@ fn source_route_records_boxed_variant_payloads_as_the_semantic_type_with_their_c
         vec![incan_core::interop::RustPayloadCarrier::Direct]
     );
     Ok(())
+}
+
+#[test]
+fn direct_workspace_reads_sealed_build_script_output_for_generated_enums() -> Result<(), Box<dyn std::error::Error>> {
+    // A normal Oven command never runs Cargo, so a dependency whose items live in build-script output (prost's
+    // generated modules) is visible only through the sealed plan directories the installer records. Without that
+    // route the generated `oneof` enum below simply does not exist for inspection.
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let inner = tmp.path().join("inner-0.1.0");
+    let out_dir = tmp
+        .path()
+        .join("plan/target/aarch64-apple-darwin/debug/build/inner/0123abcd0123abcd/out");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(inner.join("src"))?;
+    fs::create_dir_all(&out_dir)?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        "version = 3\n\n[[package]]\nname = \"inner\"\nversion = \"0.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+    )?;
+    fs::write(
+        inner.join("Cargo.toml"),
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        inner.join("src/lib.rs"),
+        "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\n",
+    )?;
+    // Spelled the way prost writes a recursive oneof: a nested module, a `super::` payload path, and the storage
+    // carrier through its own re-export of `Box`.
+    fs::write(
+        out_dir.join("gen.rs"),
+        "pub struct Node;\npub mod kind {\n    pub enum Kind {\n        Node(::prost::alloc::boxed::Box<super::Node>),\n        Empty,\n    }\n}\n",
+    )?;
+    crate::loader::write_oven_generated_out_dirs(&root, std::slice::from_ref(&out_dir))?;
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "inner::kind::Kind", std::slice::from_ref(&inner))?
+        .ok_or_else(|| std::io::Error::other("expected generated enum metadata through the sealed out dir"))?;
+    let incan_core::interop::RustItemKind::Type(info) = &hit.metadata.kind else {
+        return Err(std::io::Error::other("expected a type item").into());
+    };
+    let boxed = info
+        .variants
+        .iter()
+        .find(|variant| variant.name == "Node")
+        .ok_or_else(|| std::io::Error::other("Node variant missing"))?;
+    assert_eq!(
+        boxed.fields,
+        vec![incan_core::interop::RustTypeShape::RustPath {
+            path: "inner::Node".to_string(),
+            args: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        boxed.field_carriers,
+        vec![incan_core::interop::RustPayloadCarrier::Boxed]
+    );
+    Ok(())
+}
+
+#[test]
+fn sealed_out_dir_owner_is_read_from_both_build_layouts() {
+    use std::path::Path;
+    assert_eq!(
+        super::sealed_out_dir_crate_name(Path::new(
+            "/loaf/target/aarch64-apple-darwin/debug/build/substrait/9741e2/out"
+        )),
+        Some("substrait".to_string())
+    );
+    assert_eq!(
+        super::sealed_out_dir_crate_name(Path::new("/target/debug/build/substrait-9741e23407182c1c/out")),
+        Some("substrait".to_string())
+    );
+    assert_eq!(super::sealed_out_dir_crate_name(Path::new("/nowhere/out")), None);
 }
 
 #[test]

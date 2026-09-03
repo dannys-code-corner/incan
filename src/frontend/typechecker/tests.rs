@@ -23714,12 +23714,34 @@ fn rust_inspect_records_absolute_reexport_paths_in_the_ancestral_namespace() -> 
             "{name}: an absolute path must never be joined onto the owning module, got {fields:?}"
         );
     }
+    // Both boxed spellings are the one `alloc::boxed::Box` item: the payload is recorded as its semantic type and
+    // the carrier beside it, whether the source reached `Box` directly or through another crate's re-export.
+    let carriers = |name: &str| -> Result<Vec<incan_core::interop::RustPayloadCarrier>, Box<dyn std::error::Error>> {
+        Ok(info
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .ok_or_else(|| format!("missing {name} variant"))?
+            .field_carriers
+            .clone())
+    };
     assert_eq!(
         direct,
-        vec!["alloc::boxed::Box<demo::proto::Inner>".to_string()],
-        "a direct absolute std path records the ancestral item, not an owner-relative one"
+        vec!["demo::proto::Inner".to_string()],
+        "a direct absolute std path records the semantic payload in the ancestral namespace"
     );
+    assert_eq!(
+        boxed,
+        vec!["demo::proto::Inner".to_string()],
+        "a re-exported absolute path is the same carrier"
+    );
+    assert_eq!(
+        carriers("Direct")?,
+        vec![incan_core::interop::RustPayloadCarrier::Boxed]
+    );
+    assert_eq!(carriers("Boxed")?, vec![incan_core::interop::RustPayloadCarrier::Boxed]);
     assert_eq!(text, vec!["String".to_string()]);
+    assert_eq!(carriers("Text")?, vec![incan_core::interop::RustPayloadCarrier::Direct]);
     Ok(())
 }
 

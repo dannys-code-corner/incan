@@ -469,6 +469,8 @@ pub(crate) struct PreparedOvenProjectRegistrySourceAuthorities {
     authority: OvenLoadedProjectInspectionAuthority,
     sources: Vec<crate::rust_inspect::OvenInspectionRegistrySource>,
     registry_lock_source: Option<PathBuf>,
+    /// Build-script output directories the explicit bake sealed below the authority root.
+    generated_out_dirs: Vec<PathBuf>,
     test_dependency_plan: Option<crate::cli::commands::build::OvenDirectRustcPlanSelection>,
     _release_loafs: Vec<OvenToolchainLoaf>,
 }
@@ -932,6 +934,14 @@ pub(crate) fn prepare_project_registry_source_authorities(
         }
         Some(path)
     };
+    // The explicit bake sealed its Cargo bootstrap's build-script output below the authority root; those files are
+    // the only Cargo-free source of generated Rust (prost modules, for one) a direct inspection workspace can read.
+    let generated_out_dirs = authority
+        .payload
+        .generated_out_dirs
+        .iter()
+        .map(|dir| authority.artifact_root.join(&dir.relative_root))
+        .collect::<Vec<_>>();
     let test_dependency_plan = if let Some(stored_index) = test_dependency_stored_index {
         let constituent_index = authority
             .payload
@@ -971,6 +981,7 @@ pub(crate) fn prepare_project_registry_source_authorities(
         authority,
         sources,
         registry_lock_source,
+        generated_out_dirs,
         test_dependency_plan,
         _release_loafs: release_loafs,
     }))
@@ -1042,6 +1053,9 @@ impl PreparedOvenProjectRegistrySourceAuthorities {
         }
         crate::rust_inspect::write_sealed_oven_inspection_source_authority(manifest_dir, self.sources.clone())
             .map_err(|error| CliError::failure(format!("failed to install Oven Rust source authority: {error}")))?;
+        crate::rust_inspect::write_oven_generated_out_dirs(manifest_dir, &self.generated_out_dirs).map_err(
+            |error| CliError::failure(format!("failed to install Oven generated output directories: {error}")),
+        )?;
         if let Some(lock) = self.registry_lock_source.as_deref() {
             install_oven_registry_lock(lock, &manifest_dir.join("Cargo.lock"))?;
         }

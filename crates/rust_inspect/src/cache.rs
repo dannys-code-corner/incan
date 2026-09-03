@@ -16,7 +16,7 @@ use std::time::Instant;
 use incan_core::interop::{
     RUST_NEVER_TYPE_DISPLAY, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam,
     RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeMetadataCompleteness, RustTypeShape,
-    RustTypeShapePathFallback, RustVariantInfo, RustVisibility, parse_rust_type_shape_text,
+    RustTypeShapePathFallback, RustVariantInfo, RustVisibility, is_box_carrier_path, parse_rust_type_shape_text,
     rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
     rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
 };
@@ -1085,9 +1085,54 @@ fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) 
             }
         }
     }
+    // A direct Oven inspection workspace has no Cargo target directory. The sealed plan Loafs that compiled its
+    // dependencies keep their build-script output as `build/<crate>/<hash>/out`, and the installer lists the ones this
+    // workspace may read; without them prost's generated `oneof` enums are invisible to normal commands.
+    for out_dir in crate::loader::read_oven_generated_out_dirs(root) {
+        let Some(owner) = sealed_out_dir_crate_name(&out_dir) else {
+            continue;
+        };
+        let normalized = normalized_crate_cache_key(owner.as_str());
+        if !crate_names
+            .iter()
+            .any(|name| normalized == *name || normalized.starts_with(format!("{name}_").as_str()))
+        {
+            continue;
+        }
+        let Ok(out_entries) = fs::read_dir(&out_dir) else {
+            continue;
+        };
+        for out_entry in out_entries.flatten() {
+            let path = out_entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     files.dedup();
     files
+}
+
+/// Return the crate owning one build-script output directory.
+///
+/// Oven seals build units as `build/<crate>/<hash>/out`; Cargo lays them out as `build/<crate>-<hash>/out`.
+fn sealed_out_dir_crate_name(out_dir: &Path) -> Option<String> {
+    let build_unit = out_dir.parent()?;
+    let unit_name = build_unit.file_name()?.to_str()?;
+    let owner = build_unit.parent()?;
+    if owner.parent()?.file_name()?.to_str()? == "build" {
+        return Some(owner.file_name()?.to_str()?.to_string());
+    }
+    if owner.file_name()?.to_str()? == "build" {
+        return Some(
+            unit_name
+                .rsplit_once('-')
+                .map_or(unit_name, |(name, _)| name)
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Collect file names from `include!(concat!(env!("OUT_DIR"), "..."))` macro text.
@@ -3677,14 +3722,10 @@ fn generated_struct_metadata(
 /// lowering can restore it at the Rust constructor.
 fn normalize_generated_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
-        RustTypeShape::RustPath { path, args }
-            if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
-        {
-            (
-                args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
-                RustPayloadCarrier::Boxed,
-            )
-        }
+        RustTypeShape::RustPath { path, args } if is_box_carrier_path(path.as_str()) => (
+            args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+            RustPayloadCarrier::Boxed,
+        ),
         other => (other, RustPayloadCarrier::Direct),
     }
 }

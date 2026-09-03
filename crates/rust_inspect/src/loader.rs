@@ -85,6 +85,34 @@ pub const OVEN_DIRECT_INSPECTION_MARKER: &str = ".incan_oven_direct_rust_project
 pub const OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER: &str = ".incan_oven_cargo_rust_inspection";
 /// Compiler-authored source authority consumed by the direct Oven inspection loader.
 pub const OVEN_DIRECT_INSPECTION_AUTHORITY_FILE: &str = ".incan_oven_rust_sources.json";
+/// Sealed build-script output directories (one absolute `OUT_DIR` per line) a direct-inspection workspace may read.
+///
+/// Normal Oven commands never run Cargo, so generated Rust such as prost's `include!`d modules is reachable only
+/// through the immutable plan Loafs that compiled it. The installer lists those directories here and the
+/// generated-code route scans them the way it scans a Cargo target directory.
+pub const OVEN_GENERATED_OUT_DIRS_FILE: &str = ".incan_oven_generated_out_dirs";
+
+/// Record the sealed build-script output directories a direct-inspection workspace may read.
+pub fn write_oven_generated_out_dirs(manifest_dir: &Path, out_dirs: &[PathBuf]) -> Result<PathBuf, RustMetadataError> {
+    let mut lines: Vec<String> = out_dirs.iter().map(|dir| dir.to_string_lossy().into_owned()).collect();
+    lines.sort();
+    lines.dedup();
+    let path = manifest_dir.join(OVEN_GENERATED_OUT_DIRS_FILE);
+    fs::write(&path, format!("{}\n", lines.join("\n")))?;
+    Ok(path)
+}
+
+/// Read the sealed build-script output directories recorded for a direct-inspection workspace, if any.
+pub(crate) fn read_oven_generated_out_dirs(manifest_dir: &Path) -> Vec<PathBuf> {
+    fs::read_to_string(manifest_dir.join(OVEN_GENERATED_OUT_DIRS_FILE))
+        .map(|text| {
+            text.lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(PathBuf::from)
+                .collect()
+        })
+        .unwrap_or_default()
+}
 const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 2;
 
 /// How a compiler-authored direct-inspection projection establishes its registry-source integrity boundary.

@@ -7,7 +7,7 @@ use incan_core::interop::{
     RustImplementedTrait, RustItemKind, RustItemMetadata, RustMacroInfo, RustMethodSig, RustModuleChild,
     RustModuleChildKind, RustModuleInfo, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustParam,
     RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustTypeShapePathFallback,
-    RustVariantInfo, RustVisibility, parse_rust_type_shape_text, render_rust_type_shape,
+    RustVariantInfo, RustVisibility, is_box_carrier_path, parse_rust_type_shape_text, render_rust_type_shape,
     rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
     rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
 };
@@ -467,14 +467,10 @@ fn source_field_constructor_label(field: &ra_ap_hir::Field, db: &RootDatabase) -
 /// Record a variant payload as its semantic type, remembering a stripped `Box<T>` carrier so lowering can restore it.
 fn normalize_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
-        RustTypeShape::RustPath { path, args }
-            if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
-        {
-            (
-                args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
-                RustPayloadCarrier::Boxed,
-            )
-        }
+        RustTypeShape::RustPath { path, args } if is_box_carrier_path(path.as_str()) => (
+            args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+            RustPayloadCarrier::Boxed,
+        ),
         other => (other, RustPayloadCarrier::Direct),
     }
 }

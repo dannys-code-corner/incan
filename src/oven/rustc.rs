@@ -354,6 +354,23 @@ pub(crate) struct OvenProjectInspectionAuthorityPayload {
     pub constituents: Vec<OvenProjectInspectionConstituent>,
     #[serde(default)]
     pub registry_sources: Vec<OvenProjectInspectionSource>,
+    /// Build-script output directories the explicit bake sealed below this authority's artifact root.
+    ///
+    /// Generated Rust such as prost's `include!`d modules exists as files only where the bake's Cargo bootstrap
+    /// wrote its `OUT_DIR`s. A normal command never runs Cargo, so the authority carries those files itself and a
+    /// direct inspection workspace reads them the way it would read a Cargo `OUT_DIR`.
+    #[serde(default)]
+    pub generated_out_dirs: Vec<OvenProjectInspectionGeneratedOutDir>,
+}
+
+/// One sealed build-script output directory, laid out as `generated-out-dirs/build/<crate>-<hash>/out` so the
+/// generated-code route recognizes it like a Cargo target directory.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct OvenProjectInspectionGeneratedOutDir {
+    /// Cargo package whose build script produced the directory.
+    pub crate_name: String,
+    /// Directory below the authority's artifact root holding the sealed `*.rs` output.
+    pub relative_root: String,
 }
 
 /// Exact authority entry named by a source-current completed project output.
@@ -9083,6 +9100,7 @@ mod tests {
                 base_loaf_identity: None,
             }],
             registry_sources: Vec::new(),
+            generated_out_dirs: Vec::new(),
         };
         let authority = store.publish(&OvenArtifactPublishRequest {
             receipt: second_receipt.clone(),
@@ -10313,6 +10331,7 @@ mod tests {
                 package: source,
                 owner: OvenProjectInspectionSourceOwner::Constituent { index: 0 },
             }],
+            generated_out_dirs: Vec::new(),
         };
         validate_project_inspection_authority_payload(&payload)?;
 

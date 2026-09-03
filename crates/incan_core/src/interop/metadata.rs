@@ -1879,6 +1879,18 @@ pub fn ancestral_rust_path(path: &str) -> String {
     path.to_string()
 }
 
+/// Return whether a recorded Rust path names the `Box` storage carrier, through any re-export.
+///
+/// `alloc::boxed::Box` reaches metadata under many spellings: the prelude `Box`, `std::boxed::Box`, and the
+/// re-exports generated code leans on (`prost::alloc::boxed::Box`, or a crate's `pub extern crate alloc`). They are
+/// one item, so the recorders that strip a variant payload's carrier decide through this rule rather than a spelling.
+pub fn is_box_carrier_path(path: &str) -> bool {
+    let ancestral = ancestral_rust_path(path);
+    ancestral == "alloc::boxed::Box"
+        || ancestral.ends_with("::alloc::boxed::Box")
+        || ancestral.ends_with("::std::boxed::Box")
+}
+
 /// Rewrite every item path inside a Rust type display — generic arguments included — to its ancestral spelling.
 ///
 /// `std::option::Option<std::boxed::Box<T>>` and `core::option::Option<alloc::boxed::Box<T>>` name the same type;
@@ -1928,7 +1940,25 @@ fn strip_defaulted_global_allocator(display: &str) -> String {
 
 #[cfg(test)]
 mod ancestral_path_tests {
+    use super::is_box_carrier_path;
     use super::{ancestral_rust_display, ancestral_rust_path};
+
+    #[test]
+    fn box_carrier_paths_are_recognized_through_every_reexport() {
+        for spelling in [
+            "Box",
+            "std::boxed::Box",
+            "alloc::boxed::Box",
+            "prost::alloc::boxed::Box",
+            "carrier::alloc::boxed::Box",
+            "::std::boxed::Box",
+        ] {
+            assert!(is_box_carrier_path(spelling), "{spelling} names the Box carrier");
+        }
+        for other in ["Rc", "alloc::rc::Rc", "demo::Box", "std::boxed::BoxLike"] {
+            assert!(!is_box_carrier_path(other), "{other} is not the Box carrier");
+        }
+    }
 
     /// Every spelling of one standard item must fold onto the crate that defines it.
     #[test]

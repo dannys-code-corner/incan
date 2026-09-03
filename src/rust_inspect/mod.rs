@@ -15,5 +15,6 @@ pub use ::rust_inspect::{
     Fidelity, InspectError, InspectResult, Inspector, InspectorConfig, OVEN_CARGO_BOOTSTRAP_INSPECTION_MARKER,
     OVEN_DIRECT_INSPECTION_AUTHORITY_FILE, OVEN_DIRECT_INSPECTION_MARKER, OvenInspectionRegistrySource,
     RustMetadataCache, RustMetadataError, RustWorkspace, extract_rust_item, oven_inspection_registry_source_roots,
-    write_oven_inspection_source_authority, write_sealed_oven_inspection_source_authority,
+    write_oven_generated_out_dirs, write_oven_inspection_source_authority,
+    write_sealed_oven_inspection_source_authority,
 };
