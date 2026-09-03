@@ -12,16 +12,18 @@ use super::{CompileError, TypeChecker};
 use crate::frontend::ast::{Declaration, Program, Span};
 use crate::frontend::symbols::{SymbolKind, TypeInfo};
 use crate::frontend::{lexer, parser};
+use crate::provider::ProviderPlan;
+use std::sync::Arc;
 
-/// Parse one test program, panicking with context on lex/parse failure.
-fn parse(source: &str, context: &str) -> Program {
-    let tokens = lexer::lex(source).unwrap_or_else(|errs| panic!("{context} lex failed: {errs:?}"));
-    parser::parse(&tokens).unwrap_or_else(|errs| panic!("{context} parse failed: {errs:?}"))
+/// Parse one test program and preserve fixture failures as ordinary test errors.
+fn parse(source: &str, context: &str) -> Result<Program, String> {
+    let tokens = lexer::lex(source).map_err(|errors| format!("{context} lex failed: {errors:?}"))?;
+    parser::parse(&tokens).map_err(|errors| format!("{context} parse failed: {errors:?}"))
 }
 
 /// Check one standalone program and return the checker for identity inspection.
 fn check(source: &str, context: &str) -> Result<TypeChecker, String> {
-    let program = parse(source, context);
+    let program = parse(source, context)?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     checker
@@ -74,6 +76,95 @@ fn write_identity_at(
                 span.start, span.end
             )
         })
+}
+
+/// Imported trait defaults retain their declaration identity for lowering into a local adopter.
+#[test]
+fn imported_trait_default_method_identity_survives_for_lowering() -> Result<(), String> {
+    let checker = check(
+        r#"
+from std.traits.error import Error
+
+model LocalError with Error:
+  detail: str
+
+  def message(self) -> str:
+    return self.detail
+"#,
+        "imported trait default identity",
+    )?;
+
+    let identity = checker
+        .type_info()
+        .traits
+        .method_identities
+        .get(&("Error".to_string(), "source".to_string()))
+        .ok_or_else(|| {
+            format!(
+                "missing Error.source identity in lowering artifacts: {:?}",
+                checker.type_info().traits.method_identities
+            )
+        })?;
+    assert_eq!(identity.declaration_name, "source");
+    assert_eq!(identity.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(
+        identity.origin,
+        SymbolOrigin::Module(vec!["std".to_string(), "traits".to_string(), "error".to_string(),])
+    );
+    Ok(())
+}
+
+/// Dependency-only trait metadata uses its canonical module-qualified key when no local symbol carries the trait.
+#[test]
+fn dependency_trait_default_method_identity_survives_private_module_checking() -> Result<(), String> {
+    let provider = parse(
+        r#"
+pub trait Contract:
+  def required(self) -> str: ...
+
+  def fallback(self) -> str:
+    return "fallback"
+"#,
+        "dependency trait provider",
+    )?;
+    let consumer = parse(
+        r#"
+from provider import Contract
+
+model Implementation with Contract:
+  def required(self) -> str:
+    return "implemented"
+"#,
+        "dependency trait consumer",
+    )?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["consumer".to_string()]));
+    checker
+        .check_with_imports_allow_private(&consumer, &[("provider", &provider)])
+        .map_err(|errors| format!("dependency trait consumer should typecheck: {errors:?}"))?;
+
+    let identity = checker
+        .type_info()
+        .traits
+        .method_identities
+        .get(&("provider.Contract".to_string(), "fallback".to_string()))
+        .ok_or_else(|| {
+            format!(
+                "missing provider.Contract.fallback identity in lowering artifacts: {:?}",
+                checker.type_info().traits.method_identities
+            )
+        })?;
+    assert_eq!(identity.declaration_name, "fallback");
+    assert_eq!(identity.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(identity.origin, SymbolOrigin::Module(vec!["provider".to_string()]));
+    let adopted_identity = checker
+        .type_info()
+        .traits
+        .method_identities
+        .get(&("Contract".to_string(), "fallback".to_string()))
+        .ok_or_else(|| "missing locally-adopted Contract.fallback identity in lowering artifacts".to_string())?;
+    assert_eq!(adopted_identity, identity);
+    Ok(())
 }
 
 /// A module-level declaration's identity is minted once and is independent of how often it is referenced.
@@ -447,7 +538,7 @@ fn duplicate_generic_binders_have_distinct_declaration_site_identities() -> Resu
     let source = "def choose[T, T](value: T) -> T:\n  return value\n";
     let first = nth_span(source, "T", 0)?;
     let second = nth_span(source, "T", 1)?;
-    let program = parse(source, "duplicate generic binders");
+    let program = parse(source, "duplicate generic binders")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = match checker.check_program(&program) {
@@ -615,7 +706,7 @@ model Token:
     observed = cls
     return cls(value=value)
 "#;
-    let program = parse(source, "bare cls");
+    let program = parse(source, "bare cls")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = check_errors(&mut checker, &program, "bare cls must retain its prior rejection")?;
@@ -646,7 +737,7 @@ model Token:
   property observed -> int:
     return self.value
 "#;
-    let program = parse(source, "property receiver provenance");
+    let program = parse(source, "property receiver provenance")?;
     let property_span = match &program.declarations[0].node {
         Declaration::Model(model) => {
             model
@@ -851,7 +942,7 @@ def accepted(converter: Converter) -> int:
 def rejected(converter: Converter) -> bool:
   return converter.convert()
 "#;
-    let program = parse(source, "selected method overload identity");
+    let program = parse(source, "selected method overload identity")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = check_errors(
@@ -904,13 +995,13 @@ pub def helper() -> int:
   return 1
 "#,
         "identity lib",
-    );
+    )?;
     let api = parse(
         r#"
 pub from lib import helper as h
 "#,
         "identity api facade",
-    );
+    )?;
     let consumer_source = r#"
 from lib import helper
 from lib import helper as h
@@ -921,7 +1012,7 @@ def use_all() -> None:
   b = h
   c = run
 "#;
-    let consumer = parse(consumer_source, "identity consumer");
+    let consumer = parse(consumer_source, "identity consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker
@@ -976,6 +1067,216 @@ def use_all() -> None:
     Ok(())
 }
 
+/// Static imports keep the provider declaration identity even though statics are not codegraph source targets.
+#[test]
+fn static_import_alias_and_reexport_share_the_declaration_identity() -> Result<(), String> {
+    let provider = parse("pub static counter: int = 1\n", "static identity provider")?;
+    let facade = parse("pub from provider import counter\n", "static identity facade")?;
+    let consumer_source = r#"
+from facade import counter as shared
+
+def read() -> int:
+  return shared
+"#;
+    let consumer = parse(consumer_source, "static identity consumer")?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["consumer".to_string()]));
+    checker
+        .check_with_imports(&consumer, &[("provider", &provider), ("facade", &facade)])
+        .map_err(|errors| format!("static identity consumer should typecheck: {errors:?}"))?;
+
+    let imported = checker
+        .type_info()
+        .resolved_import_identity("shared")
+        .ok_or("re-exported static import must prove an identity")?
+        .clone();
+    assert_eq!(imported.kind, SemanticSourceTargetKind::Static);
+    assert_eq!(imported.declaration_name, "counter");
+    assert_eq!(imported.origin, SymbolOrigin::Module(vec!["provider".to_string()]));
+    assert_eq!(
+        identity_at(
+            &checker,
+            nth_span(consumer_source, "shared", 1)?,
+            "re-exported static read",
+        )?,
+        imported
+    );
+    Ok(())
+}
+
+/// An SDK component's own `std.*` spelling resolves to the exact physical source declaration covered by its
+/// bootstrap grant. The public spelling remains a binding path; it must not mint a second provider identity.
+#[test]
+fn bootstrap_std_import_uses_physical_provider_source_identity() -> Result<(), String> {
+    let registry = parse(
+        r#"
+pub model RegistrySubject:
+  label: str
+
+  @staticmethod
+  def current_unit() -> Self:
+    return RegistrySubject(label="unit")
+
+pub class Registry:
+  def entry(self) -> int:
+    return 1
+"#,
+        "bootstrap registry provider",
+    )?;
+    let source = r#"
+from std.registry import Registry, RegistrySubject
+
+def read(registry: Registry) -> int:
+  return registry.entry()
+
+def subject() -> RegistrySubject:
+  return RegistrySubject.current_unit()
+"#;
+    let consumer = parse(source, "bootstrap registry consumer")?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["features".to_string()]));
+    checker.register_dependency_module_path_segments("registry", vec!["registry".to_string()]);
+    checker.set_provider_plan(Arc::new(
+        ProviderPlan::default().with_bootstrap_sdk_namespace_roots(["registry".to_string()]),
+    ));
+    checker
+        .check_with_imports_allow_private(&consumer, &[("registry", &registry)])
+        .map_err(|errors| format!("bootstrap registry consumer should typecheck: {errors:?}"))?;
+
+    for imported_name in ["Registry", "RegistrySubject"] {
+        let identity = checker
+            .type_info()
+            .resolved_import_identity(imported_name)
+            .ok_or_else(|| format!("missing resolved import identity for {imported_name}"))?;
+        assert_eq!(identity.origin, SymbolOrigin::Module(vec!["registry".to_string()]));
+    }
+    let entry = identity_at(
+        &checker,
+        nth_span(source, "registry.entry()", 0)?,
+        "Registry.entry call",
+    )?;
+    assert_eq!(entry.declaration_name, "entry");
+    assert_eq!(entry.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(entry.origin, SymbolOrigin::Module(vec!["registry".to_string()]));
+    let current_unit = identity_at(
+        &checker,
+        nth_span(source, "RegistrySubject.current_unit()", 0)?,
+        "RegistrySubject.current_unit call",
+    )?;
+    assert_eq!(current_unit.declaration_name, "current_unit");
+    assert_eq!(current_unit.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(current_unit.origin, SymbolOrigin::Module(vec!["registry".to_string()]));
+    Ok(())
+}
+
+/// Nested field method lookup during provider bootstrap must use the physical source dependency metadata too. A
+/// direct import of `Date` would hide the stale-stub precedence bug this test guards against.
+#[test]
+fn bootstrap_nested_member_uses_physical_provider_source_identity() -> Result<(), String> {
+    let naive = parse(
+        r#"
+pub model Date:
+  day: int
+
+  def add_months(self, months: int) -> Self:
+    return self
+
+pub model DateTime:
+  pub date: Date
+"#,
+        "bootstrap datetime provider",
+    )?;
+    let source = r#"
+from std.datetime.civil.naive import DateTime
+
+def shift(value: DateTime) -> None:
+  _ = value.date.add_months(1)
+"#;
+    let consumer = parse(source, "bootstrap datetime consumer")?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec![
+        "datetime".to_string(),
+        "civil".to_string(),
+        "offset".to_string(),
+    ]));
+    checker.set_current_package_identity(Some("incan_stdlib_data".to_string()));
+    checker.register_dependency_module_path_segments(
+        "datetime_civil_naive",
+        vec!["datetime".to_string(), "civil".to_string(), "naive".to_string()],
+    );
+    checker.set_provider_plan(Arc::new(
+        ProviderPlan::default().with_bootstrap_sdk_namespace_roots(["datetime".to_string()]),
+    ));
+    checker
+        .check_with_imports_allow_private(&consumer, &[("datetime_civil_naive", &naive)])
+        .map_err(|errors| format!("bootstrap nested datetime consumer should typecheck: {errors:?}"))?;
+
+    let add_months = identity_at(
+        &checker,
+        nth_span(source, "value.date.add_months(1)", 0)?,
+        "nested Date.add_months call",
+    )?;
+    assert_eq!(add_months.declaration_name, "add_months");
+    assert_eq!(add_months.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(
+        add_months.origin,
+        SymbolOrigin::Package {
+            library: "incan_stdlib_data".to_string(),
+            module_path: vec!["datetime".to_string(), "civil".to_string(), "naive".to_string()],
+        }
+    );
+    Ok(())
+}
+
+/// Provider bootstrap resolution remains physical when a public `std.*` facade re-exports another source module from
+/// the same component. Following the facade through its written public path must not mint a second member identity.
+#[test]
+fn bootstrap_std_facade_reexport_uses_physical_member_identity() -> Result<(), String> {
+    let file = parse(
+        r#"
+pub class File:
+  def flush(self) -> None:
+    pass
+"#,
+        "bootstrap fs.file provider",
+    )?;
+    let facade = parse("from std.fs.file import File\n", "bootstrap fs facade")?;
+    let source = r#"
+from std.fs import File
+
+def flush(file: File) -> None:
+  file.flush()
+"#;
+    let consumer = parse(source, "bootstrap tempfile consumer")?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["tempfile".to_string()]));
+    checker.register_dependency_module_path_segments("fs_file", vec!["fs".to_string(), "file".to_string()]);
+    checker.register_dependency_module_path_segments("fs", vec!["fs".to_string()]);
+    checker.set_provider_plan(Arc::new(
+        ProviderPlan::default().with_bootstrap_sdk_namespace_roots(["fs".to_string()]),
+    ));
+    checker
+        .check_with_imports_allow_private(&consumer, &[("fs_file", &file), ("fs", &facade)])
+        .map_err(|errors| format!("bootstrap tempfile consumer should typecheck: {errors:?}"))?;
+
+    let imported = checker
+        .type_info()
+        .resolved_import_identity("File")
+        .ok_or("facade-imported File must prove its physical declaration identity")?;
+    assert_eq!(
+        imported.origin,
+        SymbolOrigin::Module(vec!["fs".to_string(), "file".to_string()])
+    );
+    let flush = identity_at(&checker, nth_span(source, "file.flush()", 0)?, "File.flush call")?;
+    assert_eq!(flush.declaration_name, "flush");
+    assert_eq!(flush.kind, SemanticSourceTargetKind::Method);
+    assert_eq!(
+        flush.origin,
+        SymbolOrigin::Module(vec!["fs".to_string(), "file".to_string()])
+    );
+    Ok(())
+}
+
 /// A dependency symbol without its compiler-retained canonical identity is unproven; lookup must fail closed rather
 /// than reconstructing an identity from the dependency key, source spelling, kind, and span.
 #[test]
@@ -983,11 +1284,11 @@ fn dependency_member_identity_does_not_reconstruct_missing_canonical_data() -> R
     let provider = parse(
         "pub def helper() -> int:\n  return 1\n",
         "fail-closed identity provider",
-    );
+    )?;
     let consumer = parse(
         "from provider import helper\n\ndef run() -> int:\n  return helper()\n",
         "fail-closed identity consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker.register_dependency_module_path_segments("provider", vec!["provider".to_string()]);
@@ -1020,14 +1321,14 @@ fn imported_alias_call_error_retains_original_declaration_location() -> Result<(
 pub def parse(value: int) -> int:
   return value
 "#;
-    let provider = parse(provider_source, "diagnostic provider");
+    let provider = parse(provider_source, "diagnostic provider")?;
     let consumer_source = r#"
 from provider import parse as alias
 
 def run() -> int:
   return alias("bad")
 "#;
-    let consumer = parse(consumer_source, "diagnostic consumer");
+    let consumer = parse(consumer_source, "diagnostic consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker.register_dependency_module_path_segments("provider", vec!["provider".to_string()]);
@@ -1062,15 +1363,15 @@ def run() -> int:
 /// Type annotations reached through an import alias and a re-export retain the original type declaration identity.
 #[test]
 fn imported_alias_and_reexport_type_annotations_share_the_declaration_identity() -> Result<(), String> {
-    let provider = parse("pub model Item:\n  value: int\n", "type identity provider");
-    let facade = parse("pub from provider import Item as PublicItem\n", "type identity facade");
+    let provider = parse("pub model Item:\n  value: int\n", "type identity provider")?;
+    let facade = parse("pub from provider import Item as PublicItem\n", "type identity facade")?;
     let consumer_source = r#"
 from facade import PublicItem as LocalItem
 
 def keep(value: LocalItem) -> LocalItem:
   return value
 "#;
-    let consumer = parse(consumer_source, "type identity consumer");
+    let consumer = parse(consumer_source, "type identity consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker
@@ -1109,7 +1410,7 @@ model Known:
 def invalid(first: MissingLeaf, second: Missing[Known], third: absent::Thing, fourth: absent.Thing) -> None:
   pass
 "#;
-    let program = parse(source, "unresolved type references");
+    let program = parse(source, "unresolved type references")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     if checker.check_program(&program).is_ok() {
@@ -1138,6 +1439,9 @@ def len(value: int) -> int:
 
 def shadowed() -> int:
   return len(4)
+
+def explicit(values: list[int]) -> int:
+  return std.builtins.len(values)
 "#;
     let checker = check(source, "builtin rebinding")?;
 
@@ -1165,6 +1469,11 @@ def shadowed() -> int:
         registry_len, local_len,
         "the rebound spelling and the registry builtin are two different canonical identities"
     );
+    let call_len = identity_at(&checker, nth_span(source, "len", 1)?, "shadowed len call")?;
+    assert_eq!(
+        &call_len, local_len,
+        "the call must resolve to the active source declaration"
+    );
     Ok(())
 }
 
@@ -1178,7 +1487,7 @@ fn print_and_println_cannot_be_redefined() -> Result<(), String> {
         ("println", "def run() -> None:\n  mut println = 1\n"),
     ];
     for (name, source) in cases {
-        let program = parse(source, "immutable output builtin");
+        let program = parse(source, "immutable output builtin")?;
         let mut checker = TypeChecker::new();
         let errors = match checker.check_program(&program) {
             Ok(()) => return Err(format!("immutable output builtin {name} was replaced")),
@@ -1192,12 +1501,12 @@ fn print_and_println_cannot_be_redefined() -> Result<(), String> {
         );
     }
 
-    let provider = parse("pub def render() -> None:\n  pass\n", "output alias provider");
+    let provider = parse("pub def render() -> None:\n  pass\n", "output alias provider")?;
     for name in ["print", "println"] {
         let consumer = parse(
             &format!("from helpers import render as {name}\n"),
             "output alias consumer",
-        );
+        )?;
         let mut checker = TypeChecker::new();
         let import_errors = match checker.check_with_imports(&consumer, &[("helpers", &provider)]) {
             Ok(()) => return Err(format!("an import replaced immutable {name}")),
@@ -1301,7 +1610,7 @@ model User:
 model User:
   age: int
 "#;
-    let program = parse(source, "duplicate declarations");
+    let program = parse(source, "duplicate declarations")?;
     let second_span = program.declarations[1].span;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
@@ -1418,7 +1727,7 @@ trait Contract with Other:
     ];
 
     for (source, name, first_method, rejected_method, kind) in cases {
-        let program = parse(source, &format!("duplicate {kind}"));
+        let program = parse(source, &format!("duplicate {kind}"))?;
         let mut checker = TypeChecker::new();
         let errors = match checker.check_program(&program) {
             Ok(()) => return Err(format!("duplicate {kind} declaration was accepted")),
@@ -1474,7 +1783,7 @@ fn local_declaration_over_import_is_diagnosed() -> Result<(), String> {
     let provider = parse(
         "pub def helper(value: str) -> str:\n  return value\n",
         "collision provider",
-    );
+    )?;
     let consumer_source = r#"
 from lib import helper
 
@@ -1484,7 +1793,7 @@ def helper(value: int) -> int:
 def read() -> None:
   observed = helper
 "#;
-    let consumer = parse(consumer_source, "collision consumer");
+    let consumer = parse(consumer_source, "collision consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     let errors = match checker.check_with_imports(&consumer, &[("lib", &provider)]) {
@@ -1529,12 +1838,12 @@ def read() -> None:
 /// Two unaliased imports with the same local spelling and different declaration identities are ambiguous.
 #[test]
 fn same_spelled_imports_from_different_modules_are_ambiguous() -> Result<(), String> {
-    let left = parse("pub model Item:\n  left: int\n", "left provider");
-    let right = parse("pub model Item:\n  right: str\n", "right provider");
+    let left = parse("pub model Item:\n  left: int\n", "left provider")?;
+    let right = parse("pub model Item:\n  right: str\n", "right provider")?;
     let consumer = parse(
         "from left import Item\nfrom right import Item\n",
         "ambiguous import consumer",
-    );
+    )?;
     let first = consumer.declarations[0].span;
     let second = consumer.declarations[1].span;
     let mut checker = TypeChecker::new();
@@ -1581,12 +1890,12 @@ fn same_spelled_imports_from_different_modules_are_ambiguous() -> Result<(), Str
 /// A target-specific source identity cannot leak into a later stdlib import through their shared local spelling.
 #[test]
 fn source_and_stdlib_import_collision_is_order_independent() -> Result<(), String> {
-    let provider = parse("pub def value() -> int:\n  return 1\n", "source import provider");
+    let provider = parse("pub def value() -> int:\n  return 1\n", "source import provider")?;
     for source in [
         "from lib import value as shared\nfrom std.collections import OrdinalKey as shared\n",
         "from std.collections import OrdinalKey as shared\nfrom lib import value as shared\n",
     ] {
-        let consumer = parse(source, "source and stdlib import collision");
+        let consumer = parse(source, "source and stdlib import collision")?;
         let mut checker = TypeChecker::new();
         let errors = match checker.check_with_imports(&consumer, &[("lib", &provider)]) {
             Ok(()) => return Err("source/stdlib collision was accepted".to_string()),
@@ -1622,7 +1931,7 @@ def right() -> int:
 same = alias left
 same = alias right
 "#;
-    let program = parse(source, "local alias collision");
+    let program = parse(source, "local alias collision")?;
     let mut checker = TypeChecker::new();
     let errors = match checker.check_program(&program) {
         Ok(()) => return Err("two local aliases shared one name".to_string()),
@@ -1646,13 +1955,12 @@ same = alias right
 /// A module import cannot skip the shared registry merely because another concrete binding arrived first.
 #[test]
 fn module_import_after_concrete_bindings_reports_the_collision() -> Result<(), String> {
-    let left = parse("pub model Item:\n  value: int\n", "left provider");
-    let right = parse("pub def value() -> int:\n  return 1\n", "right provider");
-
+    let left = parse("pub model Item:\n  value: int\n", "left provider")?;
+    let right = parse("pub def value() -> int:\n  return 1\n", "right provider")?;
     let local_first = parse(
         "def shared() -> int:\n  return 1\n\nimport right as shared\n",
         "local before module import",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     let errors = match checker.check_with_imports(&local_first, &[("right", &right)]) {
         Ok(()) => return Err("a module import silently skipped a preceding local binding".to_string()),
@@ -1668,7 +1976,7 @@ fn module_import_after_concrete_bindings_reports_the_collision() -> Result<(), S
     let item_first = parse(
         "from left import Item\nimport right as Item\n",
         "item before module import",
-    );
+    )?;
     let first = item_first.declarations[0].span;
     let second = item_first.declarations[1].span;
     let mut checker = TypeChecker::new();
@@ -1704,9 +2012,9 @@ fn module_import_after_concrete_bindings_reports_the_collision() -> Result<(), S
 /// Module aliases obey the same builtin tiers as every other source binding.
 #[test]
 fn module_aliases_cannot_replace_output_builtins_but_can_shadow_ordinary_builtins() -> Result<(), String> {
-    let provider = parse("pub def value() -> int:\n  return 1\n", "module alias provider");
+    let provider = parse("pub def value() -> int:\n  return 1\n", "module alias provider")?;
     for name in ["print", "println"] {
-        let consumer = parse(&format!("import provider as {name}\n"), "immutable module alias");
+        let consumer = parse(&format!("import provider as {name}\n"), "immutable module alias")?;
         let mut checker = TypeChecker::new();
         let errors = match checker.check_with_imports(&consumer, &[("provider", &provider)]) {
             Ok(()) => return Err(format!("module alias replaced immutable {name}")),
@@ -1720,7 +2028,7 @@ fn module_aliases_cannot_replace_output_builtins_but_can_shadow_ordinary_builtin
         );
     }
 
-    let consumer = parse("import provider as len\n", "ordinary builtin module alias");
+    let consumer = parse("import provider as len\n", "ordinary builtin module alias")?;
     let mut checker = TypeChecker::new();
     checker
         .check_with_imports(&consumer, &[("provider", &provider)])
@@ -1740,8 +2048,8 @@ fn module_aliases_cannot_replace_output_builtins_but_can_shadow_ordinary_builtin
 /// one shared target identity.
 #[test]
 fn repeated_proven_import_is_a_duplicate_with_complete_evidence() -> Result<(), String> {
-    let provider = parse("pub model Item:\n  value: int\n", "repeat provider");
-    let consumer = parse("from lib import Item\nfrom lib import Item\n", "repeat consumer");
+    let provider = parse("pub model Item:\n  value: int\n", "repeat provider")?;
+    let consumer = parse("from lib import Item\nfrom lib import Item\n", "repeat consumer")?;
     let first = consumer.declarations[0].span;
     let second = consumer.declarations[1].span;
     let mut checker = TypeChecker::new();
@@ -1786,7 +2094,7 @@ enum Level:
   Warning = alias Warn
   Warning = alias Info
 "#;
-    let program = parse(source, "duplicate enum variant alias");
+    let program = parse(source, "duplicate enum variant alias")?;
     let Declaration::Enum(en) = &program.declarations[0].node else {
         return Err("expected enum declaration".to_string());
     };
@@ -1847,11 +2155,11 @@ enum Level:
 /// Repeating one checked module import is a duplicate of the same path-namespace declaration, not an ambiguity.
 #[test]
 fn repeated_module_import_has_one_deterministic_identity() -> Result<(), String> {
-    let provider = parse("pub def value() -> int:\n  return 1\n", "module provider");
+    let provider = parse("pub def value() -> int:\n  return 1\n", "module provider")?;
     let consumer = parse(
         "import provider as shared\nimport provider as shared\n",
         "module consumer",
-    );
+    )?;
     let first = consumer.declarations[0].span;
     let second = consumer.declarations[1].span;
     let mut checker = TypeChecker::new();
@@ -1897,11 +2205,11 @@ fn dependency_interfaces_are_not_ambient_consumer_bindings() -> Result<(), Strin
     let provider = parse(
         "pub model Hidden:\n  value: int\n\npub trait Contract:\n  def read(self) -> int\n\npub def helper() -> int:\n  return 1\n",
         "dependency interface provider",
-    );
+    )?;
     let consumer = parse(
         "def read(value: Hidden) -> int:\n  observed = helper\n  return 1\n",
         "dependency interface consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     let errors = match checker.check_with_imports(&consumer, &[("provider", &provider)]) {
         Ok(()) => return Err("unimported dependency declarations leaked into consumer scope".to_string()),
@@ -1932,10 +2240,10 @@ fn explicit_dependency_import_materializes_only_its_aliased_binding() -> Result<
     let provider = parse(
         "pub model Imported:\n  value: int\n\npub model Unimported:\n  value: int\n",
         "explicit import provider",
-    );
+    )?;
     let consumer_source =
         "from provider import Imported as Local\n\ndef read(value: Local) -> Local:\n  return value\n";
-    let consumer = parse(consumer_source, "explicit import consumer");
+    let consumer = parse(consumer_source, "explicit import consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker
@@ -1970,11 +2278,11 @@ pub def helper() -> int:
 
 pub run = alias helper
 "#;
-    let provider = parse(provider_source, "public alias provider");
+    let provider = parse(provider_source, "public alias provider")?;
     let consumer = parse(
         "from provider import run\n\ndef read() -> int:\n  return run()\n",
         "public alias consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     checker
@@ -2001,11 +2309,11 @@ pub run = alias helper
 /// aliased import receives the exact provider-owned target.
 #[test]
 fn dependency_type_alias_targets_are_isolated_until_explicitly_imported() -> Result<(), String> {
-    let provider = parse("pub type Payload = str\n", "type alias provider");
+    let provider = parse("pub type Payload = str\n", "type alias provider")?;
     let local = parse(
         "model Payload:\n  value: int\n\ndef keep(value: Payload) -> Payload:\n  return value\n",
         "local nominal consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     checker
         .check_with_imports(&local, &[("provider", &provider)])
@@ -2018,7 +2326,7 @@ fn dependency_type_alias_targets_are_isolated_until_explicitly_imported() -> Res
     let imported = parse(
         "from provider import Payload as TextPayload\n\ndef read(value: TextPayload) -> str:\n  return value\n",
         "explicit type alias consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     checker
         .check_with_imports(&imported, &[("provider", &provider)])
@@ -2035,7 +2343,7 @@ fn dependency_type_alias_targets_are_isolated_until_explicitly_imported() -> Res
 #[test]
 fn duplicate_type_alias_side_table_keeps_the_first_target() -> Result<(), String> {
     let source = "type Payload = int\ntype Payload = str\n";
-    let program = parse(source, "duplicate type alias target");
+    let program = parse(source, "duplicate type alias target")?;
     let mut checker = TypeChecker::new();
     let errors = match checker.check_program(&program) {
         Ok(()) => return Err("duplicate type aliases were accepted".to_string()),
@@ -2059,14 +2367,13 @@ fn duplicate_type_alias_side_table_keeps_the_first_target() -> Result<(), String
 /// bridge is collected before either provider.
 #[test]
 fn dependency_predeclaration_is_module_exact_and_order_independent() -> Result<(), String> {
-    let left = parse("pub model Contract[T]:\n  value: T\n", "left contract");
-    let right = parse("pub model Contract[A, B]:\n  first: A\n  second: B\n", "right contract");
+    let left = parse("pub model Contract[T]:\n  value: T\n", "left contract")?;
+    let right = parse("pub model Contract[A, B]:\n  first: A\n  second: B\n", "right contract")?;
     let bridge = parse(
         "from right import Contract\n\npub Selected = alias Contract\n\npub def pair(value: Contract[int, str]) -> Contract[int, str]:\n  return value\n",
         "contract bridge",
-    );
-    let consumer = parse("def noop() -> None:\n  pass\n", "order consumer");
-
+    )?;
+    let consumer = parse("def noop() -> None:\n  pass\n", "order consumer")?;
     for dependencies in [
         [("bridge", &bridge), ("left", &left), ("right", &right)],
         [("bridge", &bridge), ("right", &right), ("left", &left)],
@@ -2096,9 +2403,9 @@ fn dependency_predeclaration_is_module_exact_and_order_independent() -> Result<(
 /// The non-canonical same-leaf fallback fails closed when more than one dependency module can answer it.
 #[test]
 fn ambiguous_dependency_leaf_fallback_does_not_select_by_order() -> Result<(), String> {
-    let first = parse("pub model Contract:\n  first: int\n", "first helpers");
-    let second = parse("pub model Contract:\n  second: str\n", "second helpers");
-    let consumer = parse("def noop() -> None:\n  pass\n", "ambiguous leaf consumer");
+    let first = parse("pub model Contract:\n  first: int\n", "first helpers")?;
+    let second = parse("pub model Contract:\n  second: str\n", "second helpers")?;
+    let consumer = parse("def noop() -> None:\n  pass\n", "ambiguous leaf consumer")?;
     let mut checker = TypeChecker::new();
     checker.register_dependency_module_path_segments("pkg_helpers", vec!["pkg".to_string(), "helpers".to_string()]);
     checker.register_dependency_module_path_segments("other_helpers", vec!["other".to_string(), "helpers".to_string()]);
@@ -2118,12 +2425,12 @@ fn ambiguous_dependency_leaf_fallback_does_not_select_by_order() -> Result<(), S
 /// Module imports participate in the same ambiguity mechanism as item imports.
 #[test]
 fn same_alias_for_different_module_imports_is_ambiguous() -> Result<(), String> {
-    let left = parse("pub def left_value() -> int:\n  return 1\n", "left module");
-    let right = parse("pub def right_value() -> int:\n  return 2\n", "right module");
+    let left = parse("pub def left_value() -> int:\n  return 1\n", "left module")?;
+    let right = parse("pub def right_value() -> int:\n  return 2\n", "right module")?;
     let consumer = parse(
         "import left as shared\nimport right as shared\n",
         "module alias consumer",
-    );
+    )?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     let errors = match checker.check_with_imports(&consumer, &[("left", &left), ("right", &right)]) {
@@ -2161,7 +2468,7 @@ fn same_alias_for_different_module_imports_is_ambiguous() -> Result<(), String> 
 /// identity fact for the wrong binding is worse than none.
 #[test]
 fn overload_set_beside_an_aliased_import_records_no_identity() -> Result<(), String> {
-    let provider = parse("pub def helper() -> int:\n  return 1\n", "overload-shadow provider");
+    let provider = parse("pub def helper() -> int:\n  return 1\n", "overload-shadow provider")?;
     let consumer_source = r#"
 from lib import helper as imported_helper
 
@@ -2174,7 +2481,7 @@ def helper(value: str) -> str:
 def read() -> None:
   observed = helper
 "#;
-    let consumer = parse(consumer_source, "overload-shadow consumer");
+    let consumer = parse(consumer_source, "overload-shadow consumer")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     // The reference errors ("cannot use overloaded function as a value"), which is expected and not the subject
@@ -2210,8 +2517,8 @@ def use_helper() -> int:
     assert_eq!(local_identity.kind, SemanticSourceTargetKind::Function);
     assert_eq!(local_identity.declaration_name, "helper");
 
-    let provider = parse("pub def compute() -> int:\n  return 1\n", "direct-call provider");
-    let facade = parse("pub from provider import compute as exposed\n", "direct-call facade");
+    let provider = parse("pub def compute() -> int:\n  return 1\n", "direct-call provider")?;
+    let facade = parse("pub from provider import compute as exposed\n", "direct-call facade")?;
     let consumer_source = r#"
 from provider import compute
 from provider import compute as renamed
@@ -2222,7 +2529,7 @@ def use_all() -> int:
   second = renamed()
   return execute()
 "#;
-    let consumer = parse(consumer_source, "direct-call consumer");
+    let consumer = parse(consumer_source, "direct-call consumer")?;
     let mut import_checker = TypeChecker::new();
     import_checker.set_current_module_path(Some(vec!["consumer".to_string()]));
     import_checker
@@ -2368,7 +2675,7 @@ def accepted() -> int:
 def rejected() -> bool:
   return convert(true)
 "#;
-    let program = parse(source, "direct function overload identity");
+    let program = parse(source, "direct function overload identity")?;
     let mut checker = TypeChecker::new();
     checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = check_errors(
@@ -2414,7 +2721,7 @@ def choose(value: int) -> str:
 def ambiguous() -> None:
   observed = choose(1)
 "#;
-    let ambiguous_program = parse(ambiguous_source, "ambiguous direct function overload");
+    let ambiguous_program = parse(ambiguous_source, "ambiguous direct function overload")?;
     let mut ambiguous_checker = TypeChecker::new();
     ambiguous_checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = check_errors(
@@ -2628,7 +2935,7 @@ import std.testing
 def unresolved(value: MissingType) -> None:
   assert value is Some(inner)
 "#;
-    let unresolved_program = parse(unresolved_source, "unresolved assert is-pattern scrutinee");
+    let unresolved_program = parse(unresolved_source, "unresolved assert is-pattern scrutinee")?;
     let mut unresolved_checker = TypeChecker::new();
     unresolved_checker.set_current_module_path(Some(vec!["conformance".to_string()]));
     let errors = check_errors(

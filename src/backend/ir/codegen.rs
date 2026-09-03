@@ -543,6 +543,11 @@ pub struct IrCodegen<'a> {
     public_typecheck_module_paths: HashSet<Vec<String>>,
     /// Canonical defining package identity supplied by the command that owns the generated artifact.
     registry_package_identity: Option<String>,
+    /// Package origin used for canonical identities emitted by a compiled-library producer.
+    ///
+    /// Ordinary program builds leave this absent and retain module-owned identities. Library builds set it before
+    /// checking so producer symbols and consumer-hydrated manifest identities encode the same origin.
+    canonical_emission_package_identity: Option<String>,
     /// Canonical source-module path for the root program when its parsed AST lacks a source path.
     root_source_module_name: Option<String>,
     /// Shared stdlib source metadata cache reused across the repeated internal typecheck/lowering passes that codegen
@@ -587,6 +592,7 @@ impl<'a> IrCodegen<'a> {
             preserve_dependency_public_items: true,
             public_typecheck_module_paths: HashSet::new(),
             registry_package_identity: None,
+            canonical_emission_package_identity: None,
             root_source_module_name: None,
             stdlib_cache: StdlibAstCache::new(),
             prechecked_main_type_info: None,
@@ -669,6 +675,7 @@ impl<'a> IrCodegen<'a> {
     /// dependency universe lets same-name public helpers from unrelated modules collide before `from ... import ... as
     /// ...` collection, which changes behavior between `--check` and `--emit-rust`.
     fn imported_dependency_modules_for_program(
+        &self,
         program: &Program,
         dependencies: &[(&'a str, &'a Program, Option<Vec<String>>)],
         self_key: Option<&str>,
@@ -679,18 +686,14 @@ impl<'a> IrCodegen<'a> {
         }
 
         let mut selected = BTreeSet::new();
-        let mut pending = Self::direct_imported_dependency_indexes(program, &module_idx_by_key, self_key);
+        let mut pending = self.direct_imported_dependency_indexes(program, &module_idx_by_key, self_key);
         while let Some(idx) = pending.pop() {
             let (name, ast, path_segments) = &dependencies[idx];
             let dep_key = Self::dependency_module_key(name, path_segments);
             if self_key == Some(dep_key.as_str()) || !selected.insert(idx) {
                 continue;
             }
-            pending.extend(Self::direct_imported_dependency_indexes(
-                ast,
-                &module_idx_by_key,
-                Some(dep_key.as_str()),
-            ));
+            pending.extend(self.direct_imported_dependency_indexes(ast, &module_idx_by_key, Some(dep_key.as_str())));
         }
 
         selected
@@ -704,6 +707,7 @@ impl<'a> IrCodegen<'a> {
 
     /// Return direct dependency-module indexes named by source imports in one program.
     fn direct_imported_dependency_indexes(
+        &self,
         program: &Program,
         module_idx_by_key: &HashMap<String, usize>,
         self_key: Option<&str>,
@@ -723,25 +727,49 @@ impl<'a> IrCodegen<'a> {
                         && let Some(dep_idx) = module_idx_by_key.get(&key).copied()
                     {
                         dep_indexes.insert(dep_idx);
+                    } else if self
+                        .provider_plan
+                        .as_deref()
+                        .is_some_and(|plan| plan.bootstrap_owns_sdk_module(&module.segments))
+                        && module.segments.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT)
+                    {
+                        let physical_key = canonicalize_source_module_segments(&module.segments[1..]).join("_");
+                        if self_key != Some(physical_key.as_str())
+                            && let Some(dep_idx) = module_idx_by_key.get(&physical_key).copied()
+                        {
+                            dep_indexes.insert(dep_idx);
+                        }
                     }
                 }
                 ImportKind::Module(path) => {
                     if path.parent_levels > 0 || path.segments.is_empty() {
                         continue;
                     }
-                    let full_key = canonicalize_source_module_segments(&path.segments).join("_");
-                    if self_key != Some(full_key.as_str())
-                        && let Some(dep_idx) = module_idx_by_key.get(&full_key).copied()
-                    {
-                        dep_indexes.insert(dep_idx);
+                    let bootstrap_physical = self
+                        .provider_plan
+                        .as_deref()
+                        .is_some_and(|plan| plan.bootstrap_owns_sdk_module(&path.segments))
+                        .then(|| path.segments[1..].to_vec());
+                    let mut candidate_paths = Vec::new();
+                    if let Some(physical) = bootstrap_physical {
+                        candidate_paths.push(physical);
                     }
-                    if path.segments.len() > 1 {
-                        let parent_key =
-                            canonicalize_source_module_segments(&path.segments[..path.segments.len() - 1]).join("_");
-                        if self_key != Some(parent_key.as_str())
-                            && let Some(dep_idx) = module_idx_by_key.get(&parent_key).copied()
+                    candidate_paths.push(path.segments.clone());
+                    for candidate in candidate_paths {
+                        let full_key = canonicalize_source_module_segments(&candidate).join("_");
+                        if self_key != Some(full_key.as_str())
+                            && let Some(dep_idx) = module_idx_by_key.get(&full_key).copied()
                         {
                             dep_indexes.insert(dep_idx);
+                        }
+                        if candidate.len() > 1 {
+                            let parent_key =
+                                canonicalize_source_module_segments(&candidate[..candidate.len() - 1]).join("_");
+                            if self_key != Some(parent_key.as_str())
+                                && let Some(dep_idx) = module_idx_by_key.get(&parent_key).copied()
+                            {
+                                dep_indexes.insert(dep_idx);
+                            }
                         }
                     }
                 }
@@ -946,6 +974,11 @@ impl<'a> IrCodegen<'a> {
         self.apply_string_try_from_bridge_config(emitter, string_conversion);
     }
 
+    /// Give an emitter the package context needed to render self-package canonical paths through `crate::...`.
+    fn apply_canonical_emission_context(&self, emitter: &mut IrEmitter) {
+        emitter.set_current_package_identity(self.canonical_emission_package_identity.clone());
+    }
+
     /// Set whether non-stdlib dependency modules preserve their public API surface during emission.
     ///
     /// Library builds keep this enabled so public dependency declarations remain available at the Rust crate boundary.
@@ -957,6 +990,11 @@ impl<'a> IrCodegen<'a> {
     /// Set the package identity used when materializing explicit package-level registry subjects.
     pub fn set_registry_package_identity(&mut self, identity: Option<String>) {
         self.registry_package_identity = identity;
+    }
+
+    /// Set the package origin for source declarations emitted into a compiled-library artifact.
+    pub fn set_canonical_emission_package_identity(&mut self, identity: Option<String>) {
+        self.canonical_emission_package_identity = identity;
     }
 
     /// Set the root compilation-unit identity when parsing did not retain a source path.
@@ -1071,6 +1109,7 @@ impl<'a> IrCodegen<'a> {
     /// Apply codegen's shared project context to an internal typechecker pass.
     fn configure_typechecker(&self, tc: &mut crate::frontend::typechecker::TypeChecker) {
         tc.stdlib_cache = self.stdlib_cache.clone();
+        tc.set_current_package_identity(self.canonical_emission_package_identity.clone());
         if let Some(names) = self.declared_crate_names.clone() {
             tc.set_declared_crate_names(names);
         }
@@ -1197,7 +1236,7 @@ impl<'a> IrCodegen<'a> {
                 Self::register_dependency_module_paths(&mut tc, &dependencies);
                 tc.set_current_module_path(Some(canonicalize_source_module_segments(path_segments)));
                 let typecheck_deps =
-                    Self::imported_dependency_modules_for_program(module_ast, &dependencies, Some(&module_key));
+                    self.imported_dependency_modules_for_program(module_ast, &dependencies, Some(&module_key));
                 let result = match tc.check_with_imports_allow_private(module_ast, &typecheck_deps) {
                     Ok(()) => tc.type_info().clone(),
                     Err(errs) => return Err(Self::typecheck_errors_for_module(&module_key, errs)),
@@ -1485,7 +1524,7 @@ impl<'a> IrCodegen<'a> {
             self.configure_typechecker(&mut tc);
             Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(root_module_path.clone());
-            let typecheck_deps = Self::imported_dependency_modules_for_program(program, &dependency_modules, None);
+            let typecheck_deps = self.imported_dependency_modules_for_program(program, &dependency_modules, None);
             let result = match tc.check_with_imports(program, &typecheck_deps) {
                 Ok(()) => tc.type_info().clone(),
                 Err(errs) => return Err(GenerationError::TypeCheck(errs)),
@@ -1558,7 +1597,7 @@ impl<'a> IrCodegen<'a> {
                 tc.set_current_module_path(Some(dep_path.clone()));
                 let dep_key = Self::dependency_module_key(dep_name, &dep_path_segments);
                 let typecheck_deps =
-                    Self::imported_dependency_modules_for_program(dep_ast, &dependency_modules, Some(&dep_key));
+                    self.imported_dependency_modules_for_program(dep_ast, &dependency_modules, Some(&dep_key));
                 let result = match tc.check_with_imports_allow_private(dep_ast, &typecheck_deps) {
                     Ok(()) => tc.type_info().clone(),
                     Err(errs) => return Err(Self::typecheck_errors_for_module(&dep_key, errs)),
@@ -1623,6 +1662,7 @@ impl<'a> IrCodegen<'a> {
             let mut svc = EmitService::new_from_program(&ir_program);
             // Configure inner emitter
             let inner = svc.inner_mut();
+            self.apply_canonical_emission_context(inner);
             inner.set_internal_module_roots(internal_module_roots.clone());
             Self::configure_source_import_paths(inner, ir_program.source_module_name.as_deref(), &source_module_paths);
             if self.emit_zen_in_main {
@@ -1650,6 +1690,7 @@ impl<'a> IrCodegen<'a> {
             Ok(svc.emit_program(&ir_program)?)
         } else {
             let mut emitter = IrEmitter::new(&ir_program.function_registry);
+            self.apply_canonical_emission_context(&mut emitter);
             emitter.set_internal_module_roots(internal_module_roots.clone());
             Self::configure_source_import_paths(
                 &mut emitter,
@@ -1723,7 +1764,7 @@ impl<'a> IrCodegen<'a> {
             Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(module_identity_path.clone());
             let typecheck_deps =
-                Self::imported_dependency_modules_for_program(program, &dependency_modules, Some(&module_key));
+                self.imported_dependency_modules_for_program(program, &dependency_modules, Some(&module_key));
             let result = match tc.check_with_imports_allow_private(program, &typecheck_deps) {
                 Ok(()) => tc.type_info().clone(),
                 Err(errs) => return Err(Self::typecheck_errors_for_module(&module_key, errs)),
@@ -1756,7 +1797,7 @@ impl<'a> IrCodegen<'a> {
                 Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(dep_identity_path.clone());
                 let typecheck_deps =
-                    Self::imported_dependency_modules_for_program(dep_ast, &dependency_modules, Some(&dep_key));
+                    self.imported_dependency_modules_for_program(dep_ast, &dependency_modules, Some(&dep_key));
                 let result = match tc.check_with_imports_allow_private(dep_ast, &typecheck_deps) {
                     Ok(()) => tc.type_info().clone(),
                     Err(errs) => return Err(Self::typecheck_errors_for_module(&dep_key, errs)),
@@ -1791,12 +1832,14 @@ impl<'a> IrCodegen<'a> {
         if use_emit_service {
             let mut svc = EmitService::new_from_program(&ir_program);
             let inner = svc.inner_mut();
+            self.apply_canonical_emission_context(inner);
             inner.set_internal_module_roots(internal_roots);
             inner.set_externally_reachable_items(self.externally_reachable_items.clone());
             self.apply_capability_bridge_configs(inner, &ordinal_bridge, &string_try_from_bridge);
             Ok(svc.emit_program(&ir_program)?)
         } else {
             let mut emitter = IrEmitter::new(&ir_program.function_registry);
+            self.apply_canonical_emission_context(&mut emitter);
             emitter.set_internal_module_roots(internal_roots);
             if self.emit_zen_in_main {
                 emitter.set_emit_zen(true);
@@ -1888,7 +1931,7 @@ impl<'a> IrCodegen<'a> {
                 tc.set_current_module_path(module_identity_path.clone());
                 let module_key = Self::dependency_module_key(name, &path_segments);
                 let typecheck_deps =
-                    Self::imported_dependency_modules_for_program(ast, &dependency_modules, Some(&module_key));
+                    self.imported_dependency_modules_for_program(ast, &dependency_modules, Some(&module_key));
                 let result = match tc.check_with_imports_allow_private(ast, &typecheck_deps) {
                     Ok(()) => tc.type_info().clone(),
                     Err(errs) => return Err(Self::typecheck_errors_for_module(&module_key, errs)),
@@ -2000,6 +2043,7 @@ impl<'a> IrCodegen<'a> {
             let module_code = if use_emit_service {
                 let mut svc = EmitService::new_from_program(ir);
                 let inner = svc.inner_mut();
+                self.apply_canonical_emission_context(inner);
                 inner.set_internal_module_roots(internal_roots.clone());
                 Self::configure_source_import_paths(inner, ir.source_module_name.as_deref(), &source_module_paths);
                 inner.set_preserve_public_items(preserve_public_items);
@@ -2026,6 +2070,7 @@ impl<'a> IrCodegen<'a> {
                 svc.emit_program(ir)?
             } else {
                 let mut emitter = IrEmitter::new(&ir.function_registry);
+                self.apply_canonical_emission_context(&mut emitter);
                 emitter.set_internal_module_roots(internal_roots.clone());
                 Self::configure_source_import_paths(
                     &mut emitter,
@@ -2182,7 +2227,7 @@ impl<'a> IrCodegen<'a> {
                     tc.set_current_module_path(Some(canonicalize_source_module_segments(path)));
                     let self_key = canonicalize_source_module_segments(path).join("_");
                     let typecheck_deps =
-                        Self::imported_dependency_modules_for_program(ast, &dependency_modules, Some(&self_key));
+                        self.imported_dependency_modules_for_program(ast, &dependency_modules, Some(&self_key));
                     let result = if self.public_typecheck_module_paths.contains(path) {
                         tc.check_with_imports(ast, &typecheck_deps)
                     } else {
@@ -2294,6 +2339,7 @@ impl<'a> IrCodegen<'a> {
             let module_code = if use_emit_service {
                 let mut svc = EmitService::new_from_program(ir);
                 let inner = svc.inner_mut();
+                self.apply_canonical_emission_context(inner);
                 inner.set_internal_module_roots(internal_roots.clone());
                 Self::configure_source_import_paths(inner, ir.source_module_name.as_deref(), &source_module_paths);
                 inner.set_preserve_public_items(preserve_public_items);
@@ -2320,6 +2366,7 @@ impl<'a> IrCodegen<'a> {
                 svc.emit_program(ir)?
             } else {
                 let mut emitter = IrEmitter::new(&ir.function_registry);
+                self.apply_canonical_emission_context(&mut emitter);
                 emitter.set_internal_module_roots(internal_roots.clone());
                 Self::configure_source_import_paths(
                     &mut emitter,
@@ -2372,6 +2419,7 @@ mod tests {
     use crate::library_manifest::{
         ConstExport, FunctionExport, LibraryManifest, ModelExport, ParamExport, ParamKindExport, TypeRef,
     };
+    use incan_semantics_core::{SemanticSourceTargetKind, decode_incan_symbol_identity, encode_incan_symbol_identity};
     use std::collections::HashMap;
     #[cfg(feature = "rust_inspect")]
     use std::fs;
@@ -2396,10 +2444,18 @@ mod tests {
         annotation: &str,
         projections: Vec<crate::frontend::typechecker::MutableRustTypeArgumentProjection>,
     ) -> Result<AstLowering, Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+
+        let tokens = lexer::lex(source).map_err(|errors| format!("lex errors: {errors:?}"))?;
+        let ast = parser::parse(&tokens).map_err(|errors| format!("parse errors: {errors:?}"))?;
+        let mut checker = TypeChecker::new();
+        checker
+            .check_program(&ast)
+            .map_err(|errors| format!("typecheck errors: {errors:?}"))?;
         let start = source
             .find(annotation)
             .ok_or_else(|| format!("projection annotation `{annotation}` must occur in source"))?;
-        let mut type_info = TypeCheckInfo::default();
+        let mut type_info = checker.type_info().clone();
         type_info
             .rust
             .mutable_reference_type_argument_projections
@@ -2425,6 +2481,56 @@ mod tests {
         assert!(!code.contains("#[allow(dead_code)]"), "{code}");
         assert!(!code.contains("#[allow(unused_imports)]"), "{code}");
         assert!(!code.contains("#[allow(dead_code, unused_variables)]"), "{code}");
+    }
+
+    /// Recover the exact compiler projection for one source declaration from generated Rust.
+    fn projected_name(code: &str, source_name: &str, kind: SemanticSourceTargetKind) -> String {
+        let identities = code
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|token| token.starts_with("__incan_v"))
+            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
+            .filter(|identity| identity.kind == kind && identity.declaration_name == source_name)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            identities.len(),
+            1,
+            "expected exactly one {kind:?} identity for `{source_name}`, got {identities:?} in:\n{code}"
+        );
+        identities
+            .iter()
+            .next()
+            .map(encode_incan_symbol_identity)
+            .unwrap_or_else(|| unreachable!("identity count checked above"))
+    }
+
+    fn compact_rust(code: &str) -> String {
+        code.chars().filter(|character| !character.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn overloaded_source_functions_keep_distinct_canonical_projections() {
+        let code = generate(
+            r#"
+pub def convert(value: int) -> int:
+  return value
+
+pub def convert(value: str) -> str:
+  return value
+"#,
+        );
+        let identities = code
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|token| token.starts_with("__incan_v"))
+            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
+            .filter(|identity| {
+                identity.kind == SemanticSourceTargetKind::Function && identity.declaration_name == "convert"
+            })
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            identities.len(),
+            2,
+            "each overload needs its own source identity: {code}"
+        );
     }
 
     #[test]
@@ -2581,7 +2687,10 @@ def main() -> None:
             "expected the trait alias to emit the required method name, got:\n{code}"
         );
         assert!(
-            code.contains("pub fn filter(&self, value: i64) -> i64"),
+            code.contains(&format!(
+                "pub fn {}(\n        &self,\n        value: i64,\n    ) -> i64",
+                projected_name(&code, "filter", SemanticSourceTargetKind::Method)
+            )),
             "expected the alias target to remain available as an inherent method, got:\n{code}"
         );
     }
@@ -2599,11 +2708,15 @@ pub def use() -> str:
   return get(path="/health")
 "#,
         );
-        assert!(code.contains("pub fn get("), "{code}");
+        let get = projected_name(&code, "get", SemanticSourceTargetKind::Partial);
+        let route = projected_name(&code, "route", SemanticSourceTargetKind::Function);
+        assert!(code.contains(&format!("pub fn {get}(")), "{code}");
         assert!(code.contains("\"GET\""), "{code}");
-        assert!(code.contains("route("), "{code}");
+        assert!(code.contains(&format!("{route}(")), "{code}");
         assert!(
-            code.contains("get(\"GET\".to_string(), \"/health\".to_string())"),
+            code.contains(&format!(
+                "{get}(\n        \"GET\".to_string(),\n        \"/health\".to_string(),\n    )"
+            )),
             "{code}"
         );
     }
@@ -2659,7 +2772,8 @@ pub def use() -> Reader:
   return BronzeReader()
 "#,
         );
-        assert!(code.contains("pub fn BronzeReader("), "{code}");
+        let bronze_reader = projected_name(&code, "BronzeReader", SemanticSourceTargetKind::Partial);
+        assert!(code.contains(&format!("pub fn {bronze_reader}(")), "{code}");
         assert!(code.contains("\"bronze\""), "{code}");
         assert!(code.contains("\"delta\""), "{code}");
         assert!(code.contains("Reader {"), "{code}");
@@ -2682,7 +2796,8 @@ pub def use(user: User) -> str:
 "#,
         );
         assert!(code.contains("fn short"), "{code}");
-        assert!(code.contains("return self.label(prefix);"), "{code}");
+        let label = projected_name(&code, "label", SemanticSourceTargetKind::Method);
+        assert!(code.contains(&format!("return self\n            .{label}(")), "{code}");
         assert!(code.contains("user.short(\"name\".to_string())"), "{code}");
     }
 
@@ -2702,7 +2817,8 @@ pub def use(user: User) -> str:
 "#,
         );
         assert!(code.contains("fn short"), "{code}");
-        assert!(code.contains("return self.label(&prefix);"), "{code}");
+        let label = projected_name(&code, "label", SemanticSourceTargetKind::Method);
+        assert!(code.contains(&format!("return self\n            .{label}(")), "{code}");
         assert!(code.contains("user.short(\"name\".to_string())"), "{code}");
     }
 
@@ -2738,9 +2854,11 @@ def main() -> int:
   return mean(10)
 "#,
         );
-        assert!(code.contains("pub fn avg(x: i64) -> i64"), "{code}");
-        assert!(code.contains("pub use avg as average;"), "{code}");
-        assert!(code.contains("return avg(10);"), "{code}");
+        let avg = projected_name(&code, "avg", SemanticSourceTargetKind::Function);
+        let compact = compact_rust(&code);
+        assert!(compact.contains(&format!("pubfn{avg}(x:i64,)->i64")), "{code}");
+        assert!(compact.contains(&format!("pubuse{avg}asaverage;")), "{code}");
+        assert!(compact.contains(&format!("return{avg}(10,);")), "{code}");
         assert!(!code.contains("fn mean"), "{code}");
     }
 
@@ -2757,9 +2875,16 @@ def main() -> int:
   return mod(10)
 "#,
         );
-        assert!(code.contains("pub fn modulo_value(value: i64) -> i64"), "{code}");
-        assert!(code.contains("pub use modulo_value as r#mod;"), "{code}");
-        assert!(code.contains("return modulo_value(10);"), "{code}");
+        let modulo_value = projected_name(&code, "modulo_value", SemanticSourceTargetKind::Function);
+        assert!(
+            code.contains(&format!("pub fn {modulo_value}(\n    value: i64,\n) -> i64")),
+            "{code}"
+        );
+        assert!(code.contains(&format!("pub use {modulo_value} as r#mod;")), "{code}");
+        assert!(
+            code.contains(&format!("return {modulo_value}(\n        10,\n    );")),
+            "{code}"
+        );
     }
 
     #[test]
@@ -2772,8 +2897,12 @@ pub def mod(value: int) -> int:
 pub modulo = alias mod
 "#,
         );
-        assert!(code.contains("pub fn r#mod(value: i64) -> i64"), "{code}");
-        assert!(code.contains("pub use r#mod as modulo;"), "{code}");
+        let modulo = projected_name(&code, "mod", SemanticSourceTargetKind::Function);
+        assert!(
+            code.contains(&format!("pub fn {modulo}(\n    value: i64,\n) -> i64")),
+            "{code}"
+        );
+        assert!(code.contains(&format!("pub use {modulo} as modulo;")), "{code}");
     }
 
     #[test]
@@ -2787,7 +2916,8 @@ pub root = math.sqrt
             vec![vec!["math".to_string()]],
         );
         assert!(code.contains("pub use crate::__incan_std::math as math;"), "{code}");
-        assert!(code.contains("pub use math::sqrt as root;"), "{code}");
+        let sqrt = projected_name(&code, "sqrt", SemanticSourceTargetKind::Function);
+        assert!(code.contains(&format!("pub use math::{sqrt} as root;")), "{code}");
     }
 
     #[test]
@@ -2802,7 +2932,11 @@ def main() -> None:
 "#,
         );
 
-        assert!(code.contains("fn helper(value: i64) -> i64"), "{code}");
+        let helper = projected_name(&code, "helper", SemanticSourceTargetKind::Function);
+        assert!(
+            code.contains(&format!("fn {helper}(\n    value: i64,\n) -> i64")),
+            "{code}"
+        );
         assert_no_generated_unused_lint_allows(&code);
     }
 
@@ -2858,11 +2992,17 @@ def main() -> None:
         );
 
         assert!(
-            constants_code.contains("pub fn api_version() -> String"),
+            constants_code.contains(&format!(
+                "pub fn {}() -> String",
+                projected_name(constants_code, "api_version", SemanticSourceTargetKind::Function)
+            )),
             "{constants_code}"
         );
         assert!(
-            constants_code.contains("pub fn max_page_size() -> i64"),
+            constants_code.contains(&format!(
+                "pub fn {}() -> i64",
+                projected_name(constants_code, "max_page_size", SemanticSourceTargetKind::Function)
+            )),
             "{constants_code}"
         );
         assert!(!constants_code.contains("default_timeout"), "{constants_code}");
@@ -2900,8 +3040,16 @@ def main() -> None:
             "missing generated std.compression.gzip module",
         );
 
-        assert!(!gzip_code.contains("pub fn compress"), "{gzip_code}");
-        assert!(gzip_code.contains("pub fn decompress"), "{gzip_code}");
+        assert!(
+            !gzip_code
+                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+                .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
+                .any(|identity| identity.kind == SemanticSourceTargetKind::Function
+                    && identity.declaration_name == "compress"),
+            "{gzip_code}"
+        );
+        let decompress = projected_name(gzip_code, "decompress", SemanticSourceTargetKind::Function);
+        assert!(gzip_code.contains(&format!("pub fn {decompress}(")), "{gzip_code}");
         assert_no_generated_unused_lint_allows(gzip_code);
     }
 
@@ -2937,11 +3085,17 @@ def main() -> None:
         );
 
         assert!(
-            constants_code.contains("pub fn api_version() -> String"),
+            constants_code.contains(&format!(
+                "pub fn {}() -> String",
+                projected_name(constants_code, "api_version", SemanticSourceTargetKind::Function)
+            )),
             "{constants_code}"
         );
         assert!(
-            constants_code.contains("pub fn default_timeout() -> i64"),
+            constants_code.contains(&format!(
+                "pub fn {}() -> i64",
+                projected_name(constants_code, "default_timeout", SemanticSourceTargetKind::Function)
+            )),
             "{constants_code}"
         );
         assert_no_generated_unused_lint_allows(constants_code);
@@ -2980,7 +3134,8 @@ def test_generated_entrypoint() -> None:
         )]));
         let code = must_ok(codegen.try_generate(&ast));
 
-        assert!(code.contains("fn test_generated_entrypoint"), "{code}");
+        let entrypoint = projected_name(&code, "test_generated_entrypoint", SemanticSourceTargetKind::Function);
+        assert!(code.contains(&format!("fn {entrypoint}(")), "{code}");
         assert_no_generated_unused_lint_allows(&code);
     }
 
@@ -3123,6 +3278,7 @@ def main() -> None:
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })));
@@ -3237,6 +3393,7 @@ def main() -> None:
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })));
@@ -3354,6 +3511,7 @@ def main() -> None:
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })));
@@ -3439,6 +3597,7 @@ def main() -> None:
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })));
@@ -3743,7 +3902,11 @@ def main() -> None:
 "#,
         );
 
-        assert!(code.contains("fn helper(value: i64, _: i64) -> i64"), "{code}");
+        let helper = projected_name(&code, "helper", SemanticSourceTargetKind::Function);
+        assert!(
+            code.contains(&format!("fn {helper}(\n    value: i64,\n    _: i64,\n) -> i64")),
+            "{code}"
+        );
         assert!(!code.contains("#[allow(unused_variables)]"), "{code}");
     }
 
@@ -4129,7 +4292,11 @@ pub def add(a: int, b: int) -> int:
   return a + b
 "#,
         );
-        assert!(code.contains("fn add(a: i64, b: i64) -> i64"));
+        let add = projected_name(&code, "add", SemanticSourceTargetKind::Function);
+        assert!(
+            compact_rust(&code).contains(&format!("fn{add}(a:i64,b:i64,)->i64")),
+            "{code}"
+        );
         assert!(code.contains("a + b"));
     }
 
@@ -4585,7 +4752,9 @@ def count_inner() -> int:
   return len(live)
 "#,
         )?;
-        let generated = IrCodegen::new().try_generate(&program)?;
+        let mut codegen = IrCodegen::new();
+        codegen.set_externally_reachable_items(std::collections::HashSet::from(["count_inner".to_string()]));
+        let generated = codegen.try_generate(&program)?;
 
         assert!(
             generated.contains("let live = vec![") && generated.contains("live.len() as i64"),
@@ -4612,7 +4781,9 @@ def same(left: Value, right: Value) -> bool:
   return left == right
 "#,
         )?;
-        let generated = IrCodegen::new().try_generate(&program)?;
+        let mut codegen = IrCodegen::new();
+        codegen.set_externally_reachable_items(std::collections::HashSet::from(["same".to_string()]));
+        let generated = codegen.try_generate(&program)?;
 
         assert!(
             generated.contains("impl PartialEq for Value"),
@@ -4620,7 +4791,7 @@ def same(left: Value, right: Value) -> bool:
         );
         assert!(
             generated.contains("pub fn __incan_v1_")
-                && generated.contains("<Self as std::cmp::PartialEq>::eq(self, other)"),
+                && generated.contains("<Self as std::cmp::PartialEq>::eq(self, &other)"),
             "source __eq__ must expose a recoverable wrapper that invokes the ABI slot:\n{generated}"
         );
         assert!(
@@ -4798,8 +4969,9 @@ def main() -> None:
             .get(&testing_path)
             .ok_or_else(|| std::io::Error::other("missing generated std.testing module"))?;
 
+        let timeout = projected_name(testing_code, "timeout", SemanticSourceTargetKind::Function);
         assert!(
-            testing_code.contains("pub fn timeout(duration: String)"),
+            compact_rust(testing_code).contains(&format!("pubfn{timeout}(duration:String,)")),
             "std.testing.timeout should remain a non-generic marker wrapper; got:\n{testing_code}"
         );
         assert!(
@@ -4863,17 +5035,20 @@ def main() -> None:
     fn streaming_hash_helpers_import_io_error_for_reader_chunk_failures() -> Result<(), Box<dyn std::error::Error>> {
         let streaming_module = read_stdlib_program("crates/incan_stdlib/stdlib/hash/_streaming.incn")?;
         let streaming_code = IrCodegen::new().try_generate(&streaming_module)?;
-        let compact_streaming_code = streaming_code
-            .chars()
-            .filter(|character| !character.is_whitespace())
-            .collect::<String>();
+        let compact_streaming_code = compact_rust(&streaming_code);
 
+        let reader_digest = projected_name(&streaming_code, "reader_digest", SemanticSourceTargetKind::Function);
+        let feed_digest_reader = projected_name(
+            &streaming_code,
+            "_feed_digest_reader",
+            SemanticSourceTargetKind::Function,
+        );
         assert!(
-            compact_streaming_code.contains("pubfnreader_digest<R:BinaryReader>"),
+            compact_streaming_code.contains(&format!("pubfn{reader_digest}<R:BinaryReader,>")),
             "the public reader API must retain its source-declared BinaryReader-only contract; got:\n{streaming_code}"
         );
         assert!(
-            compact_streaming_code.contains("_feed_digest_reader<H:ByteDigestHasher,R:BinaryReader>"),
+            compact_streaming_code.contains(&format!("{feed_digest_reader}<H:ByteDigestHasher,R:BinaryReader,>")),
             "streaming over ReaderChunks<R> must preserve the source-declared BinaryReader contract without a hidden Clone requirement; got:\n{streaming_code}"
         );
         assert!(
@@ -4885,8 +5060,9 @@ def main() -> None:
             "std.hash._streaming must import the IoError carried by BinaryReader chunks; got:\n{streaming_code}"
         );
         assert!(
-            streaming_code.contains("FallibleIterator::<\n                Vec<u8>,\n                IoError,"),
-            "streaming reader helpers must preserve their fallible chunk type; got:\n{streaming_code}"
+            compact_streaming_code.contains("FallibleIterator::<Vec<u8>,HashError,>")
+                && compact_streaming_code.contains("|error:IoError|"),
+            "streaming reader helpers must preserve the imported chunk error at the mapping boundary and the mapped hash error afterward; got:\n{streaming_code}"
         );
         Ok(())
     }
@@ -5686,7 +5862,11 @@ pub def move_items(mut items: FooBar[tuple[&mut Widget, &mut Gadget]]) -> None:
 "#;
         let tokens = must_ok(lexer::lex(source));
         let ast = must_ok(parser::parse(&tokens));
-        let mut lowering = AstLowering::new();
+        let mut checker = crate::frontend::typechecker::TypeChecker::new();
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
         let ir_program = lowering
             .lower_program(&ast)
             .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
@@ -6553,7 +6733,11 @@ pub def inspect(mut items: FooBar[tuple[Widget, Gadget]]) -> None:
 "#;
         let tokens = must_ok(lexer::lex(source));
         let ast = must_ok(parser::parse(&tokens));
-        let mut lowering = AstLowering::new();
+        let mut checker = crate::frontend::typechecker::TypeChecker::new();
+        checker
+            .check_program(&ast)
+            .map_err(|errors| std::io::Error::other(format!("typecheck failed: {errors:?}")))?;
+        let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
         let ir_program = lowering
             .lower_program(&ast)
             .map_err(|error| std::io::Error::other(format!("lowering failed: {error:?}")))?;
@@ -6621,8 +6805,10 @@ pub def translate(time: f32, velocity: f32) -> f32:
             .map_err(|error| std::io::Error::other(format!("emit failed: {error:?}")))?;
 
         assert!(
-            code.contains("pub fn translate(time: f32, velocity: f32) -> f32")
-                && code.contains("accept_f32(")
+            compact_rust(&code).contains(&format!(
+                "pubfn{}(time:f32,velocity:f32,)->f32",
+                projected_name(&code, "translate", SemanticSourceTargetKind::Function)
+            )) && code.contains("accept_f32(")
                 && code.matches("incan_stdlib::num::require_finite_f32").count() == 6,
             "expected exact f32 arithmetic to retain its width and finite invariant across the imported Rust f32 \
              boundary, got:\n{code}"
@@ -7534,8 +7720,9 @@ pub def run() -> int:
 "#;
         let ast = parse_program(source);
         let code = must_ok(IrCodegen::new().try_generate(&ast));
+        let id = projected_name(&code, "id", SemanticSourceTargetKind::Function);
         assert!(
-            code.contains("id::<i64>(1)") || code.contains("id :: < i64 > (1)"),
+            compact_rust(&code).contains(&format!("{id}::<i64,>(1)")),
             "expected explicit function type args to emit Rust turbofish, got:\n{code}"
         );
     }
@@ -7553,8 +7740,9 @@ pub def run() -> int:
 "#;
         let ast = parse_program(source);
         let code = must_ok(IrCodegen::new().try_generate(&ast));
+        let pick = projected_name(&code, "pick", SemanticSourceTargetKind::Method);
         assert!(
-            code.contains("pick::<i64>") || code.contains("pick :: < i64 >"),
+            compact_rust(&code).contains(&format!("{pick}::<i64,>(1)")),
             "expected explicit method type args to emit Rust turbofish, got:\n{code}"
         );
     }
@@ -7570,8 +7758,9 @@ pub def run() -> int:
 "#;
         let ast = parse_program(source);
         let code = must_ok(IrCodegen::new().try_generate(&ast));
+        let pair_map = projected_name(&code, "pair_map", SemanticSourceTargetKind::Function);
         assert!(
-            code.contains("pair_map::<i64, i64>") || code.contains("pair_map :: < i64 , i64 >"),
+            compact_rust(&code).contains(&format!("{pair_map}::<i64,i64,>(1,2)")),
             "expected full turbofish for mixed explicit/`_` call-site generics, got:\n{code}"
         );
     }

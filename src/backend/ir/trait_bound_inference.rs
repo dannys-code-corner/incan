@@ -73,8 +73,9 @@ pub fn infer_trait_bounds(program: &mut IrProgram) {
     for decl in &program.declarations {
         match &decl.kind {
             IrDeclKind::Function(func) => {
+                let key = free_function_callable_key(program, &func.name);
                 collect_inferred_bounds_for_callable(
-                    &func.name,
+                    &key,
                     func,
                     &func.type_params,
                     &trait_decls,
@@ -135,8 +136,9 @@ pub fn infer_trait_bounds(program: &mut IrProgram) {
         for decl in &program.declarations {
             match &decl.kind {
                 IrDeclKind::Function(func) => {
+                    let key = free_function_callable_key(program, &func.name);
                     propagate_bounds_for_callable(
-                        &func.name,
+                        &key,
                         func,
                         &func.type_params,
                         &propagation_context,
@@ -367,8 +369,9 @@ fn propagate_trait_bounds_from_signature_maps(
         for decl in &program.declarations {
             match &decl.kind {
                 IrDeclKind::Function(func) => {
+                    let key = free_function_callable_key(program, &func.name);
                     propagate_bounds_for_callable(
-                        &func.name,
+                        &key,
                         func,
                         &func.type_params,
                         &propagation_context,
@@ -433,7 +436,7 @@ fn collect_current_callable_keys(program: &IrProgram) -> HashSet<String> {
     for decl in &program.declarations {
         match &decl.kind {
             IrDeclKind::Function(func) => {
-                keys.insert(func.name.clone());
+                keys.insert(free_function_callable_key(program, &func.name));
             }
             IrDeclKind::Trait(trait_decl) => {
                 for (index, method) in trait_decl.methods.iter().enumerate() {
@@ -457,6 +460,18 @@ fn collect_current_callable_keys(program: &IrProgram) -> HashSet<String> {
     keys
 }
 
+/// Return the exact semantic key used by free-function bound propagation.
+///
+/// Source functions use the projection registered from their canonical identity, which is also what checked call
+/// lowering places in the callee expression. Compiler-generated and external helpers have no source identity and keep
+/// their explicit registry name.
+fn free_function_callable_key(program: &IrProgram, registry_name: &str) -> String {
+    program
+        .function_registry
+        .emitted_projection(registry_name)
+        .unwrap_or_else(|| registry_name.to_string())
+}
+
 /// Collect the callable signatures that are already present on an IR program.
 ///
 /// The propagation pass needs two parallel maps: type-parameter bounds for each generic callable, and parameter types
@@ -470,8 +485,9 @@ fn collect_current_callable_signature_maps(
     for decl in &program.declarations {
         match &decl.kind {
             IrDeclKind::Function(func) if !func.type_params.is_empty() => {
-                function_bounds.insert(func.name.clone(), func.type_params.clone());
-                function_params.insert(func.name.clone(), func.params.clone());
+                let key = free_function_callable_key(program, &func.name);
+                function_bounds.insert(key.clone(), func.type_params.clone());
+                function_params.insert(key, func.params.clone());
             }
             IrDeclKind::Trait(trait_decl) => {
                 for (index, method) in trait_decl.methods.iter().enumerate() {
@@ -507,10 +523,14 @@ fn collect_current_callable_signature_maps(
 /// directly. Impl methods can see both owner-level and method-owned type parameters, so each inferred bound is merged
 /// into the matching owner or method parameter instead of replacing either signature wholesale.
 fn write_back_callable_bounds(program: &mut IrProgram, function_bounds: &mut HashMap<String, Vec<IrTypeParam>>) {
+    let function_registry = program.function_registry.clone();
     for decl in &mut program.declarations {
         match &mut decl.kind {
             IrDeclKind::Function(func) => {
-                if let Some(inferred) = function_bounds.remove(&func.name) {
+                let key = function_registry
+                    .emitted_projection(&func.name)
+                    .unwrap_or_else(|| func.name.clone());
+                if let Some(inferred) = function_bounds.remove(&key) {
                     func.type_params = inferred;
                 }
             }
@@ -1209,7 +1229,13 @@ fn collect_backend_clone_bounds_in_expr(
                         arg_policy: *arg_policy,
                         receiver_ref_kind: receiver_ref_kind(receiver),
                         has_incan_method_signature: matches!(arg_policy, MethodCallArgPolicy::SourceOwned)
-                            || matches!(dispatch, Some(super::expr::IrMethodDispatch::Trait(_))),
+                            || matches!(
+                                dispatch,
+                                Some(
+                                    super::expr::IrMethodDispatch::Trait(_)
+                                        | super::expr::IrMethodDispatch::SourceProjection(_)
+                                )
+                            ),
                         is_incan_owned_nominal_receiver: clone_context.is_incan_owned_nominal_receiver(&receiver.ty),
                         is_rusttype_alias_receiver: clone_context.is_rusttype_alias_receiver(&receiver.ty),
                         preserves_lookup_arg_shape: matches!(arg_policy, MethodCallArgPolicy::PreserveShape),
@@ -3080,7 +3106,10 @@ fn collect_method_implementation_bound_requirements(
     context: &BoundCollectionContext<'_, '_>,
     result: &mut Vec<PropagatedBoundRequirement>,
 ) {
-    let Some(super::expr::IrMethodDispatch::Trait(dispatch)) = dispatch else {
+    let Some(
+        super::expr::IrMethodDispatch::Trait(dispatch) | super::expr::IrMethodDispatch::SourceProjection(dispatch),
+    ) = dispatch
+    else {
         return;
     };
     let trait_source_name = &dispatch.trait_source_name;
@@ -3706,6 +3735,7 @@ mod tests {
             visibility: Visibility::Public,
             type_params,
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         }
@@ -3721,6 +3751,7 @@ mod tests {
             source_module_name: None,
             entry_point: None,
             function_registry: FunctionRegistry::new(),
+            member_projections: Vec::new(),
             function_reexports: Vec::new(),
             rust_module_path: None,
             newtype_construction: Default::default(),
@@ -3759,6 +3790,7 @@ mod tests {
             visibility: Visibility::Public,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         };
@@ -3778,6 +3810,7 @@ mod tests {
             source_module_name: None,
             entry_point: None,
             function_registry: FunctionRegistry::new(),
+            member_projections: Vec::new(),
             function_reexports: Vec::new(),
             rust_module_path: None,
             newtype_construction: Default::default(),

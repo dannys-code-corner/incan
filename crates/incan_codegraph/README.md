@@ -14,8 +14,7 @@ Codegraph began as the first v0.5 RFC 106 slice. The current v0.6 schema covers:
 - imports and public exports
 - compiler-checked registry entries, including public facade projections that preserve one canonical subject identity
 - compiler-checked C binding declarations, direct C calls admitted through explicit `unsafe:` source, and compiler-proven public façade-to-private-bridge relations
-- canonical declaration identities on checked declaration, reference, and call records, with export-local `target_id`
-  linkage when the target declaration is present in the same graph
+- canonical declaration identities on checked declaration, reference, and call records, with export-local `target_id` linkage when the target declaration is present in the same graph
 - containment relationships
 - stable diagnostic records in tolerant exports, including canonical identities for related declarations
 - source spans, explicit language tags, provenance, and degraded-state flags
@@ -36,9 +35,7 @@ Every non-header fact record carries:
 - `provenance`
 - `degraded`
 
-Checked declaration, reference, and call records also carry a structured `canonical_identity`. References reached
-through imports, aliases, or re-exports retain the original declaration identity. `target_id` is only an optional link
-to a declaration record in this particular export; a checked identity remains present when no such record exists.
+Checked declaration, reference, and call records also carry a structured `canonical_identity`. References reached through imports, aliases, or re-exports retain the original declaration identity. `target_id` is only an optional link to a declaration record in this particular export; a checked identity remains present when no such record exists.
 
 The schema already has a `rust` language value because Rust is Incan's host, generated-code target, and interop substrate. That is reserved for follow-up work; the v0.6 CLI must not emit Rust graph facts until first-class Rust support lands.
 

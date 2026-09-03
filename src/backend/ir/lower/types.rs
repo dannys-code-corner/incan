@@ -765,6 +765,10 @@ impl AstLowering {
                     incan_core::lang::types::numerics::NumericTypeId::F32,
                 )))
             }
+            ResolvedType::Named(name) if self.active_trait_type_substitution(name).is_some() => self
+                .active_trait_type_substitution(name)
+                .unwrap_or_else(|| IrType::Generic(name.clone())),
+            ResolvedType::Named(name) if self.is_active_callable_type_param(name) => IrType::Generic(name.clone()),
             ResolvedType::Named(name) => IrType::Struct(name.clone()),
             ResolvedType::Ref(inner) => IrType::Ref(Box::new(
                 self.lower_resolved_type_with_rust_path_mode(inner, rust_path_mode),
@@ -1455,6 +1459,23 @@ mod tests {
         assert_eq!(
             lowered,
             IrType::NamedGeneric("Box".to_string(), vec![IrType::Struct("Node".to_string())])
+        );
+    }
+
+    #[test]
+    fn lower_resolved_named_type_param_preserves_active_generic_identity() {
+        let mut lowering = AstLowering::new();
+        lowering
+            .active_callable_type_params
+            .push(std::collections::HashSet::from(["K".to_string()]));
+
+        assert_eq!(
+            lowering.lower_resolved_type(&ResolvedType::Named("K".to_string())),
+            IrType::Generic("K".to_string())
+        );
+        assert_eq!(
+            lowering.lower_resolved_type(&ResolvedType::Named("Value".to_string())),
+            IrType::Struct("Value".to_string())
         );
     }
 

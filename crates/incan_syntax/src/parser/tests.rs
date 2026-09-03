@@ -57,6 +57,11 @@ mod tests {
             })
     }
 
+    /// Build a structured fixture-shape failure for fallible parser tests.
+    fn parser_test_error(message: &str) -> Vec<CompileError> {
+        vec![CompileError::new(message.to_string(), Span::default())]
+    }
+
     /// Test helper: surface a structured failure instead of panicking when a declaration is not a trait.
     fn require_trait_decl(decl: &Spanned<Declaration>) -> Result<&TraitDecl, Vec<CompileError>> {
         match &decl.node {
@@ -3496,25 +3501,25 @@ def main() -> int:
         let source = "def render() -> str:\n  return f\"{((value) => value)(1)}\"\n";
         let program = parse_str(source)?;
         let Declaration::Function(function) = &program.declarations[0].node else {
-            panic!("Expected function");
+            return Err(parser_test_error("expected function"));
         };
         let Statement::Return(Some(return_expr)) = &function.body[0].node else {
-            panic!("Expected return with expression");
+            return Err(parser_test_error("expected return with expression"));
         };
         let Expr::FString(parts) = &return_expr.node else {
-            panic!("Expected f-string expression");
+            return Err(parser_test_error("expected f-string expression"));
         };
         let FStringPart::Expr { expr, .. } = &parts[0] else {
-            panic!("Expected interpolation expression");
+            return Err(parser_test_error("expected interpolation expression"));
         };
         let Expr::Call(callee, _, _) = &expr.node else {
-            panic!("Expected immediate closure call");
+            return Err(parser_test_error("expected immediate closure call"));
         };
         let Expr::Paren(closure) = &callee.node else {
-            panic!("Expected parenthesized closure callee");
+            return Err(parser_test_error("expected parenthesized closure callee"));
         };
         let Expr::Closure(params, body) = &closure.node else {
-            panic!("Expected closure");
+            return Err(parser_test_error("expected closure"));
         };
 
         let first = require_source_span(source, "value", 0)?.start;

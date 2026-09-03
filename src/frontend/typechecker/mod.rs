@@ -2171,6 +2171,11 @@ impl TypeChecker {
         self.current_module_path = path;
     }
 
+    /// Set the defining package for declarations checked for a compiled-library artifact.
+    pub fn set_current_package_identity(&mut self, package_identity: Option<String>) {
+        self.symbols.set_package_identity(package_identity);
+    }
+
     /// Return accumulated non-fatal diagnostics (warnings/lints) from the last check.
     pub fn warnings(&self) -> &[CompileError] {
         &self.warnings
@@ -2768,15 +2773,17 @@ impl TypeChecker {
     /// This records all visible trait and method-alias symbols (local and imported), not just declarations in the
     /// current module, so lowering can resolve supertrait graphs, generic trait arity, and same-type method aliases
     /// across module boundaries.
-    fn record_trait_metadata_for_lowering(&mut self) {
+    fn record_trait_metadata_for_lowering(&mut self, program: &Program) {
         self.type_info.traits.direct_supertraits.clear();
         self.type_info.traits.type_params.clear();
+        self.type_info.traits.method_identities.clear();
         self.type_info.declarations.type_method_rebindings.clear();
         self.type_info.declarations.newtype_construction.clear();
         self.type_info.derivations.derivable_modules = self.dependency_derivable_modules.clone();
         self.type_info.derivations.trait_rust_derive_paths = self.dependency_trait_rust_derive_paths.clone();
         let mut method_rebindings = Vec::new();
         let mut newtype_construction = Vec::new();
+        let mut adopted_traits = Vec::new();
         for sym in self.symbols.all_symbols() {
             match &sym.kind {
                 SymbolKind::Trait(info) => {
@@ -2788,13 +2795,23 @@ impl TypeChecker {
                         .traits
                         .type_params
                         .insert(sym.name.clone(), info.type_params.clone());
+                    for (method_name, method) in &info.methods {
+                        if let Some(identity) = &method.identity {
+                            self.type_info
+                                .traits
+                                .method_identities
+                                .insert((sym.name.clone(), method_name.clone()), identity.clone());
+                        }
+                    }
                     method_rebindings.push((sym.name.clone(), info.method_aliases.clone()));
                 }
                 SymbolKind::Type(TypeInfo::Model(info)) => {
                     method_rebindings.push((sym.name.clone(), info.method_aliases.clone()));
+                    adopted_traits.extend(info.trait_adoptions.clone());
                 }
                 SymbolKind::Type(TypeInfo::Class(info)) => {
                     method_rebindings.push((sym.name.clone(), info.method_aliases.clone()));
+                    adopted_traits.extend(info.trait_adoptions.clone());
                 }
                 SymbolKind::Type(TypeInfo::Newtype(info)) => {
                     let mut aliases = info.method_rebindings.clone();
@@ -2803,8 +2820,57 @@ impl TypeChecker {
                     if !info.is_rusttype {
                         newtype_construction.push((sym.name.clone(), info.clone()));
                     }
+                    adopted_traits.extend(info.trait_adoptions.clone());
+                }
+                SymbolKind::Type(TypeInfo::Enum(info)) => {
+                    adopted_traits.extend(info.trait_adoptions.clone());
                 }
                 _ => {}
+            }
+        }
+        for declaration in &program.declarations {
+            let Declaration::Import(import) = &declaration.node else {
+                continue;
+            };
+            let ImportKind::From { module, items } = &import.kind else {
+                continue;
+            };
+            for item in items {
+                let Some(info) = self.stdlib_cache.lookup_trait(&module.segments, &item.name) else {
+                    continue;
+                };
+                let local_name = item.alias.as_ref().unwrap_or(&item.name);
+                for (method_name, method) in info.methods {
+                    if let Some(identity) = method.identity {
+                        self.type_info
+                            .traits
+                            .method_identities
+                            .insert((local_name.clone(), method_name), identity);
+                    }
+                }
+            }
+        }
+        for (qualified_trait_name, info) in &self.dependency_module_traits {
+            for (method_name, method) in &info.methods {
+                if let Some(identity) = &method.identity {
+                    self.type_info
+                        .traits
+                        .method_identities
+                        .insert((qualified_trait_name.clone(), method_name.clone()), identity.clone());
+                }
+            }
+        }
+        for adoption in adopted_traits {
+            let Some(info) = self.lookup_trait_adoption_info(&adoption).cloned() else {
+                continue;
+            };
+            for (method_name, method) in info.methods {
+                if let Some(identity) = method.identity {
+                    self.type_info
+                        .traits
+                        .method_identities
+                        .insert((adoption.name.clone(), method_name), identity);
+                }
             }
         }
         for (type_name, aliases) in method_rebindings {
@@ -2828,12 +2894,18 @@ impl TypeChecker {
             let supports_string_conversion = self
                 .temporary_trait_capability_supports_type(string_conversion, &concrete_type)
                 .unwrap_or(false);
+            let checked_constructor = Self::validated_newtype_ctor_name(&name, &info);
+            let checked_constructor_identity = checked_constructor
+                .as_deref()
+                .and_then(|constructor| info.methods.get(constructor))
+                .and_then(|method| method.identity.clone());
             self.type_info.declarations.newtype_construction.insert(
                 name.clone(),
                 crate::frontend::typechecker::type_info::NewtypeConstructionInfo {
                     type_params: info.type_params.clone(),
                     underlying: info.underlying.clone(),
-                    checked_constructor: Self::validated_newtype_ctor_name(&name, &info),
+                    checked_constructor,
+                    checked_constructor_identity,
                     constraints: info.constraints.clone(),
                     implicit_coercion_enabled: info.implicit_coercion_enabled,
                     supports_string_conversion,
@@ -5621,22 +5693,46 @@ impl TypeChecker {
         }
     }
 
-    /// Collect concrete declarations in source order, then aliases and partials after all possible targets exist.
+    /// Collect concrete declarations first, then resolve aliases and partials in dependency order.
+    ///
+    /// Aliases may target partials and partials may target aliases, so two fixed phases are insufficient. Retrying
+    /// unresolved projections to a fixed point preserves forward references without guessing through source names.
+    /// Anything still unresolved after a no-progress pass is collected once so the normal unknown-target diagnostics
+    /// remain authoritative (and the declaration validator can additionally report cycles).
     fn collect_declarations_for_check(&mut self, declarations: &[Spanned<Declaration>]) {
         for decl in declarations {
             if !matches!(decl.node, Declaration::Alias(_) | Declaration::Partial(_)) {
                 self.collect_declaration(decl);
             }
         }
-        for decl in declarations {
-            if matches!(decl.node, Declaration::Alias(_)) {
-                self.collect_declaration(decl);
+
+        let mut pending = declarations
+            .iter()
+            .filter(|decl| matches!(decl.node, Declaration::Alias(_) | Declaration::Partial(_)))
+            .collect::<Vec<_>>();
+        while !pending.is_empty() {
+            let mut deferred = Vec::new();
+            let mut made_progress = false;
+            for decl in pending {
+                let target = match &decl.node {
+                    Declaration::Alias(alias) => &alias.target.segments,
+                    Declaration::Partial(partial) => &partial.target.segments,
+                    _ => unreachable!("pending projection declarations contain only aliases and partials"),
+                };
+                if self.alias_target_symbol_kind(target).is_some() {
+                    self.collect_declaration(decl);
+                    made_progress = true;
+                } else {
+                    deferred.push(decl);
+                }
             }
-        }
-        for decl in declarations {
-            if matches!(decl.node, Declaration::Partial(_)) {
-                self.collect_declaration(decl);
+            if !made_progress {
+                for decl in deferred {
+                    self.collect_declaration(decl);
+                }
+                break;
             }
+            pending = deferred;
         }
     }
 
@@ -5741,7 +5837,7 @@ impl TypeChecker {
             .c_abi
             .resolve_checked_facades(self.current_module_path.as_deref());
 
-        self.record_trait_metadata_for_lowering();
+        self.record_trait_metadata_for_lowering(program);
         self.record_model_field_visibilities_for_lowering(program);
         self.record_class_layouts_for_lowering(program);
 
@@ -6356,6 +6452,33 @@ impl TypeChecker {
     }
 
     /// Select one dependency cache entry using source-resolution order and an unambiguous nested-entry fallback.
+    ///
+    /// During SDK provider construction, a granted public `std.*` path resolves to the provider's physical source
+    /// path before ordinary consumer candidates. This also applies while following facade re-exports: a facade such
+    /// as physical `fs` may itself import `std.fs.file`, and that binding must retain the one `fs.file` declaration
+    /// identity emitted by the same provider.
+    fn dependency_source_import_candidates(
+        &self,
+        base_module_path: &[String],
+        module: &ImportPath,
+    ) -> Vec<Vec<String>> {
+        let mut candidates = Vec::new();
+        if module.parent_levels == 0
+            && self.provider_plan.bootstrap_owns_sdk_module(&module.segments)
+            && module.segments.first().map(String::as_str) == Some(incan_core::lang::stdlib::STDLIB_ROOT)
+            && module.segments.len() > 1
+        {
+            candidates.push(canonicalize_source_module_segments(&module.segments[1..]));
+        }
+        for candidate in logical_source_import_candidates(base_module_path, module) {
+            if !candidates.contains(&candidate) {
+                candidates.push(candidate);
+            }
+        }
+        candidates
+    }
+
+    /// Select one dependency cache entry using source-resolution order and an unambiguous nested-entry fallback.
     fn dependency_module_entry_for_path<'a, T>(
         &self,
         module: &ImportPath,
@@ -6377,7 +6500,7 @@ impl TypeChecker {
         module: &ImportPath,
         entries: &'a HashMap<String, T>,
     ) -> Option<&'a T> {
-        for candidate in logical_source_import_candidates(base_module_path, module) {
+        for candidate in self.dependency_source_import_candidates(base_module_path, module) {
             if let Some(entry) = entries.get(&candidate.join("_")) {
                 return Some(entry);
             }
@@ -6498,6 +6621,20 @@ impl TypeChecker {
     /// A symbol kind, name, module key, and span are insufficient proof: absent canonical data must stay absent rather
     /// than being reconstructed into a plausible but invented declaration.
     pub(crate) fn dependency_member_identity(&self, module: &ImportPath, item_name: &str) -> Option<CanonicalSymbolId> {
+        if module.parent_levels == 0 {
+            let provider_key = canonicalize_source_module_segments(&module.segments).join(".");
+            if self
+                .dependency_direct_member_symbols
+                .get(&provider_key)
+                .is_some_and(|members| members.contains_key(item_name))
+            {
+                return self
+                    .dependency_direct_member_identities
+                    .get(&provider_key)
+                    .and_then(|identities| identities.get(item_name))
+                    .cloned();
+            }
+        }
         let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
         self.dependency_member_identity_from(current_module_path, module, item_name, 0)
     }
@@ -6517,7 +6654,7 @@ impl TypeChecker {
         if depth >= Self::MAX_REEXPORT_DEPTH {
             return None;
         }
-        for owner in logical_source_import_candidates(from_module_path, module) {
+        for owner in self.dependency_source_import_candidates(from_module_path, module) {
             let key = owner.join("_");
             let resolves_here = self
                 .dependency_member_symbols
@@ -6561,7 +6698,7 @@ impl TypeChecker {
         item_name: &str,
     ) -> Option<(RegistryDefinitionInfo, Vec<String>)> {
         let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
-        for candidate in logical_source_import_candidates(current_module_path, module) {
+        for candidate in self.dependency_source_import_candidates(current_module_path, module) {
             let key = canonicalize_source_module_segments(&candidate).join("_");
             if let Some(registries) = self.dependency_registry_definitions.get(&key)
                 && let Some(definition) = registries.definitions.get(item_name)
@@ -7065,9 +7202,15 @@ impl TypeChecker {
             visiting.remove(target_name);
             return Some(Vec::new());
         }
+        let ctor = Self::validated_newtype_ctor_name(target_name, &newtype);
+        let ctor_identity = ctor
+            .as_deref()
+            .and_then(|name| newtype.methods.get(name))
+            .and_then(|method| method.identity.clone());
         steps.push(ValidatedNewtypeCoercionStep {
             newtype_name: target_name.clone(),
-            ctor: Self::validated_newtype_ctor_name(target_name, &newtype),
+            ctor,
+            ctor_identity,
             constraints: if Self::validated_newtype_ctor_name(target_name, &newtype).is_some() {
                 Vec::new()
             } else {

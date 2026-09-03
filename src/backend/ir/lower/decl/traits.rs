@@ -180,6 +180,7 @@ impl AstLowering {
                     visibility: Visibility::Private,
                     type_params: all_type_params,
                     is_extern: false,
+                    rust_extern_name: None,
                     rust_attributes: self.extract_passthrough_attributes(&m.node.decorators),
                     lint_allows: self.extract_rust_lint_allows(&m.node.decorators),
                 })

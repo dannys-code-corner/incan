@@ -281,7 +281,8 @@ impl TypeChecker {
                     module_path.extend_from_slice(&rest[..rest.len().saturating_sub(1)]);
                     module_path
                 };
-                self.dependency_member_identity(&ImportPath::simple(module_path), member)
+                self.dependency_member_identity(&ImportPath::simple(module_path.clone()), member)
+                    .or_else(|| self.stdlib_cache.lookup_identity(&module_path, member))
             }
             [] => None,
         }
@@ -359,7 +360,7 @@ impl TypeChecker {
     /// Single-segment targets use ordinary module-scope lookup. Qualified targets must begin with an imported module
     /// binding and are resolved through stdlib or `pub::` library metadata so `lib.name` cannot accidentally fall back
     /// to an unrelated local `name`.
-    fn alias_target_symbol_kind(&mut self, segments: &[String]) -> Option<SymbolKind> {
+    pub(super) fn alias_target_symbol_kind(&mut self, segments: &[String]) -> Option<SymbolKind> {
         match segments {
             [name] => self.lookup_symbol(name).map(|symbol| symbol.kind.clone()),
             [module_name, rest @ ..] => {

@@ -356,7 +356,7 @@ impl<'a> IrEmitter<'a> {
         let invocation = if impl_block.trait_name.is_none()
             && magic_methods::from_str(&projection.abi_method_name) == Some(magic_methods::MagicMethodId::Eq)
         {
-            let forwarded = args.iter().skip(1);
+            let forwarded = args.iter().skip(1).map(|arg| quote! { &#arg });
             quote! { <Self as std::cmp::PartialEq>::eq(self, #(#forwarded),*) }
         } else if let Some(trait_name) = impl_block.trait_name.as_deref() {
             let trait_tokens = self.emit_supertrait_bound_path(trait_name, &impl_block.trait_type_args);

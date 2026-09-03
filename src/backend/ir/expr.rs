@@ -729,6 +729,9 @@ impl BuiltinFn {
 pub enum IrMethodDispatch {
     /// Preserve the selected trait owner and, when required, emit a fully-qualified trait method call.
     Trait(Box<IrTraitDispatch>),
+    /// Emit a compiler-proved inherent source projection while retaining the selected trait evidence for bound
+    /// propagation and receiver mutability.
+    SourceProjection(Box<IrTraitDispatch>),
     /// Keep the emitted call as regular Rust method lookup while retaining this extension-trait import binding.
     RustExtensionTraitImport { binding: String },
 }

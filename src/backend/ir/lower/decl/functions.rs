@@ -415,7 +415,10 @@ impl AstLowering {
         let is_generator = return_type_is_generator(&return_type) && body_contains_yield(&f.body);
         self.push_callable_param_scope(&params);
         self.push_callable_return_type(&return_type);
+        self.active_callable_type_params
+            .push(type_param_names.iter().map(|name| (*name).to_string()).collect());
         let body_result = self.lower_statements(&f.body);
+        self.active_callable_type_params.pop();
         if body_result.is_ok() {
             for param in &mut params {
                 if matches!(param.ty, IrType::Function { .. }) {
@@ -487,6 +490,7 @@ impl AstLowering {
             visibility,
             type_params: all_type_params,
             is_extern,
+            rust_extern_name: is_extern.then(|| f.name.clone()),
             rust_attributes,
             lint_allows,
         })

@@ -34,7 +34,7 @@ This RFC defines import-scoped extension properties: library-authored `pub vocab
 
 ## Motivation
 
-Incan already has computed properties, typed numeric values, newtypes, temporal intervals, frozen const-friendly values, custom nominal types, and vocabulary-driven DSL surfaces. What it lacks is a source-level way for a library to say: "when this vocabulary is imported, this receiver type has this value-like property, and the compiler can see exactly how it lowers." Constructor calls such as `TimeDelta.days(3) + TimeDelta.hours(12)` are clear and should remain valid, but they are heavier than the domain idea being expressed. `3.days` is short, readable, and still statically typed if the property resolves through an imported vocabulary fact.
+Incan already has computed properties, typed numeric values, newtypes, temporal intervals, frozen const-friendly values, custom nominal types, and vocabulary-driven DSL surfaces. What it lacks is a source-level way for a library to say: "when this vocabulary is imported, this receiver type has this value-like property, and the compiler can see exactly how it lowers." Constructor calls such as `TimeDelta.from_days(3) + TimeDelta.hours(12)` are clear and should remain valid, but they are heavier than the domain idea being expressed. `3.days` is short, readable, and still statically typed if the property resolves through an imported vocabulary fact.
 
 The same shape is useful outside temporal units. `256.mib` can carry byte-size semantics instead of a raw integer. `2.5.percent` can carry rate semantics instead of a float or string. `"/users/{id}".route` can parse and validate a route pattern from a `FrozenStr` before runtime. `order.status.badge` can be an admin-UI projection imported from the UI layer rather than a permanent core-domain member on `OrderStatus`.
 
@@ -90,7 +90,7 @@ A vocabulary author writes a `pub vocab` block and declares extension properties
 ```incan
 pub vocab temporal_units:
     property days on int -> TimeDelta:
-        return TimeDelta.days(self)
+        return TimeDelta.from_days(self)
 
     property hours on int -> TimeDelta:
         return TimeDelta.hours(self)
@@ -348,7 +348,7 @@ This RFC adds a declaration form, not a new use-site expression form:
 ```incan
 pub vocab temporal_units:
     property days on int -> TimeDelta:
-        return TimeDelta.days(self)
+        return TimeDelta.from_days(self)
 ```
 
 Use sites continue to use ordinary property access:
@@ -392,7 +392,7 @@ The standard-library-looking modules in this RFC are examples and pressure tests
 
 ### Compatibility and migration
 
-This RFC is additive. Existing code that does not import a vocabulary is unaffected. Constructor-style APIs such as `TimeDelta.days(3)` and explicit parsers such as `RoutePattern.parse(path)` remain valid and should continue to be documented where they are clearer, fallible, dynamic, or not value-like.
+This RFC is additive. Existing code that does not import a vocabulary is unaffected. Constructor-style APIs such as `TimeDelta.from_days(3)` and explicit parsers such as `RoutePattern.parse(path)` remain valid and should continue to be documented where they are clearer, fallible, dynamic, or not value-like.
 
 ## Alternatives considered
 

@@ -145,6 +145,11 @@ pub struct AstLowering {
     /// permits them to access adopter fields. This stack keeps every annotation and typechecker-owned expression fact
     /// specialized to the concrete `with Trait[...]` arguments during that expansion.
     pub(super) active_trait_type_substitutions: Vec<HashMap<String, IrType>>,
+    /// Callable and owner type parameters active while lowering a body.
+    ///
+    /// The typechecker intentionally represents scoped parameters as either `TypeVar` or `Named` depending on the
+    /// semantic path that produced a fact. This stack lets resolved-type lowering preserve both forms as IR generics.
+    pub(super) active_callable_type_params: Vec<HashSet<String>>,
     /// Concrete nominal types that explicitly adopt the stdlib Iterator protocol.
     pub(super) iterator_adopter_names: HashSet<String>,
     /// Optional typechecker output used to drive lowering (avoid heuristics).
@@ -220,6 +225,8 @@ pub struct AstLowering {
     /// Trait ABI slots are lowered separately. Keeping the exact identities here prevents that later pass from
     /// emitting a second recoverable wrapper for a declaration whose inherent projection already exists.
     pub(super) emitted_inherent_method_identities: HashSet<CanonicalSymbolId>,
+    /// Exact source-member identities paired with the nominal owner that receives their emitted projection.
+    pub(super) emitted_member_projections: Vec<(String, String, CanonicalSymbolId)>,
     /// Compiler-generated forwarding methods created for source method-partial bindings.
     ///
     /// A method partial is a binding to an existing declaration, not a second declaration. Recording these exact
@@ -241,9 +248,12 @@ impl AstLowering {
     /// Return the compiler-minted identity for a linker-visible source function declaration.
     fn emitted_function_identity(&self, name: &str, span: ast::Span) -> Result<CanonicalSymbolId, LoweringError> {
         let identity = self.type_info.as_ref().and_then(|info| {
+            let declaration_span = (span.start, span.end);
             info.declarations
-                .declaration_identities
-                .get(&(span.start, span.end))
+                .function_bindings_by_span
+                .get(&declaration_span)
+                .and_then(|binding| binding.identity.as_ref())
+                .or_else(|| info.declarations.declaration_identities.get(&declaration_span))
                 .filter(|identity| {
                     matches!(
                         identity.kind,
@@ -357,6 +367,11 @@ impl AstLowering {
                     // target declaration. Method partials retain the binding spelling while carrying their target's
                     // identity; that deliberate mismatch keeps their compiler-generated forwarding helper name.
                     && identity.declaration_name == resolved_method_name
+            })
+            .filter(|identity| {
+                self.type_info
+                    .as_ref()
+                    .is_none_or(|info| !info.is_compiler_generated_member_identity(identity))
             })
             .map(encode_incan_symbol_identity)
     }
@@ -573,6 +588,7 @@ impl AstLowering {
             active_trait_default_function_paths: Vec::new(),
             active_trait_default_type_paths: Vec::new(),
             active_trait_type_substitutions: Vec::new(),
+            active_callable_type_params: Vec::new(),
             iterator_adopter_names: HashSet::new(),
             type_info: None,
             provider_plan: None,
@@ -597,6 +613,7 @@ impl AstLowering {
             rusttype_interop_edges: HashMap::new(),
             type_method_rebindings: HashMap::new(),
             emitted_inherent_method_identities: HashSet::new(),
+            emitted_member_projections: Vec::new(),
             generated_method_partial_wrappers: HashSet::new(),
             local_generated_method_partial_wrappers: HashSet::new(),
             current_source_module_name: None,
@@ -862,6 +879,14 @@ impl AstLowering {
             .iter()
             .rev()
             .find_map(|substitutions| substitutions.get(name).cloned())
+    }
+
+    /// Return whether `name` is a type parameter of the callable or nominal owner whose body is being lowered.
+    pub(super) fn is_active_callable_type_param(&self, name: &str) -> bool {
+        self.active_callable_type_params
+            .iter()
+            .rev()
+            .any(|params| params.contains(name))
     }
 
     /// Extract generated validation constraints from a newtype underlying annotation.
@@ -1897,6 +1922,7 @@ impl AstLowering {
     #[tracing::instrument(skip_all, fields(decl_count = program.declarations.len()))]
     pub fn lower_program(&mut self, program: &ast::Program) -> Result<IrProgram, LoweringErrors> {
         let mut ir_program = IrProgram::new();
+        self.emitted_member_projections.clear();
         ir_program.source_module_name = self.current_source_module_name.clone();
         let mut errors: Vec<LoweringError> = Vec::new();
         self.import_aliases = decorator_resolution::collect_import_aliases(program);
@@ -2047,10 +2073,25 @@ impl AstLowering {
                     .as_ref()
                     .and_then(|info| info.declarations.newtype_construction.get(&n.name));
                 let plan = if let Some(checked) = checked {
+                    let checked_constructor_source_name = checked.checked_constructor.clone();
+                    let checked_constructor = checked
+                        .checked_constructor_identity
+                        .as_ref()
+                        .filter(|identity| {
+                            identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method
+                                && matches!(
+                                    identity.origin,
+                                    incan_semantics_core::SymbolOrigin::Module(_)
+                                        | incan_semantics_core::SymbolOrigin::Package { .. }
+                                )
+                        })
+                        .map(incan_semantics_core::encode_incan_symbol_identity)
+                        .or_else(|| checked_constructor_source_name.clone());
                     super::IrNewtypeConstructionPlan {
                         type_params: self.lower_type_params(&n.type_params),
                         underlying: self.lower_resolved_type(&checked.underlying),
-                        checked_constructor: checked.checked_constructor.clone(),
+                        checked_constructor,
+                        checked_constructor_source_name,
                         constraints: checked.constraints.clone(),
                         implicit_coercion_enabled: checked.implicit_coercion_enabled,
                         supports_string_conversion: checked.supports_string_conversion,
@@ -2066,10 +2107,12 @@ impl AstLowering {
                             | IrType::Numeric(_)
                             | IrType::Generic(_)
                     );
+                    let checked_constructor = Self::select_newtype_checked_ctor(n);
                     super::IrNewtypeConstructionPlan {
                         type_params: self.lower_type_params(&n.type_params),
                         underlying,
-                        checked_constructor: Self::select_newtype_checked_ctor(n),
+                        checked_constructor: checked_constructor.clone(),
+                        checked_constructor_source_name: checked_constructor,
                         constraints: Self::newtype_constraints_from_ast(&n.underlying.node),
                         implicit_coercion_enabled: Self::newtype_allows_implicit_coercion(&n.decorators),
                         supports_string_conversion,
@@ -2770,6 +2813,7 @@ impl AstLowering {
             .type_info
             .as_ref()
             .is_some_and(|info| info.c_abi.uses_checked_c_span_buffers);
+        ir_program.member_projections = self.emitted_member_projections.clone();
 
         if errors.is_empty() {
             Ok(ir_program)
@@ -3222,6 +3266,7 @@ impl AstLowering {
             visibility: Self::map_visibility(f.visibility),
             type_params,
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })
@@ -3357,6 +3402,7 @@ impl AstLowering {
             visibility: Self::map_visibility(f.visibility),
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })
@@ -3821,6 +3867,13 @@ class Account:
             .check_program(&program)
             .map_err(|errors| format!("typecheck failed: {errors:?}"))?;
         let mut type_info = checker.type_info().clone();
+        if let Some(binding) = type_info
+            .declarations
+            .function_bindings_by_span
+            .get_mut(&(declaration.span.start, declaration.span.end))
+        {
+            binding.identity = None;
+        }
         type_info
             .declarations
             .declaration_identities

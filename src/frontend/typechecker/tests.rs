@@ -4025,6 +4025,15 @@ def choose(value: Attempts = 3) -> Attempts:
     assert_eq!(coercion.steps.len(), 1);
     assert_eq!(coercion.steps[0].newtype_name, "Attempts");
     assert_eq!(coercion.steps[0].ctor.as_deref(), Some("from_underlying"));
+    let ctor_identity = coercion.steps[0]
+        .ctor_identity
+        .as_ref()
+        .ok_or("checked coercion must retain the selected hook identity")?;
+    assert_eq!(
+        ctor_identity.kind,
+        incan_semantics_core::SemanticSourceTargetKind::Method
+    );
+    assert_eq!(ctor_identity.declaration_name, "from_underlying");
 
     Ok(())
 }
@@ -14631,6 +14640,111 @@ fn provider_plan_for_sdk_modules(
 }
 
 #[test]
+fn sdk_provider_import_retains_manifest_canonical_identity() -> Result<(), String> {
+    let package_name = "incan_stdlib_fixture";
+    let module_path = vec!["helpers".to_string()];
+    let provider_ast = parse_program("pub def helper() -> int:\n  return 42\n", "canonical SDK provider");
+    let mut provider_checker = TypeChecker::new();
+    provider_checker.set_current_package_identity(Some(package_name.to_string()));
+    provider_checker.set_current_module_path(Some(module_path.clone()));
+    provider_checker
+        .check_program(&provider_ast)
+        .map_err(|errors| format!("canonical SDK provider should typecheck: {errors:?}"))?;
+    let checked_exports = collect_checked_public_exports(&provider_ast, &provider_checker);
+    let mut api = CheckedApiMetadataPackage {
+        schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+        package: None,
+        modules: vec![collect_checked_api_metadata(
+            &provider_ast,
+            &provider_checker,
+            module_path.clone(),
+        )],
+        public_namespaces: Vec::new(),
+    };
+    materialize_checked_api_public_namespaces(&mut api).map_err(|error| error.to_string())?;
+    let mut identity_graph = LibraryIdentityGraph::from_checked_exports(package_name, &[]);
+    identity_graph
+        .extend_checked_api_exports(package_name, &api, &[(module_path.clone(), checked_exports)])
+        .map_err(|error| error.to_string())?;
+    let public_path = vec![package_name.to_string(), "helpers".to_string(), "helper".to_string()];
+    if identity_graph.canonical_for_public_path(&public_path).is_none() {
+        return Err(format!(
+            "fixture identity graph did not retain {public_path:?}: {:?}",
+            identity_graph.exports
+        ));
+    }
+    let mut manifest = LibraryManifest::new(package_name, "0.5.0");
+    manifest.contract_metadata.api = Some(api);
+    manifest.contract_metadata.identity_graph = identity_graph;
+
+    let namespace_claims = BTreeSet::from([vec!["std".to_string(), "helpers".to_string()]]);
+    let plan = ProviderPlan::new(
+        LibraryManifestIndex::default(),
+        vec![ProviderRecord {
+            identity: ProviderIdentity {
+                name: package_name.to_string(),
+                version: "0.5.0".to_string(),
+                digest: "sha256:canonical-fixture".to_string(),
+                feature_projection: BTreeSet::new(),
+            },
+            provenance: ProviderProvenance::Sdk {
+                sdk_identity: "incan@0.5.0".to_string(),
+                component_id: "stdlib-fixture".to_string(),
+                inventory_path: None,
+            },
+            authority: NamespaceAuthority::SdkReserved,
+            namespace_claims: namespace_claims.clone(),
+            available: true,
+            enabled: true,
+            manifest: Some(Arc::new(manifest)),
+            artifact: None,
+            implementation_facets: Vec::new(),
+        }],
+        namespace_claims,
+    )
+    .map_err(|error| error.to_string())?;
+    let consumer_source = "from std.helpers import helper\n\ndef run() -> int:\n  return helper()\n";
+    let consumer_ast = parse_program(consumer_source, "canonical SDK consumer");
+    let mut consumer_checker = TypeChecker::new();
+    consumer_checker.set_current_module_path(Some(vec!["consumer".to_string()]));
+    consumer_checker.set_provider_plan(Arc::new(plan));
+    let seeded = consumer_checker
+        .dependency_direct_member_identities
+        .get("std.helpers")
+        .and_then(|identities| identities.get("helper"))
+        .ok_or("SDK provider seeding must retain the manifest identity")?;
+    assert_eq!(
+        seeded.origin,
+        SymbolOrigin::Package {
+            library: package_name.to_string(),
+            module_path: module_path.clone(),
+        }
+    );
+    consumer_checker
+        .check_program(&consumer_ast)
+        .map_err(|errors| format!("canonical SDK consumer should typecheck: {errors:?}"))?;
+
+    let imported = consumer_checker
+        .type_info()
+        .resolved_import_identity("helper")
+        .ok_or("SDK import must retain its manifest canonical identity")?;
+    assert_eq!(
+        imported.origin,
+        SymbolOrigin::Package {
+            library: package_name.to_string(),
+            module_path: module_path.clone(),
+        }
+    );
+    let call_start = consumer_source.rfind("helper").ok_or("missing helper call")?;
+    let called = consumer_checker
+        .type_info()
+        .resolved_identity(Span::new(call_start, call_start + "helper".len()))
+        .ok_or("SDK call must retain its manifest canonical identity")?;
+    assert_eq!(called, imported);
+    Ok(())
+}
+
+#[test]
 fn disabled_sdk_component_import_has_a_component_selection_remedy() -> Result<(), Box<dyn std::error::Error>> {
     let ast = parse_program("import std.web\n", "disabled SDK provider import");
     let mut checker = TypeChecker::new();
@@ -15090,7 +15204,7 @@ from std.datetime.civil import Date, TimeDelta
 from std.datetime.error import DateTimeError
 
 def main() -> Result[None, DateTimeError]:
-  renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.days(30)
+  renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.from_days(30)
   print(renewal.isoformat())
   return Ok(None)
 "#;
@@ -18321,7 +18435,7 @@ def main() -> None:
 }
 
 #[test]
-fn test_enum_duplicate_identical_trait_instantiation_rejected() {
+fn test_enum_duplicate_identical_trait_instantiation_rejected() -> Result<(), String> {
     let source = r#"
 trait Convert[T]:
   def convert(self) -> T: ...
@@ -18334,7 +18448,7 @@ enum Token with Convert[int], Convert[int]:
 "#;
 
     let Err(errs) = check_str(source) else {
-        panic!("expected duplicate enum trait instantiation diagnostic");
+        return Err("expected duplicate enum trait instantiation diagnostic".to_string());
     };
     let duplicate = errs
         .iter()
@@ -18342,13 +18456,14 @@ enum Token with Convert[int], Convert[int]:
             err.message
                 .contains("Trait 'Convert' is adopted more than once with type arguments [int]")
         })
-        .unwrap_or_else(|| panic!("expected duplicate enum trait instantiation diagnostic, got: {errs:?}"));
+        .ok_or_else(|| format!("expected duplicate enum trait instantiation diagnostic, got: {errs:?}"))?;
     assert_eq!(
         duplicate.related_spans().len(),
         1,
         "duplicate trait adoption must retain the first adoption site"
     );
     assert_ne!(duplicate.related_spans()[0].span, duplicate.span);
+    Ok(())
 }
 
 #[test]
@@ -21807,10 +21922,18 @@ def run() -> int:
 
     let facts = info.semantic_fact_store(&module_path);
     let rendered = facts.iter().map(|fact| fact.render_snapshot()).collect::<Vec<_>>();
-    let mut sorted = rendered.clone();
-    sorted.sort();
+    let repeated = info.semantic_fact_store(&module_path);
+    let structured = facts.iter().cloned().collect::<Vec<_>>();
+    let repeated_structured = repeated.iter().cloned().collect::<Vec<_>>();
 
-    assert_eq!(rendered, sorted, "semantic facts should iterate deterministically");
+    assert_eq!(
+        structured, repeated_structured,
+        "semantic facts should iterate deterministically"
+    );
+    assert!(
+        structured.windows(2).all(|pair| pair[0] <= pair[1]),
+        "semantic facts should preserve their structured store order"
+    );
     assert!(
         rendered
             .iter()
@@ -22134,6 +22257,13 @@ pub static package_capability: RegistryEntry[FeatureId, CapabilitySpec] = capabi
     )?;
 
     let facts = info.semantic_fact_store(&module_path);
+    assert!(
+        info.references.resolved_identities.values().any(|identity| {
+            identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method
+                && identity.declaration_name == "entry"
+        }),
+        "the declaration-only Registry.entry validation path must retain its selected source method identity"
+    );
     let unit_entry = facts
         .iter()
         .find(|fact| {

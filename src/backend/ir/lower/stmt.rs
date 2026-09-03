@@ -1123,11 +1123,18 @@ impl AstLowering {
                     .and_then(|info| info.resolved_operator_call(stmt_span).cloned())
                     && resolved_operator.kind == ResolvedOperatorKind::IndexAssign
                 {
+                    let dispatch = self
+                        .type_info
+                        .as_ref()
+                        .and_then(|info| info.resolved_method_call(stmt_span).cloned())
+                        .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &object));
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(stmt_span, &resolved_operator.method, &object, dispatch);
                     IrStmtKind::Expr(TypedExpr::new(
                         IrExprKind::MethodCall {
                             receiver: Box::new(object),
-                            method: resolved_operator.method,
-                            dispatch: None,
+                            method,
+                            dispatch,
                             type_args: Vec::new(),
                             args: vec![
                                 IrCallArg {
@@ -1504,11 +1511,18 @@ impl AstLowering {
                     .and_then(|info| info.resolved_operator_call(stmt_span).cloned())
                     && resolved_operator.kind == ResolvedOperatorKind::Binary
                 {
+                    let dispatch = self
+                        .type_info
+                        .as_ref()
+                        .and_then(|info| info.resolved_method_call(stmt_span).cloned())
+                        .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &lhs_expr));
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(stmt_span, &resolved_operator.method, &lhs_expr, dispatch);
                     let method_call = TypedExpr::new(
                         IrExprKind::MethodCall {
                             receiver: Box::new(lhs_expr),
-                            method: resolved_operator.method,
-                            dispatch: None,
+                            method,
+                            dispatch,
                             type_args: Vec::new(),
                             args: vec![IrCallArg {
                                 name: None,

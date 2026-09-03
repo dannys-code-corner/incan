@@ -248,6 +248,12 @@ pub struct SymbolTable {
     /// origin, which `module_identity_for_path` renders as `<module>` — the same anonymous-module convention the
     /// fact store already uses.
     module_path: Vec<String>,
+    /// Defining package for declarations checked as part of a compiled-library artifact.
+    ///
+    /// Source modules normally use [`SymbolOrigin::Module`]. A library producer sets this before collecting its
+    /// modules so the identity embedded in its Rust symbols is exactly the package identity later hydrated by
+    /// consumers from the `.incnlib` contract.
+    package_identity: Option<String>,
     /// True only while [`Self::add_builtins`] runs, so [`Self::define`] leaves identity assignment to the explicit
     /// registry identities that loop attaches (builtin aliases must carry the canonical registry spelling, which the
     /// generic mint cannot know).
@@ -289,6 +295,7 @@ impl SymbolTable {
             current_scope_binding_transaction: None,
             identities: HashMap::new(),
             module_path: Vec::new(),
+            package_identity: None,
             minting_builtins: false,
             dependency_interface_bindings: None,
             dependency_interface_symbol_ids: HashSet::new(),
@@ -311,6 +318,22 @@ impl SymbolTable {
     /// Builtins are already defined by then and keep their [`SymbolOrigin::Builtin`] identities.
     pub fn set_module_path(&mut self, module_path: Vec<String>) {
         self.module_path = module_path;
+    }
+
+    /// Record that subsequently checked declarations are owned by one compiled package.
+    pub fn set_package_identity(&mut self, package_identity: Option<String>) {
+        self.package_identity = package_identity;
+    }
+
+    /// Return the origin that owns declarations in the currently checked module.
+    fn declaration_origin(&self) -> SymbolOrigin {
+        self.package_identity
+            .as_ref()
+            .map(|library| SymbolOrigin::Package {
+                library: library.clone(),
+                module_path: self.module_path.clone(),
+            })
+            .unwrap_or_else(|| SymbolOrigin::Module(self.module_path.clone()))
     }
 
     /// Return the RFC 120 canonical identity minted for a defined symbol, if the definition proved one.
@@ -927,7 +950,7 @@ impl SymbolTable {
                 )
             }
             _ => (
-                SymbolOrigin::Module(self.module_path.clone()),
+                self.declaration_origin(),
                 symbol.name.clone(),
                 HirSourceSpan::new(symbol.span.start, symbol.span.end),
             ),
@@ -962,7 +985,14 @@ impl SymbolTable {
                 return None;
             }
             let identity = self.identities.get(&id)?;
-            if !matches!(&identity.origin, SymbolOrigin::Module(path) if path == &self.module_path) {
+            let owned_here = match (&identity.origin, self.package_identity.as_deref()) {
+                (SymbolOrigin::Module(path), None) => path == &self.module_path,
+                (SymbolOrigin::Package { library, module_path }, Some(package)) => {
+                    library == package && module_path == &self.module_path
+                }
+                _ => false,
+            };
+            if !owned_here {
                 return None;
             }
             Some((symbol.span, identity))
@@ -980,12 +1010,14 @@ impl SymbolTable {
         kind: SemanticSourceTargetKind,
         span: Span,
     ) -> CanonicalSymbolId {
-        CanonicalSymbolId::module_declaration(
-            self.module_path.clone(),
-            name,
+        CanonicalSymbolId {
+            namespace: identity_namespace_for_kind(&kind),
+            origin: self.declaration_origin(),
+            declaration_name: name.to_string(),
             kind,
-            HirSourceSpan::new(span.start, span.end),
-        )
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(span.start, span.end),
+        }
     }
 
     /// Build the canonical identity of one compiler-proven source or package module path.
@@ -1023,7 +1055,14 @@ impl SymbolTable {
         kind: SemanticSourceTargetKind,
         span: Span,
     ) -> CanonicalSymbolId {
-        source_member_identity(&self.module_path, name, kind, span)
+        CanonicalSymbolId {
+            namespace: SymbolNamespace::Member,
+            origin: self.declaration_origin(),
+            declaration_name: name.to_string(),
+            kind,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(span.start, span.end),
+        }
     }
 
     /// Attach the explicit registry identity for one builtin definition.
@@ -2496,6 +2535,38 @@ mod tests {
     }
 
     #[test]
+    fn compiled_package_declarations_are_minted_in_the_package_origin() -> Result<(), String> {
+        let mut table = SymbolTable::new();
+        table.set_package_identity(Some("incan_stdlib_system".to_string()));
+        table.set_module_path(vec!["fs".to_string(), "path".to_string()]);
+        let id = table.define_with_target_kind(
+            Symbol {
+                name: "helper".to_string(),
+                kind: SymbolKind::Variable(VariableInfo {
+                    ty: ResolvedType::Int,
+                    is_mutable: false,
+                    is_used: false,
+                }),
+                span: Span::new(10, 20),
+                scope: 0,
+            },
+            SemanticSourceTargetKind::Function,
+        );
+        let identity = table.identity_of(id).ok_or("missing package-owned identity")?;
+
+        assert_eq!(
+            identity.origin,
+            SymbolOrigin::Package {
+                library: "incan_stdlib_system".to_string(),
+                module_path: vec!["fs".to_string(), "path".to_string()],
+            }
+        );
+        assert_eq!(identity.declaration_name, "helper");
+        assert_eq!(identity.kind, SemanticSourceTargetKind::Function);
+        Ok(())
+    }
+
+    #[test]
     fn shared_binding_registration_preserves_the_first_site_and_reports_the_collision() {
         let mut bindings = HashMap::new();
         let first = Span::new(4, 8);
@@ -2589,7 +2660,7 @@ mod tests {
 
         assert!(is_overload_emitted_name(&emitted));
         assert!(!is_overload_emitted_name("cast_overload_suffix"));
-        assert!(!is_overload_emitted_name("__incan_overload_d28281f54a5b9ea6"));
+        assert!(is_overload_emitted_name("__incan_overload_d28281f54a5b9ea6"));
     }
 
     #[test]

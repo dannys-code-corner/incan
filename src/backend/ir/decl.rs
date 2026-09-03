@@ -333,6 +333,11 @@ pub struct IrFunction {
     /// When `true`, emission should generate a delegation call to `<rust_module_path>::<name>()` instead of compiling
     /// the Incan body. The `rust_module_path` is stored on `IrProgram`.
     pub is_extern: bool,
+    /// Rust ABI symbol named by the source `@rust.extern` declaration.
+    ///
+    /// The emitted Incan wrapper may use a canonical identity projection, so its linker-visible name cannot also be
+    /// used to address the host-owned Rust implementation. `None` is required for ordinary Incan callables.
+    pub rust_extern_name: Option<String>,
     /// Passthrough Rust attributes collected from decorators.
     ///
     /// Example: `@route("/users/{id}")` imported from a `rust.module("incan_web_macros")` stub becomes

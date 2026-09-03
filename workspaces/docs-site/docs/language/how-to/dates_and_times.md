@@ -101,8 +101,8 @@ from std.datetime import Date, DateTimeError, DateTimeInterval, TimeDelta, YearM
 def schedule(anchor_text: str) -> Result[None, DateTimeError]:
     anchor = Date.fromisoformat(anchor_text)?
 
-    reminder = anchor + TimeDelta.days(7)
-    next_billing_cycle = anchor + YearMonthInterval.months(1)
+    reminder = anchor + TimeDelta.from_days(7)
+    next_billing_cycle = anchor + YearMonthInterval.from_months(1)
     compound = anchor + DateTimeInterval.new(months=1, days=3)
 
     println(reminder.isoformat())
@@ -111,7 +111,7 @@ def schedule(anchor_text: str) -> Result[None, DateTimeError]:
     return Ok(None)
 ```
 
-Do not replace `YearMonthInterval.months(1)` with a fixed number of days. Month arithmetic depends on the calendar.
+Do not replace `YearMonthInterval.from_months(1)` with a fixed number of days. Month arithmetic depends on the calendar.
 
 ## Work with fixed offsets
 

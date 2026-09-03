@@ -85,8 +85,8 @@ zone = TimeZone.named("Europe/Amsterdam")?
 from std.datetime import Date, TimeDelta, YearMonthInterval
 
 anchor = Date.strptime("2026-04-14", "%Y-%m-%d")?
-next_week = anchor + TimeDelta.days(7)
-quarter_end = anchor + YearMonthInterval.months(3)
+next_week = anchor + TimeDelta.from_days(7)
+quarter_end = anchor + YearMonthInterval.from_months(3)
 ```
 
 The mental model should be simple:

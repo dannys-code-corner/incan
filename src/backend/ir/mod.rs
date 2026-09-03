@@ -51,7 +51,7 @@ pub use types::{IrType, Mutability, Ownership};
 
 use crate::frontend::ast::Span;
 use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
-use incan_semantics_core::{CanonicalSymbolId, encode_incan_symbol_identity};
+use incan_semantics_core::{CanonicalSymbolId, SemanticSourceTargetKind, SymbolOrigin, encode_incan_symbol_identity};
 use std::collections::HashMap;
 
 /// Function signature for call-site type checking
@@ -311,6 +311,32 @@ impl FunctionRegistry {
         self.canonical_identity(&key)
     }
 
+    /// Return one unambiguous package-owned function identity by its declaration site.
+    ///
+    /// Physical registry keys may already be encoded projections, so current-package helper lookup cannot recover a
+    /// semantic path from those keys. This query inspects only identities retained by lowering and fails closed when
+    /// multiple distinct declarations match.
+    pub fn canonical_package_function_identity(
+        &self,
+        library: &str,
+        module_path: &[String],
+        declaration_name: &str,
+    ) -> Option<&CanonicalSymbolId> {
+        let mut candidates = self.canonical_identities.values().filter(|identity| {
+            identity.kind == SemanticSourceTargetKind::Function
+                && identity.declaration_name == declaration_name
+                && matches!(
+                    &identity.origin,
+                    SymbolOrigin::Package {
+                        library: owner,
+                        module_path: owner_module,
+                    } if owner == library && owner_module == module_path
+                )
+        });
+        let first = candidates.next()?;
+        candidates.all(|candidate| candidate == first).then_some(first)
+    }
+
     /// Iterate over registered function signatures.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &FunctionSignature)> {
         self.signatures.iter()
@@ -402,8 +428,13 @@ pub struct IrNewtypeConstructionPlan {
     pub type_params: Vec<decl::IrTypeParam>,
     /// Wrapped runtime value type after frontend resolution.
     pub underlying: IrType,
-    /// Canonical validation hook selected by the checked frontend or conservative fallback.
+    /// Physical validation-hook name selected by the checked frontend or conservative fallback.
+    ///
+    /// Source-authored hooks use their RFC 120 projection; metadata-free direct-lowering fixtures retain the source
+    /// spelling because no declaration identity is available there.
     pub checked_constructor: Option<String>,
+    /// Source spelling retained for diagnostics and other user-facing evidence.
+    pub checked_constructor_source_name: Option<String>,
     /// Generated primitive predicates used when no explicit validation hook exists.
     pub constraints: Vec<crate::frontend::symbols::NewtypePrimitiveConstraint>,
     /// Whether ordinary implicit underlying-to-newtype coercion is enabled.
@@ -552,6 +583,8 @@ pub struct IrProgram {
     pub entry_point: Option<String>,
     /// Function signature registry for call-site type checking
     pub function_registry: FunctionRegistry,
+    /// Exact source-member projections emitted by this program, keyed by nominal owner and source declaration name.
+    pub member_projections: Vec<(String, String, CanonicalSymbolId)>,
     /// Public source-function re-exports keyed by local exported name and canonical target path.
     pub function_reexports: Vec<FunctionReexport>,
     /// RFC 023: The `rust.module("path::to::module")` Rust backing path, if declared.
@@ -580,6 +613,7 @@ impl IrProgram {
             source_module_name: None,
             entry_point: None,
             function_registry: FunctionRegistry::new(),
+            member_projections: Vec::new(),
             function_reexports: Vec::new(),
             rust_module_path: None,
             newtype_construction: std::collections::HashMap::new(),
@@ -656,6 +690,38 @@ mod tests {
         registry.register("opaque_backend_projection".to_string(), Vec::new(), IrType::Int);
 
         assert_eq!(registry.source_name("opaque_backend_projection"), Some("calculate"));
+    }
+
+    #[test]
+    fn function_registry_finds_exact_package_declaration_behind_encoded_key() {
+        let mut registry = FunctionRegistry::new();
+        let identity = incan_semantics_core::CanonicalSymbolId {
+            namespace: incan_semantics_core::SymbolNamespace::OrdinaryLexical,
+            origin: incan_semantics_core::SymbolOrigin::Package {
+                library: "incan_stdlib_data".to_string(),
+                module_path: vec!["collections".to_string()],
+            },
+            declaration_name: "_ordinal_hash".to_string(),
+            kind: incan_semantics_core::SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: incan_semantics_core::HirSourceSpan::new(10, 20),
+        };
+        registry.register_canonical_projection(
+            "opaque_projection".to_string(),
+            "_ordinal_hash".to_string(),
+            identity.clone(),
+            Vec::new(),
+            IrType::Int,
+        );
+
+        assert_eq!(
+            registry.canonical_package_function_identity(
+                "incan_stdlib_data",
+                &["collections".to_string()],
+                "_ordinal_hash"
+            ),
+            Some(&identity)
+        );
     }
 
     #[test]

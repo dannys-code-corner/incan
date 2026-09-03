@@ -1595,7 +1595,7 @@ mod tests {
             value: TypedExpr::new(
                 IrExprKind::StaticBinding {
                     name: "ACTIVE_FLAGS".to_string(),
-                    reference_kind: IrStaticReferenceKind::Source,
+                    reference_kind: IrStaticReferenceKind::CompilerGenerated,
                 },
                 IrType::List(Box::new(IrType::Bool)),
             ),
@@ -1776,7 +1776,7 @@ mod tests {
                 value: TypedExpr::new(
                     IrExprKind::StaticBinding {
                         name: "ITEMS".to_string(),
-                        reference_kind: IrStaticReferenceKind::Source,
+                        reference_kind: IrStaticReferenceKind::CompilerGenerated,
                     },
                     IrType::List(Box::new(IrType::Int)),
                 ),

@@ -49,15 +49,19 @@ impl AstLowering {
     /// Method-partial wrappers are explicitly classified compiler helpers and therefore return `None`. Absence for a
     /// source-written declaration is terminal: lowering never reconstructs member provenance from spellings.
     fn emitted_method_identity(
-        &self,
+        &mut self,
         owner: &str,
         method: &Spanned<ast::MethodDecl>,
     ) -> Result<Option<incan_semantics_core::CanonicalSymbolId>, LoweringError> {
         if self.is_generated_method_partial_wrapper(owner, method) {
             return Ok(None);
         }
-        self.required_member_identity(owner, &method.node.name, method.span)
-            .map(Some)
+        let identity = self.required_member_identity(owner, &method.node.name, method.span)?;
+        let projection = (owner.to_string(), method.node.name.clone(), identity.clone());
+        if !self.emitted_member_projections.contains(&projection) {
+            self.emitted_member_projections.push(projection);
+        }
+        Ok(Some(identity))
     }
 
     /// Require the compiler-owned identity for one linker-visible source member declaration.
@@ -71,20 +75,21 @@ impl AstLowering {
             .as_ref()
             .and_then(|info| {
                 info
-            .declarations
-            .member_declaration_identities
-            .get(&(span.start, span.end))
-            .filter(|identity| {
-                matches!(
-                    identity.kind,
-                    incan_semantics_core::SemanticSourceTargetKind::Method
-                        | incan_semantics_core::SemanticSourceTargetKind::Property
-                ) && matches!(
-                    identity.origin,
-                    incan_semantics_core::SymbolOrigin::Module(_) | incan_semantics_core::SymbolOrigin::Package { .. }
-                )
-            })
-            .cloned()
+                    .declarations
+                    .member_declaration_identities
+                    .get(&(span.start, span.end))
+                    .filter(|identity| {
+                        matches!(
+                            identity.kind,
+                            incan_semantics_core::SemanticSourceTargetKind::Method
+                                | incan_semantics_core::SemanticSourceTargetKind::Property
+                        ) && matches!(
+                            identity.origin,
+                            incan_semantics_core::SymbolOrigin::Module(_)
+                                | incan_semantics_core::SymbolOrigin::Package { .. }
+                        )
+                    })
+                    .cloned()
             })
             .ok_or_else(|| LoweringError {
                 message: format!(
@@ -94,39 +99,98 @@ impl AstLowering {
             })
     }
 
+    /// Return the checked identity for a trait default whose declaration may belong to an imported source file.
+    fn emitted_trait_default_method_identity(
+        &self,
+        trait_name: &str,
+        method: &Spanned<ast::MethodDecl>,
+    ) -> Result<Option<incan_semantics_core::CanonicalSymbolId>, LoweringError> {
+        if self.is_generated_method_partial_wrapper(trait_name, method) {
+            return Ok(None);
+        }
+        let visible_key = (trait_name.to_string(), method.node.name.clone());
+        let (canonical_module_path, canonical_source_name) = self.canonical_trait_identity(trait_name);
+        let canonical_key = match (canonical_module_path, canonical_source_name) {
+            (Some(module_path), Some(source_name)) => Some((
+                format!("{}.{}", module_path.join("."), source_name),
+                method.node.name.clone(),
+            )),
+            _ => None,
+        };
+        if let Some(identity) = self
+            .type_info
+            .as_ref()
+            .and_then(|info| {
+                info.traits.method_identities.get(&visible_key).or_else(|| {
+                    canonical_key
+                        .as_ref()
+                        .and_then(|key| info.traits.method_identities.get(key))
+                })
+            })
+            .filter(|identity| {
+                identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method
+                    && matches!(
+                        identity.origin,
+                        incan_semantics_core::SymbolOrigin::Module(_)
+                            | incan_semantics_core::SymbolOrigin::Package { .. }
+                    )
+            })
+            .cloned()
+        {
+            return Ok(Some(identity));
+        }
+        self.required_member_identity(trait_name, &method.node.name, method.span)
+            .map(Some)
+    }
+
     /// Pair Rust trait slots with exact method identities without reconstructing either from a spelling.
     fn trait_method_projections(
-        &self,
+        &mut self,
         methods: &[IrFunction],
         concrete_methods: &[Spanned<ast::MethodDecl>],
         default_methods: &[Spanned<ast::MethodDecl>],
         trait_name: &str,
+        trait_type_params: &[ast::TypeParam],
+        trait_type_args: &[IrType],
+        owner_type_param_names: &std::collections::HashSet<&str>,
     ) -> Result<Vec<IrMethodProjection>, LoweringError> {
-        let expected_trait = self.canonical_trait_identity(trait_name).1;
-        let concrete_owner = self.current_impl_type.as_deref().unwrap_or(trait_name);
+        let concrete_owner = self.current_impl_type.clone().unwrap_or_else(|| trait_name.to_string());
         let mut projections = Vec::new();
         for method in methods {
-            let concrete_sources = concrete_methods
-                .iter()
-                .filter(|source| source.node.name == method.name)
-                .filter(|source| {
-                    source
-                        .node
-                        .trait_target
-                        .as_ref()
-                        .is_none_or(|target| self.canonical_trait_identity(&target.node.name).1 == expected_trait)
-                })
-                .collect::<Vec<_>>();
+            let trait_source = default_methods.iter().find(|source| source.node.name == method.name);
+            let mut concrete_sources = Vec::new();
+            for source in concrete_methods.iter().filter(|source| source.node.name == method.name) {
+                if !self.method_trait_target_matches_impl(
+                    &source.node,
+                    trait_name,
+                    trait_type_args,
+                    owner_type_param_names,
+                ) {
+                    continue;
+                }
+                if trait_source.is_some_and(|trait_source| {
+                    !self.trait_impl_override_matches(
+                        &trait_source.node,
+                        &source.node,
+                        trait_type_params,
+                        trait_type_args,
+                        owner_type_param_names,
+                    )
+                }) {
+                    continue;
+                }
+                concrete_sources.push(source);
+            }
             let identity = if concrete_sources.is_empty() {
-                let Some(source) = default_methods.iter().find(|source| source.node.name == method.name) else {
+                let Some(source) = trait_source else {
                     // Backend-generated ABI helpers have no source declaration and therefore no Incan projection.
                     continue;
                 };
-                self.emitted_method_identity(trait_name, source)?
+                self.emitted_trait_default_method_identity(trait_name, source)?
             } else {
                 let mut candidate = None;
                 for source in concrete_sources {
-                    let Some(identity) = self.emitted_method_identity(concrete_owner, source)? else {
+                    let Some(identity) = self.emitted_method_identity(&concrete_owner, source)? else {
                         // A source method partial is a binding; its forwarding method is a generated helper.
                         continue;
                     };
@@ -689,6 +753,7 @@ impl AstLowering {
             visibility: Visibility::Public,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })
@@ -809,6 +874,7 @@ impl AstLowering {
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })
@@ -1234,7 +1300,15 @@ impl AstLowering {
                         PropertyLoweringMode::TraitImpl,
                     )?);
                 }
-                let method_projections = self.trait_method_projections(&methods, impl_methods, &[], trait_name)?;
+                let method_projections = self.trait_method_projections(
+                    &methods,
+                    impl_methods,
+                    &[],
+                    trait_name,
+                    &[],
+                    &trait_type_args,
+                    &type_param_names,
+                )?;
                 return Ok(IrImpl {
                     target_type: type_name.to_string(),
                     type_params: self.lower_type_params(type_params),
@@ -1381,8 +1455,15 @@ impl AstLowering {
                 });
             }
 
-            let method_projections =
-                self.trait_method_projections(&methods, impl_methods, &trait_methods, trait_name)?;
+            let method_projections = self.trait_method_projections(
+                &methods,
+                impl_methods,
+                &trait_methods,
+                trait_name,
+                &trait_type_params,
+                &trait_type_args,
+                &type_param_names,
+            )?;
             Ok(IrImpl {
                 target_type: type_name.to_string(),
                 type_params: self.lower_type_params(type_params),
@@ -1536,11 +1617,18 @@ impl AstLowering {
         let return_type = self.lower_callable_return_type(&m.return_type.node, Some(&combined_type_param_names));
         self.push_callable_param_scope(&params);
         self.push_callable_return_type(&return_type);
+        self.active_callable_type_params.push(
+            combined_type_param_names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
         let body_result = if let Some(ref body_stmts) = m.body {
             self.lower_statements(body_stmts)
         } else {
             Ok(vec![])
         };
+        self.active_callable_type_params.pop();
         self.pop_callable_param_scope();
         self.pop_callable_return_type();
         let body = match body_result {
@@ -1571,6 +1659,7 @@ impl AstLowering {
             visibility: Visibility::Private,
             type_params: std::mem::take(&mut all_type_params),
             is_extern,
+            rust_extern_name: is_extern.then(|| m.name.clone()),
             rust_attributes,
             lint_allows,
         })
@@ -1829,12 +1918,19 @@ impl AstLowering {
         }
         self.push_callable_param_scope(&params);
         self.push_callable_return_type(&return_type);
+        self.active_callable_type_params.push(
+            combined_type_param_names
+                .iter()
+                .map(|name| (*name).to_string())
+                .collect(),
+        );
         let body_result = if let Some(ref body_stmts) = m.body {
             self.lower_statements(body_stmts)
         } else {
             // Abstract method with no body
             Ok(vec![])
         };
+        self.active_callable_type_params.pop();
         self.current_classmethod_constructor = previous_classmethod_constructor;
         if body_result.is_ok() {
             for param in &mut params {
@@ -1874,6 +1970,7 @@ impl AstLowering {
             visibility,
             type_params: std::mem::take(&mut all_type_params),
             is_extern,
+            rust_extern_name: is_extern.then(|| m.name.clone()),
             rust_attributes,
             lint_allows,
         })
@@ -1903,6 +2000,12 @@ impl AstLowering {
 
         let return_type = self.lower_callable_return_type(&declaration.return_type.node, type_param_names);
         self.push_callable_return_type(&return_type);
+        self.active_callable_type_params.push(
+            type_param_names
+                .into_iter()
+                .flat_map(|params| params.iter().map(|name| (*name).to_string()))
+                .collect(),
+        );
         let body_result = match mode {
             PropertyLoweringMode::TraitDecl => Ok(Vec::new()),
             PropertyLoweringMode::Inherent | PropertyLoweringMode::TraitImpl => {
@@ -1913,6 +2016,7 @@ impl AstLowering {
                 }
             }
         };
+        self.active_callable_type_params.pop();
         self.pop_callable_return_type();
         self.pop_scope();
         let body = body_result?;
@@ -1926,6 +2030,10 @@ impl AstLowering {
         if matches!(mode, PropertyLoweringMode::Inherent) {
             let owner = self.current_impl_type.as_deref().unwrap_or("<unknown-owner>");
             let identity = self.required_member_identity(owner, &property.node.name, property.span)?;
+            let projection = (owner.to_string(), property.node.name.clone(), identity.clone());
+            if !self.emitted_member_projections.contains(&projection) {
+                self.emitted_member_projections.push(projection);
+            }
             name = incan_semantics_core::encode_incan_symbol_identity(&identity);
             self.emitted_inherent_method_identities.insert(identity);
         }
@@ -1941,6 +2049,7 @@ impl AstLowering {
             visibility,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         })

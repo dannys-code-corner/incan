@@ -2515,7 +2515,7 @@ impl TypeChecker {
     }
 
     /// Return collected method metadata for an owner type or trait surface.
-    fn method_info_for_owner(&self, owner: &str, method: &str) -> Option<&MethodInfo> {
+    pub(super) fn method_info_for_owner(&self, owner: &str, method: &str) -> Option<&MethodInfo> {
         if let Some(info) = self.lookup_trait_info(owner) {
             return info.methods.get(method);
         }
@@ -2768,13 +2768,14 @@ impl TypeChecker {
             ));
             return;
         };
-        let subject_kind = match self.registry_explicit_subject_kind(subject) {
-            Ok(subject_kind) => subject_kind,
-            Err(message) => {
-                self.errors.push(CompileError::type_error(message, subject.span));
-                return;
-            }
-        };
+        let (subject_kind, subject_constructor_identity, checked_constructor_identity) =
+            match self.registry_explicit_subject(subject) {
+                Ok(subject) => subject,
+                Err(message) => {
+                    self.errors.push(CompileError::type_error(message, subject.span));
+                    return;
+                }
+            };
         if !definition.subjects.contains(&subject_kind) {
             self.errors.push(CompileError::type_error(
                 format!("registry `{registry_name}` does not enable SubjectKind.{subject_kind}"),
@@ -2831,6 +2832,21 @@ impl TypeChecker {
             ));
             return;
         }
+        let Some(entry_method_identity) = self
+            .type_info
+            .resolved_identity(static_decl.value.span)
+            .filter(|identity| {
+                identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method
+                    && identity.declaration_name == "entry"
+            })
+            .cloned()
+        else {
+            self.errors.push(CompileError::type_error(
+                "registry.entry must resolve to the source-owned Registry.entry declaration".to_string(),
+                static_decl.value.span,
+            ));
+            return;
+        };
         self.type_info
             .registry
             .explicit_entries
@@ -2839,6 +2855,9 @@ impl TypeChecker {
                 key: key_value,
                 descriptor: descriptor_value,
                 subject_kind,
+                entry_method_identity,
+                subject_constructor_identity,
+                checked_constructor_identity,
                 entry_name: static_decl.name.clone(),
                 declaration_span: (span.start, span.end),
                 key_span: (key.span.start, key.span.end),
@@ -2847,8 +2866,15 @@ impl TypeChecker {
             });
     }
 
-    /// Resolve the bounded explicit registry subject surface without evaluating a source expression.
-    fn registry_explicit_subject_kind(&self, subject: &Spanned<Expr>) -> Result<SemanticRegistrySubjectKind, String> {
+    /// Resolve the bounded explicit registry subject and the exact source artifacts that lowering may substitute.
+    ///
+    /// The public placeholder and compiler-reserved materializer are both ordinary Incan methods, so this frontend
+    /// boundary retains their canonical identities instead of asking lowering to reconstruct either artifact from a
+    /// method spelling. The expression has already been typechecked before this validator runs.
+    fn registry_explicit_subject(
+        &self,
+        subject: &Spanned<Expr>,
+    ) -> Result<(SemanticRegistrySubjectKind, CanonicalSymbolId, CanonicalSymbolId), String> {
         let Expr::MethodCall(receiver, method, _, arguments) = &subject.node else {
             return Err(
                 "registry.entry subject must be RegistrySubject.current_unit() or RegistrySubject.package()"
@@ -2861,14 +2887,35 @@ impl TypeChecker {
                     .to_string(),
             );
         }
-        match method.as_str() {
-            "current_unit" => Ok(SemanticRegistrySubjectKind::CompilationUnit),
-            "package" => Ok(SemanticRegistrySubjectKind::Package),
+        let (subject_kind, checked_constructor_name) = match method.as_str() {
+            "current_unit" => (SemanticRegistrySubjectKind::CompilationUnit, "_checked_current_unit"),
+            "package" => (SemanticRegistrySubjectKind::Package, "_checked_package"),
             _ => Err(
                 "registry.entry subject must be RegistrySubject.current_unit() or RegistrySubject.package()"
                     .to_string(),
-            ),
-        }
+            )?,
+        };
+        let subject_constructor_identity = self
+            .type_info
+            .resolved_identity(subject.span)
+            .filter(|identity| {
+                identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method
+                    && identity.declaration_name == *method
+            })
+            .cloned()
+            .ok_or_else(|| {
+                "registry.entry subject must resolve to the compiler-owned RegistrySubject constructor".to_string()
+            })?;
+        let checked_constructor_identity = self
+            .method_info_for_owner("RegistrySubject", checked_constructor_name)
+            .and_then(|method| method.identity.clone())
+            .filter(|identity| identity.kind == incan_semantics_core::SemanticSourceTargetKind::Method)
+            .ok_or_else(|| {
+                format!(
+                    "registry.entry cannot resolve compiler-owned RegistrySubject.{checked_constructor_name} materializer"
+                )
+            })?;
+        Ok((subject_kind, subject_constructor_identity, checked_constructor_identity))
     }
 
     /// Return whether a checked description or explicit entry already owns `key` in `registry_name`.

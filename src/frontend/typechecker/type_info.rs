@@ -657,6 +657,13 @@ pub struct TraitArtifacts {
     /// Includes locally-declared and imported traits so backend lowering can handle cross-module trait hierarchies
     /// without relying on local AST declarations.
     pub type_params: HashMap<String, Vec<String>>,
+    /// Exact source identities of visible trait methods, keyed by trait identity and method spelling.
+    ///
+    /// A source-visible trait uses its local binding as the trait key. A dependency-only trait uses its
+    /// module-qualified source name. Imported default-method ASTs retain declaration spans from another source file,
+    /// so lowering cannot look them up in the current module's span-keyed declaration table. This checked map carries
+    /// the already-resolved identity across that boundary without reconstructing it from either spelling.
+    pub method_identities: HashMap<(String, String), CanonicalSymbolId>,
 }
 
 /// Derive expansion metadata imported from dependency modules and manifests.
@@ -1074,6 +1081,12 @@ pub struct RegistryExplicitEntryInfo {
     pub key: SemanticRegistryValue,
     pub descriptor: SemanticRegistryValue,
     pub subject_kind: SemanticRegistrySubjectKind,
+    /// Exact source method approved for the declaration-only registry entry call.
+    pub entry_method_identity: CanonicalSymbolId,
+    /// Exact source constructor approved for the explicit subject expression.
+    pub subject_constructor_identity: CanonicalSymbolId,
+    /// Exact source-owned materializer selected by the frontend for backend substitution.
+    pub checked_constructor_identity: CanonicalSymbolId,
     pub entry_name: String,
     pub declaration_span: (usize, usize),
     pub key_span: (usize, usize),
@@ -1145,6 +1158,8 @@ pub struct NewtypeConstructionInfo {
     pub underlying: ResolvedType,
     /// Canonical checked constructor selected by the typechecker, when present.
     pub checked_constructor: Option<String>,
+    /// Exact declaration identity of `checked_constructor`, when source provenance is available.
+    pub checked_constructor_identity: Option<CanonicalSymbolId>,
     /// Compiler-generated constrained-primitive predicates used when no checked constructor exists.
     pub constraints: Vec<NewtypePrimitiveConstraint>,
     /// Whether ordinary implicit construction from the underlying value is allowed.
@@ -1250,6 +1265,11 @@ pub struct CallArtifacts {
     pub resolved_method_calls: HashMap<(usize, usize), ResolvedMethodCall>,
     /// Top-level overload callee emitted names selected by the typechecker, keyed by full call expression span.
     pub selected_function_emitted_names: HashMap<(usize, usize), String>,
+    /// Compiler-generated member identities observed at checked call sites.
+    ///
+    /// These helpers retain owner-discriminated semantic identities for tooling, but they are not source declarations
+    /// and therefore must not receive an RFC 120 recoverable source-symbol projection during lowering.
+    pub compiler_generated_member_identities: HashSet<CanonicalSymbolId>,
     /// Collection constructors selected from the canonical collection vocabulary.
     ///
     /// Lowering consumes this decision instead of interpreting a source spelling such as `set(...)` as an ordinary
@@ -1509,6 +1529,11 @@ pub struct ValidatedNewtypeCoercionStep {
     pub newtype_name: String,
     /// Canonical validation hook to call. `None` means direct newtype wrapping is sufficient.
     pub ctor: Option<String>,
+    /// Exact source declaration selected for `ctor`, when the hook has compiler-owned identity metadata.
+    ///
+    /// Lowering uses this to select the RFC 120 physical projection without reconstructing declaration provenance
+    /// from the conventional `from_underlying` spelling.
+    pub ctor_identity: Option<CanonicalSymbolId>,
     /// Generated constrained-primitive predicates to enforce before direct wrapping.
     pub constraints: Vec<NewtypePrimitiveConstraint>,
 }
@@ -2033,6 +2058,16 @@ impl TypeCheckInfo {
             .selected_function_emitted_names
             .get(&(span.start, span.end))
             .map(String::as_str)
+    }
+
+    /// Return whether `identity` names a compiler-generated member rather than a source declaration.
+    pub fn is_compiler_generated_member_identity(&self, identity: &CanonicalSymbolId) -> bool {
+        self.calls.compiler_generated_member_identities.contains(identity)
+    }
+
+    /// Preserve that a checked member identity belongs to compiler-generated surface.
+    pub(crate) fn record_compiler_generated_member_identity(&mut self, identity: CanonicalSymbolId) {
+        self.calls.compiler_generated_member_identities.insert(identity);
     }
 
     /// Return the canonical collection constructor selected for one source call.

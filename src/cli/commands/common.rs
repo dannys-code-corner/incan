@@ -4771,6 +4771,26 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
     module_index: usize,
     module_idx_by_key: &HashMap<String, usize>,
 ) -> Vec<(&'m str, &'m Program)> {
+    imported_module_deps_for_with_index_and_plan(modules, module_index, module_idx_by_key, None)
+}
+
+/// Resolve imported source dependencies with the SDK producer's bootstrap namespace bridge enabled.
+pub(crate) fn imported_module_deps_for_with_provider_plan<'m>(
+    modules: &'m [ParsedModule],
+    module_index: usize,
+    module_idx_by_key: &HashMap<String, usize>,
+    provider_plan: &ProviderPlan,
+) -> Vec<(&'m str, &'m Program)> {
+    imported_module_deps_for_with_index_and_plan(modules, module_index, module_idx_by_key, Some(provider_plan))
+}
+
+/// Shared source-dependency closure with an optional provider-build namespace bridge.
+fn imported_module_deps_for_with_index_and_plan<'m>(
+    modules: &'m [ParsedModule],
+    module_index: usize,
+    module_idx_by_key: &HashMap<String, usize>,
+    provider_plan: Option<&ProviderPlan>,
+) -> Vec<(&'m str, &'m Program)> {
     // ---- Context: bounds and setup ----
     if module_index >= modules.len() {
         return Vec::new();
@@ -4782,12 +4802,14 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
         modules: &[ParsedModule],
         module_index: usize,
         module_idx_by_key: &HashMap<String, usize>,
+        provider_plan: Option<&ProviderPlan>,
     ) -> BTreeSet<usize> {
         /// Resolve one import path to the exact collected source module, including a safe nested-entry fallback.
         fn resolve_local_dep_index(
             current_module_path: &[String],
             path: &ImportPath,
             module_idx_by_key: &HashMap<String, usize>,
+            provider_plan: Option<&ProviderPlan>,
         ) -> Option<usize> {
             let exact = logical_source_import_candidates(current_module_path, path)
                 .into_iter()
@@ -4795,8 +4817,24 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
                     let key = canonicalize_source_module_segments(&candidate).join("_");
                     module_idx_by_key.get(&key).copied()
                 });
-            if exact.is_some() || path.is_absolute || path.parent_levels > 0 {
+            if exact.is_some() {
                 return exact;
+            }
+
+            // An SDK producer writes its public spelling (`std.registry`) while compiling the physical provider
+            // source module (`registry`). Only its explicit bootstrap grant authorizes this source-graph edge.
+            if path.parent_levels == 0
+                && !path.is_absolute
+                && provider_plan.is_some_and(|plan| plan.bootstrap_owns_sdk_module(&path.segments))
+                && path.segments.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT)
+            {
+                let physical_key = canonicalize_source_module_segments(&path.segments[1..]).join("_");
+                if let Some(index) = module_idx_by_key.get(&physical_key).copied() {
+                    return Some(index);
+                }
+            }
+            if path.is_absolute || path.parent_levels > 0 {
+                return None;
             }
 
             // CLI entrypoints retain the synthetic logical name `main` even when their file lives in a nested source
@@ -4826,9 +4864,12 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
             };
             match &import.kind {
                 ImportKind::From { module, .. } => {
-                    if let Some(dep_idx) =
-                        resolve_local_dep_index(&modules[module_index].path_segments, module, module_idx_by_key)
-                        && dep_idx != module_index
+                    if let Some(dep_idx) = resolve_local_dep_index(
+                        &modules[module_index].path_segments,
+                        module,
+                        module_idx_by_key,
+                        provider_plan,
+                    ) && dep_idx != module_index
                     {
                         dep_indexes.insert(dep_idx);
                     }
@@ -4838,11 +4879,17 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
                         &modules[module_index].path_segments,
                         path,
                         module_idx_by_key,
+                        provider_plan,
                     )
                     .or_else(|| {
                         let mut parent_path = path.clone();
                         parent_path.segments.pop();
-                        resolve_local_dep_index(&modules[module_index].path_segments, &parent_path, module_idx_by_key)
+                        resolve_local_dep_index(
+                            &modules[module_index].path_segments,
+                            &parent_path,
+                            module_idx_by_key,
+                            provider_plan,
+                        )
                     });
                     if let Some(dep_idx) = dep_idx
                         && dep_idx != module_index
@@ -4857,14 +4904,19 @@ pub(crate) fn imported_module_deps_for_with_index<'m>(
     }
 
     let mut dep_indexes: BTreeSet<usize> = BTreeSet::new();
-    let mut pending: Vec<usize> = direct_local_dep_indexes(modules, module_index, module_idx_by_key)
+    let mut pending: Vec<usize> = direct_local_dep_indexes(modules, module_index, module_idx_by_key, provider_plan)
         .into_iter()
         .collect();
     while let Some(dep_idx) = pending.pop() {
         if dep_idx == module_index || !dep_indexes.insert(dep_idx) {
             continue;
         }
-        pending.extend(direct_local_dep_indexes(modules, dep_idx, module_idx_by_key));
+        pending.extend(direct_local_dep_indexes(
+            modules,
+            dep_idx,
+            module_idx_by_key,
+            provider_plan,
+        ));
     }
 
     // ---- Context: materialize dependency pairs for typechecker.check_with_imports ----
@@ -4962,7 +5014,8 @@ fn typecheck_modules_with_import_graph_artifacts(
     let mut stdlib_cache = StdlibAstCache::new();
 
     for (idx, module) in modules.iter().enumerate() {
-        let deps_for_module = imported_module_deps_for_with_index(modules, idx, &module_idx_by_key);
+        let deps_for_module =
+            imported_module_deps_for_with_provider_plan(modules, idx, &module_idx_by_key, provider_plan);
 
         // Parser warnings were already rendered at parse time; collect them here so both warning classes reach
         // machine-readable reports from one deterministic sweep.
@@ -6510,6 +6563,47 @@ pub def probe() -> SubstraitPlan:
                 .into());
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn provider_bootstrap_std_import_adds_the_physical_source_dependency() -> Result<(), Box<dyn std::error::Error>> {
+        let make_module = |name: &str, source: &str| -> Result<ParsedModule, Box<dyn std::error::Error>> {
+            let tokens = lexer::lex(source).map_err(|errors| format!("{name} lex failed: {errors:?}"))?;
+            let ast = parser::parse(&tokens).map_err(|errors| format!("{name} parse failed: {errors:?}"))?;
+            Ok(ParsedModule {
+                name: name.to_string(),
+                path_segments: vec![name.to_string()],
+                file_path: PathBuf::from(format!("{name}.incn")),
+                source: source.to_string(),
+                ast,
+            })
+        };
+        let modules = vec![
+            make_module("registry", "pub model Registry:\n    label: str\n")?,
+            make_module(
+                "features",
+                "from std.registry import Registry\n\npub def label(value: Registry) -> str:\n    return value.label\n",
+            )?,
+        ];
+        let module_idx_by_key = module_key_index(&modules);
+        let features_index = modules
+            .iter()
+            .position(|module| module.path_segments == ["features".to_string()])
+            .ok_or("expected features module")?;
+        assert!(
+            imported_module_deps_for_with_index(&modules, features_index, &module_idx_by_key).is_empty(),
+            "an ordinary consumer must not reinterpret std.registry as a local source import"
+        );
+
+        let provider_plan = ProviderPlan::default().with_bootstrap_sdk_namespace_roots(["registry".to_string()]);
+        let dependencies =
+            imported_module_deps_for_with_provider_plan(&modules, features_index, &module_idx_by_key, &provider_plan);
+        assert_eq!(
+            dependencies.iter().map(|(name, _)| *name).collect::<Vec<_>>(),
+            vec!["registry"],
+            "the bootstrap grant must add the exact physical provider source edge"
+        );
         Ok(())
     }
 

@@ -17,7 +17,7 @@ use crate::frontend::library_exports::{
     CheckedParamDefault, CheckedParamDefaultArg, CheckedParamDefaultCallSignature, CheckedPresetValue,
 };
 use crate::frontend::library_manifest_index::{LibraryManifestFailureKind, LibraryManifestIndexEntry};
-use crate::frontend::module::{ExportedSymbol, canonicalize_source_module_segments, logical_source_import_candidates};
+use crate::frontend::module::{ExportedSymbol, canonicalize_source_module_segments};
 use crate::frontend::symbols::*;
 use crate::frontend::testing_markers::{
     TestingMarkerLoadError, TestingMarkerSemantics, load_testing_marker_semantics,
@@ -285,11 +285,28 @@ impl TypeChecker {
     /// evidence.
     fn resolved_source_module_path(&self, path: &ImportPath) -> Option<Vec<String>> {
         let normalized = canonicalize_source_module_segments(&path.segments);
+        let base = self.current_module_path.as_deref().unwrap_or_default();
+        if self.provider_plan.bootstrap_owns_sdk_module(&normalized)
+            && let Some(candidate) = self.dependency_source_import_candidates(base, path).into_iter().next()
+            && candidate.first().map(String::as_str) != Some(stdlib::STDLIB_ROOT)
+        {
+            let key = candidate.join("_");
+            if self.dependency_exports.contains_key(&key)
+                || self.dependency_member_symbols.contains_key(&key)
+                || self.dependency_module_path_segments.contains_key(&key)
+            {
+                return Some(
+                    self.dependency_module_path_segments
+                        .get(&key)
+                        .cloned()
+                        .unwrap_or(candidate),
+                );
+            }
+        }
         if stdlib::is_any_stdlib_path(&normalized) && self.is_known_stdlib_module(&normalized) {
             return Some(normalized);
         }
-        let base = self.current_module_path.as_deref().unwrap_or_default();
-        for candidate in logical_source_import_candidates(base, path) {
+        for candidate in self.dependency_source_import_candidates(base, path) {
             let key = candidate.join("_");
             if self.dependency_exports.contains_key(&key)
                 || self.dependency_member_symbols.contains_key(&key)
@@ -329,6 +346,9 @@ impl TypeChecker {
         self.cache_stdlib_stub_semantics(&context);
 
         for item in items {
+            if self.materialize_bootstrap_source_dependency_import(module, item, span) {
+                continue;
+            }
             if self.materialize_stdlib_from_import(&context, item, testing_semantics.as_ref(), span) {
                 continue;
             }
@@ -357,7 +377,42 @@ impl TypeChecker {
             return false;
         };
         let projection = self.imported_source_dependency_partial_projection(module, item);
-        self.define_resolved_source_import_symbol(module, item, kind, projection, span);
+        self.define_resolved_source_import_symbol(module, module, item, kind, projection, span);
+        true
+    }
+
+    /// Prefer the exact local source declaration while compiling an SDK component's granted namespace.
+    ///
+    /// Provider source keeps physical paths such as `registry`, while its public language surface is spelled
+    /// `std.registry`. The bootstrap grant is the compiler-owned evidence that the current component may bridge those
+    /// two paths. Resolve the physical path from the provider source root and require that the checked dependency
+    /// graph actually contains the requested member; ordinary SDK consumers never take this path.
+    fn materialize_bootstrap_source_dependency_import(
+        &mut self,
+        module: &ImportPath,
+        item: &ImportItem,
+        span: Span,
+    ) -> bool {
+        if module.parent_levels != 0 || !self.provider_plan.bootstrap_owns_sdk_module(&module.segments) {
+            return false;
+        }
+        let Some(source_segments) = module
+            .segments
+            .first()
+            .is_some_and(|segment| segment == stdlib::STDLIB_ROOT)
+            .then_some(&module.segments[1..])
+        else {
+            return false;
+        };
+        if source_segments.is_empty() {
+            return false;
+        }
+        let source_module = ImportPath::absolute(source_segments.to_vec());
+        let Some(kind) = self.imported_source_dependency_symbol_kind(&source_module, item) else {
+            return false;
+        };
+        let projection = self.imported_source_dependency_partial_projection(&source_module, item);
+        self.define_resolved_source_import_symbol(module, &source_module, item, kind, projection, span);
         true
     }
 
@@ -406,6 +461,18 @@ impl TypeChecker {
         if !context.stdlib.as_ref().is_some_and(|stdlib| stdlib.has_stub) {
             return;
         }
+        if context.module.parent_levels == 0
+            && self.provider_plan.bootstrap_owns_sdk_module(&context.module.segments)
+            && context.module.segments.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT)
+        {
+            let physical_path = canonicalize_source_module_segments(&context.module.segments[1..]);
+            let has_exact_source_module = self.dependency_module_path_segments.iter().any(|(cache_key, path)| {
+                path == &physical_path && self.dependency_member_symbols.contains_key(cache_key)
+            });
+            if has_exact_source_module {
+                return;
+            }
+        }
 
         for (type_name, type_info) in self.stdlib_cache.list_types(&context.module.segments) {
             self.transitive_stdlib_stub_types.entry(type_name).or_insert(type_info);
@@ -428,13 +495,16 @@ impl TypeChecker {
             .active_sdk_records()
             .filter_map(|provider| {
                 let manifest = provider.manifest.clone()?;
-                let api = manifest.contract_metadata.api.clone()?;
-                Some((provider.namespace_claims.clone(), api))
+                manifest.contract_metadata.api.as_ref()?;
+                Some((provider.namespace_claims.clone(), manifest))
             })
             .collect::<Vec<_>>();
         let mut seeded_modules = HashSet::new();
         let mut aliases = Vec::new();
-        for (namespace_claims, api) in providers {
+        for (namespace_claims, manifest) in providers {
+            let Some(api) = manifest.contract_metadata.api.clone() else {
+                continue;
+            };
             for module in api.modules {
                 let mut consumer_path = vec![stdlib::STDLIB_ROOT.to_string()];
                 consumer_path.extend(module.module_path.clone());
@@ -459,40 +529,95 @@ impl TypeChecker {
                         *counts.entry(name).or_default() += 1;
                         counts
                     });
+                let mut function_identity_offsets = HashMap::<String, usize>::new();
                 let mut provider_members = Vec::new();
                 for declaration in module.declarations {
+                    let name = Self::api_declaration_name(&declaration).to_string();
+                    let public_path = std::iter::once(manifest.name.clone())
+                        .chain(module.module_path.iter().cloned())
+                        .chain(std::iter::once(name.clone()))
+                        .collect::<Vec<_>>();
+                    let canonical = if matches!(&declaration, ApiDeclaration::Function(_)) {
+                        let offset = function_identity_offsets.entry(name.clone()).or_default();
+                        let identity = manifest
+                            .contract_metadata
+                            .identity_graph
+                            .function_identities_for_public_path(&public_path)
+                            .get(*offset)
+                            .cloned()
+                            .flatten();
+                        *offset += 1;
+                        identity
+                    } else {
+                        manifest
+                            .contract_metadata
+                            .identity_graph
+                            .canonical_for_public_path(&public_path)
+                    };
                     if let ApiDeclaration::Alias(alias) = &declaration {
-                        aliases.push((module_key.clone(), alias.name.clone(), alias.target_path.clone()));
+                        aliases.push((
+                            module_key.clone(),
+                            alias.name.clone(),
+                            alias.target_path.clone(),
+                            canonical,
+                        ));
                         continue;
                     }
-                    let name = Self::api_declaration_name(&declaration).to_string();
                     let Some(mut kind) = self.symbol_kind_from_api_declaration(&declaration) else {
                         continue;
                     };
                     Self::qualify_provider_symbol_bounds(&mut kind, &[stdlib::STDLIB_ROOT.to_string()]);
-                    if function_counts.get(name.as_str()).copied().unwrap_or_default() > 1
-                        && let SymbolKind::Function(info) = &mut kind
-                    {
-                        info.emitted_name = Some(overloaded_function_emitted_name(&name, info));
+                    if function_counts.get(name.as_str()).copied().unwrap_or_default() > 1 {
+                        kind = match kind {
+                            SymbolKind::Function(mut info) => {
+                                info.emitted_name = Some(overloaded_function_emitted_name(&name, &info));
+                                SymbolKind::FunctionOverloads(vec![FunctionOverloadInfo {
+                                    info,
+                                    span: Span::default(),
+                                    identity: canonical.clone(),
+                                }])
+                            }
+                            other => other,
+                        };
                     }
-                    provider_members.push((name.clone(), kind.clone()));
-                    match kind {
+                    provider_members.push((name.clone(), kind.clone(), canonical));
+                    match &kind {
                         SymbolKind::Type(type_info) => {
-                            self.transitive_stdlib_stub_types.entry(name).or_insert(type_info);
+                            self.transitive_stdlib_stub_types
+                                .entry(name)
+                                .or_insert_with(|| type_info.clone());
                         }
                         SymbolKind::Trait(trait_info) => {
                             self.transitive_stdlib_stub_traits
                                 .entry(name.clone())
                                 .or_insert(trait_info.clone());
                             self.dependency_module_traits
-                                .insert(format!("{module_key}.{name}"), trait_info);
+                                .insert(format!("{module_key}.{name}"), trait_info.clone());
                         }
                         _ => {}
                     }
                 }
-                let members = self.dependency_member_symbols.entry(module_key).or_default();
-                for (name, kind) in provider_members {
-                    Self::insert_provider_module_symbol(members, name, kind);
+                for (name, kind, canonical) in provider_members {
+                    Self::insert_provider_module_symbol(
+                        self.dependency_member_symbols.entry(module_key.clone()).or_default(),
+                        name.clone(),
+                        kind.clone(),
+                    );
+                    Self::insert_provider_module_symbol(
+                        self.dependency_direct_member_symbols
+                            .entry(module_key.clone())
+                            .or_default(),
+                        name.clone(),
+                        kind,
+                    );
+                    if let Some(identity) = canonical
+                        && function_counts.get(name.as_str()).copied().unwrap_or_default() <= 1
+                    {
+                        self.dependency_direct_member_identities
+                            .entry(module_key.clone())
+                            .or_default()
+                            .insert(name, identity);
+                    }
                 }
             }
         }
@@ -502,7 +627,7 @@ impl TypeChecker {
         let mut unresolved = aliases;
         while !unresolved.is_empty() {
             let mut progressed = false;
-            unresolved.retain(|(module_key, name, target_path)| {
+            unresolved.retain(|(module_key, name, target_path, canonical)| {
                 let Some((target_module, target_name)) = Self::sdk_provider_alias_target(target_path) else {
                     return false;
                 };
@@ -531,7 +656,20 @@ impl TypeChecker {
                     _ => {}
                 }
                 let members = self.dependency_member_symbols.entry(module_key.clone()).or_default();
-                Self::insert_provider_module_symbol(members, name.clone(), kind);
+                Self::insert_provider_module_symbol(members, name.clone(), kind.clone());
+                Self::insert_provider_module_symbol(
+                    self.dependency_direct_member_symbols
+                        .entry(module_key.clone())
+                        .or_default(),
+                    name.clone(),
+                    kind,
+                );
+                if let Some(identity) = canonical.clone() {
+                    self.dependency_direct_member_identities
+                        .entry(module_key.clone())
+                        .or_default()
+                        .insert(name.clone(), identity);
+                }
                 progressed = true;
                 false
             });
@@ -611,6 +749,10 @@ impl TypeChecker {
                     },
                 );
                 SymbolKind::FunctionOverloads(overloads)
+            }
+            (SymbolKind::FunctionOverloads(mut existing), SymbolKind::FunctionOverloads(incoming)) => {
+                existing.extend(incoming);
+                SymbolKind::FunctionOverloads(existing)
             }
             (_, incoming) => incoming,
         };
@@ -831,6 +973,7 @@ impl TypeChecker {
         if !self.symbols.is_active_lookup_binding(symbol_id) {
             return true;
         }
+        self.record_resolved_import_owner(context.module, item, &local_name);
         self.record_testing_marker_import(context, item, &local_name, testing_semantics);
         self.record_imported_function_binding(&local_name, &kind);
         if matches!(kind, SymbolKind::Static(_)) {
@@ -1098,8 +1241,8 @@ impl TypeChecker {
                     kind: target_kind.to_string(),
                 },
             );
-            self.record_resolved_import_owner(module, item, local_name);
         }
+        self.record_resolved_import_owner(module, item, local_name);
     }
 
     /// Define a fallback module placeholder for one `from module import item` binding.
@@ -1142,7 +1285,8 @@ impl TypeChecker {
     /// Define a source-imported dependency symbol under its local import name.
     fn define_resolved_source_import_symbol(
         &mut self,
-        module: &ImportPath,
+        written_module: &ImportPath,
+        resolved_module: &ImportPath,
         item: &ImportItem,
         mut kind: SymbolKind,
         projection: Option<PartialProjectionInfo>,
@@ -1153,8 +1297,8 @@ impl TypeChecker {
             info.is_imported = true;
         }
         self.validate_root_namespace(&local_name, span);
-        let target_identity = self.dependency_member_identity(module, &item.name);
-        let mut binding_path = canonicalize_source_module_segments(&module.segments);
+        let target_identity = self.dependency_member_identity(resolved_module, &item.name);
+        let mut binding_path = canonicalize_source_module_segments(&written_module.segments);
         binding_path.push(item.name.clone());
         let symbol_id = self.symbols.define_import_binding_at_path(
             Symbol {
@@ -1170,8 +1314,15 @@ impl TypeChecker {
             return;
         }
 
+        if let Some(identity) = target_identity {
+            self.type_info
+                .declarations
+                .resolved_import_identities
+                .insert(local_name.clone(), identity);
+        }
+
         if matches!(kind, SymbolKind::Type(TypeInfo::TypeAlias))
-            && let Some(target) = self.dependency_member_type_alias_for_path(module, &item.name)
+            && let Some(target) = self.dependency_member_type_alias_for_path(resolved_module, &item.name)
         {
             self.record_dependency_import_type_alias_before_change(&local_name);
             self.type_aliases.insert(local_name.clone(), target);
@@ -1180,17 +1331,11 @@ impl TypeChecker {
             self.source_import_targets.insert(
                 local_name.clone(),
                 crate::frontend::typechecker::SourceTargetInfo {
-                    module_path: canonicalize_source_module_segments(&module.segments),
+                    module_path: canonicalize_source_module_segments(&written_module.segments),
                     name: item.name.clone(),
                     kind: target_kind.to_string(),
                 },
             );
-            if let Some(identity) = target_identity {
-                self.type_info
-                    .declarations
-                    .resolved_import_identities
-                    .insert(local_name.clone(), identity);
-            }
         }
         self.record_imported_function_binding(&local_name, &kind);
         if matches!(kind, SymbolKind::Static(_)) {
@@ -1199,7 +1344,7 @@ impl TypeChecker {
                 crate::frontend::typechecker::StaticBindingInfo { is_imported: true },
             );
             if let Some((definition, owner_module_path)) =
-                self.dependency_registry_definition_for_path(module, &item.name)
+                self.dependency_registry_definition_for_path(resolved_module, &item.name)
             {
                 self.type_info.registry.imported_definitions.insert(
                     local_name.clone(),

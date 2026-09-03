@@ -1273,6 +1273,17 @@ impl TypeChecker {
         Some(Self::synthetic_member_identity(owner, member, kind))
     }
 
+    /// Record one compiler-generated member without classifying its generated Rust helper as a source declaration.
+    fn record_compiler_generated_member_identity(&mut self, owner_name: &str, member: &str, span: Span) {
+        let Some(identity) =
+            self.synthetic_member_identity_for_named_owner(owner_name, member, SemanticSourceTargetKind::Method)
+        else {
+            return;
+        };
+        self.type_info.record_resolved_identity(span, identity.clone());
+        self.type_info.record_compiler_generated_member_identity(identity);
+    }
+
     /// Resolve a builtin method through its receiver and method registries, preserving owner discrimination.
     fn compiler_builtin_method_identity(base_ty: &ResolvedType, method: &str) -> Option<CanonicalSymbolId> {
         let (owner, member) = match base_ty {
@@ -2389,7 +2400,7 @@ impl TypeChecker {
                     } else {
                         &effective_sig.params
                     };
-                    self.record_rust_call_site_params(span, params, callable_display.as_str(), true);
+                    self.record_rust_call_site_params(span, params, callable_display.as_str());
                 }
                 Some(Self::substitute_rust_self_type(ret, rust_path))
             }
@@ -4303,6 +4314,12 @@ impl TypeChecker {
             && name == "Registry"
             && method == "entry"
         {
+            if let Some(identity) = self
+                .method_info_for_owner(name, method)
+                .and_then(|method_info| method_info.identity.clone())
+            {
+                self.type_info.record_resolved_identity(span, identity);
+            }
             self.check_call_args(args);
             if !self.checking_registry_entry_static_initializer {
                 self.errors.push(CompileError::type_error(
@@ -4579,13 +4596,8 @@ impl TypeChecker {
                 ResolvedType::Named(name) | ResolvedType::Generic(name, _) => Some(name.as_str()),
                 _ => None,
             } && let Some(id) = magic_methods::from_str(method)
-                && let Some(identity) = self.synthetic_member_identity_for_named_owner(
-                    owner_name,
-                    magic_methods::as_str(id),
-                    SemanticSourceTargetKind::Method,
-                )
             {
-                self.type_info.record_resolved_identity(span, identity);
+                self.record_compiler_generated_member_identity(owner_name, magic_methods::as_str(id), span);
             }
             self.validate_reflection_magic_call(method, type_args, args, span);
             return ret;
@@ -4606,11 +4618,7 @@ impl TypeChecker {
                 span,
             })
         {
-            if let Some(identity) =
-                self.synthetic_member_identity_for_named_owner(enum_name, method, SemanticSourceTargetKind::Method)
-            {
-                self.type_info.record_resolved_identity(span, identity);
-            }
+            self.record_compiler_generated_member_identity(enum_name, method, span);
             return ret;
         }
 
@@ -5154,13 +5162,7 @@ impl TypeChecker {
                     }
                     TypeInfo::Enum(en) => {
                         if let Some(id @ enum_helpers::EnumHelperId::Message) = enum_helpers::from_str(method) {
-                            if let Some(identity) = self.synthetic_member_identity_for_named_owner(
-                                type_name,
-                                enum_helpers::as_str(id),
-                                SemanticSourceTargetKind::Method,
-                            ) {
-                                self.type_info.record_resolved_identity(span, identity);
-                            }
+                            self.record_compiler_generated_member_identity(type_name, enum_helpers::as_str(id), span);
                             return ResolvedType::Str;
                         }
                         let trait_adoptions = self.trait_adoptions_for_type_methods(&en.trait_adoptions, &en.derives);
@@ -5264,14 +5266,12 @@ impl TypeChecker {
                 return ret;
             }
             if let Some(ret) = self.generic_reflection_magic_method_return_type(method) {
-                if let Some(id) = magic_methods::from_str(method)
-                    && let Some(identity) = self.synthetic_member_identity_for_named_owner(
+                if let Some(id) = magic_methods::from_str(method) {
+                    self.record_compiler_generated_member_identity(
                         self.generic_placeholder_name(&base_ty).unwrap_or_default(),
                         magic_methods::as_str(id),
-                        SemanticSourceTargetKind::Method,
-                    )
-                {
-                    self.type_info.record_resolved_identity(span, identity);
+                        span,
+                    );
                 }
                 self.validate_reflection_magic_call(method, type_args, args, span);
                 return ret;

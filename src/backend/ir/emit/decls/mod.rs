@@ -619,7 +619,8 @@ impl<'a> IrEmitter<'a> {
                         .next()
                         .is_some_and(|ch| ch.is_ascii_uppercase());
                     if is_incan_source_stdlib && binding.starts_with('_') && !private_type_like_binding {
-                        return self.should_emit_extension_trait_import(&binding);
+                        return self.should_emit_import_binding(&binding)
+                            || self.should_emit_extension_trait_import(&binding);
                     }
                     should_reexport_item(item)
                         || self.should_emit_import_binding(&binding)

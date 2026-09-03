@@ -482,9 +482,10 @@ impl<'a> IrEmitter<'a> {
     pub(in crate::backend::ir::emit) fn emit_borrowed_function_adapter(
         &self,
         func: &super::super::super::decl::IrFunction,
+        adapter_target_name: &str,
         indices: &[usize],
     ) -> Result<Option<TokenStream>, EmitError> {
-        if !self.needs_borrowed_function_adapter(&func.name, indices) {
+        if !self.needs_borrowed_function_adapter(adapter_target_name, indices) {
             return Ok(None);
         }
         if indices.iter().all(|index| {
@@ -495,7 +496,7 @@ impl<'a> IrEmitter<'a> {
         }) {
             return Ok(None);
         }
-        let helper_name = Self::borrowed_function_adapter_name(&func.name, indices);
+        let helper_name = Self::borrowed_function_adapter_name(adapter_target_name, indices);
         let Some(helper) = Self::borrowed_function_clone(func, helper_name, indices) else {
             return Ok(None);
         };
@@ -798,7 +799,12 @@ impl<'a> IrEmitter<'a> {
         let name = self.rust_function_ident(&func.name);
         // The wrapper is Incan-origin and therefore projected. Its delegated symbol remains host-owned Rust and must
         // use the compiler-carried source spelling rather than inheriting or decoding the Incan projection.
-        let backing_name = Self::rust_ident(self.function_registry.source_name(&func.name).unwrap_or(&func.name));
+        let backing_name = Self::rust_ident(
+            func.rust_extern_name
+                .as_deref()
+                .or_else(|| self.function_registry.source_name(&func.name))
+                .unwrap_or(&func.name),
+        );
         let vis = self.emit_visibility(&func.visibility);
         let exact_ingress_params =
             Self::exact_float_ingress_param_names(func, matches!(func.visibility, Visibility::Public));
@@ -1051,6 +1057,7 @@ impl<'a> IrEmitter<'a> {
         };
 
         let name = Self::rust_ident(&func.name);
+        let backing_name = Self::rust_ident(func.rust_extern_name.as_deref().unwrap_or(&func.name));
         let vis = self.emit_visibility(&func.visibility);
         let mutated_params = self.collect_mutated_params(func);
         let exact_ingress_params =
@@ -1098,7 +1105,7 @@ impl<'a> IrEmitter<'a> {
                 quote! { #ident }
             })
             .collect();
-        call_path_tokens.push(quote! { #name });
+        call_path_tokens.push(quote! { #backing_name });
         let call_path = join_path_tokens(&call_path_tokens);
 
         // Forward all params, including `self`.
@@ -1936,6 +1943,7 @@ mod tests {
             visibility: Visibility::Private,
             type_params: Vec::new(),
             is_extern: false,
+            rust_extern_name: None,
             rust_attributes: Vec::new(),
             lint_allows: Vec::new(),
         };

@@ -1,6 +1,6 @@
 # RFC 120: canonical source symbol identity
 
-- **Status:** In Progress
+- **Status:** Implemented
 - **Created:** 2026-08-19
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -19,7 +19,7 @@
 - **Issue:** [#1042](https://github.com/encero-systems/incan/issues/1042)
 - **RFC PR:** —
 - **Written against:** v0.5
-- **Shipped in:** —
+- **Shipped in:** v0.6
 
 ## Summary
 
@@ -134,7 +134,7 @@ Emission has two deliberately separate contracts:
 
 The initial projection format is an Incan-owned `incan-v1` payload, encoded with a Rust-identifier-safe reversible alphabet and carried in the emitted item's unmangled identifier. It contains the complete canonical identity payload — namespace, origin, declaration name, kind, scope discriminant, and declaration span — plus a format version. A decoded payload is therefore the identity for the artifact that carries it, rather than a lookup key that needs a source map or another companion artifact. The payload identifies the source declaration; generic specialization remains in Rust v0's type suffix and is not duplicated inside `incan-v1`.
 
-The implementation separates carrier conformance from compiler-emitter conformance. [DD-0002](../design_records/0002_single_pinned_rust_version.md) selects Rust 1.98.0 and records the artifact-size and identifier-length measurement. `tests/emitted_symbol_projection_tests.rs` rejects any other compiler release and uses a synthetic, independently compiled Rust fixture on Linux and macOS to prove that optimized v0 mangling, native symbol inspection, demangling, and decoding preserve ordinary-function, generic-function, member-method, and source-static identities without a sidecar. Its representative `host_bridge` symbol remains unclassified rather than being guessed as an Incan declaration. Separate direct codegen regressions prove that the Incan compiler attaches the same projection to declarations, call sites, imports, re-exports, top-level partial wrappers, concrete methods, computed properties, source-static declarations and references, and Rust-extern wrappers without decoding an emitted name. A method partial keeps its synthetic wrapper explicitly non-Incan and calls the recoverably projected source method it targets.
+The implementation separates carrier conformance from compiler-emitter conformance. [DD-0002](../../../design_records/0002_single_pinned_rust_version.md) selects Rust 1.98.0 and records the artifact-size and identifier-length measurement. `tests/emitted_symbol_projection_tests.rs` rejects any other compiler release and uses a synthetic, independently compiled Rust fixture on Linux and macOS to prove that optimized v0 mangling, native symbol inspection, demangling, and decoding preserve ordinary-function, generic-function, member-method, and source-static identities without a sidecar. Its representative `host_bridge` symbol remains unclassified rather than being guessed as an Incan declaration. Separate direct codegen regressions prove that the Incan compiler attaches the same projection to declarations, call sites, imports, re-exports, top-level partial wrappers, concrete methods, computed properties, source-static declarations and references, and Rust-extern wrappers without decoding an emitted name. A method partial keeps its synthetic wrapper explicitly non-Incan and calls the recoverably projected source method it targets.
 
 This applies only to Incan-origin declarations that materialize as linker-visible symbols. Locals and other source declarations that do not materialize as an emitted symbol are not counterexamples; a future backtrace locates them through their nearest recoverable Incan-origin frame. A frame with no Incan origin is classified as runtime, host, or interop and may be collapsed at normal verbosity or shown at an explicit verbose setting. It is never guessed to be an Incan declaration.
 
@@ -288,7 +288,7 @@ Define and emit the versioned `incan-v1` payload for every linker-visible Incan-
 
 The identity guarantees that must not regress at the v0.6 backend cutover belong in the backend-parity corpus rather than only in frontend unit tests, so a replacement backend cannot silently lose them. The corpus pins a typed set of semantically valid cells rather than pretending every axis forms a literal cross-product. Ordinary lexical declarations are covered through local, import, alias, and re-export bindings at module, function, and block scope. Member targets use the same four owner-binding forms, but their declaration cell is correctly scoped to the owning nominal type; executable member references are then covered at function and block scope. Module-path identities are covered for direct imports and module aliases at the module graph/HIR boundary; they do not have local or re-export declaration forms, and Body IR carries the declaration selected through a qualified path rather than retaining the path prefix as a runtime dispatch identity. Every cell requires the carriers its layer genuinely represents: a checked identity always, HIR for represented module bindings, Body IR for executable references, and an emitted projection only for linker-visible source declarations. Conformance additionally covers explicit shadowing with `let` and with `mut`, one generic-binder case, and #1116's builtin contract: a rebound builtin-function spelling and the same name reached through `std.builtins.<name>` must carry two different canonical identities across the cutover. It also includes a release-artifact decode of the `incan-v1` payload after v0 mangling and demangling, plus classification fixtures proving representative non-Incan frames are never reported as source declarations.
 
-## Progress Checklist
+## Implementation log
 
 Checked items are implemented by the current merge candidate and count as release-branch evidence only after it merges. Unchecked items remain open. The slice structure above remains the governing map; this checklist is its trackable projection.
 
@@ -299,35 +299,35 @@ Checked items are implemented by the current merge candidate and count as releas
 
 ### Identity core (Slices 1–2)
 
-- [ ] One compiler-owned identity mint at symbol definition, covering module declarations, locals, consts, statics, parameters, receivers, and generic binders, with scope discriminants.
-- [ ] Import, alias, and re-export bindings carry their resolved target's identity; unproven bindings carry none.
-- [ ] Builtin registry identities: every alias spelling records the one canonical registry identity.
-- [ ] Reference-side identity recording keyed by reference span, with the string-shaped source target retained as a projection.
-- [ ] Method declarations carry member-namespace identities; field/property declaration identities generalized.
-- [ ] Conformance: sibling-scope distinctness, alias/re-export equality, `let`/`mut` shadowing, builtin-rebinding distinctness, duplicate-declaration identity distinctness.
+- [x] One compiler-owned identity mint at symbol definition, covering module declarations, locals, consts, statics, parameters, receivers, and generic binders, with scope discriminants.
+- [x] Import, alias, and re-export bindings carry their resolved target's identity; unproven bindings carry none.
+- [x] Builtin registry identities: every alias spelling records the one canonical registry identity.
+- [x] Reference-side identity recording keyed by reference span, with the string-shaped source target retained as a projection.
+- [x] Method declarations carry member-namespace identities; field/property declaration identities generalized.
+- [x] Conformance: sibling-scope distinctness, alias/re-export equality, `let`/`mut` shadowing, builtin-rebinding distinctness, duplicate-declaration identity distinctness.
 
 ### One shared binding mechanism (Slice 3)
 
-- [ ] Single binding-registration/collision entry point; duplicate declarations and imports become diagnostics.
-- [ ] `duplicate_alias`, `duplicate_trait_instantiation`, and `duplicate_library_export` migrate to frontend-owned call sites of the shared mechanism.
-- [ ] Ordinary fallback builtin spellings remain shadowable; immutable `print` and `println` reject replacement.
+- [x] Single binding-registration/collision entry point; duplicate declarations and imports become diagnostics.
+- [x] `duplicate_alias`, `duplicate_trait_instantiation`, and `duplicate_library_export` migrate to frontend-owned call sites of the shared mechanism.
+- [x] Ordinary fallback builtin spellings remain shadowable; immutable `print` and `println` reject replacement.
 
 ### Consumers (Slices 4–8)
 
-- [ ] HIR declarations carry canonical identity; single-binding imports carry their target's identity.
-- [ ] Body IR callable targets consume the typechecker-minted identity instead of re-deriving one.
-- [ ] Body IR resolves locals by identity so no resolver-resolved reference degrades to an external local.
-- [ ] Diagnostics name canonical declaration sites regardless of the referencing binding.
-- [ ] LSP definition/references/hover resolve through identity.
-- [ ] Codegraph keys records on identity rather than the string triple.
+- [x] HIR declarations carry canonical identity; single-binding imports carry their target's identity.
+- [x] Body IR callable targets consume the typechecker-minted identity instead of re-deriving one.
+- [x] Body IR resolves locals by identity so no resolver-resolved reference degrades to an external local.
+- [x] Diagnostics name canonical declaration sites regardless of the referencing binding.
+- [x] LSP definition/references/hover resolve through identity.
+- [x] Codegraph keys records on identity rather than the string triple.
 
 ### Recoverable projection (Slice 9)
 
-- [ ] `incan-v1` emitted-name payload with DD-0002 toolchain record and decode fixtures (#1174).
+- [x] `incan-v1` emitted-name payload with DD-0002 toolchain record and decode fixtures (#1174).
 
 ### Cutover conformance
 
-- [ ] Typed identity-coverage rows land in the backend-parity corpus for every semantically valid binding/namespace/scope cell and require only the carriers each compiler layer actually represents.
+- [x] Typed identity-coverage rows land in the backend-parity corpus for every semantically valid binding/namespace/scope cell and require only the carriers each compiler layer actually represents.
 
 ## Design decisions
 

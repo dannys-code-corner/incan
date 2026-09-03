@@ -84,7 +84,7 @@ pub model DateTimeOffset with OrdinalKey:
         if not ordinal_key_signed_magnitude_i64_is_canonical(data, 18):
             return Err(OrdinalMapError.invalid_key_record("DateTimeOffset offset must use canonical signed-magnitude encoding"))
         offset_seconds = ordinal_key_read_signed_magnitude_i64(data, 18)
-        match FixedOffset.seconds(offset_seconds):
+        match FixedOffset.from_seconds(offset_seconds):
             Ok(offset) => return Ok(DateTimeOffset(datetime=datetime, offset=offset))
             Err(err) => return Err(OrdinalMapError.invalid_key_record(err.message()))
 
@@ -187,10 +187,10 @@ pub model DateTimeOffset with OrdinalKey:
         if isinstance(other, DateTimeOffset):
             seconds = self._utc_seconds() - other._utc_seconds()
             nanos = self.datetime.time.nanosecond - other.datetime.time.nanosecond
-            return TimeDelta.nanoseconds(seconds * 1_000_000_000 + nanos)
+            return TimeDelta.from_nanoseconds(seconds * 1_000_000_000 + nanos)
         elif isinstance(other, TimeDelta):
             return DateTimeOffset(
-                datetime=self.datetime.add_timedelta(TimeDelta.nanoseconds(0 - other.total_nanoseconds())),
+                datetime=self.datetime.add_timedelta(TimeDelta.from_nanoseconds(0 - other.total_nanoseconds())),
                 offset=self.offset,
             )
         elif isinstance(other, YearMonthInterval):
@@ -203,7 +203,7 @@ pub model DateTimeOffset with OrdinalKey:
                 datetime=DateTime(
                     date=self.datetime.date.add_months(0 - other.year_month().total_months()),
                     time=self.datetime.time,
-                ).add_timedelta(TimeDelta.nanoseconds(0 - other.day_time().total_nanoseconds())),
+                ).add_timedelta(TimeDelta.from_nanoseconds(0 - other.day_time().total_nanoseconds())),
                 offset=self.offset,
             )
 

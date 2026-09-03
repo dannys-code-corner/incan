@@ -95,8 +95,8 @@ The distinction is intentional. "One month" cannot be reduced to a fixed number 
 from std.datetime import Date, TimeDelta, YearMonthInterval
 
 anchor = Date.fromisoformat("2026-01-31")?
-println((anchor + TimeDelta.days(30)).isoformat())
-println((anchor + YearMonthInterval.months(1)).isoformat())
+println((anchor + TimeDelta.from_days(30)).isoformat())
+println((anchor + YearMonthInterval.from_months(1)).isoformat())
 ```
 
 Use the interval that matches the product rule. Billing cycles, anniversaries, and month-end workflows usually want `YearMonthInterval`; timeouts and measured work usually want `Duration`; civil reminders often want `TimeDelta`.

@@ -56,12 +56,13 @@ use crate::frontend::library_manifest_index::{LibraryManifestIndex, LibraryManif
 use crate::frontend::module::logical_source_path_candidates;
 use crate::frontend::symbols::ResolvedType;
 use crate::library_manifest::{
-    FieldExport, FieldVisibilityExport, LibraryManifest, MethodExport, NewtypeExport, ParamDefaultCallSignatureExport,
-    ParamDefaultExport, ParamExport, ParamKindExport, TypeRef, resolved_type_from_manifest_type_ref,
+    ExportIdentityKind, FieldExport, FieldVisibilityExport, LibraryManifest, MethodExport, NewtypeExport,
+    ParamDefaultCallSignatureExport, ParamDefaultExport, ParamExport, ParamKindExport, TypeRef,
+    resolved_type_from_manifest_type_ref,
 };
 use incan_core::lang::types::collections::{self, CollectionTypeId};
 use incan_core::lang::{rust_keywords, stdlib};
-use incan_semantics_core::{SemanticSourceTargetKind, SymbolOrigin, encode_incan_symbol_identity};
+use incan_semantics_core::{CanonicalSymbolId, SemanticSourceTargetKind, SymbolOrigin, encode_incan_symbol_identity};
 
 /// Value-enum metadata loaded from a `.incnlib` dependency for consumer-side trait bridges.
 #[derive(Debug, Clone)]
@@ -475,6 +476,10 @@ pub struct IrEmitter<'a> {
     static_projections: RefCell<HashMap<String, String>>,
     /// Cross-module registry used only for IR calls that carry an explicit canonical callee path.
     canonical_function_registry: Option<FunctionRegistry>,
+    /// Exact compiled-provider function identities keyed by their public `std.<module>.<name>` path.
+    compiled_sdk_function_identities: HashMap<Vec<String>, CanonicalSymbolId>,
+    /// Public provider paths with more than one distinct function identity.
+    ambiguous_compiled_sdk_function_paths: HashSet<Vec<String>>,
     /// Track struct derives for generating serde methods in impl blocks
     struct_derives: std::collections::HashMap<String, Vec<String>>,
     /// Current function's return type (for applying conversions in return statements)
@@ -532,6 +537,10 @@ pub struct IrEmitter<'a> {
     newtype_backing_type_names: HashMap<String, HashSet<String>>,
     /// Method signature lookup for Incan-owned nominal receivers, including imported modules.
     method_signatures: HashMap<(String, String), FunctionSignature>,
+    /// Exact emitted projections for source members keyed by nominal owner and source declaration name.
+    member_projections: HashMap<(String, String), CanonicalSymbolId>,
+    /// Member keys that resolve to more than one distinct declaration identity.
+    ambiguous_member_projections: HashSet<(String, String)>,
     /// Impl-level generic parameter order for method signatures.
     method_signature_type_params: HashMap<(String, String), Vec<String>>,
     /// Whether we're currently emitting a return expression (allows moves instead of clones)
@@ -574,6 +583,12 @@ pub struct IrEmitter<'a> {
     source_module_paths: HashSet<Vec<String>>,
     /// Canonical path of the source module currently being emitted.
     current_source_module_path: Option<Vec<String>>,
+    /// Canonical package identity of the compilation unit currently being emitted.
+    ///
+    /// Package-owned symbols retain their `pub::<package>::...` identity even inside the package that declares them.
+    /// Emission uses this context only to render those self-package references through `crate::...`; consumers still
+    /// render the same identities through the linked dependency crate.
+    current_package_identity: Option<String>,
     /// RFC 023: The `rust.module("path::to::module")` Rust backing path, if declared.
     ///
     /// When set, `@rust.extern` functions emit delegation calls to `<rust_module_path>::<fn_name>()` instead of
@@ -663,6 +678,8 @@ impl<'a> IrEmitter<'a> {
             function_registry,
             static_projections: RefCell::new(HashMap::new()),
             canonical_function_registry: None,
+            compiled_sdk_function_identities: HashMap::new(),
+            ambiguous_compiled_sdk_function_paths: HashSet::new(),
             struct_derives: std::collections::HashMap::new(),
             current_function_return_type: RefCell::new(None),
             current_method_owner_type_params: RefCell::new(None),
@@ -686,6 +703,8 @@ impl<'a> IrEmitter<'a> {
             rusttype_alias_names: HashSet::new(),
             newtype_backing_type_names: HashMap::new(),
             method_signatures: HashMap::new(),
+            member_projections: HashMap::new(),
+            ambiguous_member_projections: HashSet::new(),
             method_signature_type_params: HashMap::new(),
             in_return_context: RefCell::new(false),
             const_string_literals: std::collections::HashMap::new(),
@@ -701,6 +720,7 @@ impl<'a> IrEmitter<'a> {
             internal_module_roots: HashSet::new(),
             source_module_paths: HashSet::new(),
             current_source_module_path: None,
+            current_package_identity: None,
             rust_module_path: None,
             rust_import_paths: RefCell::new(std::collections::HashMap::new()),
             newtype_construction: HashMap::new(),
@@ -794,6 +814,56 @@ impl<'a> IrEmitter<'a> {
         self.canonical_function_registry
             .as_ref()
             .unwrap_or(self.function_registry)
+    }
+
+    /// Resolve a stdlib function path to one compiler-retained identity without reconstructing it from source names.
+    pub(super) fn canonical_stdlib_function_identity(&self, path: &[String]) -> Option<&CanonicalSymbolId> {
+        if let Some(identity) = self.canonical_function_registry().canonical_identity_for_path(path) {
+            return Some(identity);
+        }
+        let (declaration_name, module_path) = path.get(1..)?.split_last()?;
+        if path.first().map(String::as_str) != Some(stdlib::STDLIB_ROOT) {
+            return None;
+        }
+        if let Some(library) = self.current_package_identity.as_deref()
+            && let Some(identity) = self.canonical_function_registry().canonical_package_function_identity(
+                library,
+                module_path,
+                declaration_name,
+            )
+        {
+            return Some(identity);
+        }
+        (!self.ambiguous_compiled_sdk_function_paths.contains(path))
+            .then(|| self.compiled_sdk_function_identities.get(path))
+            .flatten()
+    }
+
+    /// Return one exact member projection, failing closed when the owner/name pair is ambiguous.
+    pub(super) fn member_projection(&self, owner: &str, source_name: &str) -> Option<String> {
+        let key = (owner.to_string(), source_name.to_string());
+        if self.ambiguous_member_projections.contains(&key) {
+            return None;
+        }
+        self.member_projections.get(&key).map(encode_incan_symbol_identity)
+    }
+
+    /// Seed one member projection while preserving ambiguity rather than selecting by insertion order.
+    fn register_member_projection(&mut self, owner: &str, source_name: &str, identity: CanonicalSymbolId) {
+        let key = (owner.to_string(), source_name.to_string());
+        if self.ambiguous_member_projections.contains(&key) {
+            return;
+        }
+        match self.member_projections.get(&key) {
+            Some(existing) if existing != &identity => {
+                self.member_projections.remove(&key);
+                self.ambiguous_member_projections.insert(key);
+            }
+            Some(_) => {}
+            None => {
+                self.member_projections.insert(key, identity);
+            }
+        }
     }
 
     /// Configure the concrete callable-name helper modules available to this emitter.
@@ -1256,6 +1326,11 @@ impl<'a> IrEmitter<'a> {
     /// Set the canonical source path of the module currently being emitted.
     pub fn set_current_source_module_path(&mut self, path: Option<Vec<String>>) {
         self.current_source_module_path = path;
+    }
+
+    /// Set the package identity of the compilation unit currently being emitted.
+    pub fn set_current_package_identity(&mut self, identity: Option<String>) {
+        self.current_package_identity = identity;
     }
 
     /// Configure whether anonymous union wrappers are addressed through the crate root.
@@ -2193,6 +2268,30 @@ impl<'a> IrEmitter<'a> {
     /// enum variant rather than a Rust field access.
     pub(crate) fn seed_sdk_provider_manifest_metadata(&mut self, manifest: &LibraryManifest) {
         let provider_crate = manifest.name.replace('-', "_");
+        for entry in &manifest.contract_metadata.identity_graph.exports {
+            if entry.kind != ExportIdentityKind::Function || entry.public_path.first() != Some(&manifest.name) {
+                continue;
+            }
+            let Some(identity) = entry.canonical.as_ref().and_then(|canonical| canonical.hydrate()) else {
+                continue;
+            };
+            let public_std_path = std::iter::once(stdlib::STDLIB_ROOT.to_string())
+                .chain(entry.public_path.iter().skip(1).cloned())
+                .collect::<Vec<_>>();
+            if self.ambiguous_compiled_sdk_function_paths.contains(&public_std_path) {
+                continue;
+            }
+            match self.compiled_sdk_function_identities.get(&public_std_path) {
+                Some(existing) if existing != &identity => {
+                    self.compiled_sdk_function_identities.remove(&public_std_path);
+                    self.ambiguous_compiled_sdk_function_paths.insert(public_std_path);
+                }
+                Some(_) => {}
+                None => {
+                    self.compiled_sdk_function_identities.insert(public_std_path, identity);
+                }
+            }
+        }
         self.seed_compiled_provider_export_metadata(
             &provider_crate,
             &manifest.exports.models,
@@ -2373,6 +2472,9 @@ impl<'a> IrEmitter<'a> {
         type_params: &[crate::library_manifest::TypeParamExport],
     ) {
         for method in methods {
+            if let Some(identity) = method.canonical.as_ref().and_then(|canonical| canonical.hydrate()) {
+                self.register_member_projection(owner, &method.name, identity);
+            }
             let key = (owner.to_string(), method.name.clone());
             self.method_signatures.insert(
                 key.clone(),
@@ -2405,6 +2507,11 @@ impl<'a> IrEmitter<'a> {
 
     /// Seed nominal metadata, optionally skipping ambiguous dependency names.
     fn seed_nominal_metadata_from_program_inner(&mut self, program: &IrProgram, skip_ambiguous: bool) {
+        for (owner, source_name, identity) in &program.member_projections {
+            if !skip_ambiguous || !self.ambiguous_type_names.contains(owner) {
+                self.register_member_projection(owner, source_name, identity.clone());
+            }
+        }
         let source_dependency_module_path = if skip_ambiguous {
             program
                 .source_module_name
@@ -3264,9 +3371,45 @@ mod tests {
     use crate::backend::ir::expr::{IrExprKind, IrStaticReferenceKind, TypedExpr};
     use crate::backend::ir::stmt::{IrStmt, IrStmtKind};
     use crate::backend::ir::{FunctionRegistry, IrProgram, IrType};
+    use crate::library_manifest::{
+        CanonicalIdentityExport, ExportIdentity, ExportIdentityKind, ExportIdentityProjection, LibraryManifest,
+    };
     use incan_semantics_core::{
         CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
     };
+
+    #[test]
+    fn compiled_sdk_manifest_seeds_exact_stdlib_function_identity() {
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        let identity = CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_core".to_string(),
+                module_path: vec!["result".to_string()],
+            },
+            declaration_name: "map".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(10, 20),
+        };
+        let mut manifest = LibraryManifest::new("incan_stdlib_core", "0.6.0");
+        manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+            public_name: "map".to_string(),
+            public_path: vec!["incan_stdlib_core".to_string(), "result".to_string(), "map".to_string()],
+            source_path: vec!["result".to_string(), "map".to_string()],
+            kind: ExportIdentityKind::Function,
+            projection: ExportIdentityProjection::Direct,
+            canonical: CanonicalIdentityExport::from_canonical("incan_stdlib_core", &identity),
+        });
+
+        emitter.seed_sdk_provider_manifest_metadata(&manifest);
+
+        assert_eq!(
+            emitter.canonical_stdlib_function_identity(&["std".to_string(), "result".to_string(), "map".to_string(),]),
+            Some(&identity)
+        );
+    }
 
     #[test]
     fn callback_reference_matches_imported_source_parameter_surface() {

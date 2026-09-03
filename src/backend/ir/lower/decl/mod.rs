@@ -256,21 +256,15 @@ impl AstLowering {
             return Ok(());
         };
 
-        let (expected_source_constructor, checked_constructor, identity) = match entry.subject_kind {
-            incan_semantics_core::SemanticRegistrySubjectKind::CompilationUnit => (
-                "current_unit",
-                "_checked_current_unit",
-                self.current_source_module_name
-                    .clone()
-                    .unwrap_or_else(|| "<unknown-compilation-unit>".to_string()),
-            ),
-            incan_semantics_core::SemanticRegistrySubjectKind::Package => (
-                "package",
-                "_checked_package",
-                self.registry_package_identity
-                    .clone()
-                    .unwrap_or_else(|| "<unpackaged>".to_string()),
-            ),
+        let identity = match entry.subject_kind {
+            incan_semantics_core::SemanticRegistrySubjectKind::CompilationUnit => self
+                .current_source_module_name
+                .clone()
+                .unwrap_or_else(|| "<unknown-compilation-unit>".to_string()),
+            incan_semantics_core::SemanticRegistrySubjectKind::Package => self
+                .registry_package_identity
+                .clone()
+                .unwrap_or_else(|| "<unpackaged>".to_string()),
             incan_semantics_core::SemanticRegistrySubjectKind::Function
             | incan_semantics_core::SemanticRegistrySubjectKind::Method => {
                 return Err(LoweringError {
@@ -280,6 +274,11 @@ impl AstLowering {
                 });
             }
         };
+        let expected_source_constructor =
+            incan_semantics_core::encode_incan_symbol_identity(&entry.subject_constructor_identity);
+        let expected_entry_method = incan_semantics_core::encode_incan_symbol_identity(&entry.entry_method_identity);
+        let checked_constructor =
+            incan_semantics_core::encode_incan_symbol_identity(&entry.checked_constructor_identity);
 
         let IrExprKind::MethodCall { method, args, .. } = &mut value.kind else {
             return Err(LoweringError {
@@ -287,9 +286,10 @@ impl AstLowering {
                 span: IrSpan::default(),
             });
         };
-        if method != "entry" {
+        if method != &expected_entry_method {
             return Err(LoweringError {
-                message: "checked registry entry lowering expected registry.entry(...)".to_string(),
+                message: "checked registry entry lowering no longer matches its frontend-approved Registry.entry"
+                    .to_string(),
                 span: IrSpan::default(),
             });
         }
@@ -310,13 +310,13 @@ impl AstLowering {
                 span: IrSpan::default(),
             });
         };
-        if subject_method != expected_source_constructor {
+        if subject_method != &expected_source_constructor {
             return Err(LoweringError {
                 message: "checked registry entry subject no longer matches its frontend-approved artifact".to_string(),
                 span: IrSpan::default(),
             });
         }
-        *subject_method = checked_constructor.to_string();
+        *subject_method = checked_constructor;
         *subject_args = vec![IrCallArg {
             name: None,
             kind: IrCallArgKind::Positional,

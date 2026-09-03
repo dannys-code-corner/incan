@@ -29,6 +29,7 @@ use incan_core::lang::c_abi::{LinkCapabilityId, ScalarTypeId};
 use incan_core::lang::surface::result_methods::ResultMethodId;
 use incan_core::lang::types::numerics::{self, NumericFamily};
 use incan_core::lang::{conventions, keywords, magic_methods, stdlib as core_stdlib, trait_capabilities};
+use incan_semantics_core::encode_incan_symbol_identity;
 
 use super::super::decl::{
     FunctionParamDefault, IrDeclKind, IrEnum, IrEnumValue, IrEnumValueType, IrFunction, IrImportOrigin,
@@ -53,6 +54,7 @@ struct OrdinalValueEnumBridgeSpec {
     value_type: IrEnumValueType,
     trait_path: TokenStream,
     error_path: TokenStream,
+    invalid_record_method: TokenStream,
 }
 
 /// Render the one checked native-link declaration retained from the C binding descriptor.
@@ -1981,22 +1983,59 @@ impl<'a> IrEmitter<'a> {
     }
 
     /// Emit a macro invocation from a registered support path.
-    fn emit_support_macro_invocation(macro_path: &str) -> TokenStream {
-        let mut segments = macro_path.split("::").map(Self::rust_ident);
+    fn emit_support_macro_invocation(
+        &self,
+        support: &incan_core::lang::generated_support::GeneratedModuleSupport,
+    ) -> Result<TokenStream, EmitError> {
+        let mut segments = support.macro_path.split("::").map(Self::rust_ident);
         let Some(first) = segments.next() else {
-            return quote! {};
+            return Ok(quote! {});
         };
         let path = segments.fold(quote! { #first }, |acc, segment| quote! { #acc :: #segment });
-        quote! { #path!(); }
+        let source_module = support.source_module.split('.').map(str::to_string).collect::<Vec<_>>();
+        let args = support
+            .macro_function_args
+            .iter()
+            .map(|source_name| {
+                let mut canonical_path = source_module.clone();
+                canonical_path.push((*source_name).to_string());
+                self.canonical_stdlib_function_identity(&canonical_path)
+                    .map(encode_incan_symbol_identity)
+                    .map(|projection| Self::rust_ident(&projection))
+                    .ok_or_else(|| {
+                        EmitError::InternalInvariant(format!(
+                            "generated support macro `{}` requires canonical function `{}`",
+                            support.macro_path,
+                            canonical_path.join(".")
+                        ))
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(quote! { #path!(#(#args),*); })
     }
 
     /// Splice registered generated-code support into generated modules.
-    fn emit_registered_generated_module_supports(program: &IrProgram) -> Vec<TokenStream> {
+    fn emit_registered_generated_module_supports(&self, program: &IrProgram) -> Result<Vec<TokenStream>, EmitError> {
         incan_core::lang::generated_support::generated_module_supports()
             .iter()
             .filter(|support| Self::emits_registered_support_module(program, support))
-            .map(|support| Self::emit_support_macro_invocation(support.macro_path))
+            .map(|support| self.emit_support_macro_invocation(support))
             .collect()
+    }
+
+    /// Return the exact source projection for `OrdinalMapError.invalid_key_record` used by generated bridges.
+    fn ordinal_map_invalid_record_method(&self) -> Result<TokenStream, EmitError> {
+        self.member_projection("OrdinalMapError", "invalid_key_record")
+            .map(|projection| {
+                let ident = Self::rust_ident(&projection);
+                quote! { #ident }
+            })
+            .ok_or_else(|| {
+                EmitError::InternalInvariant(
+                    "generated OrdinalKey bridge requires canonical OrdinalMapError.invalid_key_record identity"
+                        .to_string(),
+                )
+            })
     }
 
     /// Emit temporary RFC 101 adapter impls for deterministic builtin `OrdinalKey` families.
@@ -2004,10 +2043,11 @@ impl<'a> IrEmitter<'a> {
     /// Native helper behavior lives in `incan_stdlib::collections::__private`; this emitter only places impls at the
     /// crate boundary where Rust coherence requires them until RFC 098/099 can model trait-owned capability families
     /// in source.
-    fn emit_builtin_ordinal_key_impls(&self) -> TokenStream {
-        quote! {
+    fn emit_builtin_ordinal_key_impls(&self) -> Result<TokenStream, EmitError> {
+        let invalid_record_method = self.ordinal_map_invalid_record_method()?;
+        Ok(quote! {
             fn __incan_ordinal_key_invalid_record(detail: String) -> OrdinalMapError {
-                OrdinalMapError::invalid_key_record(detail, -1i64)
+                OrdinalMapError::#invalid_record_method(detail, -1i64)
             }
 
             macro_rules! __incan_ordinal_key_int_impl {
@@ -2146,7 +2186,7 @@ impl<'a> IrEmitter<'a> {
             __incan_ordinal_key_int_impl!(u32, incan_stdlib::collections::__private::ordinal_key_encoding_uint(32u16), 4usize);
             __incan_ordinal_key_int_impl!(u64, incan_stdlib::collections::__private::ordinal_key_encoding_uint(64u16), 8usize);
             __incan_ordinal_key_int_impl!(u128, incan_stdlib::collections::__private::ordinal_key_encoding_uint(128u16), 16usize);
-        }
+        })
     }
 
     /// Emit the temporary primitive implementations behind the source-owned `Sum[T]` contract.
@@ -2215,8 +2255,9 @@ impl<'a> IrEmitter<'a> {
                 quote! { 0i64 }
             };
             let construction = if let Some(constructor) = &plan.checked_constructor {
+                let constructor_source = plan.checked_constructor_source_name.as_deref().unwrap_or(constructor);
+                let message = format!("validated newtype construction failed: {source_name}::{constructor_source}");
                 let constructor = Self::rust_ident(constructor);
-                let message = format!("validated newtype construction failed: {source_name}::{constructor}");
                 quote! {
                     match #name::#constructor(total) {
                         Ok(value) => value,
@@ -2504,9 +2545,10 @@ impl<'a> IrEmitter<'a> {
         let encoding = spec.encoding;
         let trait_path = spec.trait_path;
         let error_path = spec.error_path;
+        let invalid_record_method = spec.invalid_record_method;
         let invalid_record = |detail: TokenStream| {
             quote! {
-                #error_path::invalid_key_record(#detail, -1i64)
+                #error_path::#invalid_record_method(#detail, -1i64)
             }
         };
         let invalid_utf8 = invalid_record(quote! { err.to_string() });
@@ -2581,7 +2623,7 @@ impl<'a> IrEmitter<'a> {
         local_ordinal_key_trait: bool,
         source_module_name: Option<&str>,
         emit_local: bool,
-    ) -> TokenStream {
+    ) -> Result<TokenStream, EmitError> {
         let local_trait_path = if local_ordinal_key_trait {
             quote! { OrdinalKey }
         } else {
@@ -2592,7 +2634,6 @@ impl<'a> IrEmitter<'a> {
         } else {
             Self::ordinal_key_contract_paths().1
         };
-
         let mut specs = Vec::new();
         if emit_local {
             for decl in emitted_declarations {
@@ -2613,6 +2654,7 @@ impl<'a> IrEmitter<'a> {
                     value_type,
                     trait_path: local_trait_path.clone(),
                     error_path: local_error_path.clone(),
+                    invalid_record_method: self.ordinal_map_invalid_record_method()?,
                 });
             }
         }
@@ -2632,6 +2674,7 @@ impl<'a> IrEmitter<'a> {
                     value_type: external.value_type,
                     trait_path: external_trait_path.clone(),
                     error_path: external_error_path.clone(),
+                    invalid_record_method: self.ordinal_map_invalid_record_method()?,
                 });
             }
         }
@@ -2641,15 +2684,16 @@ impl<'a> IrEmitter<'a> {
             .map(Self::emit_ordinal_value_enum_bridge_impl)
             .collect::<Vec<_>>();
 
-        quote! { #(#impls)* }
+        Ok(quote! { #(#impls)* })
     }
 
     /// Emit consumer-side `OrdinalKey` impls for user-authored key adopters imported from `.incnlib` dependencies.
-    fn emit_external_custom_ordinal_key_impls(&self) -> TokenStream {
+    fn emit_external_custom_ordinal_key_impls(&self) -> Result<TokenStream, EmitError> {
         if self.external_ordinal_custom_keys.is_empty() {
-            return quote! {};
+            return Ok(quote! {});
         }
         let (trait_path, error_path) = Self::ordinal_key_contract_paths();
+        let invalid_record_method = self.ordinal_map_invalid_record_method()?;
         let mut impls = Vec::new();
         for external in &self.external_ordinal_custom_keys {
             let dependency = Self::rust_ident(&external.dependency_key);
@@ -2688,14 +2732,14 @@ impl<'a> IrEmitter<'a> {
                     fn from_ordinal_bytes(data: Vec<u8>) -> Result<Self, #error_path> {
                         match #type_path::from_ordinal_bytes(data) {
                             Ok(value) => Ok(value),
-                            Err(err) => Err(#error_path::invalid_key_record(err.message(), err.index())),
+                            Err(err) => Err(#error_path::#invalid_record_method(err.message(), err.index())),
                         }
                     }
                 }
             });
         }
 
-        quote! { #(#impls)* }
+        Ok(quote! { #(#impls)* })
     }
 
     /// Return the anonymous union shape needed by generated field overlay methods for a concrete struct.
@@ -4105,14 +4149,17 @@ impl<'a> IrEmitter<'a> {
             decl_items.push(self.emit_decl(decl)?);
             if let IrDeclKind::Function(func) = &decl.kind {
                 let adapters = self.borrowed_function_adapters.borrow();
-                let mut matching_adapters: Vec<Vec<usize>> = adapters
+                let mut matching_adapters: Vec<(String, Vec<usize>)> = adapters
                     .iter()
-                    .filter_map(|(name, indices)| (name == &func.name).then_some(indices.clone()))
+                    .filter_map(|(name, indices)| {
+                        (self.function_registry.registry_key(name) == func.name)
+                            .then_some((name.clone(), indices.clone()))
+                    })
                     .collect();
                 drop(adapters);
                 matching_adapters.sort();
-                for indices in matching_adapters {
-                    if let Some(helper) = self.emit_borrowed_function_adapter(func, &indices)? {
+                for (adapter_target_name, indices) in matching_adapters {
+                    if let Some(helper) = self.emit_borrowed_function_adapter(func, &adapter_target_name, &indices)? {
                         decl_items.push(helper);
                     }
                 }
@@ -4139,7 +4186,7 @@ impl<'a> IrEmitter<'a> {
         items.push(self.emit_local_newtype_iterator_sum_impls(*self.iterator_sum_used.borrow()));
         items.push(self.emit_local_newtype_string_try_from_impls(&emitted_declarations));
         if defines_ordinal_key_trait {
-            items.push(self.emit_builtin_ordinal_key_impls());
+            items.push(self.emit_builtin_ordinal_key_impls()?);
         }
         let emit_local_ordinal_value_enums =
             defines_ordinal_key_trait || imports_std_ordinal_contract || self.emit_std_ordinal_value_enum_impls;
@@ -4148,11 +4195,11 @@ impl<'a> IrEmitter<'a> {
             defines_ordinal_key_trait,
             program.source_module_name.as_deref(),
             emit_local_ordinal_value_enums,
-        ));
+        )?);
         if !defines_ordinal_key_trait {
-            items.push(self.emit_external_custom_ordinal_key_impls());
+            items.push(self.emit_external_custom_ordinal_key_impls()?);
         }
-        items.extend(Self::emit_registered_generated_module_supports(program));
+        items.extend(self.emit_registered_generated_module_supports(program)?);
 
         Ok(quote! {
             #(#items)*

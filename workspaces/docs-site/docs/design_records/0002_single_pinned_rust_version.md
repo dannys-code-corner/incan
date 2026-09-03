@@ -66,15 +66,15 @@ The backend-parity report binds this native probe with three separate content id
 
 The carrier fixture also proves that the generic `<u64>` specialization remains visible in the v0 demangling while the reversible Incan payload continues to identify the source declaration. Specialization is therefore not duplicated inside `incan-v1`: the canonical payload answers which declaration produced the symbol, while Rust v0's own type suffix distinguishes its linker-visible instantiation.
 
-An earlier three-symbol prototype recorded this Rust 1.98.0 macOS arm64 measurement:
+The current four-symbol fixture recorded this Rust 1.98.0 macOS arm64 measurement on 2026-09-03:
 
 | Fixture | Artifact bytes | Source identifier bytes |
 | --- | ---: | ---: |
-| short-name baseline | 1,443,608 | 21 |
-| `incan-v1` projection | 1,444,072 | 475 |
-| delta | +464 | +454 |
+| short-name baseline | 1,443,672 | 28 |
+| `incan-v1` projection | 1,444,264 | 602 |
+| delta | +592 | +574 |
 
-That table is historical prototype data, not a measurement of the current four-symbol fixture and not an acceptance threshold. The current ordinary/generic/method/static fixture prints its own baseline, projected, and identifier-byte measurements on every Linux and macOS CI run while asserting semantic recovery; its exact macOS figures must be recorded only after that fixture is rerun. Object formats and linkers differ across supported platforms, so no platform-independent byte-for-byte threshold is implied. There is no optimized or release fixture mode that removes the payload.
+The ordinary/generic/method/static fixture prints its baseline, projected, and identifier-byte measurements on every Linux and macOS CI run while asserting semantic recovery. Object formats and linkers differ across supported platforms, so this macOS observation is not a platform-independent byte-for-byte threshold. There is no optimized or release fixture mode that removes the payload.
 
 This conformance fixture does **not** by itself complete issue #1168's repository-wide pin migration. The workspace manifest and other build lanes must still converge on the accepted 1.98.0 policy; the fixture is intentionally narrower and refuses to turn their current drift into evidence for a different compiler release.
 

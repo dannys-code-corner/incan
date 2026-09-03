@@ -134,9 +134,9 @@ use super::common::{
     cargo_command_flags, collect_incan_source_files, collect_modules_detailed_with_session,
     collect_project_requirements, collect_rust_dependency_uses, discover_effective_project_manifest,
     effective_project_manifest_for_exact_root, enforce_project_toolchain_constraint,
-    extend_requirements_with_provider_plan, format_dependency_error, imported_module_deps_for_with_index,
-    merge_project_requirement_dependencies, module_key_index, render_module_warnings, resolve_project_root,
-    resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
+    extend_requirements_with_provider_plan, format_dependency_error, imported_module_deps_for_with_provider_plan,
+    merge_project_requirement_dependencies, module_key_index, register_module_path_segments, render_module_warnings,
+    resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
@@ -10029,10 +10029,13 @@ fn prepare_library_project(
     let mut checked_type_info_by_path = BTreeMap::new();
 
     for (idx, module) in modules.iter().enumerate() {
-        let deps_for_module = imported_module_deps_for_with_index(&modules, idx, &module_idx_by_key);
+        let deps_for_module =
+            imported_module_deps_for_with_provider_plan(&modules, idx, &module_idx_by_key, &provider_plan);
         let mut checker = typechecker::TypeChecker::new();
         checker.stdlib_cache = stdlib_cache.clone();
+        checker.set_current_package_identity(Some(project_name.clone()));
         checker.set_current_module_path(Some(module.path_segments.clone()));
+        register_module_path_segments(&mut checker, &modules);
         checker.set_declared_crate_names(declared.clone());
         checker.set_provider_plan(Arc::clone(&provider_plan));
         #[cfg(feature = "rust_inspect")]
@@ -10227,6 +10230,7 @@ fn prepare_library_project(
     let mut codegen = IrCodegen::new();
     codegen.set_preserve_dependency_public_items(true);
     codegen.set_registry_package_identity(Some(project_name.clone()));
+    codegen.set_canonical_emission_package_identity(Some(project_name.clone()));
     codegen.set_root_source_module_name(
         lib_module
             .file_path
