@@ -10033,7 +10033,10 @@ fn prepare_library_project(
             imported_module_deps_for_with_provider_plan(&modules, idx, &module_idx_by_key, &provider_plan);
         let mut checker = typechecker::TypeChecker::new();
         checker.stdlib_cache = stdlib_cache.clone();
-        checker.set_current_package_identity(Some(project_name.clone()));
+        checker.set_current_package_identity(crate::frontend::module::declaration_package_identity(
+            Some(&project_name),
+            Some(&module.path_segments),
+        ));
         checker.set_current_module_path(Some(module.path_segments.clone()));
         register_module_path_segments(&mut checker, &modules);
         checker.set_declared_crate_names(declared.clone());

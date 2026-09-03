@@ -1108,9 +1108,17 @@ impl<'a> IrCodegen<'a> {
     }
 
     /// Apply codegen's shared project context to an internal typechecker pass.
-    fn configure_typechecker(&self, tc: &mut crate::frontend::typechecker::TypeChecker) {
+    fn configure_typechecker(
+        &self,
+        tc: &mut crate::frontend::typechecker::TypeChecker,
+        module_path: Option<&[String]>,
+    ) {
         tc.stdlib_cache = self.stdlib_cache.clone();
-        tc.set_current_package_identity(self.canonical_emission_package_identity.clone());
+        let package_identity = crate::frontend::module::declaration_package_identity(
+            self.canonical_emission_package_identity.as_deref(),
+            module_path,
+        );
+        tc.set_current_package_identity(package_identity);
         if let Some(names) = self.declared_crate_names.clone() {
             tc.set_declared_crate_names(names);
         }
@@ -1233,7 +1241,7 @@ impl<'a> IrCodegen<'a> {
             let module_type_info = {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
-                self.configure_typechecker(&mut tc);
+                self.configure_typechecker(&mut tc, Some(path_segments.as_slice()));
                 Self::register_dependency_module_paths(&mut tc, &dependencies);
                 tc.set_current_module_path(Some(canonicalize_source_module_segments(path_segments)));
                 let typecheck_deps =
@@ -1522,7 +1530,7 @@ impl<'a> IrCodegen<'a> {
         } else {
             use crate::frontend::typechecker::TypeChecker;
             let mut tc = TypeChecker::new();
-            self.configure_typechecker(&mut tc);
+            self.configure_typechecker(&mut tc, root_module_path.as_deref());
             Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(root_module_path.clone());
             let typecheck_deps = self.imported_dependency_modules_for_program(program, &dependency_modules, None);
@@ -1593,7 +1601,7 @@ impl<'a> IrCodegen<'a> {
             } else {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
-                self.configure_typechecker(&mut tc);
+                self.configure_typechecker(&mut tc, Some(dep_path.as_slice()));
                 Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(Some(dep_path.clone()));
                 let dep_key = Self::dependency_module_key(dep_name, &dep_path_segments);
@@ -1761,7 +1769,7 @@ impl<'a> IrCodegen<'a> {
         let module_type_info = {
             use crate::frontend::typechecker::TypeChecker;
             let mut tc = TypeChecker::new();
-            self.configure_typechecker(&mut tc);
+            self.configure_typechecker(&mut tc, module_identity_path.as_deref());
             Self::register_dependency_module_paths(&mut tc, &dependency_modules);
             tc.set_current_module_path(module_identity_path.clone());
             let typecheck_deps =
@@ -1794,7 +1802,7 @@ impl<'a> IrCodegen<'a> {
             let dep_type_info = {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
-                self.configure_typechecker(&mut tc);
+                self.configure_typechecker(&mut tc, dep_identity_path.as_deref());
                 Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(dep_identity_path.clone());
                 let typecheck_deps =
@@ -1927,7 +1935,7 @@ impl<'a> IrCodegen<'a> {
             let module_type_info = {
                 use crate::frontend::typechecker::TypeChecker;
                 let mut tc = TypeChecker::new();
-                self.configure_typechecker(&mut tc);
+                self.configure_typechecker(&mut tc, module_identity_path.as_deref());
                 Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                 tc.set_current_module_path(module_identity_path.clone());
                 let module_key = Self::dependency_module_key(name, &path_segments);
@@ -2223,7 +2231,7 @@ impl<'a> IrCodegen<'a> {
                 } else {
                     use crate::frontend::typechecker::TypeChecker;
                     let mut tc = TypeChecker::new();
-                    self.configure_typechecker(&mut tc);
+                    self.configure_typechecker(&mut tc, Some(path.as_slice()));
                     Self::register_dependency_module_paths(&mut tc, &dependency_modules);
                     tc.set_current_module_path(Some(canonicalize_source_module_segments(path)));
                     let self_key = canonicalize_source_module_segments(path).join("_");
@@ -2420,7 +2428,9 @@ mod tests {
     use crate::library_manifest::{
         ConstExport, FunctionExport, LibraryManifest, ModelExport, ParamExport, ParamKindExport, TypeRef,
     };
-    use incan_semantics_core::{SemanticSourceTargetKind, decode_incan_symbol_identity, encode_incan_symbol_identity};
+    use incan_semantics_core::{
+        SemanticSourceTargetKind, SymbolOrigin, decode_incan_symbol_identity, encode_incan_symbol_identity,
+    };
     use std::collections::HashMap;
     #[cfg(feature = "rust_inspect")]
     use std::fs;
@@ -5056,6 +5066,60 @@ def main() -> None:
             io_code.contains("f.__call__(acc.clone(), item.clone())"),
             "imported FallibleIterator defaults must retain nominal Callable2 dispatch; got:\n{io_code}"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn package_codegen_keeps_embedded_stdlib_method_identity_at_declaration_origin()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let main_module = parse_program_result(
+            r#"
+from std.io import BytesIO
+
+pub def oven_bytes() -> bytes:
+  return BytesIO(b"oven").getvalue()
+"#,
+        )?;
+        let io_module = read_stdlib_program("crates/incan_stdlib/stdlib/io.incn")?;
+        let traits_error_module = read_stdlib_program("crates/incan_stdlib/stdlib/traits/error.incn")?;
+
+        let io_path = vec!["__incan_std".to_string(), "io".to_string()];
+        let traits_error_path = vec!["__incan_std".to_string(), "traits".to_string(), "error".to_string()];
+
+        let mut codegen = IrCodegen::new();
+        codegen.set_canonical_emission_package_identity(Some("oven_release_bytes_io".to_string()));
+        codegen.add_module_with_path_segments("__incan_std_io", &io_module, io_path.clone());
+        codegen.add_module_with_path_segments(
+            "__incan_std_traits_error",
+            &traits_error_module,
+            traits_error_path.clone(),
+        );
+
+        let (main_code, rust_modules) =
+            codegen.try_generate_multi_file_nested(&main_module, &[io_path.clone(), traits_error_path])?;
+        let io_code = rust_modules
+            .get(&io_path)
+            .ok_or_else(|| std::io::Error::other("missing generated std.io module"))?;
+
+        let referenced_getvalue = projected_name(&main_code, "getvalue", SemanticSourceTargetKind::Method);
+        let declared_getvalue = projected_name(io_code, "getvalue", SemanticSourceTargetKind::Method);
+        assert_eq!(
+            referenced_getvalue, declared_getvalue,
+            "a stdlib method reference must keep the identity assigned at its declaration site"
+        );
+        let getvalue_identity = decode_incan_symbol_identity(&declared_getvalue)?
+            .ok_or_else(|| std::io::Error::other("getvalue projection did not contain an Incan identity"))?;
+        assert_eq!(getvalue_identity.origin, SymbolOrigin::Module(io_path.clone()));
+
+        let referenced_constructor = projected_name(&main_code, "BytesIO", SemanticSourceTargetKind::Function);
+        let declared_constructor = projected_name(io_code, "BytesIO", SemanticSourceTargetKind::Function);
+        assert_eq!(
+            referenced_constructor, declared_constructor,
+            "a stdlib constructor reference must keep the identity assigned at its declaration site"
+        );
+        let constructor_identity = decode_incan_symbol_identity(&declared_constructor)?
+            .ok_or_else(|| std::io::Error::other("BytesIO projection did not contain an Incan identity"))?;
+        assert_eq!(constructor_identity.origin, SymbolOrigin::Module(io_path));
         Ok(())
     }
 
