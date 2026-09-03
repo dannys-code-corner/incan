@@ -1263,6 +1263,11 @@ fn select_receipt_project_extension_execution_plan(
         })
         .collect::<CliResult<Vec<_>>>()?;
     if selected.is_empty() {
+        tracing::debug!(
+            "no stored project extension matches receipt {} (build unit {})",
+            receipt.identity,
+            receipt.build_unit_identity
+        );
         return Ok(None);
     }
     if selected.len() != 1 {
@@ -6530,10 +6535,24 @@ fn prepare_oven_test_dependency_envelope(
     let publisher_dependencies = test_dependency_publisher_dependencies(&dependencies, &packaged_provider_aliases);
     let publisher_dependency_surface_digest =
         digest_dependency_specs(&publisher_dependencies).map_err(|error| CliError::failure(error.to_string()))?;
-    for receipt in debug_target_receipts.iter().filter(|receipt| {
-        debug_target_receipt_covers_test_publisher_dependencies(receipt, &publisher_dependency_surface_digest)
-    }) {
+    for receipt in debug_target_receipts {
+        let covers =
+            debug_target_receipt_covers_test_publisher_dependencies(receipt, &publisher_dependency_surface_digest);
+        tracing::debug!(
+            "test dependency envelope: debug target receipt {} kind={:?} rust-dependencies={:?} publisher-surface={} covers={covers}",
+            receipt.identity,
+            receipt.compatibility.kind,
+            receipt.sources.build_unit_inputs.get("rust-dependencies"),
+            publisher_dependency_surface_digest
+        );
+        if !covers {
+            continue;
+        }
         let Some(plan_selection) = select_oven_direct_rustc_plan(store, receipt, &publisher_dependencies)? else {
+            tracing::debug!(
+                "test dependency envelope: receipt {} covers the surface but selects no stored plan",
+                receipt.identity
+            );
             continue;
         };
         if matches!(
@@ -13875,6 +13894,13 @@ pub(crate) fn bake_oven_project_targets(
     let mut pending_outputs = Vec::new();
     let mut debug_target_receipts = Vec::new();
     let mut library_inspection_constituent: Option<LibraryInspectionConstituent> = None;
+    // Every prepared target keeps the store leases of the plans it selected or published. Those leases must outlive
+    // the whole bake, not just the target's own loop arm: the inspection authority sealed after the loop names those
+    // entries as constituents, and a later admission in the same bake (the test-dependency envelope, the authority
+    // itself) prunes unleased entries when the domain policy is tight. A bake that succeeds must leave a loadable
+    // closure, so its constituents stay leased until the authority is sealed; if the policy cannot hold them all,
+    // admission fails loudly instead.
+    let mut retained_preparations: Vec<PreparedLibraryProject> = Vec::new();
     #[cfg(feature = "rust_inspect")]
     let mut rust_inspect_manifest_dirs = BTreeSet::new();
 
@@ -14066,6 +14092,7 @@ pub(crate) fn bake_oven_project_targets(
                     });
                 }
                 remove_completed_generated_cargo_lock(prepared.generator.output_dir())?;
+                retained_preparations.push(prepared);
             }
             OvenBakeProjectTarget::Executable => {
                 if published_project_lock.is_none() {
