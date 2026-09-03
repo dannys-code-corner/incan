@@ -3759,3 +3759,58 @@ fn manifest_writer_rejects_non_hex_desugarer_sha256() -> Result<(), Box<dyn std:
     assert!(matches!(err, Err(LibraryManifestError::Invalid(msg)) if msg.contains("must be 64 hex characters")));
     Ok(())
 }
+
+/// A `pub from <module> import <Model>` re-export must survive manifest validation, exactly as the shipped
+/// `examples/advanced/library_package` producer writes it.
+///
+/// The identity-graph validator admitted a `Reexport` projection only for `Alias` and `Function` kinds. That is not
+/// a property of re-exports: the projection is orthogonal to the kind, and `CheckedExportKind` maps every
+/// declaration kind onto it. `pub from pricing import LineItem, subtotal` re-exports a model beside a function, so
+/// the function half satisfied the whitelist while the model half failed with "identity graph entry `LineItem` uses
+/// a reexport projection for Model" — and because every existing reexport test re-exported an alias or a function,
+/// nothing caught it until `check-docs-examples` failed in CI.
+///
+/// `LibraryReexportResolver` (the production path at `cli::commands::build`) makes the intent explicit: it resolves
+/// a `pub from` item to its *target's* real kind while retaining the reexport projection, and
+/// `resolve_library_reexports_*` already asserts a `TypeAlias` emerging that way. `TypeAlias` was not in the
+/// whitelist either, so the validator contradicted a contract the resolver's own tests had already pinned.
+#[test]
+fn reexported_model_passes_identity_graph_validation() -> Result<(), Box<dyn std::error::Error>> {
+    let mut manifest = LibraryManifest::from_checked_exports("pricing_core", "0.1.0", &[]);
+    manifest.exports.models.push(ModelExport {
+        name: "LineItem".to_string(),
+        type_params: Vec::new(),
+        traits: Vec::new(),
+        trait_adoptions: Vec::new(),
+        derives: Vec::new(),
+        fields: Vec::new(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+    });
+
+    let identity = published_declaration_identity(
+        "pricing_core",
+        &["pricing"],
+        "LineItem",
+        incan_semantics_core::SemanticSourceTargetKind::Model,
+        10,
+        20,
+    );
+    manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+        public_name: "LineItem".to_string(),
+        public_path: vec!["pricing_core".to_string(), "LineItem".to_string()],
+        source_path: vec!["pricing".to_string(), "LineItem".to_string()],
+        kind: ExportIdentityKind::Model,
+        projection: ExportIdentityProjection::Reexport {
+            target_path: vec!["pricing".to_string(), "LineItem".to_string()],
+        },
+        canonical: CanonicalIdentityExport::from_canonical("pricing_core", &identity),
+    });
+
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("reexported-model.incnlib");
+    manifest
+        .write_to_path(&path)
+        .map_err(|error| format!("a re-exported model must pass identity-graph validation, got: {error}"))?;
+    Ok(())
+}

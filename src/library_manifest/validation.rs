@@ -397,12 +397,14 @@ fn validate_export_identity_binding(
             target_path
         }
         ExportIdentityProjection::Reexport { target_path } => {
-            if !matches!(entry.kind, ExportIdentityKind::Alias | ExportIdentityKind::Function) {
-                return Err(LibraryManifestError::Invalid(format!(
-                    "identity graph entry `{}` uses a reexport projection for {:?}",
-                    entry.public_name, entry.kind
-                )));
-            }
+            // No kind restriction, deliberately. A re-export is a projection over an already-declared symbol, and
+            // `pub from <module> import <name>` accepts every public declaration kind -- `CheckedExportKind` maps
+            // all of them onto this projection. Restricting it to aliases and functions rejected the shipped
+            // `pub from pricing import LineItem, subtotal`, whose function half passed while its model half did
+            // not. The invariant that *is* a property of re-exports is the path identity checked below: a
+            // re-export republishes its target rather than renaming it. `LibraryReexportResolver` resolves each
+            // `pub from` item to its target's real kind while keeping this projection, which is why any kind can
+            // legitimately arrive here.
             if entry.source_path != *target_path {
                 return Err(LibraryManifestError::Invalid(format!(
                     "identity graph reexport `{}` has different source and target paths",
