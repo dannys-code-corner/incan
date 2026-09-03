@@ -405,7 +405,12 @@ jobs:
           - { partition: 2, display: 3 }
           - { partition: 3, display: 4 }
     steps:
+      # The replayed compiler suite includes the frozen v0.5 capability snapshot check, which resolves the `v0.5.0`
+      # tag in this checkout; a tagless shallow clone fails that shard rather than the code under test.
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          fetch-tags: true
       - uses: dtolnay/rust-toolchain@stable
       - name: Install WASI target for vocab desugarers
         run: rustup target add wasm32-wasip1 --toolchain stable
