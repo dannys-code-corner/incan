@@ -141,6 +141,16 @@ pub struct OvenStoreCommandOptions {
     pub max_domain_logical_bytes: Option<u64>,
 }
 
+impl OvenStoreCommandOptions {
+    /// Whether a command will resolve the ordinary compiler-owned Oven store without caller-specific policy.
+    fn is_ordinary_default(&self) -> bool {
+        self.root.is_none()
+            && self.max_physical_bytes.is_none()
+            && self.max_domain_physical_bytes.is_none()
+            && self.max_domain_logical_bytes.is_none()
+    }
+}
+
 /// Inputs for `incan inspect oven` receipt and build-unit inspection.
 #[derive(Debug, Clone)]
 pub struct OvenReceiptInspectCommandOptions {
@@ -232,7 +242,11 @@ pub struct OvenInteropBakeCommandOptions {
     /// Exact locked target triple to select and bake.
     pub target: String,
     /// Runtime-only receipt that selects the existing sealed direct-rustc Loaf plan.
-    pub base_receipt: PathBuf,
+    ///
+    /// When omitted, Oven prepares an exact debug Rust-only base for a conventional executable before it selects and
+    /// seals the declared native inputs. The bootstrap cannot emit a caller-visible binary and never discovers a
+    /// native toolchain outside this command.
+    pub base_receipt: Option<PathBuf>,
     /// Explicit selected C compiler for a declared toolchain requirement or C shim.
     pub c_compiler: Option<PathBuf>,
     /// Explicit selected C++ compiler for a declared C++ shim.
@@ -549,6 +563,10 @@ pub fn oven_legacy_cargo_prepare(options: OvenLegacyCargoPrepareCommandOptions) 
 struct OvenInteropBakeReport {
     /// Selected locked target triple.
     target: String,
+    /// The pre-interop runtime receipt selected directly or prepared by this command.
+    base_receipt: PathBuf,
+    /// Whether this invocation prepared its pre-interop Rust closure instead of receiving `--base-receipt`.
+    bootstrap_prepared: bool,
     /// Project-local selected execution receipt written only after final plan publication succeeds.
     execution_receipt: PathBuf,
     /// Selected-execution identity bound into the final direct-rustc build unit.
@@ -564,7 +582,7 @@ struct OvenInteropBakeReport {
     bundles: Vec<String>,
     /// Whether this command reused an existing verified interop plan without starting a native tool.
     reused: bool,
-    /// The baker never invokes Cargo.
+    /// Whether an automatic base bootstrap invoked the named compatibility publisher.
     cargo_process_started: bool,
 }
 
@@ -592,11 +610,28 @@ struct OvenInteropStageReport {
 /// Select declared native tools, bake locked C/C++ inputs, and publish one receipt-bound direct-rustc plan.
 ///
 /// This is an explicit Oven publisher, not a normal command fallback. It consumes only the canonical package lock,
-/// selected tool/SDK evidence, a sealed runtime receipt, and declared package files. Cargo, `pkg-config`, and ambient
-/// include or link path discovery are intentionally absent.
+/// selected tool/SDK evidence, a sealed runtime receipt, and declared package files. When no base receipt is supplied,
+/// the command first invokes the named compatibility publisher for the Rust-only closure; it never uses Cargo to
+/// discover native inputs. `pkg-config` and ambient include or link path discovery are intentionally absent.
 pub fn oven_interop_bake(options: OvenInteropBakeCommandOptions) -> CliResult<ExitCode> {
     let locked = locked_interop_plan_target(&options.project, &options.target)?;
-    let base_receipt = read_receipt(&options.base_receipt)?;
+    if options.base_receipt.is_none() && !options.store.is_ordinary_default() {
+        return Err(CliError::failure(
+            "automatic interop bootstrap uses the ordinary compiler-owned Oven store; set INCAN_HOME for that store or provide --base-receipt when selecting an explicit --store or storage policy",
+        ));
+    }
+    let (base_receipt, base_receipt_path, bootstrap_prepared, cargo_process_started) =
+        match options.base_receipt.as_ref() {
+            Some(path) => (read_receipt(path)?, path.clone(), false, false),
+            None => {
+                let (receipt, path, cargo_process_started) =
+                    crate::cli::commands::build::prepare_oven_interop_bootstrap(
+                        &locked.project_root,
+                        &locked.target.target,
+                    )?;
+                (receipt, path, true, cargo_process_started)
+            }
+        };
     let toolchain = selected_compiler_capability(&locked.target, &options)?;
     let sdk = selected_sdk_capability(&locked.target, &options)?;
     let execution_receipt = receipt_interop_execution(&locked.target, toolchain, sdk).map_err(CliError::failure)?;
@@ -618,6 +653,8 @@ pub fn oven_interop_bake(options: OvenInteropBakeCommandOptions) -> CliResult<Ex
     write_interop_execution_receipt(&execution_receipt, &receipt_path).map_err(CliError::failure)?;
     let report = OvenInteropBakeReport {
         target: locked.target.target,
+        base_receipt: base_receipt_path,
+        bootstrap_prepared,
         execution_receipt: receipt_path,
         execution_receipt_identity: execution_receipt.identity,
         plan_identity: baked.plan_identity,
@@ -625,18 +662,28 @@ pub fn oven_interop_bake(options: OvenInteropBakeCommandOptions) -> CliResult<Ex
         archives: baked.archive_names,
         bundles: baked.bundle_names,
         reused: baked.reused,
-        cargo_process_started: false,
+        cargo_process_started,
     };
     match options.format {
-        OvenOutputFormat::Text => println!(
-            "{} Oven interop target {} direct-rustc plan {} without Cargo.",
-            if report.reused { "Reused" } else { "Baked" },
-            report.target,
-            report.plan_identity
-        ),
+        OvenOutputFormat::Text => println!("{}", interop_bake_terminal_message(&report)),
         OvenOutputFormat::Json => print_json(&report)?,
     }
     Ok(ExitCode::SUCCESS)
+}
+
+/// Render process-authority evidence for one explicit native interop bake.
+fn interop_bake_terminal_message(report: &OvenInteropBakeReport) -> String {
+    format!(
+        "{} Oven interop target {} direct-rustc plan {}{}.",
+        if report.reused { "Reused" } else { "Baked" },
+        report.target,
+        report.plan_identity,
+        if report.cargo_process_started {
+            " after preparing its Rust-only base through the named compatibility publisher"
+        } else {
+            " without invoking Cargo"
+        }
+    )
 }
 
 /// Stage one already baked selected interop plan in a fixed caller-owned Android or iOS layout.
@@ -5858,9 +5905,9 @@ mod tests {
         compiler_suite_remove_generated_rust_closure, compiler_suite_selected_shard_references,
         compiler_suite_selection_context, compiler_suite_selection_report, compiler_suite_temporary_directory,
         compiler_suite_uses_indexed_foundations, compiler_suite_workspace_library_dependency_closure,
-        default_rustup_home, default_store_root, loaf_envelope_default_limits, loaf_envelope_evidence,
-        native_test_failure_summary, oven_import, oven_publish_direct_rustc_plan, oven_run, oven_test,
-        parse_named_path, prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults,
+        default_rustup_home, default_store_root, interop_bake_terminal_message, loaf_envelope_default_limits,
+        loaf_envelope_evidence, native_test_failure_summary, oven_import, oven_publish_direct_rustc_plan, oven_run,
+        oven_test, parse_named_path, prepare_compiler_suite_child, resolve_limits_with_environment_and_defaults,
         reuse_complete_loaf_envelope, run_compiler_suite_children_with_leases_retained,
         run_prepared_compiler_suite_children, select_compiler_suite_shards, write_compiler_suite_report,
         write_native_test_failure_transcript,
@@ -5896,6 +5943,30 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::time::Instant;
+
+    #[test]
+    fn interop_bake_text_evidence_distinguishes_automatic_bootstrap_cargo() -> Result<(), Box<dyn std::error::Error>> {
+        let report = super::OvenInteropBakeReport {
+            target: "aarch64-apple-darwin".to_string(),
+            base_receipt: PathBuf::from("base-receipt.json"),
+            bootstrap_prepared: true,
+            execution_receipt: PathBuf::from("execution-receipt.json"),
+            execution_receipt_identity: "sha256:execution".to_string(),
+            plan_identity: "sha256:plan".to_string(),
+            final_receipt_identity: "sha256:final".to_string(),
+            archives: Vec::new(),
+            bundles: Vec::new(),
+            reused: false,
+            cargo_process_started: true,
+        };
+
+        let message = interop_bake_terminal_message(&report);
+
+        assert!(message.contains("named compatibility publisher"));
+        assert!(!message.contains("without invoking Cargo"));
+        assert_eq!(serde_json::to_value(&report)?["cargo_process_started"], true);
+        Ok(())
+    }
 
     #[test]
     fn loaf_fixture_probe_pins_the_explicit_baker_authorities() {

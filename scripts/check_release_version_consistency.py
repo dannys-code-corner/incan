@@ -40,6 +40,12 @@ def pep440(version: str) -> str:
     Mirrors ``pep440_version`` in ``workspaces/release/pip/prepare_package.py``; the two must agree or this check
     would report a false difference on every pre-release.
     """
+    dev = re.fullmatch(r"(.+)-dev\.(\d+)\.(\d+)", version)
+    if dev:
+        # Cargo's dotted prerelease identifiers can distinguish `dev.1.1` from the reserved `dev.2`.
+        # PEP 440 has only one numeric development-release field, so retain the extra identity as a valid local
+        # version segment rather than emitting the invalid `0.6.0.dev1.1` spelling.
+        return f"{dev.group(1)}.dev{dev.group(2)}+{dev.group(3)}"
     normalized = version.replace("-dev.", ".dev")
     return re.sub(r"-(a|b|rc)(\d+)$", r"\1\2", normalized)
 
@@ -62,6 +68,11 @@ def mirrors(version: str) -> list[tuple[Path, re.Pattern[str], str]]:
     return [
         (Path("workspaces/release/npm/package.json"), re.compile(r'^\s*"version":\s*"([^"]+)"', re.MULTILINE), cargo_form),
         (Path("workspaces/release/pip/pyproject.toml"), re.compile(r'^version = "([^"]+)"', re.MULTILINE), pip_form),
+        (
+            Path("workspaces/release/pip/src/incan_toolchain/__init__.py"),
+            re.compile(r'^__release_version__ = "([^"]+)"', re.MULTILINE),
+            cargo_form,
+        ),
         (
             Path("workspaces/release/pip/src/incan_toolchain/__init__.py"),
             re.compile(r'^__version__ = "([^"]+)"', re.MULTILINE),
