@@ -3084,8 +3084,11 @@ impl OvenRustcArtifactManifest {
     /// `[rust-dependencies]`, resolved to Cargo package names). Those leaves may substitute across compilation
     /// identities because the root is recompiled against whatever the composed plan names — that swap is what
     /// unifies the root's trait identities with the sealed standard library. Every other leaf substitutes only onto
-    /// an identical compilation identity; see [`registry_leaf_substitution_is_safe`]. Because this parameter shapes
-    /// the composed plan, stored extension payloads record it and recomposition passes the recorded set.
+    /// an identical compilation identity; see [`registry_leaf_substitution_is_safe`]. When the plan retains
+    /// extension-built consumers, no leaf crosses identities, the root's own included: the root then links the
+    /// extension's runtime, and its leaves are also dependencies of that runtime and of the retained consumers,
+    /// which recorded them by exact identity hash. Because this parameter shapes the composed plan, stored
+    /// extension payloads record it and recomposition passes the recorded set.
     pub(crate) fn with_release_cohort_from_base(
         &self,
         base: &Self,
@@ -3118,23 +3121,6 @@ impl OvenRustcArtifactManifest {
             });
         };
         let mut composed = self.clone();
-        composed.externs[*project_runtime_index] = (*base_runtime).clone();
-        let base_compiler_artifacts = compiler_runtime_artifacts_by_name(base)?;
-        let base_compiler_sidecars = compiler_runtime_sidecars_by_name(base)?;
-        for artifact in &mut composed.externs {
-            replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
-        }
-        composed.supporting_artifacts = std::mem::take(&mut composed.supporting_artifacts)
-            .into_iter()
-            .filter_map(|artifact| {
-                replace_compiler_runtime_supporting_artifact(
-                    artifact,
-                    &base_compiler_artifacts,
-                    &base_compiler_sidecars,
-                )
-            })
-            .collect();
-        canonicalize_release_registry_sources(&mut composed, base)?;
         let root_registry_packages = root_registry_packages
             .iter()
             .map(|package| normalized_package_name(package))
@@ -3151,8 +3137,10 @@ impl OvenRustcArtifactManifest {
         // in both cases retained prebuilt crates hold exact identity hashes of other leaves. Without either fact,
         // every retained consumer is recompiled against the composed plan — the generated root plus the sealed
         // release family — and swapping shared leaves onto the release copies is exactly what unifies the root's
-        // trait identities with the standard library. In the conservative regime that swap stays limited to leaves
-        // the root itself links; everything else substitutes only across identical compilation identities.
+        // trait identities with the standard library. In the conservative regime nothing crosses identities, the
+        // root's own leaves included: the root links the extension's runtime (below), and a root-linked leaf such
+        // as `serde` is also an ordinary dependency of the retained consumers and of that runtime, so the unified
+        // Cargo resolution stays the plan and the base contributes only byte-identical canonicalization.
         let leaf_is_root_linked = |leaf: &OvenRustcRegistryLeaf| {
             root_extern_crates.contains(&leaf.crate_name)
                 || root_registry_packages.contains(&normalized_package_name(&leaf.package))
@@ -3177,6 +3165,35 @@ impl OvenRustcArtifactManifest {
                 .registry_leaves
                 .iter()
                 .any(|leaf| leaf_is_root_linked(leaf) && !leaf_has_release_counterpart(leaf));
+        // ---- Select the compiler runtime the root links ----
+        // Every consumer recompiled against the composed plan links the sealed release runtime, which is what
+        // unifies the root's trait identities with the standard library. The conservative regime cannot: its
+        // retained consumers were compiled by one unified Cargo resolution together with the project's own copy
+        // of the runtime, and a unit with process-global state — an async runtime above all — must be linked once.
+        // Taking the base's runtime there would bring the base's `tokio` in through the standard library's async
+        // component while DataFusion keeps the extension's, and the reactor one side starts is invisible to the
+        // other. So the root keeps the extension's runtime in that regime, and the whole link stays the single
+        // resolution Cargo produced. The base still contributes its release execution artifacts and vocabulary
+        // auxiliaries below.
+        if !retains_extension_built_consumers {
+            composed.externs[*project_runtime_index] = (*base_runtime).clone();
+            let base_compiler_artifacts = compiler_runtime_artifacts_by_name(base)?;
+            let base_compiler_sidecars = compiler_runtime_sidecars_by_name(base)?;
+            for artifact in &mut composed.externs {
+                replace_compiler_runtime_extern(artifact, &base_compiler_artifacts)?;
+            }
+            composed.supporting_artifacts = std::mem::take(&mut composed.supporting_artifacts)
+                .into_iter()
+                .filter_map(|artifact| {
+                    replace_compiler_runtime_supporting_artifact(
+                        artifact,
+                        &base_compiler_artifacts,
+                        &base_compiler_sidecars,
+                    )
+                })
+                .collect();
+        }
+        canonicalize_release_registry_sources(&mut composed, base)?;
         let mut leaf_replacements = Vec::new();
         for (index, project_leaf) in composed.registry_leaves.iter().enumerate() {
             let candidates = base
@@ -3190,7 +3207,7 @@ impl OvenRustcArtifactManifest {
             if candidates.is_empty() {
                 continue;
             }
-            let allow_cross_identity = !retains_extension_built_consumers || leaf_is_root_linked(project_leaf);
+            let allow_cross_identity = !retains_extension_built_consumers;
             let Some(release_leaf) = candidates.into_iter().find(|candidate| {
                 same_registry_leaf_semantics(candidate, project_leaf)
                     && registry_leaf_substitution_is_safe(project_leaf, candidate, allow_cross_identity)
@@ -3319,18 +3336,31 @@ impl OvenRustcArtifactManifest {
                 }
             }
             if !rerooted_paths.is_empty() {
+                // A record that already carries the release digest at a colliding path is the base's copy and
+                // stays put; only the project's copy under that path moves.
+                let follows_the_base = |relative_path: &str, digest: &str| {
+                    release_artifacts
+                        .get(relative_path)
+                        .is_some_and(|release| release.digest == digest)
+                };
                 for artifact in &mut composed.externs {
-                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path) {
+                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path)
+                        && !follows_the_base(&artifact.relative_path, &artifact.digest)
+                    {
                         artifact.relative_path = rerooted.clone();
                     }
                 }
                 for artifact in &mut composed.supporting_artifacts {
-                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path) {
+                    if let Some(rerooted) = rerooted_paths.get(&artifact.relative_path)
+                        && !follows_the_base(&artifact.relative_path, &artifact.digest)
+                    {
                         artifact.relative_path = rerooted.clone();
                     }
                 }
                 for leaf in &mut composed.registry_leaves {
-                    if let Some(rerooted) = rerooted_paths.get(&leaf.artifact.relative_path) {
+                    if let Some(rerooted) = rerooted_paths.get(&leaf.artifact.relative_path)
+                        && !follows_the_base(&leaf.artifact.relative_path, &leaf.artifact.digest)
+                    {
                         leaf.artifact.relative_path = rerooted.clone();
                     }
                 }
@@ -8164,6 +8194,214 @@ mod tests {
             super::registry_leaf_substitution_is_safe(&project, &divergent_release, true),
             "a root-extern leaf may cross identities because the generated root recompiles against the release copy"
         );
+    }
+
+    #[test]
+    fn conservative_regime_keeps_a_root_linked_leaf_on_the_project_identity() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // `shared` is root-linked and has a release counterpart with different bytes. `engine` — root-linked with
+        // no counterpart — keeps its extension-built subtree, and that subtree recorded the project's `shared` by
+        // exact identity hash, as does the extension's runtime the root now links. Nothing may cross identities:
+        // the root keeps the project's `shared`, re-rooted beside the release twin, or the retained consumer stops
+        // loading (#1227, IncQL on a packaged toolchain: `substrait` against the project's `serde`).
+        let root = tempfile::tempdir()?;
+        let receipt = intent(root.path())?;
+        let source = OvenRustcRegistrySource {
+            registry: "registry+https://github.com/rust-lang/crates.io-index".to_string(),
+            checksum: "shared-checksum".to_string(),
+            relative_root: "registry-sources/shared".to_string(),
+            digest: "sha256:shared-source".to_string(),
+        };
+        let registry_source = OvenRustcRegistrySourcePackage {
+            package: "shared".to_string(),
+            version: "1.0.0".to_string(),
+            features: Vec::new(),
+            source: source.clone(),
+        };
+        let leaf = |crate_name: &str, artifact| OvenRustcRegistryLeaf {
+            package: crate_name.to_string(),
+            version: "1.0.0".to_string(),
+            crate_name: crate_name.to_string(),
+            features: Vec::new(),
+            source: source.clone(),
+            artifact,
+        };
+        let project_shared = OvenRustcArtifactExtern {
+            crate_name: "shared".to_string(),
+            relative_path: "target/debug/deps/libshared-aaaa.rlib".to_string(),
+            digest: "sha256:project-shared".to_string(),
+        };
+        let base_shared = OvenRustcArtifactExtern {
+            crate_name: "shared".to_string(),
+            relative_path: "target/debug/deps/libshared-aaaa.rlib".to_string(),
+            digest: "sha256:base-shared".to_string(),
+        };
+        let engine_extern = OvenRustcArtifactExtern {
+            crate_name: "engine".to_string(),
+            relative_path: "target/debug/deps/libengine-bbbb.rlib".to_string(),
+            digest: "sha256:project-engine".to_string(),
+        };
+        let engine_source = OvenRustcRegistrySourcePackage {
+            package: "engine".to_string(),
+            ..registry_source.clone()
+        };
+        let project = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["target/debug/deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![
+                OvenRustcArtifactExtern {
+                    crate_name: "incan_stdlib".to_string(),
+                    relative_path: "target/debug/deps/libincan_stdlib-project.rlib".to_string(),
+                    digest: "sha256:project-stdlib".to_string(),
+                },
+                engine_extern.clone(),
+                project_shared.clone(),
+            ],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![
+                leaf("engine", engine_extern.clone()),
+                leaf("shared", project_shared.clone()),
+            ],
+            registry_sources: vec![registry_source.clone(), engine_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            // A root-linked leaf's rlib is declared once, as the root extern; only its sidecar is supporting.
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: "target/debug/deps/libshared-aaaa.rmeta".to_string(),
+                    digest: "sha256:project-shared-meta".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/shared/Cargo.toml".to_string(),
+                    digest: "sha256:shared-manifest".to_string(),
+                },
+            ],
+        };
+        let base = OvenRustcArtifactManifest {
+            schema_version: OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+            intent: receipt.intent.clone(),
+            dependency_search_paths: vec!["target/debug/deps".to_string()],
+            native_search_paths: Vec::new(),
+            externs: vec![OvenRustcArtifactExtern {
+                crate_name: "incan_stdlib".to_string(),
+                relative_path: "target/debug/deps/libincan_stdlib-release.rlib".to_string(),
+                digest: "sha256:release-stdlib".to_string(),
+            }],
+            entrypoint_externs: BTreeMap::new(),
+            registry_leaves: vec![leaf("shared", base_shared.clone())],
+            registry_sources: vec![registry_source.clone()],
+            compile_environment: BTreeMap::new(),
+            vocab_auxiliary_targets: Vec::new(),
+            supporting_artifacts: vec![
+                OvenRustcSupportingArtifact {
+                    relative_path: base_shared.relative_path.clone(),
+                    digest: base_shared.digest.clone(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "target/debug/deps/libshared-aaaa.rmeta".to_string(),
+                    digest: "sha256:base-shared-meta".to_string(),
+                },
+                OvenRustcSupportingArtifact {
+                    relative_path: "registry-sources/shared/Cargo.toml".to_string(),
+                    digest: "sha256:shared-manifest".to_string(),
+                },
+            ],
+        };
+        let composed = project
+            .with_release_cohort_from_base(&base, &BTreeSet::new())
+            .map_err(|error| format!("first composition: {error:?}"))?;
+        // The regime retains extension-built consumers, so the root keeps the extension's runtime: one unified
+        // resolution links once, and a process-global runtime cannot be brought in twice through the base.
+        let runtime = composed
+            .externs
+            .iter()
+            .find(|artifact| artifact.crate_name == "incan_stdlib")
+            .ok_or("composed plan lost the runtime extern")?;
+        assert_eq!(
+            (runtime.relative_path.as_str(), runtime.digest.as_str()),
+            (
+                "target/debug/deps/libincan_stdlib-project.rlib",
+                "sha256:project-stdlib"
+            ),
+            "the conservative regime links the extension's runtime, not the base's"
+        );
+        let root_link = composed
+            .externs
+            .iter()
+            .find(|artifact| artifact.crate_name == "shared")
+            .ok_or("composed plan lost the shared root extern")?;
+        assert_eq!(
+            (root_link.relative_path.as_str(), root_link.digest.as_str()),
+            (
+                "target/debug/extension-deps/libshared-aaaa.rlib",
+                "sha256:project-shared"
+            ),
+            "the root keeps the project's copy, re-rooted beside the release twin"
+        );
+        let leaf_record = composed
+            .registry_leaves
+            .iter()
+            .find(|candidate| candidate.crate_name == "shared")
+            .ok_or("composed plan lost the shared leaf")?;
+        assert_eq!(
+            (
+                leaf_record.artifact.relative_path.as_str(),
+                leaf_record.artifact.digest.as_str()
+            ),
+            (
+                "target/debug/extension-deps/libshared-aaaa.rlib",
+                "sha256:project-shared"
+            )
+        );
+        let supporting_paths = composed
+            .supporting_artifacts
+            .iter()
+            .map(|artifact| (artifact.relative_path.as_str(), artifact.digest.as_str()))
+            .collect::<BTreeSet<_>>();
+        assert!(
+            supporting_paths.contains(&(
+                "target/debug/extension-deps/libshared-aaaa.rmeta",
+                "sha256:project-shared-meta"
+            )),
+            "the split-metadata sidecar must move with the project's rlib"
+        );
+        // The base's copy and sidecar join the plan at their own paths for the sealed runtime's execution closure.
+        assert!(
+            supporting_paths.contains(&("target/debug/deps/libshared-aaaa.rlib", "sha256:base-shared")),
+            "the base copy must join the plan at its own path"
+        );
+        assert!(
+            supporting_paths.contains(&("target/debug/deps/libshared-aaaa.rmeta", "sha256:base-shared-meta")),
+            "the base sidecar must join the plan beside the base copy"
+        );
+        assert_eq!(
+            composed
+                .declared_artifact_paths()?
+                .iter()
+                .filter(|path| path.ends_with("libshared-aaaa.rlib"))
+                .count(),
+            2,
+            "exactly the base copy in `deps` and the project copy in `extension-deps` are declared"
+        );
+        assert!(
+            !supporting_paths.contains(&("target/debug/deps/libshared-aaaa.rlib", "sha256:project-shared")),
+            "the project's copy must not remain at the colliding path"
+        );
+        assert!(
+            composed
+                .dependency_search_paths
+                .iter()
+                .any(|path| path == "target/debug/extension-deps"),
+            "the re-rooted directory must join the search paths"
+        );
+        // Recomposition is a fixed point: the stored composed plan validates against its base unchanged.
+        let recomposed = composed
+            .with_release_cohort_from_base(&base, &BTreeSet::new())
+            .map_err(|error| format!("recomposition: {error:?}"))?;
+        assert_eq!(recomposed, composed);
+        Ok(())
     }
 
     #[test]
