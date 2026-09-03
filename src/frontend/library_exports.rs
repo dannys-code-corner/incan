@@ -1675,7 +1675,7 @@ fn map_method_overloads_with_defaults(
 
 /// Return whether a method belongs in public API metadata.
 fn is_exported_method_name(name: &str) -> bool {
-    !name.starts_with('_') || name.starts_with("__")
+    !name.starts_with('_') || name.starts_with("__") || matches!(name, "_checked_current_unit" | "_checked_package")
 }
 
 /// Convert one semantic method entry into the checked export shape.
@@ -1861,6 +1861,13 @@ mod tests {
             checked_preset_value(&value, DefaultPathContext::for_checker(&checker)),
             CheckedPresetValue::Unsupported
         );
+    }
+
+    #[test]
+    fn compiler_registry_materializers_cross_compiled_provider_boundaries() {
+        assert!(is_exported_method_name("_checked_current_unit"));
+        assert!(is_exported_method_name("_checked_package"));
+        assert!(!is_exported_method_name("_private_helper"));
     }
 
     #[test]

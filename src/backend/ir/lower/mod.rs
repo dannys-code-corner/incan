@@ -374,16 +374,26 @@ impl AstLowering {
                     .as_ref()
                     .is_none_or(|info| !info.is_compiler_generated_member_identity(identity))
             })
-            .map(|identity| {
-                let mut identity = identity.clone();
-                if rebase_source_stdlib
-                    && let SymbolOrigin::Module(module_path) = &mut identity.origin
-                    && module_path.first().map(String::as_str) == Some(incan_core::lang::stdlib::STDLIB_ROOT)
-                {
-                    module_path[0] = incan_core::lang::stdlib::INCAN_STD_NAMESPACE.to_string();
-                }
-                encode_incan_symbol_identity(&identity)
-            })
+            .map(|identity| Self::emitted_source_identity_name(identity, rebase_source_stdlib))
+    }
+
+    /// Project a checked source identity into the physical namespace used by generated Rust.
+    ///
+    /// Source stdlib metadata is owned by `std.*`; source-backed stdlib modules are emitted below `incan_std.*` to
+    /// keep that internal implementation distinct from the external `incan_stdlib` crate. Every lowering path that
+    /// compares or substitutes a checked stdlib identity must use the same one-way projection.
+    pub(in crate::backend::ir::lower) fn emitted_source_identity_name(
+        identity: &CanonicalSymbolId,
+        rebase_source_stdlib: bool,
+    ) -> String {
+        let mut identity = identity.clone();
+        if rebase_source_stdlib
+            && let SymbolOrigin::Module(module_path) = &mut identity.origin
+            && module_path.first().map(String::as_str) == Some(incan_core::lang::stdlib::STDLIB_ROOT)
+        {
+            module_path[0] = incan_core::lang::stdlib::INCAN_STD_NAMESPACE.to_string();
+        }
+        encode_incan_symbol_identity(&identity)
     }
 
     /// Enter one callable body with its declared return type available to statement lowering.

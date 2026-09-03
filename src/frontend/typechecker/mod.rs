@@ -172,7 +172,9 @@ enum MemberBindingKind {
 /// Type-owned methods have no instance receiver and are selected only through a type expression. Fields, properties,
 /// and receiver-bearing methods are selected through an instance. Keeping those surfaces distinct lets a model expose
 /// `TimeDelta.days(value)` while retaining `delta.days` as ordinary stored data without weakening collision checks
-/// within either surface.
+/// within either surface. Within the instance surface, Rust and Incan also distinguish a stored field selection
+/// (`value.name`) from an authored method call (`value.name()`); the collision registry preserves that distinction
+/// explicitly when it encounters those two declaration kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum MemberBindingSurface {
     Type,
@@ -5651,6 +5653,24 @@ impl TypeChecker {
                 } if kind == MemberBindingKind::Method => {
                     // Same-name methods form one overload binding.
                     self.record_member_declaration_identity(&name, kind, span);
+                }
+                BindingRegistration::Collision {
+                    existing: (previous_kind, _),
+                } if matches!(
+                    (previous_kind, kind),
+                    (MemberBindingKind::Field, MemberBindingKind::Method)
+                        | (MemberBindingKind::Method, MemberBindingKind::Field)
+                ) =>
+                {
+                    // A stored selection and method invocation are distinct source forms: `value.name` versus
+                    // `value.name()`. Both declarations therefore remain active even when their spellings match. If
+                    // the field appears second, retain it as the registry sentinel so a later duplicate field or
+                    // field-like declaration still collides with storage rather than being mistaken for another
+                    // callable coexistence case.
+                    self.record_member_declaration_identity(&name, kind, span);
+                    if kind == MemberBindingKind::Field {
+                        seen.insert((name, surface), (kind, span));
+                    }
                 }
                 BindingRegistration::Collision {
                     existing: (previous_kind, previous_span),

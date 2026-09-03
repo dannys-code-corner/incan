@@ -572,6 +572,32 @@ impl<'a> IrEmitter<'a> {
         }
     }
 
+    /// Preserve the Rust-facing name that existed before canonical Incan symbol projection.
+    ///
+    /// The alias is emitted only at a Rust boundary: public/crate-visible functions and private functions called by
+    /// compiler-generated harness code. It introduces no second linker symbol, while ordinary Incan-to-Incan calls
+    /// continue to use the compiler-owned canonical projection.
+    fn rust_facing_function_alias(
+        &self,
+        func: &super::super::super::decl::IrFunction,
+        projected_name: &proc_macro2::Ident,
+    ) -> Option<TokenStream> {
+        if func.name == conventions::ENTRYPOINT_NAME
+            || self.function_registry.canonical_identity(&func.name).is_none()
+            || (matches!(func.visibility, Visibility::Private) && !self.externally_reachable_items.contains(&func.name))
+        {
+            return None;
+        }
+        let alias = Self::rust_ident(&func.name);
+        if alias == *projected_name {
+            return None;
+        }
+        let visibility = self.emit_visibility(&func.visibility);
+        Some(quote! {
+            #visibility use #projected_name as #alias;
+        })
+    }
+
     /// Emit a top-level generated Rust function, including entrypoint handling and scoped lint metadata.
     pub(in crate::backend::ir::emit) fn emit_function(
         &self,
@@ -585,6 +611,7 @@ impl<'a> IrEmitter<'a> {
         let is_main = func.name == conventions::ENTRYPOINT_NAME;
         let has_recoverable_projection = self.function_registry.canonical_identity(&func.name).is_some();
         let name = self.rust_function_ident(&func.name);
+        let rust_facing_alias = self.rust_facing_function_alias(func, &name);
         let mutated_params = self.collect_mutated_params(func);
         let exact_ingress_params =
             Self::exact_float_ingress_param_names(func, !is_main && matches!(func.visibility, Visibility::Public));
@@ -707,6 +734,7 @@ impl<'a> IrEmitter<'a> {
                 }
 
                 #process_entry
+                #rust_facing_alias
             });
         }
 
@@ -723,6 +751,7 @@ impl<'a> IrEmitter<'a> {
                         #(#body_stmts)*
                     })
                 }
+                #rust_facing_alias
             });
         }
 
@@ -752,6 +781,7 @@ impl<'a> IrEmitter<'a> {
                     #(#body_stmts)*
                 }
                 #process_entry
+                #rust_facing_alias
             })
         } else {
             let ret_ty = self.emit_type(&func.return_type);
@@ -775,6 +805,7 @@ impl<'a> IrEmitter<'a> {
                     #(#body_stmts)*
                 }
                 #process_entry
+                #rust_facing_alias
             })
         }
     }
@@ -797,6 +828,7 @@ impl<'a> IrEmitter<'a> {
         };
 
         let name = self.rust_function_ident(&func.name);
+        let rust_facing_alias = self.rust_facing_function_alias(func, &name);
         // The wrapper is Incan-origin and therefore projected. Its delegated symbol remains host-owned Rust and must
         // use the compiler-carried source spelling rather than inheriting or decoding the Incan projection.
         let backing_name = Self::rust_ident(
@@ -881,6 +913,7 @@ impl<'a> IrEmitter<'a> {
                     #vis #async_kw fn #name #generics (#(#unused_params),*) {
                         incan_stdlib::errors::__private::raise_runtime_misuse(#panic_message)
                     }
+                    #rust_facing_alias
                 });
             }
 
@@ -891,6 +924,7 @@ impl<'a> IrEmitter<'a> {
                 #vis #async_kw fn #name #generics (#(#unused_params),*) -> #ret_ty {
                     incan_stdlib::errors::__private::raise_runtime_misuse(#panic_message)
                 }
+                #rust_facing_alias
             });
         }
 
@@ -929,6 +963,7 @@ impl<'a> IrEmitter<'a> {
                     #(#exact_ingress_stmts)*
                     #delegated_call
                 }
+                #rust_facing_alias
             })
         } else {
             let ret_ty = self.emit_type(&func.return_type);
@@ -941,6 +976,7 @@ impl<'a> IrEmitter<'a> {
                     #(#exact_ingress_stmts)*
                     #validated_return
                 }
+                #rust_facing_alias
             })
         }
     }

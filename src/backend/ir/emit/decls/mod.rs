@@ -160,6 +160,14 @@ impl<'a> IrEmitter<'a> {
     ) -> Result<TokenStream, EmitError> {
         let vis = self.emit_visibility(visibility);
         let name_ident = self.rust_static_declaration_ident(name, provenance)?;
+        let rust_facing_alias = if matches!(provenance, super::super::decl::IrStaticProvenance::Source(_))
+            && !matches!(visibility, super::super::decl::Visibility::Private)
+        {
+            let alias = Self::rust_generated_static_ident(name);
+            (alias != name_ident).then(|| quote! { #vis use #name_ident as #alias; })
+        } else {
+            None
+        };
         let ty_tokens = self.emit_type(ty);
         let previous = self.in_static_initializer.replace(true);
         let emitted_value = self.emit_expr(value);
@@ -171,6 +179,7 @@ impl<'a> IrEmitter<'a> {
         Ok(quote! {
             #vis static #name_ident: std::sync::LazyLock<incan_stdlib::storage::StaticCell<#ty_tokens>> =
                 std::sync::LazyLock::new(|| incan_stdlib::storage::StaticCell::new(#converted_value));
+            #rust_facing_alias
         })
     }
 
@@ -717,7 +726,27 @@ impl<'a> IrEmitter<'a> {
                             }
                         }
                     };
-                    quote! { #static_init_import #item_import }
+                    let rust_facing_reexport = if should_reexport_item(item)
+                        && item
+                            .canonical
+                            .as_ref()
+                            .is_some_and(super::super::decl::is_projected_source_symbol)
+                        && source_binding != emitted_name
+                    {
+                        let source_ident = if item.is_static {
+                            Self::rust_generated_static_ident(source_binding)
+                        } else {
+                            Self::rust_ident(source_binding)
+                        };
+                        if absolute_path {
+                            quote! { pub use :: #path_ts_clone :: #name_ident as #source_ident; }
+                        } else {
+                            quote! { pub use #path_ts_clone :: #name_ident as #source_ident; }
+                        }
+                    } else {
+                        quote! {}
+                    };
+                    quote! { #static_init_import #item_import #rust_facing_reexport }
                 })
                 .collect();
             Ok(quote! { #(#item_stmts)* })

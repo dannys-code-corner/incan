@@ -3001,6 +3001,31 @@ fn rename_checked_export(export: &CheckedNamedExport, exported_name: &str) -> Ch
     renamed
 }
 
+/// Project a checked provider export through the entrypoint binding that actually re-exports it.
+///
+/// The provider export retains the concrete declaration shape (model, trait, function, and so on), while the
+/// entrypoint's checked export owns the re-export path and target identity. Combining those two checked products
+/// avoids relabeling a renamed declaration as a direct export whose public name no longer matches its canonical
+/// declaration.
+fn project_checked_reexport(
+    export: &CheckedNamedExport,
+    exported_name: &str,
+    entrypoint_exports: Option<&HashMap<String, Vec<CheckedNamedExport>>>,
+) -> CheckedNamedExport {
+    let mut projected = rename_checked_export(export, exported_name);
+    let Some(candidates) = entrypoint_exports.and_then(|exports| exports.get(exported_name)) else {
+        return projected;
+    };
+    let checked_projection = candidates
+        .iter()
+        .find(|candidate| candidate.identity.canonical == export.identity.canonical)
+        .or_else(|| (candidates.len() == 1).then(|| &candidates[0]));
+    if let Some(checked_projection) = checked_projection {
+        projected.identity = checked_projection.identity.clone();
+    }
+    projected
+}
+
 /// Group checked exports by public source name while preserving same-name function overload entries.
 fn checked_exports_by_name(exports: Vec<CheckedNamedExport>) -> HashMap<String, Vec<CheckedNamedExport>> {
     let mut grouped: HashMap<String, Vec<CheckedNamedExport>> = HashMap::new();
@@ -3089,6 +3114,7 @@ impl<'a> LibraryReexportResolver<'a> {
         let mut resolved = Vec::new();
         let mut exported_names = LibraryExportBindingRegistry::default();
         let known_modules: Vec<String> = self.module_exports.keys().cloned().collect();
+        let entrypoint_exports = self.module_exports.get(&module_key(&lib_module.path_segments));
 
         if let Some(exports_by_name) = self.module_exports.get(&module_key(&lib_module.path_segments)) {
             for (export_name, export_span) in Self::direct_public_exports(lib_module) {
@@ -3187,7 +3213,7 @@ impl<'a> LibraryReexportResolver<'a> {
                 resolved.extend(
                     exports
                         .iter()
-                        .map(|export| rename_checked_export(export, &exported_name)),
+                        .map(|export| project_checked_reexport(export, &exported_name, entrypoint_exports)),
                 );
             }
         }
@@ -17518,6 +17544,22 @@ impl ChildId {
             "widgets".to_string(),
             HashMap::from([(widget_export.name.clone(), vec![widget_export])]),
         );
+        let public_widget_projection = CheckedNamedExport {
+            name: "PublicWidget".to_string(),
+            identity: CheckedExportIdentity::reexport(
+                vec!["widgets".to_string(), "Widget".to_string()],
+                vec!["widgets".to_string(), "Widget".to_string()],
+            ),
+            kind: CheckedExportKind::Alias(crate::frontend::library_exports::CheckedAliasExport {
+                name: "PublicWidget".to_string(),
+                target_path: vec!["widgets".to_string(), "Widget".to_string()],
+                projected_function: None,
+            }),
+        };
+        module_exports.insert(
+            "main".to_string(),
+            HashMap::from([("PublicWidget".to_string(), vec![public_widget_projection])]),
+        );
 
         let resolved = LibraryReexportResolver::new(&module_exports)
             .resolve(&lib_module)
@@ -17528,6 +17570,13 @@ impl ChildId {
             CheckedExportKind::TypeAlias(alias) => assert_eq!(alias.name, "PublicWidget"),
             _ => panic!("expected type alias export"),
         }
+        assert!(
+            matches!(
+                resolved[0].identity.projection,
+                crate::frontend::library_exports::CheckedExportProjection::Reexport { .. }
+            ),
+            "the package-root export must retain the checked entrypoint re-export projection"
+        );
         Ok(())
     }
 

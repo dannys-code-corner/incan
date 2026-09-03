@@ -9431,6 +9431,32 @@ def selected() -> int:
 }
 
 #[test]
+fn stored_field_static_factory_and_instance_accumulator_support_fluent_chaining() {
+    let source = r#"
+model TimeDelta:
+  days: int
+  seconds: int
+
+  @staticmethod
+  def days(value: int) -> TimeDelta:
+    return TimeDelta(days=value, seconds=0)
+
+  def days(self, value: int) -> TimeDelta:
+    return TimeDelta(days=self.days + value, seconds=self.seconds)
+
+  def hours(self, value: int) -> TimeDelta:
+    return TimeDelta(days=self.days, seconds=self.seconds + value * 3600)
+
+def selected() -> TimeDelta:
+  return TimeDelta.days(-7).hours(20).days(2)
+"#;
+    assert!(
+        check_str(source).is_ok(),
+        "field access, type-owned construction, and fluent instance accumulation must remain distinct"
+    );
+}
+
+#[test]
 fn instance_method_cannot_be_called_through_its_type() {
     let source = r#"
 model Counter:
@@ -9452,7 +9478,7 @@ def invalid() -> int:
 }
 
 #[test]
-fn test_all_member_binding_kinds_share_source_ordered_first_wins_registration() -> Result<(), String> {
+fn test_colliding_member_bindings_keep_distinct_field_and_method_declarations() -> Result<(), String> {
     let source = r#"
 class Surface:
   clash: int
@@ -9476,13 +9502,13 @@ class Surface:
         return Err("expected class declaration".to_string());
     };
     let first_span = class.fields[0].span;
+    let method_span = class
+        .methods
+        .iter()
+        .find(|method| method.node.name == "clash")
+        .ok_or("missing clashing method")?
+        .span;
     let rejected_spans = [
-        class
-            .methods
-            .iter()
-            .find(|method| method.node.name == "clash")
-            .ok_or("missing clashing method")?
-            .span,
         class.properties[0].span,
         class.method_aliases[0].span,
         class.method_partials[0].span,
@@ -9503,8 +9529,8 @@ class Surface:
         .collect::<Vec<_>>();
     assert_eq!(
         collision_errors.len(),
-        4,
-        "method, property, alias, and partial must each collide with the first field: {errors:?}"
+        3,
+        "property, alias, and partial must each collide with the first field while the callable method remains distinct: {errors:?}"
     );
     let first_note = format!("First declaration span: {}..{}", first_span.start, first_span.end);
     assert!(
@@ -9518,6 +9544,10 @@ class Surface:
     assert!(
         exported.contains_key(&(first_span.start, first_span.end)),
         "the accepted field declaration must be exported"
+    );
+    assert!(
+        exported.contains_key(&(method_span.start, method_span.end)),
+        "the separately callable method declaration must be exported"
     );
     assert!(
         rejected_spans

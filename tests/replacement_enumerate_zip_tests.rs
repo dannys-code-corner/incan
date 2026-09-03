@@ -440,10 +440,9 @@ def enumerate_nonlist() -> int:
     assert_direct_refusal_at_call(&module, "enumerate_nonlist", source, "enumerate(\"x\")")
 }
 
-/// The explicit builtin namespace remains a retained Body-IR indirect-call refusal, not a direct fallback spelling.
+/// The explicit builtin namespace carries the same checked builtin identity as the ambient spelling.
 #[test]
-fn replacement_refuses_explicit_builtin_namespace_enumerate_at_the_original_call_span()
--> Result<(), Box<dyn std::error::Error>> {
+fn replacement_executes_explicit_builtin_namespace_enumerate() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def explicit_namespace_enumerate() -> int:
   mut total = 0
@@ -451,13 +450,7 @@ def explicit_namespace_enumerate() -> int:
     total += pair.0
   return total
 "#;
-    let module = lower_typed_body_ir(source)?;
-    assert_direct_refusal_at_call(
-        &module,
-        "explicit_namespace_enumerate",
-        source,
-        "std.builtins.enumerate([1])",
-    )
+    assert_direct_execution(source, "explicit_namespace_enumerate", ReplacementValue::Int(0), b"")
 }
 
 /// Normal main execution preserves program output, receipt identity, and explicit refusal fallback.

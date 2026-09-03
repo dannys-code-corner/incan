@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::super::super::decl::{
     FunctionParam, FunctionParamDefault, IrAssociatedType, IrDecl, IrDeclKind, IrFunction, IrImpl, IrMethodProjection,
-    Visibility,
+    IrSourceMethodProjection, Visibility,
 };
 use super::super::super::expr::{IrCallArg, IrCallArgKind, IrExprKind, VarAccess, VarRefKind};
 use super::super::super::stmt::{IrStmt, IrStmtKind};
@@ -30,6 +30,53 @@ struct TraitImplSignature<'a> {
 }
 
 impl AstLowering {
+    /// Retain the established source-spelled native Rust surface without duplicating authored method bodies.
+    ///
+    /// The canonical method remains the sole implementation. A unique source spelling receives a forwarding
+    /// projection; overloaded type/instance spellings do not because Rust inherent impls cannot overload names by
+    /// receiver shape. Magic methods already retain their Rust ABI slots and use [`IrMethodProjection`] in the other
+    /// direction, so they are not part of this compatibility surface.
+    fn source_method_projections(
+        &mut self,
+        owner: &str,
+        methods: &[Spanned<ast::MethodDecl>],
+        properties: &[Spanned<ast::PropertyDecl>],
+    ) -> Result<Vec<IrSourceMethodProjection>, LoweringError> {
+        let mut spelling_counts = HashMap::<String, usize>::new();
+        for method in methods
+            .iter()
+            .filter(|method| magic_methods::from_str(&method.node.name).is_none())
+        {
+            *spelling_counts.entry(method.node.name.clone()).or_default() += 1;
+        }
+        for property in properties {
+            *spelling_counts.entry(property.node.name.clone()).or_default() += 1;
+        }
+
+        let mut projections = Vec::new();
+        for method in methods.iter().filter(|method| {
+            magic_methods::from_str(&method.node.name).is_none() && spelling_counts.get(&method.node.name) == Some(&1)
+        }) {
+            if let Some(identity) = self.emitted_method_identity(owner, method)? {
+                projections.push(IrSourceMethodProjection {
+                    source_name: method.node.name.clone(),
+                    identity,
+                });
+            }
+        }
+        for property in properties
+            .iter()
+            .filter(|property| spelling_counts.get(&property.node.name) == Some(&1))
+        {
+            let identity = self.required_member_identity(owner, &property.node.name, property.span)?;
+            projections.push(IrSourceMethodProjection {
+                source_name: property.node.name.clone(),
+                identity,
+            });
+        }
+        Ok(projections)
+    }
+
     /// Return whether this method is the compiler-generated forwarding helper for a source method-partial binding.
     fn is_generated_method_partial_wrapper(&self, owner: &str, method: &Spanned<ast::MethodDecl>) -> bool {
         self.generated_method_partial_wrappers.contains(&(
@@ -443,6 +490,7 @@ impl AstLowering {
         // collecting errors.
         let lowered = (|| {
             let inherent_methods = self.inherent_methods_for_rust_impl(type_params, methods, adopted_traits);
+            let source_method_projections = self.source_method_projections(type_name, &inherent_methods, properties)?;
             let method_projections: Vec<IrMethodProjection> = inherent_methods
                 .iter()
                 .filter(|method| magic_methods::from_str(&method.node.name).is_some())
@@ -478,10 +526,10 @@ impl AstLowering {
                     PropertyLoweringMode::Inherent,
                 )?);
             }
-            Ok((lowered_methods, method_projections))
+            Ok((lowered_methods, method_projections, source_method_projections))
         })();
         self.current_impl_type = prev;
-        let (lowered_methods, method_projections) = lowered?;
+        let (lowered_methods, method_projections, source_method_projections) = lowered?;
 
         Ok(IrImpl {
             target_type: type_name.to_string(),
@@ -493,6 +541,7 @@ impl AstLowering {
             associated_types: Vec::new(),
             methods: lowered_methods,
             method_projections,
+            source_method_projections,
         })
     }
 
@@ -1320,6 +1369,7 @@ impl AstLowering {
                     associated_types,
                     methods,
                     method_projections,
+                    source_method_projections: Vec::new(),
                 });
             };
             let trait_type_params = trait_decl.type_params;
@@ -1475,6 +1525,7 @@ impl AstLowering {
                 associated_types,
                 methods,
                 method_projections,
+                source_method_projections: Vec::new(),
             })
         })();
         self.current_impl_type = prev;
@@ -1681,6 +1732,7 @@ impl AstLowering {
         // collecting errors.
         let lowered = (|| {
             let inherent_methods = self.inherent_methods_for_rust_impl(type_params, methods, adopted_traits);
+            let source_method_projections = self.source_method_projections(type_name, &inherent_methods, properties)?;
             let method_projections: Vec<IrMethodProjection> = inherent_methods
                 .iter()
                 .filter(|method| magic_methods::from_str(&method.node.name).is_some())
@@ -1716,10 +1768,10 @@ impl AstLowering {
                     PropertyLoweringMode::Inherent,
                 )?);
             }
-            Ok((lowered_methods, method_projections))
+            Ok((lowered_methods, method_projections, source_method_projections))
         })();
         self.current_impl_type = prev;
-        let (lowered_methods, method_projections) = lowered?;
+        let (lowered_methods, method_projections, source_method_projections) = lowered?;
 
         Ok(IrImpl {
             target_type: type_name.to_string(),
@@ -1731,6 +1783,7 @@ impl AstLowering {
             associated_types: Vec::new(),
             methods: lowered_methods,
             method_projections,
+            source_method_projections,
         })
     }
 
@@ -1748,6 +1801,7 @@ impl AstLowering {
         let prev = self.current_impl_type.replace(type_name.to_string());
         let type_param_names: std::collections::HashSet<&str> = type_params.iter().map(|tp| tp.name.as_str()).collect();
         let inherent_methods = self.inherent_methods_for_rust_impl(type_params, methods, adopted_traits);
+        let source_method_projections = self.source_method_projections(type_name, &inherent_methods, &[])?;
         let method_projections: Vec<IrMethodProjection> = inherent_methods
             .iter()
             .filter(|method| magic_methods::from_str(&method.node.name).is_some())
@@ -1785,6 +1839,7 @@ impl AstLowering {
             associated_types: Vec::new(),
             methods: lowered_methods,
             method_projections,
+            source_method_projections,
         })
     }
 

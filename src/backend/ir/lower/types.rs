@@ -498,6 +498,7 @@ impl AstLowering {
     /// placeholders that the typechecker may have normalized to nominal names.
     pub(super) fn merge_inferred_ir_type(existing: &IrType, inferred: IrType) -> IrType {
         match (existing, inferred) {
+            (existing, IrType::Unknown) => existing.clone(),
             (IrType::Generic(existing_name), IrType::Struct(inferred_name)) if existing_name == &inferred_name => {
                 existing.clone()
             }
@@ -1532,6 +1533,28 @@ mod tests {
                     vec![IrType::Generic("T".to_string())]
                 )]
             )
+        );
+    }
+
+    #[test]
+    fn merge_inferred_ir_type_does_not_erase_a_concrete_closure_return() {
+        let merged = AstLowering::merge_inferred_ir_type(
+            &IrType::Function {
+                params: vec![IrType::Int],
+                ret: Box::new(IrType::String),
+            },
+            IrType::Function {
+                params: vec![IrType::Int],
+                ret: Box::new(IrType::Unknown),
+            },
+        );
+
+        assert_eq!(
+            merged,
+            IrType::Function {
+                params: vec![IrType::Int],
+                ret: Box::new(IrType::String),
+            }
         );
     }
 

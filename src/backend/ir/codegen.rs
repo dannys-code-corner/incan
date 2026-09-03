@@ -2421,6 +2421,12 @@ impl Default for IrCodegen<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    mod canonical_projection {
+        include!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/support/canonical_projection.rs"
+        ));
+    }
     use crate::frontend::library_manifest_index::{
         LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
     };
@@ -2428,9 +2434,8 @@ mod tests {
     use crate::library_manifest::{
         ConstExport, FunctionExport, LibraryManifest, ModelExport, ParamExport, ParamKindExport, TypeRef,
     };
-    use incan_semantics_core::{
-        SemanticSourceTargetKind, SymbolOrigin, decode_incan_symbol_identity, encode_incan_symbol_identity,
-    };
+    use canonical_projection::{projected_identities, projected_identity, projected_name};
+    use incan_semantics_core::{SemanticSourceTargetKind, SymbolOrigin};
     use std::collections::HashMap;
     #[cfg(feature = "rust_inspect")]
     use std::fs;
@@ -2494,26 +2499,6 @@ mod tests {
         assert!(!code.contains("#[allow(dead_code, unused_variables)]"), "{code}");
     }
 
-    /// Recover the exact compiler projection for one source declaration from generated Rust.
-    fn projected_name(code: &str, source_name: &str, kind: SemanticSourceTargetKind) -> String {
-        let identities = code
-            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-            .filter(|token| token.starts_with("__incan_v"))
-            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
-            .filter(|identity| identity.kind == kind && identity.declaration_name == source_name)
-            .collect::<std::collections::HashSet<_>>();
-        assert_eq!(
-            identities.len(),
-            1,
-            "expected exactly one {kind:?} identity for `{source_name}`, got {identities:?} in:\n{code}"
-        );
-        identities
-            .iter()
-            .next()
-            .map(encode_incan_symbol_identity)
-            .unwrap_or_else(|| unreachable!("identity count checked above"))
-    }
-
     fn compact_rust(code: &str) -> String {
         code.chars().filter(|character| !character.is_whitespace()).collect()
     }
@@ -2529,14 +2514,7 @@ pub def convert(value: str) -> str:
   return value
 "#,
         );
-        let identities = code
-            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-            .filter(|token| token.starts_with("__incan_v"))
-            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
-            .filter(|identity| {
-                identity.kind == SemanticSourceTargetKind::Function && identity.declaration_name == "convert"
-            })
-            .collect::<std::collections::HashSet<_>>();
+        let identities = projected_identities(&code, "convert", SemanticSourceTargetKind::Function);
         assert_eq!(
             identities.len(),
             2,
@@ -3052,11 +3030,7 @@ def main() -> None:
         );
 
         assert!(
-            !gzip_code
-                .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
-                .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
-                .any(|identity| identity.kind == SemanticSourceTargetKind::Function
-                    && identity.declaration_name == "compress"),
+            projected_identities(gzip_code, "compress", SemanticSourceTargetKind::Function).is_empty(),
             "{gzip_code}"
         );
         let decompress = projected_name(gzip_code, "decompress", SemanticSourceTargetKind::Function);
@@ -3147,7 +3121,30 @@ def test_generated_entrypoint() -> None:
 
         let entrypoint = projected_name(&code, "test_generated_entrypoint", SemanticSourceTargetKind::Function);
         assert!(code.contains(&format!("fn {entrypoint}(")), "{code}");
+        assert!(
+            code.contains(&format!("use {entrypoint} as test_generated_entrypoint;")),
+            "the generated harness must retain its source-facing call path:\n{code}"
+        );
         assert_no_generated_unused_lint_allows(&code);
+    }
+
+    #[test]
+    fn canonical_functions_keep_their_existing_rust_facing_names() {
+        let code = generate(
+            r#"
+pub def public_value() -> int:
+  return 42
+
+def test_generated_entrypoint() -> None:
+  return
+"#,
+        );
+
+        let public_projection = projected_name(&code, "public_value", SemanticSourceTargetKind::Function);
+        assert!(
+            code.contains(&format!("pub use {public_projection} as public_value;")),
+            "public Rust consumers must retain the source-facing name:\n{code}"
+        );
     }
 
     #[test]
@@ -4514,6 +4511,10 @@ def main() -> None:
             "facade reexport did not bind the provider partial projection `{projection}`:\n{facade_code}"
         );
         assert!(
+            facade_code.contains(&format!("pub use crate::provider::{projection} as portable;")),
+            "the public facade must retain the partial's Rust-facing name:\n{facade_code}"
+        );
+        assert!(
             main_code.contains(&projection),
             "consumer alias did not bind or call the provider partial projection `{projection}`:\n{main_code}"
         );
@@ -4550,6 +4551,10 @@ pub def increment() -> int:
         assert!(
             generated.matches(&projection).count() >= 4,
             "static declaration, module init, write, and read must share `{projection}`:\n{generated}"
+        );
+        assert!(
+            generated.contains(&format!("pub use {projection} as COUNTER;")),
+            "the public static must retain its existing Rust-facing name:\n{generated}"
         );
         assert!(
             !generated.contains("static COUNTER") && !generated.contains("COUNTER.with_"),
@@ -4594,6 +4599,10 @@ def main() -> None:
         assert!(
             facade_code.contains(&projection),
             "facade reexport did not bind the provider static projection `{projection}`:\n{facade_code}"
+        );
+        assert!(
+            facade_code.contains(&format!("pub use crate::provider::{projection} as COUNTER;")),
+            "the public facade must retain the static's Rust-facing name:\n{facade_code}"
         );
         assert!(
             main_code.contains(&projection),
@@ -4836,6 +4845,22 @@ pub def describe(result: Result[int, Failure]) -> Result[int, str]:
         assert!(
             !compact.contains("|error|error.message()"),
             "a contextually-known source member must not fall back to its raw spelling:\n{generated}"
+        );
+    }
+
+    #[test]
+    fn result_map_err_string_literal_closure_owns_its_checked_return() {
+        let generated = generate(
+            r#"
+pub def normalize(result: Result[int, int]) -> Result[int, str]:
+  return result.map_err((_error) => "malformed")
+"#,
+        );
+        let compact = compact_rust(&generated);
+
+        assert!(
+            compact.contains("map_err(|_error|\"malformed\".to_string())"),
+            "a contextually typed closure must materialize its checked str return:\n{generated}"
         );
     }
 
@@ -5107,8 +5132,7 @@ pub def oven_bytes() -> bytes:
             referenced_getvalue, declared_getvalue,
             "a stdlib method reference must keep the identity assigned at its declaration site"
         );
-        let getvalue_identity = decode_incan_symbol_identity(&declared_getvalue)?
-            .ok_or_else(|| std::io::Error::other("getvalue projection did not contain an Incan identity"))?;
+        let getvalue_identity = projected_identity(io_code, "getvalue", SemanticSourceTargetKind::Method);
         assert_eq!(getvalue_identity.origin, SymbolOrigin::Module(io_path.clone()));
 
         let referenced_constructor = projected_name(&main_code, "BytesIO", SemanticSourceTargetKind::Function);
@@ -5117,8 +5141,7 @@ pub def oven_bytes() -> bytes:
             referenced_constructor, declared_constructor,
             "a stdlib constructor reference must keep the identity assigned at its declaration site"
         );
-        let constructor_identity = decode_incan_symbol_identity(&declared_constructor)?
-            .ok_or_else(|| std::io::Error::other("BytesIO projection did not contain an Incan identity"))?;
+        let constructor_identity = projected_identity(io_code, "BytesIO", SemanticSourceTargetKind::Function);
         assert_eq!(constructor_identity.origin, SymbolOrigin::Module(io_path));
         Ok(())
     }

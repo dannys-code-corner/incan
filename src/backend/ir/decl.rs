@@ -296,6 +296,13 @@ pub struct IrImpl {
     /// implementation therefore retains that ABI spelling inside `impl Trait for Type` and gets a separate inherent
     /// `incan-v1` entry point carrying the implementation declaration's exact identity.
     pub method_projections: Vec<IrMethodProjection>,
+    /// Unambiguous source-spelled Rust entry points that forward to canonical inherent method implementations.
+    ///
+    /// Canonical projections remain the only authored implementations and all generated Incan calls target them.
+    /// Library artifacts retain these wrappers solely for their established native Rust surface. When Incan uses one
+    /// spelling for distinct type-owned and instance-owned declarations, no wrapper is recorded because Rust cannot
+    /// overload inherent associated items by receiver shape.
+    pub source_method_projections: Vec<IrSourceMethodProjection>,
 }
 
 /// One source method whose Rust trait slot needs a separate recoverable Incan-origin entry point.
@@ -304,6 +311,15 @@ pub struct IrMethodProjection {
     /// Rust ABI slot invoked by the recoverable entry point.
     pub abi_method_name: String,
     /// Exact compiler-owned identity encoded into the inherent entry-point name.
+    pub identity: CanonicalSymbolId,
+}
+
+/// One unambiguous source method spelling retained as a native Rust forwarding entry point.
+#[derive(Debug, Clone)]
+pub struct IrSourceMethodProjection {
+    /// Source spelling exposed to native Rust consumers.
+    pub source_name: String,
+    /// Exact compiler-owned identity of the canonical implementation.
     pub identity: CanonicalSymbolId,
 }
 

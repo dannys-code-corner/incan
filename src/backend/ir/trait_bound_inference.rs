@@ -3805,6 +3805,7 @@ mod tests {
                 associated_types: Vec::new(),
                 methods: vec![method],
                 method_projections: Vec::new(),
+                source_method_projections: Vec::new(),
             }))],
             module_init: Vec::new(),
             source_module_name: None,
@@ -4084,6 +4085,7 @@ mod tests {
             associated_types: Vec::new(),
             methods: Vec::new(),
             method_projections: Vec::new(),
+            source_method_projections: Vec::new(),
         })));
 
         propagate_trait_bounds_from_programs(&mut local, &[&external]);

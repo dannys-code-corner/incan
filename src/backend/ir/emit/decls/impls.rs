@@ -17,6 +17,23 @@ use super::super::super::types::{IR_UNION_TYPE_NAME, IrType};
 use super::super::{EmitError, IrEmitter};
 
 impl<'a> IrEmitter<'a> {
+    /// Return whether one inherent method implementation will be present in the generated Rust module.
+    fn inherent_method_is_needed(
+        &self,
+        impl_block: &super::super::super::decl::IrImpl,
+        method: &super::super::super::decl::IrFunction,
+    ) -> bool {
+        self.should_emit_method(&impl_block.target_type, &method.name, &method.visibility)
+            || !method.lint_allows.is_empty()
+            || !method.rust_attributes.is_empty()
+            || (self.emit_std_string_try_from_newtype_impls
+                && self
+                    .newtype_construction
+                    .get(&impl_block.target_type)
+                    .and_then(|plan| plan.checked_constructor.as_ref())
+                    == Some(&method.name))
+    }
+
     /// Emit an impl block, including generated convenience methods and trait impl adapters.
     pub(in crate::backend::ir::emit) fn emit_impl(
         &self,
@@ -44,15 +61,7 @@ impl<'a> IrEmitter<'a> {
                 borrowed_observer_methods.push(helper);
             }
 
-            let method_is_needed = self.should_emit_method(&impl_block.target_type, &method.name, &method.visibility)
-                || !method.lint_allows.is_empty()
-                || !method.rust_attributes.is_empty()
-                || (self.emit_std_string_try_from_newtype_impls
-                    && self
-                        .newtype_construction
-                        .get(&impl_block.target_type)
-                        .and_then(|plan| plan.checked_constructor.as_ref())
-                        == Some(&method.name));
+            let method_is_needed = self.inherent_method_is_needed(impl_block, method);
             match magic_methods::from_str(method.name.as_str()) {
                 Some(magic_methods::MagicMethodId::Eq) => {
                     let body_stmts = self.emit_stmts(&method.body)?;
@@ -83,6 +92,34 @@ impl<'a> IrEmitter<'a> {
                     regular_methods.push(self.emit_method(method)?);
                 }
                 _ => {}
+            }
+        }
+
+        if self.preserve_public_items
+            && impl_block.trait_name.is_none()
+            && self
+                .generated_use_analysis
+                .borrow()
+                .public_types
+                .contains(&impl_block.target_type)
+        {
+            for projection in &impl_block.source_method_projections {
+                let projected_name = encode_incan_symbol_identity(&projection.identity);
+                let method = impl_block
+                    .methods
+                    .iter()
+                    .find(|method| method.name == projected_name)
+                    .ok_or_else(|| {
+                        EmitError::InternalInvariant(format!(
+                            "Rust-facing projection for `{}.{}` has no canonical method implementation",
+                            impl_block.target_type, projection.source_name
+                        ))
+                    })?;
+                if !matches!(method.visibility, super::super::super::decl::Visibility::Private)
+                    && self.inherent_method_is_needed(impl_block, method)
+                {
+                    regular_methods.push(self.emit_source_method_projection(method, projection)?);
+                }
             }
         }
 
@@ -370,6 +407,83 @@ impl<'a> IrEmitter<'a> {
         Ok(quote! {
             #[inline(never)]
             pub #async_keyword fn #name #generics (#(#params),*) #return_type {
+                #invocation #await_suffix
+            }
+        })
+    }
+
+    /// Emit one source-spelled native Rust method that forwards to its canonical Incan implementation.
+    ///
+    /// This mirrors the top-level `use canonical as source` compatibility surface. Rust cannot alias an associated
+    /// item, so inherent methods need a thin wrapper instead. The wrapper contains no authored behavior: validation,
+    /// module initialization, and the method body all remain owned by the canonical target.
+    fn emit_source_method_projection(
+        &self,
+        method: &super::super::super::decl::IrFunction,
+        projection: &super::super::super::decl::IrSourceMethodProjection,
+    ) -> Result<TokenStream, EmitError> {
+        let name = Self::rust_ident(&projection.source_name);
+        let target = Self::rust_ident(&encode_incan_symbol_identity(&projection.identity));
+        let params = method
+            .params
+            .iter()
+            .map(|param| {
+                if param.is_self {
+                    match param.mutability {
+                        super::super::super::types::Mutability::Mutable => quote! { &mut self },
+                        super::super::super::types::Mutability::Immutable
+                        | super::super::super::types::Mutability::OwnedMutable => quote! { &self },
+                    }
+                } else {
+                    let param_name = Self::rust_ident(&param.name);
+                    let ty = self.emit_type(&param.ty);
+                    if matches!(param.mutability, super::super::super::types::Mutability::Mutable)
+                        && !matches!(param.ty, IrType::Int | IrType::Float | IrType::Bool)
+                    {
+                        quote! { #param_name: &mut #ty }
+                    } else {
+                        quote! { #param_name: #ty }
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let args = method
+            .params
+            .iter()
+            .filter(|param| !param.is_self)
+            .map(|param| Self::rust_ident(&param.name))
+            .collect::<Vec<_>>();
+        let generics = self.emit_type_params(&method.type_params);
+        let turbofish = if method.type_params.is_empty() {
+            quote! {}
+        } else {
+            let names = method
+                .type_params
+                .iter()
+                .map(|param| Self::rust_ident(&param.name))
+                .collect::<Vec<_>>();
+            quote! { :: < #(#names),* > }
+        };
+        let return_type = match &method.return_type {
+            IrType::Unit => quote! {},
+            ty => {
+                let ty = self.emit_method_return_type(ty, &method.type_params);
+                quote! { -> #ty }
+            }
+        };
+        let visibility = self.emit_visibility(&method.visibility);
+        let async_keyword = method.is_async.then(|| quote! { async });
+        let await_suffix = method.is_async.then(|| quote! { .await });
+        let invocation = if method.params.first().is_some_and(|param| param.is_self) {
+            quote! { self.#target #turbofish (#(#args),*) }
+        } else {
+            quote! { Self::#target #turbofish (#(#args),*) }
+        };
+        let doc_attrs = self.emit_public_rustdoc_attrs(&method.visibility, method.docstring.as_deref());
+        Ok(quote! {
+            #(#doc_attrs)*
+            #[inline]
+            #visibility #async_keyword fn #name #generics (#(#params),*) #return_type {
                 #invocation #await_suffix
             }
         })

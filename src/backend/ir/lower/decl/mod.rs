@@ -274,11 +274,9 @@ impl AstLowering {
                 });
             }
         };
-        let expected_source_constructor =
-            incan_semantics_core::encode_incan_symbol_identity(&entry.subject_constructor_identity);
-        let expected_entry_method = incan_semantics_core::encode_incan_symbol_identity(&entry.entry_method_identity);
-        let checked_constructor =
-            incan_semantics_core::encode_incan_symbol_identity(&entry.checked_constructor_identity);
+        let expected_source_constructor = Self::emitted_source_identity_name(&entry.subject_constructor_identity, true);
+        let expected_entry_method = Self::emitted_source_identity_name(&entry.entry_method_identity, true);
+        let checked_constructor = Self::emitted_source_identity_name(&entry.checked_constructor_identity, true);
 
         let IrExprKind::MethodCall { method, args, .. } = &mut value.kind else {
             return Err(LoweringError {

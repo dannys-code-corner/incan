@@ -4179,11 +4179,11 @@ mod tests {
             "tuple pattern with a nested binding, wildcard, and guard: {snapshot}"
         );
         assert!(
-            snapshot.contains("Point { x: _ } => const(())"),
+            snapshot.contains("Point { x: _ } canonical=<unresolved> => const(())"),
             "named-field struct pattern: {snapshot}"
         );
         assert!(
-            snapshot.contains("Some(_) => const(())"),
+            snapshot.contains("Some(_) canonical=<unresolved> => const(())"),
             "positional enum pattern: {snapshot}"
         );
         assert!(

@@ -6,6 +6,8 @@
 //! thing" structurally. Body IR's consumption of these facts is pinned separately in
 //! `crate::frontend::body_ir::tests`.
 
+use incan_core::lang::surface::constructors::{self, ConstructorId};
+use incan_core::lang::traits::{self, TraitId};
 use incan_semantics_core::{CanonicalSymbolId, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin};
 
 use super::{CompileError, TypeChecker};
@@ -98,7 +100,7 @@ model LocalError with Error:
         .type_info()
         .traits
         .method_identities
-        .get(&("Error".to_string(), "source".to_string()))
+        .get(&(traits::as_str(TraitId::Error).to_string(), "source".to_string()))
         .ok_or_else(|| {
             format!(
                 "missing Error.source identity in lowering artifacts: {:?}",
@@ -2922,11 +2924,12 @@ def unwrap(value: Option[int]) -> int:
   return inner
 "#;
     let checker = check(source, "assert is-pattern constructor identity")?;
-    let constructor_span = nth_span(source, "Some", 0)?;
+    let some = constructors::as_str(ConstructorId::Some);
+    let constructor_span = nth_span(source, some, 0)?;
     let identity = identity_at(&checker, constructor_span, "assert is-pattern constructor")?;
     assert_eq!(identity.origin, SymbolOrigin::Builtin);
     assert_eq!(identity.kind, SemanticSourceTargetKind::Builtin);
-    assert_eq!(identity.declaration_name, "Some");
+    assert_eq!(identity.declaration_name, some);
     assert_eq!(identity.namespace, SymbolNamespace::OrdinaryLexical);
 
     let unresolved_source = r#"
@@ -2950,7 +2953,7 @@ def unresolved(value: MissingType) -> None:
     assert_eq!(
         unresolved_checker
             .type_info()
-            .resolved_identity(nth_span(unresolved_source, "Some", 0)?),
+            .resolved_identity(nth_span(unresolved_source, some, 0)?),
         None,
         "recovery from an unresolved scrutinee must not mint constructor authority"
     );

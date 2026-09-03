@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::frontend::{lexer, parser};
+use incan_core::lang::traits::{self, TraitId};
 use incan_semantics_core::{SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin};
 
 /// Parse one focused identity fixture and preserve compiler diagnostics on failure.
@@ -243,11 +244,12 @@ def charge(amount: int) -> int:
     assert_eq!(capability.declaration_name, "charge_card");
     assert_eq!(capability.kind, SemanticSourceTargetKind::Capability);
 
+    let clone = traits::as_str(TraitId::Clone);
     let derive = checker
         .type_info()
-        .resolved_identity(nth_span(source, "Clone", 0)?)
+        .resolved_identity(nth_span(source, clone, 0)?)
         .ok_or("derive argument has no identity")?;
-    assert_eq!(derive.declaration_name, "Clone");
+    assert_eq!(derive.declaration_name, clone);
     assert_eq!(derive.origin, SymbolOrigin::Builtin);
     Ok(())
 }
