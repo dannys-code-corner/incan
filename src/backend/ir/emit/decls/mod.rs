@@ -632,7 +632,17 @@ impl<'a> IrEmitter<'a> {
                 .map(|item| {
                     let binding = item.emitted_binding_name();
                     let source_binding = item.source_binding_name();
-                    let emitted_name = item.emitted_name();
+                    let emitted_name = if is_incan_source_stdlib {
+                        let mut canonical_path = path.to_vec();
+                        canonical_path.push(item.name.clone());
+                        self.function_registry
+                            .canonical_identity_for_source_name(&item.name)
+                            .or_else(|| self.canonical_stdlib_function_identity(&canonical_path))
+                            .map(incan_semantics_core::encode_incan_symbol_identity)
+                            .unwrap_or_else(|| item.emitted_name())
+                    } else {
+                        item.emitted_name()
+                    };
                     let name_ident = Self::rust_ident(&emitted_name);
                     let runtime_surface_reexport_path = if should_reexport_item(item) && is_incan_source_stdlib {
                         self.stdlib_runtime_surface_type_reexport_path(path, &item.name)

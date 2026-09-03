@@ -19,8 +19,8 @@ use super::type_info::{
     RegistryExplicitEntryInfo,
 };
 use super::{
-    DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, TestingFixtureInfo, TypeChecker,
-    YieldContext,
+    DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, MemberBindingSurface,
+    TestingFixtureInfo, TypeChecker, YieldContext,
 };
 use incan_core::interop::{RustItemKind, RustItemMetadata, RustTraitAssoc};
 use incan_core::lang::decorators::{self, DecoratorId};
@@ -2082,46 +2082,57 @@ impl TypeChecker {
         }
 
         for (method_name, overloads) in method_overloads {
-            if overloads.len() <= 1 {
-                continue;
-            }
-            let obligations = obligations_by_method.get(method_name).map(Vec::as_slice).unwrap_or(&[]);
-            let mut matched_obligations = vec![false; obligations.len()];
-            let mut overload_matches: Vec<Option<usize>> = vec![None; overloads.len()];
-            for (idx, overload) in overloads.iter().enumerate() {
-                let matched_index = obligations
+            for surface in [MemberBindingSurface::Type, MemberBindingSurface::Instance] {
+                let surface_overloads = overloads
                     .iter()
                     .enumerate()
-                    .find(|(obligation_idx, (origin_trait, expected))| {
-                        !matched_obligations[*obligation_idx]
-                            && Self::method_trait_target_matches(overload, origin_trait)
-                            && self.method_sigs_compatible(expected, overload)
-                    })
-                    .map(|(obligation_idx, _)| obligation_idx);
-                if let Some(obligation_idx) = matched_index {
-                    matched_obligations[obligation_idx] = true;
-                    overload_matches[idx] = Some(obligation_idx);
-                }
-            }
-            let has_trait_backed_overload = overload_matches.iter().any(Option::is_some);
-            for (idx, overload) in overloads.iter().enumerate() {
-                if overload_matches[idx].is_some() {
+                    .filter(|(_, method)| surface.accepts_method(method))
+                    .collect::<Vec<_>>();
+                if surface_overloads.len() <= 1 {
                     continue;
                 }
-                let shares_call_shape = overloads
-                    .iter()
-                    .enumerate()
-                    .any(|(other_idx, other)| other_idx != idx && self.method_call_shapes_same(overload, other));
-                if has_trait_backed_overload && !shares_call_shape {
-                    continue;
-                }
-                let span = method_spans
+                let obligations = obligations_by_method
                     .get(method_name)
-                    .and_then(|spans| spans.get(idx).copied())
-                    .or_else(|| method_spans.get(method_name).and_then(|spans| spans.first().copied()))
-                    .unwrap_or_default();
-                self.errors
-                    .push(errors::duplicate_method_not_trait_backed(type_name, method_name, span));
+                    .into_iter()
+                    .flatten()
+                    .filter(|(_, method)| surface.accepts_method(method))
+                    .collect::<Vec<_>>();
+                let mut matched_obligations = vec![false; obligations.len()];
+                let mut overload_matches: Vec<Option<usize>> = vec![None; surface_overloads.len()];
+                for (idx, (_, overload)) in surface_overloads.iter().enumerate() {
+                    let matched_index = obligations
+                        .iter()
+                        .enumerate()
+                        .find(|(obligation_idx, (origin_trait, expected))| {
+                            !matched_obligations[*obligation_idx]
+                                && Self::method_trait_target_matches(overload, origin_trait)
+                                && self.method_sigs_compatible(expected, overload)
+                        })
+                        .map(|(obligation_idx, _)| obligation_idx);
+                    if let Some(obligation_idx) = matched_index {
+                        matched_obligations[obligation_idx] = true;
+                        overload_matches[idx] = Some(obligation_idx);
+                    }
+                }
+                let has_trait_backed_overload = overload_matches.iter().any(Option::is_some);
+                for (idx, (source_idx, overload)) in surface_overloads.iter().enumerate() {
+                    if overload_matches[idx].is_some() {
+                        continue;
+                    }
+                    let shares_call_shape = surface_overloads.iter().enumerate().any(|(other_idx, (_, other))| {
+                        other_idx != idx && self.method_call_shapes_same(overload, other)
+                    });
+                    if has_trait_backed_overload && !shares_call_shape {
+                        continue;
+                    }
+                    let span = method_spans
+                        .get(method_name)
+                        .and_then(|spans| spans.get(*source_idx).copied())
+                        .or_else(|| method_spans.get(method_name).and_then(|spans| spans.first().copied()))
+                        .unwrap_or_default();
+                    self.errors
+                        .push(errors::duplicate_method_not_trait_backed(type_name, method_name, span));
+                }
             }
         }
     }

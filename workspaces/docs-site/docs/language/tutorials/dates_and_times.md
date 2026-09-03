@@ -60,11 +60,11 @@ from std.datetime import Date, DateTimeError, TimeDelta, YearMonthInterval
 
 def trial_end(start: str) -> Result[Date, DateTimeError]:
     signup = Date.fromisoformat(start)?
-    return Ok(signup + TimeDelta.from_days(14))
+    return Ok(signup + TimeDelta.days(14))
 
 def renewal_date(start: str, months: int) -> Result[Date, DateTimeError]:
     signup = Date.fromisoformat(start)?
-    return Ok(signup + YearMonthInterval.from_months(months))
+    return Ok(signup + YearMonthInterval.months(months))
 ```
 
 The distinction matters. Seven days is a fixed amount of elapsed civil days. One month is a calendar operation whose day count depends on the month and year.
@@ -131,7 +131,7 @@ from std.datetime import (
 
 def first_invoice_stamp(signup_text: str) -> Result[str, DateTimeError]:
     signup = Date.fromisoformat(signup_text)?
-    due_date = signup + YearMonthInterval.from_months(1)
+    due_date = signup + YearMonthInterval.months(1)
     cutoff = Time.fromisoformat("17:00:00")?
     local_stamp = DateTime.combine(due_date, cutoff)
     offset_stamp = DateTimeOffset(datetime=local_stamp, offset=FixedOffset.utc())

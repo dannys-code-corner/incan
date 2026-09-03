@@ -84,7 +84,11 @@ impl AstLowering {
         if !can_use_source_method_projection(receiver, dispatch.as_ref()) {
             return (source_method.to_string(), dispatch);
         }
-        let Some(projection) = self.emitted_method_reference_name(call_span, source_method) else {
+        let rebase_source_stdlib = !matches!(dispatch, Some(IrMethodDispatch::Trait(_)));
+        let Some(projection) = self
+            .compiled_provider_method_reference_name(call_span, &receiver.ty, source_method)
+            .or_else(|| self.emitted_method_reference_name(call_span, source_method, rebase_source_stdlib))
+        else {
             return (source_method.to_string(), dispatch);
         };
         let dispatch = match dispatch {
@@ -2024,8 +2028,8 @@ impl AstLowering {
                         &obj.ty,
                         IrType::Struct(_) | IrType::Enum(_) | IrType::NamedGeneric(_, _) | IrType::SelfType
                     ) {
-                        self.emitted_method_reference_name(expr_span, &access.property)
-                            .unwrap_or_else(|| access.property.clone())
+                        self.project_resolved_method_target(expr_span, &access.property, &obj, None)
+                            .0
                     } else {
                         access.property.clone()
                     };

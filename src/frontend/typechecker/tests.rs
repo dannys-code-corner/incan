@@ -9343,6 +9343,114 @@ class Account:
     );
 }
 
+/// A type-owned factory and stored instance field may share a spelling because the receiver determines which
+/// declaration can be selected. The factory parameter remains nominally typed; its underlying integer argument is
+/// admitted through the ordinary validated-newtype coercion path.
+#[test]
+fn static_factory_and_instance_field_have_distinct_member_surfaces() -> Result<(), String> {
+    let source = r#"
+type Days = newtype int
+
+model TimeDelta:
+  days: Days
+
+  @staticmethod
+  def days(value: Days) -> TimeDelta:
+    return TimeDelta(days=value)
+
+def selected() -> TimeDelta:
+  return TimeDelta.days(-7)
+"#;
+    let tokens = lexer::lex(source).map_err(|errors| format!("member-surface source should lex: {errors:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errors| format!("member-surface source should parse: {errors:?}"))?;
+    let Some(Declaration::Model(model)) = program.declarations.get(1).map(|declaration| &declaration.node) else {
+        return Err("expected TimeDelta model declaration".to_string());
+    };
+    let field_span = model.fields[0].span;
+    let method_span = model.methods[0].span;
+
+    let mut checker = TypeChecker::new();
+    checker
+        .check_program(&program)
+        .map_err(|errors| format!("type-owned factory and instance field should coexist: {errors:?}"))?;
+    let declarations = &checker.type_info().declarations.member_declaration_identities;
+    assert!(
+        declarations.contains_key(&(field_span.start, field_span.end)),
+        "the instance field must retain its declaration identity"
+    );
+    assert!(
+        declarations.contains_key(&(method_span.start, method_span.end)),
+        "the type-owned factory must retain its declaration identity"
+    );
+    Ok(())
+}
+
+#[test]
+fn static_factory_cannot_be_called_through_an_instance() {
+    let source = r#"
+model TimeDelta:
+  days: int
+
+  @staticmethod
+  def days(value: int) -> TimeDelta:
+    return TimeDelta(days=value)
+
+def invalid(delta: TimeDelta) -> TimeDelta:
+  return delta.days(-7)
+"#;
+    let errors = check_str_err(source, "staticmethod instance receiver should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Type 'TimeDelta' has no method 'days(...)'")),
+        "a stored field must not make the type-owned factory callable through an instance: {errors:?}"
+    );
+}
+
+#[test]
+fn static_and_instance_methods_may_share_a_spelling() {
+    let source = r#"
+model Counter:
+  value: int
+
+  @staticmethod
+  def next(value: int) -> Counter:
+    return Counter(value=value)
+
+  def next(self) -> int:
+    return self.value + 1
+
+def selected() -> int:
+  counter = Counter.next(4)
+  return counter.next()
+"#;
+    assert!(
+        check_str(source).is_ok(),
+        "receiver ownership must disambiguate type-owned and instance-owned methods"
+    );
+}
+
+#[test]
+fn instance_method_cannot_be_called_through_its_type() {
+    let source = r#"
+model Counter:
+  value: int
+
+  def next(self) -> int:
+    return self.value + 1
+
+def invalid() -> int:
+  return Counter.next()
+"#;
+    let errors = check_str_err(source, "instance method type receiver should fail");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.message.contains("Type 'Counter' has no method 'next(...)'")),
+        "an instance method must not resolve through its type: {errors:?}"
+    );
+}
+
 #[test]
 fn test_all_member_binding_kinds_share_source_ordered_first_wins_registration() -> Result<(), String> {
     let source = r#"
@@ -9475,7 +9583,7 @@ enum Status:
 }
 
 #[test]
-fn test_enum_variant_method_collision_keeps_the_source_first_variant() -> Result<(), String> {
+fn enum_variant_and_instance_method_have_distinct_member_surfaces() -> Result<(), String> {
     let source = r#"
 enum Signal:
   Ready
@@ -9492,24 +9600,9 @@ enum Signal:
     let method_span = en.methods[0].span;
 
     let mut checker = TypeChecker::new();
-    let errors = match checker.check_program(&program) {
-        Ok(()) => return Err("enum variant/method collision was accepted".to_string()),
-        Err(errors) => errors,
-    };
-    let collisions = errors
-        .iter()
-        .filter(|error| {
-            error
-                .message
-                .contains("Duplicate member 'Signal.Ready' declared as both variant and method")
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(
-        collisions.len(),
-        1,
-        "expected one cross-kind member diagnostic: {errors:?}"
-    );
-    assert_eq!(collisions[0].span, method_span);
+    checker
+        .check_program(&program)
+        .map_err(|errors| format!("type-owned enum variant and instance method should coexist: {errors:?}"))?;
 
     let signal_id = checker.symbols.lookup("Signal").ok_or("missing Signal symbol")?;
     let signal = checker.symbols.get(signal_id).ok_or("missing Signal metadata")?;
@@ -9517,12 +9610,31 @@ enum Signal:
         return Err("Signal should retain enum metadata".to_string());
     };
     assert!(info.variant_identities.contains_key("Ready"));
-    assert!(!info.method_overloads.contains_key("Ready"));
+    assert!(info.method_overloads.contains_key("Ready"));
 
     let exported = &checker.type_info().declarations.member_declaration_identities;
     assert!(exported.contains_key(&(variant_span.start, variant_span.end)));
-    assert!(!exported.contains_key(&(method_span.start, method_span.end)));
+    assert!(exported.contains_key(&(method_span.start, method_span.end)));
     Ok(())
+}
+
+#[test]
+fn enum_variant_and_static_method_still_collide_on_the_type_surface() {
+    let source = r#"
+enum Signal:
+  Ready
+
+  @staticmethod
+  def Ready() -> int:
+    return 1
+"#;
+    let errors = check_str_err(source, "enum type-surface collision should fail");
+    assert!(
+        errors.iter().any(|error| error
+            .message
+            .contains("Duplicate member 'Signal.Ready' declared as both variant and method")),
+        "a static method and enum variant must still collide on the type surface: {errors:?}"
+    );
 }
 
 #[test]
@@ -15204,7 +15316,7 @@ from std.datetime.civil import Date, TimeDelta
 from std.datetime.error import DateTimeError
 
 def main() -> Result[None, DateTimeError]:
-  renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.from_days(30)
+  renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.days(30)
   print(renewal.isoformat())
   return Ok(None)
 "#;

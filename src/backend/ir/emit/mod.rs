@@ -818,13 +818,18 @@ impl<'a> IrEmitter<'a> {
 
     /// Resolve a stdlib function path to one compiler-retained identity without reconstructing it from source names.
     pub(super) fn canonical_stdlib_function_identity(&self, path: &[String]) -> Option<&CanonicalSymbolId> {
-        if let Some(identity) = self.canonical_function_registry().canonical_identity_for_path(path) {
-            return Some(identity);
-        }
+        let normalized_path;
+        let path = match path.first().map(String::as_str) {
+            Some(stdlib::STDLIB_ROOT) => path,
+            Some(stdlib::INCAN_STD_NAMESPACE) => {
+                normalized_path = std::iter::once(stdlib::STDLIB_ROOT.to_string())
+                    .chain(path.iter().skip(1).cloned())
+                    .collect::<Vec<_>>();
+                &normalized_path
+            }
+            _ => return None,
+        };
         let (declaration_name, module_path) = path.get(1..)?.split_last()?;
-        if path.first().map(String::as_str) != Some(stdlib::STDLIB_ROOT) {
-            return None;
-        }
         if let Some(library) = self.current_package_identity.as_deref()
             && let Some(identity) = self.canonical_function_registry().canonical_package_function_identity(
                 library,
@@ -834,9 +839,22 @@ impl<'a> IrEmitter<'a> {
         {
             return Some(identity);
         }
-        (!self.ambiguous_compiled_sdk_function_paths.contains(path))
+        if let Some(identity) = (!self.ambiguous_compiled_sdk_function_paths.contains(path))
             .then(|| self.compiled_sdk_function_identities.get(path))
             .flatten()
+        {
+            return Some(identity);
+        }
+        let emitted_path = std::iter::once(stdlib::INCAN_STD_NAMESPACE.to_string())
+            .chain(path.iter().skip(1).cloned())
+            .collect::<Vec<_>>();
+        if let Some(identity) = self
+            .canonical_function_registry()
+            .canonical_identity_for_path(&emitted_path)
+        {
+            return Some(identity);
+        }
+        self.canonical_function_registry().canonical_identity_for_path(path)
     }
 
     /// Return one exact member projection, failing closed when the owner/name pair is ambiguous.
@@ -2278,17 +2296,22 @@ impl<'a> IrEmitter<'a> {
             let public_std_path = std::iter::once(stdlib::STDLIB_ROOT.to_string())
                 .chain(entry.public_path.iter().skip(1).cloned())
                 .collect::<Vec<_>>();
-            if self.ambiguous_compiled_sdk_function_paths.contains(&public_std_path) {
-                continue;
-            }
-            match self.compiled_sdk_function_identities.get(&public_std_path) {
-                Some(existing) if existing != &identity => {
-                    self.compiled_sdk_function_identities.remove(&public_std_path);
-                    self.ambiguous_compiled_sdk_function_paths.insert(public_std_path);
+            let source_std_path = std::iter::once(stdlib::STDLIB_ROOT.to_string())
+                .chain(entry.source_path.iter().cloned())
+                .collect::<Vec<_>>();
+            for path in [public_std_path, source_std_path] {
+                if self.ambiguous_compiled_sdk_function_paths.contains(&path) {
+                    continue;
                 }
-                Some(_) => {}
-                None => {
-                    self.compiled_sdk_function_identities.insert(public_std_path, identity);
+                match self.compiled_sdk_function_identities.get(&path) {
+                    Some(existing) if existing != &identity => {
+                        self.compiled_sdk_function_identities.remove(&path);
+                        self.ambiguous_compiled_sdk_function_paths.insert(path);
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.compiled_sdk_function_identities.insert(path, identity.clone());
+                    }
                 }
             }
         }
@@ -3381,7 +3404,6 @@ mod tests {
     #[test]
     fn compiled_sdk_manifest_seeds_exact_stdlib_function_identity() {
         let registry = FunctionRegistry::new();
-        let mut emitter = IrEmitter::new(&registry);
         let identity = CanonicalSymbolId {
             namespace: SymbolNamespace::OrdinaryLexical,
             origin: SymbolOrigin::Package {
@@ -3396,19 +3418,34 @@ mod tests {
         let mut manifest = LibraryManifest::new("incan_stdlib_core", "0.6.0");
         manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
             public_name: "map".to_string(),
-            public_path: vec!["incan_stdlib_core".to_string(), "result".to_string(), "map".to_string()],
+            public_path: vec!["incan_stdlib_core".to_string(), "result_map".to_string()],
             source_path: vec!["result".to_string(), "map".to_string()],
             kind: ExportIdentityKind::Function,
             projection: ExportIdentityProjection::Direct,
             canonical: CanonicalIdentityExport::from_canonical("incan_stdlib_core", &identity),
         });
 
+        let std_path = ["std".to_string(), "result".to_string(), "map".to_string()];
+        let source_identity = CanonicalSymbolId::module_declaration(
+            vec!["std".to_string(), "result".to_string()],
+            "map",
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(30, 40),
+        );
+        let mut canonical_registry = FunctionRegistry::new();
+        canonical_registry.register_canonical_path_projection(
+            &std_path,
+            "map".to_string(),
+            source_identity,
+            Vec::new(),
+            IrType::Unit,
+        );
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.set_canonical_function_registry(canonical_registry);
+
         emitter.seed_sdk_provider_manifest_metadata(&manifest);
 
-        assert_eq!(
-            emitter.canonical_stdlib_function_identity(&["std".to_string(), "result".to_string(), "map".to_string(),]),
-            Some(&identity)
-        );
+        assert_eq!(emitter.canonical_stdlib_function_identity(&std_path), Some(&identity));
     }
 
     #[test]

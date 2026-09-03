@@ -1133,6 +1133,60 @@ impl AstLowering {
         Some(self.compiled_provider_external_signature(&provider_crate, signature))
     }
 
+    /// Resolve a source-stub member selection to the exact symbol exported by its compiled SDK provider.
+    ///
+    /// The frontend may retain the canonical identity of the `std.*` source declaration used for typechecking. Once
+    /// that module is supplied by a compiled provider, however, Rust linking must use the provider package's identity.
+    /// The checked provider manifest is the authority for that projection.
+    pub(in crate::backend::ir::lower) fn compiled_provider_method_reference_name(
+        &self,
+        call_span: ast::Span,
+        receiver_ty: &IrType,
+        method_name: &str,
+    ) -> Option<String> {
+        let source_identity = self.type_info.as_ref()?.resolved_identity(call_span)?;
+        let SymbolOrigin::Module(module_path) = &source_identity.origin else {
+            return None;
+        };
+        let mut provider_module_path = module_path.clone();
+        match provider_module_path.first_mut() {
+            Some(root) if root == stdlib::STDLIB_ROOT => {}
+            Some(root) if root == stdlib::INCAN_STD_NAMESPACE => {
+                *root = stdlib::STDLIB_ROOT.to_string();
+            }
+            _ => return None,
+        }
+        let type_name = Self::nominal_receiver_type_name(receiver_ty)?;
+        let provider_plan = self.provider_plan.as_deref()?;
+        if provider_plan.bootstrap_owns_sdk_module(&provider_module_path) {
+            return None;
+        }
+        let source_module = provider_module_path.get(1..)?;
+        let matches = provider_plan
+            .active_sdk_records()
+            .filter_map(|provider| provider.manifest.as_deref())
+            .filter_map(|manifest| manifest.contract_metadata.api.as_ref())
+            .flat_map(|api| api.modules.iter())
+            .filter(|module| {
+                let candidate = module
+                    .module_path
+                    .strip_prefix(&[stdlib::STDLIB_ROOT.to_string()])
+                    .unwrap_or(module.module_path.as_slice());
+                candidate == source_module
+            })
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| Self::api_method_export_for_declaration(declaration, type_name, method_name))
+            .collect::<Vec<_>>();
+        let [method] = matches.as_slice() else {
+            return None;
+        };
+        method
+            .canonical
+            .as_ref()
+            .and_then(|canonical| canonical.hydrate())
+            .map(|identity| incan_semantics_core::encode_incan_symbol_identity(&identity))
+    }
+
     /// Resolve an imported public dependency model/class method signature from the provider manifest.
     pub(in crate::backend::ir::lower) fn callable_signature_for_imported_pub_type_method(
         &mut self,
@@ -3034,7 +3088,7 @@ impl AstLowering {
             }
             if stdlib::is_graph_constructor_type(&constructor_name) && args.is_empty() {
                 let hook_name = self
-                    .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK)
+                    .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK, true)
                     .unwrap_or_else(|| TYPE_CONSTRUCTOR_HOOK.to_string());
                 let lowered_type_args = self.lower_call_site_type_args(call_span, type_args);
                 let receiver_ty = if lowered_type_args.is_empty() {
@@ -3137,12 +3191,9 @@ impl AstLowering {
         let imported_source_callee_path = imported_callee_path
             .as_deref()
             .map(|path| self.semantic_imported_callee_path(path));
-        let mut imported_callee_path = imported_callee_path;
-        if let (Some(path), Some(emitted_name)) = (&mut imported_callee_path, &selected_reference_name)
-            && let Some(last) = path.last_mut()
-        {
-            *last = emitted_name.clone();
-        }
+        // Keep this path source-shaped. The emitter resolves its exact physical symbol from compiler-owned package
+        // metadata; replacing the declaration segment here with a source-stub projection would make that lookup miss
+        // the compiled provider identity.
         let mut func = self.lower_expr_spanned(f)?;
         if let (ast::Expr::Ident(_), Some(emitted_name), IrExprKind::Var { name, .. }) =
             (&f.node, selected_reference_name.as_deref(), &mut func.kind)
@@ -3759,7 +3810,7 @@ impl AstLowering {
         };
         let ret_ty = self.lower_type(&hook.return_type.node);
         let hook_name = self
-            .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK)
+            .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK, true)
             .unwrap_or_else(|| TYPE_CONSTRUCTOR_HOOK.to_string());
         Ok(Some((
             IrExprKind::MethodCall {

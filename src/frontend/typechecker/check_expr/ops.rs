@@ -14,7 +14,9 @@
 use crate::frontend::ast::*;
 use crate::frontend::diagnostics::errors;
 use crate::frontend::symbols::{ResolvedType, TypeBoundInfo, TypeInfo};
-use crate::frontend::typechecker::{ProtocolIterationInfo, ResolvedMethodDispatch, ResolvedOperatorKind};
+use crate::frontend::typechecker::{
+    MemberBindingSurface, ProtocolIterationInfo, ResolvedMethodDispatch, ResolvedOperatorKind,
+};
 use crate::numeric_adapters::{numeric_op_from_ast, numeric_ty_from_resolved, pow_exponent_kind_from_ast};
 use incan_core::lang::derives::{self, DeriveId};
 use incan_core::lang::magic_methods::{self, MagicMethodId};
@@ -1071,6 +1073,7 @@ impl TypeChecker {
             None,
             Some(std::slice::from_ref(&adoption)),
             method,
+            MemberBindingSurface::Instance,
             &[],
             args,
             arg_types,
@@ -1172,6 +1175,7 @@ impl TypeChecker {
                     self.resolve_trait_receiver_method(
                         receiver_ty,
                         method,
+                        MemberBindingSurface::Instance,
                         &[],
                         args,
                         arg_types,
@@ -1195,6 +1199,7 @@ impl TypeChecker {
                     self.resolve_trait_receiver_method(
                         receiver_ty,
                         method,
+                        MemberBindingSurface::Instance,
                         &[],
                         args,
                         arg_types,
@@ -1227,6 +1232,7 @@ impl TypeChecker {
                     Some(&model.method_overloads),
                     Some(&trait_adoptions),
                     method,
+                    MemberBindingSurface::Instance,
                     &[],
                     args,
                     arg_types,
@@ -1242,6 +1248,7 @@ impl TypeChecker {
                     Some(&class.method_overloads),
                     Some(&trait_adoptions),
                     method,
+                    MemberBindingSurface::Instance,
                     &[],
                     args,
                     arg_types,
@@ -1257,6 +1264,7 @@ impl TypeChecker {
                     Some(&en.method_overloads),
                     Some(&trait_adoptions),
                     method,
+                    MemberBindingSurface::Instance,
                     &[],
                     args,
                     arg_types,
@@ -1272,6 +1280,7 @@ impl TypeChecker {
                     Some(&newtype.method_overloads),
                     Some(&newtype.trait_adoptions),
                     resolved_method,
+                    MemberBindingSurface::Instance,
                     &[],
                     args,
                     arg_types,

@@ -76,7 +76,7 @@ The current four-symbol fixture recorded this Rust 1.98.0 macOS arm64 measuremen
 
 The ordinary/generic/method/static fixture prints its baseline, projected, and identifier-byte measurements on every Linux and macOS CI run while asserting semantic recovery. Object formats and linkers differ across supported platforms, so this macOS observation is not a platform-independent byte-for-byte threshold. There is no optimized or release fixture mode that removes the payload.
 
-This conformance fixture does **not** by itself complete issue #1168's repository-wide pin migration. The workspace manifest and other build lanes must still converge on the accepted 1.98.0 policy; the fixture is intentionally narrower and refuses to turn their current drift into evidence for a different compiler release.
+This conformance fixture does **not** by itself prove the repository-wide pin. The workspace manifest, compiler/test workflows, release workflow, release-manifest generator, and their contract tests separately enforce Rust 1.98.0. Issue #1168 remains open for its distinct generated-project edition migration and reserved-keyword acceptance criteria; the Rust-version convergence does not silently claim that work is complete.
 
 ## Non-goals
 

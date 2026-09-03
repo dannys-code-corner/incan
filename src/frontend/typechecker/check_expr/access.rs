@@ -14,7 +14,7 @@ use crate::frontend::typechecker::helpers::{
     option_ty, render_resolved_type_as_rust_arg, runtime_string_method_identity_and_return, string_method_return,
 };
 use crate::frontend::typechecker::type_info::{CBindingEnumAccess, RustMethodTraitImportUse, RustTraitImportInfo};
-use crate::frontend::typechecker::{IdentKind, canonical_public_library_type_name};
+use crate::frontend::typechecker::{IdentKind, MemberBindingSurface, canonical_public_library_type_name};
 use incan_core::interop::{
     RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustVisibility,
     metadata_free_method_signature,
@@ -57,6 +57,7 @@ struct MethodCandidate {
 
 struct SourceMethodPrepass<'a> {
     method: &'a str,
+    receiver_surface: MemberBindingSurface,
     type_args: &'a [Spanned<Type>],
     args: &'a [CallArg],
     span: Span,
@@ -2914,6 +2915,7 @@ impl TypeChecker {
         method_overloads: Option<&std::collections::HashMap<String, Vec<MethodInfo>>>,
         trait_adoptions: Option<&[TypeBoundInfo]>,
         method: &str,
+        receiver_surface: MemberBindingSurface,
         explicit_type_args: &[Spanned<Type>],
         args: &[CallArg],
         arg_types: &[ResolvedType],
@@ -2934,6 +2936,7 @@ impl TypeChecker {
                 .unwrap_or_default();
             let candidates = overloads
                 .iter()
+                .filter(|info| receiver_surface.accepts_method(info))
                 .cloned()
                 .map(|info| {
                     let dispatch = trait_entries
@@ -2957,18 +2960,23 @@ impl TypeChecker {
                     MethodCandidate { info, dispatch }
                 })
                 .collect::<Vec<_>>();
-            return self.resolve_method_overload(
-                method,
-                &candidates,
-                explicit_type_args,
-                args,
-                arg_types,
-                call_site_span,
-                receiver_ty,
-                expected_return_ty,
-            );
+            if !candidates.is_empty() {
+                return self.resolve_method_overload(
+                    method,
+                    &candidates,
+                    explicit_type_args,
+                    args,
+                    arg_types,
+                    call_site_span,
+                    receiver_ty,
+                    expected_return_ty,
+                );
+            }
         }
-        if let Some(method_info) = methods.get(method) {
+        if let Some(method_info) = methods
+            .get(method)
+            .filter(|method_info| receiver_surface.accepts_method(method_info))
+        {
             return Some(self.check_resolved_generic_method_call(
                 method,
                 method_info.clone(),
@@ -2984,6 +2992,9 @@ impl TypeChecker {
             let mut candidates = Vec::new();
             for adoption in trait_adoptions {
                 if let Some(entry) = self.trait_method_entry_resolved_for_adoption(adoption, method, call_site_span) {
+                    if !receiver_surface.accepts_method(&entry.info) {
+                        continue;
+                    }
                     let dispatch = self.resolved_trait_dispatch(
                         &entry.origin_trait,
                         entry.origin_type_args.clone(),
@@ -3111,6 +3122,7 @@ impl TypeChecker {
         &mut self,
         base_ty: &ResolvedType,
         method: &str,
+        receiver_surface: MemberBindingSurface,
         type_args: &[Spanned<Type>],
         args: &[CallArg],
         span: Span,
@@ -3122,6 +3134,7 @@ impl TypeChecker {
         };
         let call = SourceMethodPrepass {
             method,
+            receiver_surface,
             type_args,
             args,
             span,
@@ -3210,12 +3223,19 @@ impl TypeChecker {
         call: &SourceMethodPrepass<'_>,
     ) -> Option<ResolvedType> {
         let method_info = if let Some(overloads) = method_overloads.get(call.method) {
-            if overloads.len() != 1 {
+            let mut matching = overloads
+                .iter()
+                .filter(|method| call.receiver_surface.accepts_method(method));
+            let method = matching.next().cloned();
+            if matching.next().is_some() {
                 return None;
             }
-            Some(overloads[0].clone())
+            method
         } else {
-            methods.get(call.method).cloned()
+            methods
+                .get(call.method)
+                .filter(|method| call.receiver_surface.accepts_method(method))
+                .cloned()
         };
         let Some(method_info) = method_info else {
             return self.resolve_unambiguous_adopted_trait_method_without_arg_prepass(trait_adoptions, call);
@@ -3242,6 +3262,7 @@ impl TypeChecker {
         let mut candidates = trait_adoptions
             .iter()
             .filter_map(|adoption| self.trait_method_entry_resolved_for_adoption(adoption, call.method, call.span))
+            .filter(|candidate| call.receiver_surface.accepts_method(&candidate.info))
             .collect::<Vec<_>>();
         if candidates.len() != 1 {
             return None;
@@ -3458,6 +3479,7 @@ impl TypeChecker {
         &mut self,
         receiver_ty: &ResolvedType,
         method: &str,
+        receiver_surface: MemberBindingSurface,
         explicit_type_args: &[Spanned<Type>],
         args: &[CallArg],
         arg_types: &[ResolvedType],
@@ -3483,6 +3505,7 @@ impl TypeChecker {
             None,
             Some(std::slice::from_ref(&adoption)),
             method,
+            receiver_surface,
             explicit_type_args,
             args,
             arg_types,
@@ -4126,6 +4149,26 @@ impl TypeChecker {
         self.check_method_call_with_expected(base, method, type_args, args, span, None)
     }
 
+    /// Classify a checked member-call receiver without recovering ownership from its spelling.
+    ///
+    /// The identifier resolution fact is authoritative for ordinary and parenthesized type expressions. A
+    /// `TypeToken[T]` value is also type-owned, which covers checked classmethod receiver values. Everything else is
+    /// an instance receiver, even when its source spelling happens to begin with an uppercase letter.
+    fn checked_member_receiver_surface(&self, base: &Spanned<Expr>, base_ty: &ResolvedType) -> MemberBindingSurface {
+        if matches!(base_ty, ResolvedType::TypeToken(_))
+            || matches!(
+                self.type_info.ident_kind(base.span),
+                Some(IdentKind::TypeName | IdentKind::Trait)
+            )
+        {
+            return MemberBindingSurface::Type;
+        }
+        match &base.node {
+            Expr::Paren(inner) | Expr::Index(inner, _) => self.checked_member_receiver_surface(inner, base_ty),
+            _ => MemberBindingSurface::Instance,
+        }
+    }
+
     /// Type-check the consuming read of one compiler-managed C output slot.
     fn check_c_abi_output_slot_take(
         &mut self,
@@ -4281,6 +4324,7 @@ impl TypeChecker {
         }
 
         let mut base_ty = self.check_type_receiver_expr(base);
+        let receiver_surface = self.checked_member_receiver_surface(base, &base_ty);
         if let Some(expected) = expected_return_ty
             && matches!(
                 result_methods::from_str(method),
@@ -4490,6 +4534,7 @@ impl TypeChecker {
         if let Some(ret) = self.resolve_unambiguous_source_method_without_arg_prepass(
             &base_ty,
             method,
+            receiver_surface,
             type_args,
             args,
             span,
@@ -4506,6 +4551,22 @@ impl TypeChecker {
                 None
             }
         });
+        let result_callback_input = match (&base_ty, result_methods::from_str(method)) {
+            (ResolvedType::Generic(name, type_args), Some(method_id))
+                if collection_type_id(name.as_str()) == Some(CollectionTypeId::Result) && type_args.len() == 2 =>
+            {
+                match method_id {
+                    ResultMethodId::Map | ResultMethodId::AndThen | ResultMethodId::Inspect => {
+                        Some(type_args[0].clone())
+                    }
+                    ResultMethodId::MapErr | ResultMethodId::OrElse | ResultMethodId::InspectErr => {
+                        Some(type_args[1].clone())
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
 
         // Rust callable bounds are not available until receiver metadata selects the method signature below. Defer
         // direct closures on Rust receivers so the selected `Fn`/`FnMut` bound can contextually type them once, rather
@@ -4517,14 +4578,23 @@ impl TypeChecker {
         let arg_types: Vec<ResolvedType> = args
             .iter()
             .map(|arg| {
-                let is_closure = match arg {
+                let arg_expr = match arg {
                     CallArg::Positional(expr)
                     | CallArg::Named(_, expr)
                     | CallArg::PositionalUnpack(expr)
-                    | CallArg::KeywordUnpack(expr) => matches!(expr.node, Expr::Closure(_, _)),
+                    | CallArg::KeywordUnpack(expr) => expr,
                 };
+                let is_closure = matches!(arg_expr.node, Expr::Closure(_, _));
                 if defer_rust_closures && contextual_rust_callable.is_none() && is_closure {
                     ResolvedType::Unknown
+                } else if let Some(input_ty) = result_callback_input.as_ref()
+                    && is_closure
+                {
+                    let expected = ResolvedType::Function(
+                        vec![CallableParam::positional(input_ty.clone())],
+                        Box::new(ResolvedType::Unknown),
+                    );
+                    self.check_expr_with_expected(arg_expr, Some(&expected))
                 } else {
                     self.check_method_arg_with_rust_callable_alias(arg, contextual_rust_callable.as_ref())
                 }
@@ -5005,6 +5075,7 @@ impl TypeChecker {
             if let Some(ret) = self.resolve_trait_receiver_method(
                 &base_ty,
                 method,
+                receiver_surface,
                 type_args,
                 args,
                 &arg_types,
@@ -5030,6 +5101,7 @@ impl TypeChecker {
                         Some(&model.method_overloads),
                         Some(&trait_adoptions),
                         method,
+                        receiver_surface,
                         type_args,
                         args,
                         &arg_types,
@@ -5047,6 +5119,7 @@ impl TypeChecker {
                         Some(&class.method_overloads),
                         Some(&trait_adoptions),
                         method,
+                        receiver_surface,
                         type_args,
                         args,
                         &arg_types,
@@ -5064,6 +5137,7 @@ impl TypeChecker {
                         Some(&en.method_overloads),
                         Some(&trait_adoptions),
                         method,
+                        receiver_surface,
                         type_args,
                         args,
                         &arg_types,
@@ -5081,6 +5155,7 @@ impl TypeChecker {
                         Some(&newtype.method_overloads),
                         Some(&newtype.trait_adoptions),
                         resolved_method,
+                        receiver_surface,
                         type_args,
                         args,
                         &arg_types,
@@ -5132,6 +5207,7 @@ impl TypeChecker {
                             Some(&model.method_overloads),
                             Some(&trait_adoptions),
                             method,
+                            receiver_surface,
                             type_args,
                             args,
                             &arg_types,
@@ -5150,6 +5226,7 @@ impl TypeChecker {
                             Some(&class.method_overloads),
                             Some(&trait_adoptions),
                             method,
+                            receiver_surface,
                             type_args,
                             args,
                             &arg_types,
@@ -5171,6 +5248,7 @@ impl TypeChecker {
                             Some(&en.method_overloads),
                             Some(&trait_adoptions),
                             method,
+                            receiver_surface,
                             type_args,
                             args,
                             &arg_types,
@@ -5188,6 +5266,7 @@ impl TypeChecker {
                             Some(&nt.method_overloads),
                             Some(&nt.trait_adoptions),
                             resolved_method,
+                            receiver_surface,
                             type_args,
                             args,
                             &arg_types,

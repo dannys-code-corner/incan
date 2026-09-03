@@ -27,13 +27,13 @@ INCAN_TEST_OVEN_COMPILER_SUITE_REPORT ?=
 INCAN_TEST_OVEN_TEST_ONE_REPORT ?=
 # The pinned publisher Cargo supplies the unstable unit graph and the package-qualified Rust-inspection tests that
 # exercise Cargo's nightly-only metadata flags. Loaf receipts and direct-rustc suite execution use the selected
-# consumer toolchain, so stable and MSRV gates prove their advertised compiler rather than nightly. The named
+# consumer toolchain, so the pinned Rust 1.98.0 gates prove their advertised compiler rather than nightly. The named
 # publisher/test-fixture boundary remains explicit; normal Oven build/run/test remains direct-rustc.
-INCAN_TEST_PREWARM_TOOLCHAIN ?= stable
+INCAN_TEST_PREWARM_TOOLCHAIN ?= 1.98.0
 INCAN_TEST_PUBLISHER_TOOLCHAIN ?= nightly-2026-03-24
 INCAN_TEST_FIXTURE_CARGO_TOOLCHAIN ?= $(INCAN_TEST_PUBLISHER_TOOLCHAIN)
-INCAN_TEST_LOAF_TOOLCHAIN ?= stable
-INCAN_TEST_SUITE_TOOLCHAIN ?= stable
+INCAN_TEST_LOAF_TOOLCHAIN ?= 1.98.0
+INCAN_TEST_SUITE_TOOLCHAIN ?= 1.98.0
 TEST_ENV = CARGO_BUILD_JOBS=$(INCAN_TEST_CARGO_BUILD_JOBS) \
 	INCAN_GENERATED_CARGO_TARGET_DIR="$(INCAN_TEST_GENERATED_CARGO_TARGET_DIR)" \
 	INCAN_INTERNAL_SDK_PROVIDER_STORE="$(INCAN_TEST_SDK_PROVIDER_STORE)" \

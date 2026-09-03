@@ -30,8 +30,8 @@ def exercise() -> Result[None, DateTimeError]:
     println(DateTime.fromisoformat("2025-01-01T00:00:00")? < DateTime.utc_now())
 
     anchor = Date.fromisoformat("2026-04-14")?
-    next_week = anchor + TimeDelta.from_days(7)
-    quarter_end = anchor + YearMonthInterval.from_months(3)
+    next_week = anchor + TimeDelta.days(7)
+    quarter_end = anchor + YearMonthInterval.months(3)
     println(next_week.isoformat())
     println(quarter_end.isoformat())
 
@@ -58,7 +58,7 @@ def exercise() -> Result[None, DateTimeError]:
         Err(_) => println("bad-week")
 
     naive = DateTime.fromisoformat("2026-04-14T12:34:56")?
-    later = naive + TimeDelta.from_days(1)
+    later = naive + TimeDelta.days(1)
     println(later.isoformat())
     first = DateTime.fromisoformat("2026-04-14T12:00:00")?
     second = DateTime.fromisoformat("2026-04-14T12:30:00")?

@@ -265,7 +265,7 @@ pub model Date with OrdinalKey:
             `Date` when subtracting an interval; `TimeDelta` when subtracting another date.
         """
         if isinstance(other, Date):
-            return TimeDelta.from_days(self._ordinal() - other._ordinal())
+            return TimeDelta.days(self._ordinal() - other._ordinal())
         elif isinstance(other, TimeDelta):
             return self.add_days(0 - other.days)
         elif isinstance(other, YearMonthInterval):
@@ -801,7 +801,7 @@ pub model FixedOffset:
     pub seconds: int
 
     @staticmethod
-    def from_seconds(value: int) -> Result[FixedOffset, DateTimeError]:
+    def seconds(value: int) -> Result[FixedOffset, DateTimeError]:
         """
         Construct a checked fixed offset from seconds.
 
@@ -828,7 +828,7 @@ pub model FixedOffset:
         Returns:
             `Ok(FixedOffset)` when the offset is within one day, otherwise `Err(DateTimeError)`.
         """
-        return FixedOffset.from_seconds(value * _SECONDS_PER_MINUTE)
+        return FixedOffset.seconds(value * _SECONDS_PER_MINUTE)
 
     @staticmethod
     def hours(value: int) -> Result[FixedOffset, DateTimeError]:
@@ -841,7 +841,7 @@ pub model FixedOffset:
         Returns:
             `Ok(FixedOffset)` when the offset is within one day, otherwise `Err(DateTimeError)`.
         """
-        return FixedOffset.from_seconds(value * _SECONDS_PER_HOUR)
+        return FixedOffset.seconds(value * _SECONDS_PER_HOUR)
 
     @staticmethod
     def utc() -> FixedOffset:
@@ -1409,7 +1409,7 @@ pub def _parse_offset(value: str, start: int) -> Result[_ParsedOffset, DateTimeE
     mut seconds = hour.value * _SECONDS_PER_HOUR + minute.value * _SECONDS_PER_MINUTE
     if sign == "-":
         seconds = 0 - seconds
-    return Ok(_ParsedOffset(offset=FixedOffset.from_seconds(seconds)?, next=minute.next))
+    return Ok(_ParsedOffset(offset=FixedOffset.seconds(seconds)?, next=minute.next))
 
 
 def _format_offset(offset: FixedOffset, colon: bool, use_z: bool) -> str:

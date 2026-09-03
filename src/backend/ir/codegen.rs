@@ -4803,6 +4803,33 @@ def same(left: Value, right: Value) -> bool:
     }
 
     #[test]
+    fn result_map_err_closure_keeps_concrete_member_identity() {
+        let generated = generate(
+            r#"
+pub model Failure:
+  detail: str
+
+  def message(self) -> str:
+    return self.detail
+
+pub def describe(result: Result[int, Failure]) -> Result[int, str]:
+  return result.map_err((error) => error.message())
+"#,
+        );
+        let projection = projected_name(&generated, "message", SemanticSourceTargetKind::Method);
+        let compact = compact_rust(&generated);
+
+        assert!(
+            compact.contains(&format!("error.{projection}()")),
+            "map_err must contextually type its error closure before member projection:\n{generated}"
+        );
+        assert!(
+            !compact.contains("|error|error.message()"),
+            "a contextually-known source member must not fall back to its raw spelling:\n{generated}"
+        );
+    }
+
+    #[test]
     fn test_multi_file_model_aliases_work_across_modules() {
         // DB module defines a model with an alias. Store module should be able to use the alias
         // in member access and constructor calls and still emit canonical Rust field names.

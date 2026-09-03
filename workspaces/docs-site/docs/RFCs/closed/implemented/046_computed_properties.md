@@ -108,7 +108,7 @@ property area -> float:
 
 - A **property access** is **`primary "." identifier`** where `identifier` names a property on the type of `primary`.
 - **`()` must not** follow the identifier for a property access. If the user writes `obj.prop()`, the typechecker reports a property-called-as-method diagnostic.
-- A field, method, property, or trait member may not share the same simple name within the same type or trait implementation.
+- Instance fields, computed properties, and receiver-bearing methods may not share the same simple name within the same type or trait implementation. Type-owned methods occupy a separate receiver surface, so a static factory such as `TimeDelta.days(value)` may intentionally share its spelling with the stored instance field read as `delta.days`.
 
 ### Typing
 
@@ -293,7 +293,7 @@ Trait properties do not introduce trait default implementations in this RFC; the
 - Trait properties are abstract requirements. `property name -> T` is the preferred abstract trait spelling, with `property name -> T: ...` accepted only to the same extent RFC 044 accepts that marker for abstract methods.
 - Concrete trait implementations use `property name -> T:` with a body; this RFC does not add default property implementations to traits.
 - A property read executes the body each time. There is no implicit memoization, and any caching must be written by the author.
-- A field, method, property, or trait member may not share the same simple name within one type or trait implementation.
+- Instance fields, computed properties, and receiver-bearing methods may not share the same simple name within one type or trait implementation. Type-owned methods occupy a separate receiver surface, so a static factory may share a stored field's spelling without making either use site ambiguous.
 - Calling a property with `()` is an error even if a call expression would otherwise typecheck structurally.
 - Generic properties use the containing type’s generic parameters and follow the same return-type substitution, variance, and ownership rules as nullary methods.
 - Property override and `super` behavior follows the existing method override model once inheritance support applies; this RFC adds no separate override rules.

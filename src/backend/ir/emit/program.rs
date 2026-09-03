@@ -1999,7 +1999,9 @@ impl<'a> IrEmitter<'a> {
             .map(|source_name| {
                 let mut canonical_path = source_module.clone();
                 canonical_path.push((*source_name).to_string());
-                self.canonical_stdlib_function_identity(&canonical_path)
+                self.function_registry
+                    .canonical_identity_for_source_name(source_name)
+                    .or_else(|| self.canonical_stdlib_function_identity(&canonical_path))
                     .map(encode_incan_symbol_identity)
                     .map(|projection| Self::rust_ident(&projection))
                     .ok_or_else(|| {

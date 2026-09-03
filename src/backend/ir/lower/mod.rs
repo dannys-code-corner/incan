@@ -354,6 +354,7 @@ impl AstLowering {
         &self,
         span: ast::Span,
         resolved_method_name: &str,
+        rebase_source_stdlib: bool,
     ) -> Option<String> {
         self.type_info
             .as_ref()?
@@ -373,7 +374,16 @@ impl AstLowering {
                     .as_ref()
                     .is_none_or(|info| !info.is_compiler_generated_member_identity(identity))
             })
-            .map(encode_incan_symbol_identity)
+            .map(|identity| {
+                let mut identity = identity.clone();
+                if rebase_source_stdlib
+                    && let SymbolOrigin::Module(module_path) = &mut identity.origin
+                    && module_path.first().map(String::as_str) == Some(incan_core::lang::stdlib::STDLIB_ROOT)
+                {
+                    module_path[0] = incan_core::lang::stdlib::INCAN_STD_NAMESPACE.to_string();
+                }
+                encode_incan_symbol_identity(&identity)
+            })
     }
 
     /// Enter one callable body with its declared return type available to statement lowering.
@@ -1857,11 +1867,19 @@ impl AstLowering {
     /// Collect callable re-exports from checked package metadata.
     fn collect_function_reexports(&self, program: &ast::Program) -> Vec<FunctionReexport> {
         let mut reexports = Vec::new();
+        let stdlib_import_facade = self.current_source_module_name.as_deref().is_some_and(|module| {
+            let root = module.split('.').next();
+            matches!(root, Some(stdlib::STDLIB_ROOT | stdlib::INCAN_STD_NAMESPACE))
+                && program
+                    .declarations
+                    .iter()
+                    .all(|decl| matches!(decl.node, ast::Declaration::Docstring(_) | ast::Declaration::Import(_)))
+        });
         for decl in &program.declarations {
             let ast::Declaration::Import(import) = &decl.node else {
                 continue;
             };
-            if !matches!(import.visibility, ast::Visibility::Public) {
+            if !matches!(import.visibility, ast::Visibility::Public) && !stdlib_import_facade {
                 continue;
             }
             let ast::ImportKind::From { module, items } = &import.kind else {
@@ -1897,7 +1915,17 @@ impl AstLowering {
         } else {
             module.segments.clone()
         };
-        crate::frontend::module::canonicalize_source_module_segments(&segments)
+        let mut canonical = crate::frontend::module::canonicalize_source_module_segments(&segments);
+        if canonical.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT)
+            && self
+                .current_source_module_name
+                .as_deref()
+                .and_then(|module| module.split('.').next())
+                == Some(stdlib::INCAN_STD_NAMESPACE)
+        {
+            canonical[0] = stdlib::INCAN_STD_NAMESPACE.to_string();
+        }
+        canonical
     }
 
     /// Lower a complete AST program to IR.
@@ -3797,6 +3825,27 @@ mod tests {
         let _ = checker.check_program(&ast);
         let mut lowering = AstLowering::new_with_type_info(checker.type_info().clone());
         lowering.lower_program(&ast)
+    }
+
+    #[test]
+    fn stdlib_import_facade_reexports_use_the_emitted_namespace() {
+        let source = r#"
+"""Import-only stdlib facade."""
+from std.datetime.civil.naive import utc
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let program = must_ok(parser::parse(&tokens));
+        let mut lowering = AstLowering::new();
+        lowering.set_current_source_module_name(Some("__incan_std.datetime.civil".to_string()));
+
+        let reexports = lowering.collect_function_reexports(&program);
+
+        assert_eq!(reexports.len(), 1);
+        assert_eq!(reexports[0].name, "utc");
+        assert_eq!(
+            reexports[0].target_path,
+            ["__incan_std", "datetime", "civil", "naive", "utc"]
+        );
     }
 
     #[test]

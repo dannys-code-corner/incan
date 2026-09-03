@@ -115,7 +115,7 @@ impl<'a> IrEmitter<'a> {
     /// conservatively capture the receiver borrow even when the hidden adapter owns `self.clone()`, which makes
     /// ordinary chains such as `stream.map(...).filter(...)` borrow a temporary. The capture list names all generic
     /// parameters in scope while deliberately excluding the receiver lifetime.
-    fn emit_method_return_type(
+    pub(in crate::backend::ir::emit) fn emit_method_return_type(
         &self,
         return_type: &IrType,
         method_type_params: &[super::super::super::decl::IrTypeParam],

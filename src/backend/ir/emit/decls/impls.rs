@@ -347,7 +347,7 @@ impl<'a> IrEmitter<'a> {
         let return_type = match &method.return_type {
             IrType::Unit => quote! {},
             ty => {
-                let ty = self.emit_type(ty);
+                let ty = self.emit_method_return_type(ty, &method.type_params);
                 quote! { -> #ty }
             }
         };

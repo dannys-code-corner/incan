@@ -1165,6 +1165,92 @@ def main() -> None:
     }
 
     #[test]
+    fn static_factory_projection_coexists_with_same_named_instance_field() -> TestResult {
+        let rust_code = generate_registry_rust(
+            r#"
+type Days = newtype int
+
+model TimeDelta:
+  pub days: Days
+
+  @staticmethod
+  def days(value: Days) -> TimeDelta:
+    return TimeDelta(days=value)
+
+def main() -> None:
+  delta = TimeDelta.days(-7)
+  println(f"{delta.days.0}")
+"#,
+            "app.main",
+        );
+        let identities = recover_incan_identities_from_generated_rust(&rust_code);
+        let factory = identities
+            .iter()
+            .find(|identity| identity.kind == SemanticSourceTargetKind::Method && identity.declaration_name == "days")
+            .ok_or_else(|| "same-named static factory must retain its canonical identity".to_string())?;
+        let projection = encode_incan_symbol_identity(factory);
+        let compact = compact_rust(&rust_code);
+
+        assert_eq!(rust_code.matches(&format!("fn {projection}")).count(), 1, "{rust_code}");
+        assert!(
+            compact.contains("pubdays:Days"),
+            "the instance field must remain ordinary stored data:\n{rust_code}"
+        );
+        assert!(
+            compact.contains(&format!("TimeDelta::{projection}(Days(-7),)")),
+            "the type-owned call must select the factory and preserve implicit newtype construction:\n{rust_code}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn type_owned_and_instance_owned_methods_with_one_spelling_project_separately() -> TestResult {
+        let rust_code = generate_registry_rust(
+            r#"
+model Counter:
+  value: int
+
+  @staticmethod
+  def next(value: int) -> Counter:
+    return Counter(value=value)
+
+  def next(self) -> int:
+    return self.value + 1
+
+def main() -> None:
+  counter = Counter.next(4)
+  println(counter.next())
+"#,
+            "app.main",
+        );
+        let projections = recover_incan_identities_from_generated_rust(&rust_code)
+            .into_iter()
+            .filter(|identity| identity.kind == SemanticSourceTargetKind::Method && identity.declaration_name == "next")
+            .map(|identity| encode_incan_symbol_identity(&identity))
+            .collect::<Vec<_>>();
+        let compact = compact_rust(&rust_code);
+
+        assert_eq!(
+            projections.len(),
+            2,
+            "both method declarations must retain identities:\n{rust_code}"
+        );
+        assert!(
+            projections
+                .iter()
+                .any(|projection| compact.contains(&format!("Counter::{projection}(4"))),
+            "the type receiver must select the static declaration:\n{rust_code}"
+        );
+        assert!(
+            projections
+                .iter()
+                .any(|projection| compact.contains(&format!("counter.{projection}()"))),
+            "the instance receiver must select the receiver-bearing declaration:\n{rust_code}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn newtype_associated_declaration_and_call_share_one_projection() -> TestResult {
         let rust_code = generate_registry_rust(
             r#"
@@ -2456,8 +2542,8 @@ def main() -> None:
         "opaque adapter returns must exclude the receiver lifetime through precise captures; generated:\n{rust_code}"
     );
     assert!(
-        compact.contains("fnmap<U:Clone>(&self,f:fn(i64)->U)->implFallibleStream<U,String>"),
-        "expected trait default types to specialize to the adopter arguments; generated:\n{rust_code}"
+        compact.contains("pubfnmap<U:Clone>(&self,f:fn(i64)->U,)->implFallibleStream<U,String>+use<U>"),
+        "expected the projected trait adapter to specialize adopter arguments and exclude the receiver lifetime; generated:\n{rust_code}"
     );
 }
 

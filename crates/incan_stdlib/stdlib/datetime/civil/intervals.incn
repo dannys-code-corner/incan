@@ -33,7 +33,7 @@ pub model TimeDelta:
     pub nanoseconds: int
 
     @staticmethod
-    def from_nanoseconds(value: int) -> TimeDelta:
+    def nanoseconds(value: int) -> TimeDelta:
         """
         Construct a day/time interval from nanoseconds.
 
@@ -72,7 +72,7 @@ pub model TimeDelta:
         return _timedelta_from_nanos(value * _NANOS_PER_MILLISECOND)
 
     @staticmethod
-    def from_seconds(value: int) -> TimeDelta:
+    def seconds(value: int) -> TimeDelta:
         """
         Construct a day/time interval from seconds.
 
@@ -95,7 +95,7 @@ pub model TimeDelta:
         Returns:
             A normalized `TimeDelta`.
         """
-        return TimeDelta.from_seconds(value * _SECONDS_PER_MINUTE)
+        return TimeDelta.seconds(value * _SECONDS_PER_MINUTE)
 
     @staticmethod
     def hours(value: int) -> TimeDelta:
@@ -108,10 +108,10 @@ pub model TimeDelta:
         Returns:
             A normalized `TimeDelta`.
         """
-        return TimeDelta.from_seconds(value * _SECONDS_PER_HOUR)
+        return TimeDelta.seconds(value * _SECONDS_PER_HOUR)
 
     @staticmethod
-    def from_days(value: int) -> TimeDelta:
+    def days(value: int) -> TimeDelta:
         """
         Construct a day/time interval from days.
 
@@ -134,7 +134,7 @@ pub model TimeDelta:
         Returns:
             A `TimeDelta`.
         """
-        return TimeDelta.from_days(value * _DAYS_PER_WEEK)
+        return TimeDelta.days(value * _DAYS_PER_WEEK)
 
     def total_nanoseconds(self) -> int:
         """
@@ -195,7 +195,7 @@ pub model YearMonthInterval:
     pub months: int
 
     @staticmethod
-    def from_years(value: int) -> YearMonthInterval:
+    def years(value: int) -> YearMonthInterval:
         """
         Construct a year/month interval from years.
 
@@ -208,7 +208,7 @@ pub model YearMonthInterval:
         return _year_month_from_months(value * _MONTHS_PER_YEAR)
 
     @staticmethod
-    def from_months(value: int) -> YearMonthInterval:
+    def months(value: int) -> YearMonthInterval:
         """
         Construct a year/month interval from months.
 

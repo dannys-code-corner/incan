@@ -337,6 +337,21 @@ impl FunctionRegistry {
         candidates.all(|candidate| candidate == first).then_some(first)
     }
 
+    /// Return one unambiguous canonical identity for a source function declared in this registry.
+    ///
+    /// Registry keys may be opaque emitted projections, so callers that already own the local module registry must
+    /// follow the compiler-retained source-name relationship instead of reconstructing a physical name.
+    pub(crate) fn canonical_identity_for_source_name(&self, source_name: &str) -> Option<&CanonicalSymbolId> {
+        let mut candidates = self
+            .canonical_identities
+            .iter()
+            .filter_map(|(registry_name, identity)| {
+                (self.source_name(registry_name) == Some(source_name)).then_some(identity)
+            });
+        let first = candidates.next()?;
+        candidates.all(|candidate| candidate == first).then_some(first)
+    }
+
     /// Iterate over registered function signatures.
     pub fn iter(&self) -> impl Iterator<Item = (&String, &FunctionSignature)> {
         self.signatures.iter()
@@ -720,6 +735,34 @@ mod tests {
                 &["collections".to_string()],
                 "_ordinal_hash"
             ),
+            Some(&identity)
+        );
+    }
+
+    #[test]
+    fn function_registry_finds_local_identity_by_retained_source_name() {
+        let mut registry = FunctionRegistry::new();
+        let identity = incan_semantics_core::CanonicalSymbolId {
+            namespace: incan_semantics_core::SymbolNamespace::OrdinaryLexical,
+            origin: incan_semantics_core::SymbolOrigin::Package {
+                library: "incan_stdlib_data".to_string(),
+                module_path: vec!["collections".to_string()],
+            },
+            declaration_name: "_missing_ordinal".to_string(),
+            kind: incan_semantics_core::SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: incan_semantics_core::HirSourceSpan::new(10, 20),
+        };
+        registry.register_canonical_projection(
+            "opaque_projection".to_string(),
+            "_missing_ordinal".to_string(),
+            identity.clone(),
+            Vec::new(),
+            IrType::Int,
+        );
+
+        assert_eq!(
+            registry.canonical_identity_for_source_name("_missing_ordinal"),
             Some(&identity)
         );
     }

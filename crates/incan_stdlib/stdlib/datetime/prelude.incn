@@ -10,7 +10,7 @@ Example:
 from std.datetime import Date, Instant, TimeDelta
 
 started = Instant.now()
-renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.from_days(30)
+renewal = Date.fromisoformat("2026-04-14")? + TimeDelta.days(30)
 println(renewal.isoformat())
 println(started.elapsed().whole_seconds())
 ```

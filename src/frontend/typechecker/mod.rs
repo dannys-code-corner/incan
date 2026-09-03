@@ -155,7 +155,7 @@ pub(crate) struct TypeAliasTarget {
     pub target: ResolvedType,
 }
 
-/// Source member categories that share one RFC 120 member-namespace registration.
+/// Source member categories registered through the RFC 120 member-name authority.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MemberBindingKind {
     Field,
@@ -165,6 +165,37 @@ enum MemberBindingKind {
     MethodPartial,
     Variant,
     VariantAlias,
+}
+
+/// Receiver surface that owns a source member spelling.
+///
+/// Type-owned methods have no instance receiver and are selected only through a type expression. Fields, properties,
+/// and receiver-bearing methods are selected through an instance. Keeping those surfaces distinct lets a model expose
+/// `TimeDelta.days(value)` while retaining `delta.days` as ordinary stored data without weakening collision checks
+/// within either surface.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum MemberBindingSurface {
+    Type,
+    Instance,
+}
+
+impl MemberBindingSurface {
+    /// Classify one authored method from its checked receiver shape.
+    const fn for_method(method: &MethodDecl) -> Self {
+        if method.receiver.is_some() {
+            Self::Instance
+        } else {
+            Self::Type
+        }
+    }
+
+    /// Return whether checked method metadata belongs to this receiver surface.
+    const fn accepts_method(self, method: &MethodInfo) -> bool {
+        match self {
+            Self::Type => method.receiver.is_none(),
+            Self::Instance => method.receiver.is_some(),
+        }
+    }
 }
 
 impl MemberBindingKind {
@@ -5480,6 +5511,10 @@ impl TypeChecker {
     }
 
     /// Register every authored member spelling through one source-ordered first-wins collision mechanism.
+    ///
+    /// Model/class fields and properties occupy the instance surface. Receiverless methods occupy the type surface,
+    /// so their spelling may match an instance member without becoming ambiguous at either use site. Method aliases
+    /// and partials inherit the surface of the method they project.
     fn validate_member_name_collisions(
         &mut self,
         owner: &str,
@@ -5489,35 +5524,75 @@ impl TypeChecker {
         properties: &[Spanned<PropertyDecl>],
         methods: &[Spanned<MethodDecl>],
     ) {
+        let mut method_surfaces: HashMap<String, HashSet<MemberBindingSurface>> = HashMap::new();
+        for method in methods {
+            method_surfaces
+                .entry(method.node.name.clone())
+                .or_default()
+                .insert(MemberBindingSurface::for_method(&method.node));
+        }
+        let mut alias_surfaces: HashMap<String, HashSet<MemberBindingSurface>> = HashMap::new();
+        for alias in aliases {
+            if let Some(surfaces) = method_surfaces.get(&alias.node.target) {
+                alias_surfaces.insert(alias.node.name.clone(), surfaces.clone());
+            }
+        }
+
         let mut declarations =
             Vec::with_capacity(fields.len() + aliases.len() + partials.len() + properties.len() + methods.len());
-        declarations.extend(
-            fields
-                .iter()
-                .map(|field| (field.node.name.clone(), MemberBindingKind::Field, field.span)),
-        );
-        declarations.extend(
-            methods
-                .iter()
-                .map(|method| (method.node.name.clone(), MemberBindingKind::Method, method.span)),
-        );
-        declarations.extend(
-            properties
-                .iter()
-                .map(|property| (property.node.name.clone(), MemberBindingKind::Property, property.span)),
-        );
-        declarations.extend(
-            aliases
-                .iter()
-                .map(|alias| (alias.node.name.clone(), MemberBindingKind::MethodAlias, alias.span)),
-        );
-        declarations.extend(partials.iter().map(|partial| {
+        declarations.extend(fields.iter().map(|field| {
             (
-                partial.node.name.clone(),
-                MemberBindingKind::MethodPartial,
-                partial.span,
+                field.node.name.clone(),
+                MemberBindingKind::Field,
+                MemberBindingSurface::Instance,
+                field.span,
             )
         }));
+        declarations.extend(methods.iter().map(|method| {
+            (
+                method.node.name.clone(),
+                MemberBindingKind::Method,
+                MemberBindingSurface::for_method(&method.node),
+                method.span,
+            )
+        }));
+        declarations.extend(properties.iter().map(|property| {
+            (
+                property.node.name.clone(),
+                MemberBindingKind::Property,
+                MemberBindingSurface::Instance,
+                property.span,
+            )
+        }));
+        for alias in aliases {
+            let surfaces = alias_surfaces
+                .get(&alias.node.name)
+                .cloned()
+                .unwrap_or_else(|| HashSet::from([MemberBindingSurface::Instance]));
+            declarations.extend(surfaces.into_iter().map(|surface| {
+                (
+                    alias.node.name.clone(),
+                    MemberBindingKind::MethodAlias,
+                    surface,
+                    alias.span,
+                )
+            }));
+        }
+        for partial in partials {
+            let surfaces = method_surfaces
+                .get(&partial.node.target)
+                .or_else(|| alias_surfaces.get(&partial.node.target))
+                .cloned()
+                .unwrap_or_else(|| HashSet::from([MemberBindingSurface::Instance]));
+            declarations.extend(surfaces.into_iter().map(|surface| {
+                (
+                    partial.node.name.clone(),
+                    MemberBindingKind::MethodPartial,
+                    surface,
+                    partial.span,
+                )
+            }));
+        }
         self.register_source_ordered_member_bindings(owner, declarations);
     }
 
@@ -5530,21 +5605,30 @@ impl TypeChecker {
         methods: &[Spanned<MethodDecl>],
     ) {
         let mut declarations = Vec::with_capacity(variants.len() + aliases.len() + methods.len());
-        declarations.extend(
-            variants
-                .iter()
-                .map(|variant| (variant.node.name.clone(), MemberBindingKind::Variant, variant.span)),
-        );
-        declarations.extend(
-            aliases
-                .iter()
-                .map(|alias| (alias.node.name.clone(), MemberBindingKind::VariantAlias, alias.span)),
-        );
-        declarations.extend(
-            methods
-                .iter()
-                .map(|method| (method.node.name.clone(), MemberBindingKind::Method, method.span)),
-        );
+        declarations.extend(variants.iter().map(|variant| {
+            (
+                variant.node.name.clone(),
+                MemberBindingKind::Variant,
+                MemberBindingSurface::Type,
+                variant.span,
+            )
+        }));
+        declarations.extend(aliases.iter().map(|alias| {
+            (
+                alias.node.name.clone(),
+                MemberBindingKind::VariantAlias,
+                MemberBindingSurface::Type,
+                alias.span,
+            )
+        }));
+        declarations.extend(methods.iter().map(|method| {
+            (
+                method.node.name.clone(),
+                MemberBindingKind::Method,
+                MemberBindingSurface::for_method(&method.node),
+                method.span,
+            )
+        }));
         self.register_source_ordered_member_bindings(owner, declarations);
     }
 
@@ -5552,13 +5636,13 @@ impl TypeChecker {
     fn register_source_ordered_member_bindings(
         &mut self,
         owner: &str,
-        mut declarations: Vec<(String, MemberBindingKind, Span)>,
+        mut declarations: Vec<(String, MemberBindingKind, MemberBindingSurface, Span)>,
     ) {
-        declarations.sort_by_key(|(_, _, span)| (span.start, span.end));
+        declarations.sort_by_key(|(_, _, _, span)| (span.start, span.end));
 
         let mut seen = HashMap::new();
-        for (name, kind, span) in declarations {
-            match register_binding(&mut seen, name.clone(), (kind, span)) {
+        for (name, kind, surface, span) in declarations {
+            match register_binding(&mut seen, (name.clone(), surface), (kind, span)) {
                 BindingRegistration::Registered => {
                     self.record_member_declaration_identity(&name, kind, span);
                 }

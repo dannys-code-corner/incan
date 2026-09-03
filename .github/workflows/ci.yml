@@ -14,6 +14,7 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   INCAN_NO_BANNER: 1
+  INCAN_RUST_TOOLCHAIN: 1.98.0
 
 jobs:
   changes:
@@ -74,9 +75,11 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       # Comment wrapping (comment_width/wrap_comments/format_code_in_doc_comments) requires nightly rustfmt.
-      # We intentionally use nightly for *formatting only*; all builds/tests remain on stable/MSRV jobs.
-      # Install stable first (rustup), then nightly with retries — nightly channel sync sometimes flakes on the network.
-      - uses: dtolnay/rust-toolchain@stable
+      # We intentionally use nightly for *formatting only*; all builds/tests remain on the pinned supported release.
+      # Install supported Rust first (rustup), then nightly with retries — nightly channel sync sometimes flakes.
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           components: rustfmt
@@ -113,13 +116,14 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
-          # Reuse matching stable artifacts without making a pull-request job a shared-cache writer.
-          shared-key: incan-stable
+          # Reuse matching pinned-toolchain artifacts without making a pull-request job a shared-cache writer.
+          shared-key: incan-rust-1.98.0
           save-if: false
       - uses: ./.github/actions/setup-rust-sccache
       - name: Run clippy
@@ -161,15 +165,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - id: macos-stable
-            name: macos-latest, stable
+          - id: macos-rust-1-98
+            name: macos-latest, Rust 1.98.0
             runner: macos-latest
-            toolchain: stable
+            toolchain: 1.98.0
             c_abi_test: check_verifies_c_bindings_against_a_declared_ios_interop_target
-          - id: linux-msrv
-            name: ubuntu-latest, MSRV 1.93.0
+          - id: linux-rust-1-98
+            name: ubuntu-latest, Rust 1.98.0
             runner: ubuntu-latest
-            toolchain: 1.93.0
+            toolchain: 1.98.0
             c_abi_test: check_verifies_c_bindings_against_a_declared_android_interop_target
     steps:
       - uses: actions/checkout@v5
@@ -195,9 +199,8 @@ jobs:
       - name: Build the compiler
         run: CARGO_BUILD_JOBS=2 cargo build --locked --features lsp --bins
       - uses: ./.github/actions/restore-sdk-provider-store
-      # Linux stable is the one complete Oven-suite authority below. The target
-      # checks here retain C-ABI coverage that is specific to macOS and MSRV
-      # without independently baking the same standard-library Loaf family.
+      # The Linux handoff below is the one complete Oven-suite authority. These jobs retain C-ABI coverage specific
+      # to macOS and Android without adding another Rust-version lane or independently baking the complete Loaf family.
       - name: Prewarm platform SDK providers
         run: >-
           CARGO_NET_OFFLINE=true
@@ -218,18 +221,20 @@ jobs:
     # workspace build. The runner-level 6-hour ceiling still bounds it.
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - name: Restore Cargo sources
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
@@ -242,7 +247,7 @@ jobs:
       - name: Check verified documentation examples
         run: >-
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_PREWARM_TOOLCHAIN=stable
+          INCAN_TEST_PREWARM_TOOLCHAIN=1.98.0
           make -s check-docs-examples
       - name: Upload compiler and reference generators
         uses: actions/upload-artifact@v6
@@ -266,18 +271,20 @@ jobs:
       oven_suite_cache_key: ${{ steps.oven-suite-cache-key.outputs.key }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - name: Restore Cargo sources
         uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
@@ -300,18 +307,18 @@ jobs:
           toolchain: nightly-2026-03-24
       - name: Install WASI target for the pinned Loaf baker
         run: rustup target add wasm32-wasip1 --toolchain nightly-2026-03-24
-      - name: Prewarm the complete Linux stable Oven suite
+      - name: Prewarm the complete Linux Rust 1.98.0 Oven suite
         run: >-
           CARGO_NET_OFFLINE=true
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_PREWARM_TOOLCHAIN=stable
-          INCAN_TEST_LOAF_TOOLCHAIN=stable
-          INCAN_TEST_SUITE_TOOLCHAIN=stable
+          INCAN_TEST_PREWARM_TOOLCHAIN=1.98.0
+          INCAN_TEST_LOAF_TOOLCHAIN=1.98.0
+          INCAN_TEST_SUITE_TOOLCHAIN=1.98.0
           make -s test-prewarm-oven-loafs test-prewarm-oven-release-loafs
       - name: Derive immutable prepared-suite cache key
         id: oven-suite-cache-key
         run: echo "key=incan-oven-suite-v1-Linux-X64-${{ github.sha }}" >> "$GITHUB_OUTPUT"
-      - name: Save prepared Linux stable Oven suite
+      - name: Save prepared Linux Rust 1.98.0 Oven suite
         uses: actions/cache/save@v5
         with:
           key: ${{ steps.oven-suite-cache-key.outputs.key }}
@@ -337,18 +344,20 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - name: Restore Cargo sources
         uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler sources
         run: make fetch-locked-cargo-sources
       - name: Run bounded Oven process-containment regressions
@@ -371,18 +380,20 @@ jobs:
     # never re-warm. The runner-level six-hour ceiling is the only bound, like every other Oven job.
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - name: Restore Cargo sources
         uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
@@ -427,9 +438,11 @@ jobs:
           - { partition: 3, display: 4 }
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
@@ -439,9 +452,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
@@ -482,9 +495,9 @@ jobs:
         run: >-
           CARGO_NET_OFFLINE=true
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_PREWARM_TOOLCHAIN=stable
-          INCAN_TEST_LOAF_TOOLCHAIN=stable
-          INCAN_TEST_SUITE_TOOLCHAIN=stable
+          INCAN_TEST_PREWARM_TOOLCHAIN=1.98.0
+          INCAN_TEST_LOAF_TOOLCHAIN=1.98.0
+          INCAN_TEST_SUITE_TOOLCHAIN=1.98.0
           make -s test-oven-partition
           INCAN_TEST_OVEN_PARTITION_INDEX=${{ matrix.partition }}
           INCAN_TEST_OVEN_PARTITION_COUNT=4
@@ -506,9 +519,11 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Install WASI target for vocab desugarers
-        run: rustup target add wasm32-wasip1 --toolchain stable
+        run: rustup target add wasm32-wasip1 --toolchain "${{ env.INCAN_RUST_TOOLCHAIN }}"
       - uses: ./.github/actions/install-nightly-toolchain
         with:
           toolchain: nightly-2026-03-24
@@ -520,9 +535,9 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-oven-pr-sources-v1-stable-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
+          key: incan-oven-pr-sources-v1-1.98.0-Linux-X64-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock', 'tests/fixtures/oven_loaf_dependencies/Cargo.lock', 'src/oven/fixtures/release_stdlib.toml') }}
           restore-keys: |
-            incan-oven-pr-sources-v1-stable-Linux-X64-
+            incan-oven-pr-sources-v1-1.98.0-Linux-X64-
       - name: Fetch locked compiler and Loaf publisher sources
         run: |
           make fetch-locked-cargo-sources
@@ -540,8 +555,8 @@ jobs:
         run: >-
           CARGO_NET_OFFLINE=true
           INCAN_TEST_COMPILER_ALREADY_BUILT=1
-          INCAN_TEST_PREWARM_TOOLCHAIN=stable
-          INCAN_TEST_LOAF_TOOLCHAIN=stable
+          INCAN_TEST_PREWARM_TOOLCHAIN=1.98.0
+          INCAN_TEST_LOAF_TOOLCHAIN=1.98.0
           make -s test-oven-release-smoke
 
   audit:
@@ -551,7 +566,9 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -567,7 +584,9 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -583,7 +602,9 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: ./.github/actions/install-nightly-toolchain
       - name: Compute udeps cache key
         id: udeps-cache-key
@@ -659,11 +680,13 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           # Keep release-profile artifacts separate from the dev/test cache.
-          shared-key: incan-stable-release
+          shared-key: incan-rust-1.98.0-release
           cache-workspace-crates: "true"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Build release compiler once
@@ -676,7 +699,9 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -717,16 +742,18 @@ jobs:
     if: ${{ needs.changes.outputs.docs_only != 'true' }}
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.INCAN_RUST_TOOLCHAIN }}
       - name: Restore Cargo sources
         uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: incan-test-cargo-sources-v2-stable-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
+          key: incan-test-cargo-sources-v2-1.98.0-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('Cargo.lock', 'crates/incan_stdlib/stdlib/components/**/vocab_companion/Cargo.lock') }}
           restore-keys: |
-            incan-test-cargo-sources-v1-stable-${{ runner.os }}-${{ runner.arch }}-
+            incan-test-cargo-sources-v1-1.98.0-${{ runner.os }}-${{ runner.arch }}-
       - name: Fetch locked Cargo sources
         run: make fetch-locked-cargo-sources
       - name: Download matching Incan CLI and checked-reference generators
