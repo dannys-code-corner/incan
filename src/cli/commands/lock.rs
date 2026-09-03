@@ -469,8 +469,9 @@ pub(crate) struct PreparedOvenProjectRegistrySourceAuthorities {
     authority: OvenLoadedProjectInspectionAuthority,
     sources: Vec<crate::rust_inspect::OvenInspectionRegistrySource>,
     registry_lock_source: Option<PathBuf>,
-    /// Build-script output directories the explicit bake sealed below the authority root.
-    generated_out_dirs: Vec<PathBuf>,
+    /// Build-script output directories the explicit bake sealed below the authority root, with their package
+    /// versions where the bake recorded them.
+    generated_out_dirs: Vec<crate::rust_inspect::SealedGeneratedOutDir>,
     test_dependency_plan: Option<crate::cli::commands::build::OvenDirectRustcPlanSelection>,
     _release_loafs: Vec<OvenToolchainLoaf>,
 }
@@ -940,7 +941,10 @@ pub(crate) fn prepare_project_registry_source_authorities(
         .payload
         .generated_out_dirs
         .iter()
-        .map(|dir| authority.artifact_root.join(&dir.relative_root))
+        .map(|dir| crate::rust_inspect::SealedGeneratedOutDir {
+            out_dir: authority.artifact_root.join(&dir.relative_root),
+            version: dir.version.clone(),
+        })
         .collect::<Vec<_>>();
     let test_dependency_plan = if let Some(stored_index) = test_dependency_stored_index {
         let constituent_index = authority

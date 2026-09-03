@@ -1050,10 +1050,44 @@ pub(crate) fn cargo_configured_target_dir(root: &Path) -> PathBuf {
     if path.is_absolute() { path } else { root.join(path) }
 }
 
+/// Read the exact version a dependency's manifest declares, if it declares one inline.
+///
+/// This is the version the generated-code route matches build units against: a closure can hold several build
+/// units of one package, and only the unit built from this version's sources defines the items this dependency
+/// exposes. A workspace-inherited version is not resolvable here and yields `None`, which disables the filter.
+fn dependency_manifest_version(dep_root: &Path) -> Option<String> {
+    let payload = fs::read_to_string(dep_root.join("Cargo.toml")).ok()?;
+    let manifest = toml::from_str::<toml::Value>(payload.as_str()).ok()?;
+    manifest.get("package")?.get("version")?.as_str().map(str::to_string)
+}
+
+/// Return the path form under which build-script output directories are compared.
+fn comparable_out_dir(out_dir: &Path) -> PathBuf {
+    fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf())
+}
+
+/// Return whether a build unit of a known version may define items for a dependency of `dep_version`.
+fn out_dir_version_matches(unit_version: Option<&str>, dep_version: Option<&str>) -> bool {
+    match (unit_version, dep_version) {
+        (Some(unit), Some(dep)) => unit == dep,
+        _ => true,
+    }
+}
+
 /// Find generated Rust files under build-script `OUT_DIR` directories that may define metadata for a dependency-owned
 /// item referenced through the root generated workspace.
+///
+/// Both routes below filter by package version whenever the version of a unit is known: a Cargo target's units
+/// through the map the workspace loader wrote from rust-analyzer's crate graph, sealed units through the version the
+/// bake recorded. A unit whose version is unknown stays a candidate, so a workspace without either record keeps
+/// today's behavior.
 fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) -> Vec<PathBuf> {
     let target_dir = cargo_configured_target_dir(root);
+    let dep_version = dependency_manifest_version(dep_root);
+    let mapped_versions = crate::loader::read_generated_out_dirs_map(root)
+        .into_iter()
+        .map(|record| (comparable_out_dir(&record.out_dir), record.version))
+        .collect::<HashMap<_, _>>();
     let mut crate_names = load_root_crate_names(dep_root);
     crate_names.push(normalized_crate_cache_key(crate_name));
     crate_names.sort();
@@ -1074,6 +1108,10 @@ fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) 
                 continue;
             }
             let out_dir = entry.path().join("out");
+            let unit_version = mapped_versions.get(&comparable_out_dir(&out_dir));
+            if !out_dir_version_matches(unit_version.map(String::as_str), dep_version.as_deref()) {
+                continue;
+            }
             let Ok(out_entries) = fs::read_dir(out_dir) else {
                 continue;
             };
@@ -1088,7 +1126,11 @@ fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) 
     // A direct Oven inspection workspace has no Cargo target directory. The sealed plan Loafs that compiled its
     // dependencies keep their build-script output as `build/<crate>/<hash>/out`, and the installer lists the ones this
     // workspace may read; without them prost's generated `oneof` enums are invisible to normal commands.
-    for out_dir in crate::loader::read_oven_generated_out_dirs(root) {
+    for sealed in crate::loader::read_oven_generated_out_dirs(root) {
+        if !out_dir_version_matches(sealed.version.as_deref(), dep_version.as_deref()) {
+            continue;
+        }
+        let out_dir = sealed.out_dir;
         let Some(owner) = sealed_out_dir_crate_name(&out_dir) else {
             continue;
         };

@@ -11,6 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ra_ap_hir::Crate;
 use ra_ap_ide_db::RootDatabase;
+use ra_ap_ide_db::base_db::RootQueryDb;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_paths::AbsPathBuf;
 use ra_ap_project_model::{CargoConfig, RustLibSource};
@@ -92,9 +93,30 @@ pub const OVEN_DIRECT_INSPECTION_AUTHORITY_FILE: &str = ".incan_oven_rust_source
 /// generated-code route scans them the way it scans a Cargo target directory.
 pub const OVEN_GENERATED_OUT_DIRS_FILE: &str = ".incan_oven_generated_out_dirs";
 
+/// One sealed build-script output directory a direct-inspection workspace may read, with the exact package version
+/// whose build script wrote it when the sealing bake knew it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SealedGeneratedOutDir {
+    pub out_dir: PathBuf,
+    pub version: Option<String>,
+}
+
 /// Record the sealed build-script output directories a direct-inspection workspace may read.
-pub fn write_oven_generated_out_dirs(manifest_dir: &Path, out_dirs: &[PathBuf]) -> Result<PathBuf, RustMetadataError> {
-    let mut lines: Vec<String> = out_dirs.iter().map(|dir| dir.to_string_lossy().into_owned()).collect();
+///
+/// One directory per line, followed by a tab and the package version when known. A closure can hold several build
+/// units of one package (two `substrait` versions, one for the project and one for a DataFusion adapter), and the
+/// version is what lets the generated-code route read the unit that belongs to the dependency being inspected.
+pub fn write_oven_generated_out_dirs(
+    manifest_dir: &Path,
+    out_dirs: &[SealedGeneratedOutDir],
+) -> Result<PathBuf, RustMetadataError> {
+    let mut lines: Vec<String> = out_dirs
+        .iter()
+        .map(|dir| match dir.version.as_deref() {
+            Some(version) => format!("{}\t{version}", dir.out_dir.to_string_lossy()),
+            None => dir.out_dir.to_string_lossy().into_owned(),
+        })
+        .collect();
     lines.sort();
     lines.dedup();
     let path = manifest_dir.join(OVEN_GENERATED_OUT_DIRS_FILE);
@@ -103,14 +125,64 @@ pub fn write_oven_generated_out_dirs(manifest_dir: &Path, out_dirs: &[PathBuf]) 
 }
 
 /// Read the sealed build-script output directories recorded for a direct-inspection workspace, if any.
-pub(crate) fn read_oven_generated_out_dirs(manifest_dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn read_oven_generated_out_dirs(manifest_dir: &Path) -> Vec<SealedGeneratedOutDir> {
     fs::read_to_string(manifest_dir.join(OVEN_GENERATED_OUT_DIRS_FILE))
         .map(|text| {
             text.lines()
                 .filter(|line| !line.trim().is_empty())
-                .map(PathBuf::from)
+                .map(|line| match line.split_once('\t') {
+                    Some((out_dir, version)) => SealedGeneratedOutDir {
+                        out_dir: PathBuf::from(out_dir),
+                        version: Some(version.trim().to_string()).filter(|version| !version.is_empty()),
+                    },
+                    None => SealedGeneratedOutDir {
+                        out_dir: PathBuf::from(line),
+                        version: None,
+                    },
+                })
                 .collect()
         })
+        .unwrap_or_default()
+}
+
+/// Build-script output directories keyed by the exact package whose build script wrote them, written beside a
+/// workspace by whichever component ran Cargo and therefore knows the mapping: `.incan_generated_out_dirs.json`.
+///
+/// Cargo names a build unit by a metadata hash the directory layout does not decode, so a directory scan alone cannot
+/// tell two versions of one package apart. rust-analyzer's crate graph and Cargo's `build-script-executed` messages
+/// both carry the package version beside the `OUT_DIR`; this file is that knowledge, persisted for the explicit bake.
+pub const GENERATED_OUT_DIRS_MAP_FILE: &str = ".incan_generated_out_dirs.json";
+
+/// One build-script output directory and the exact package whose build script wrote it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GeneratedOutDirRecord {
+    pub package: String,
+    pub version: String,
+    pub out_dir: PathBuf,
+}
+
+/// Write the package-keyed build-script output map beside a workspace.
+pub fn write_generated_out_dirs_map(
+    dir: &Path,
+    records: &[GeneratedOutDirRecord],
+) -> Result<PathBuf, RustMetadataError> {
+    let mut records = records.to_vec();
+    records.sort_by(|left, right| {
+        (&left.package, &left.version, &left.out_dir).cmp(&(&right.package, &right.version, &right.out_dir))
+    });
+    records.dedup();
+    let path = dir.join(GENERATED_OUT_DIRS_MAP_FILE);
+    let payload =
+        serde_json::to_string_pretty(&records).map_err(|error| RustMetadataError::Io(std::io::Error::other(error)))?;
+    fs::write(&path, payload)?;
+    Ok(path)
+}
+
+/// Read the package-keyed build-script output map beside a workspace, if one was written.
+pub fn read_generated_out_dirs_map(dir: &Path) -> Vec<GeneratedOutDirRecord> {
+    fs::read_to_string(dir.join(GENERATED_OUT_DIRS_MAP_FILE))
+        .ok()
+        .and_then(|payload| serde_json::from_str(&payload).ok())
         .unwrap_or_default()
 }
 const OVEN_DIRECT_INSPECTION_AUTHORITY_SCHEMA_VERSION: u32 = 2;
@@ -1164,6 +1236,12 @@ impl RustWorkspace {
                 message: "explicit Oven Rust inspection could not start the active toolchain's rust-analyzer proc-macro server; install the rust-analyzer component for that toolchain and retry the bake".to_string(),
             });
         }
+        // Only the explicit bake's own root workspace records the map: that is the workspace the bake seals from,
+        // and every other load with build scripts is a dependency package materialized under a digest-verified
+        // source tree that must not gain files.
+        if cargo_bootstrap {
+            Self::record_generated_out_dirs(&manifest_dir, &db)?;
+        }
         let crate_index = Self::build_crate_index(&db);
         Ok(RustWorkspace {
             db,
@@ -1171,6 +1249,35 @@ impl RustWorkspace {
             vfs,
             proc_macro_client: pm.map(|client| Box::new(client) as Box<dyn Any + Send + Sync>),
         })
+    }
+
+    /// Persist which package version each build-script `OUT_DIR` in the loaded crate graph belongs to.
+    ///
+    /// rust-analyzer ran the build scripts and injected `OUT_DIR` beside `CARGO_PKG_NAME` and `CARGO_PKG_VERSION`
+    /// into every crate's environment. The explicit bake seals those directories for Cargo-free inspection and needs
+    /// the version to seal them under, because a closure can hold several build units of one package.
+    fn record_generated_out_dirs(manifest_dir: &Path, db: &RootDatabase) -> Result<(), RustMetadataError> {
+        let mut records = Vec::new();
+        for krate in db.all_crates().iter() {
+            let env = krate.env(db);
+            let (Some(out_dir), Some(package), Some(version)) = (
+                env.get("OUT_DIR"),
+                env.get("CARGO_PKG_NAME"),
+                env.get("CARGO_PKG_VERSION"),
+            ) else {
+                continue;
+            };
+            records.push(GeneratedOutDirRecord {
+                package,
+                version,
+                out_dir: PathBuf::from(out_dir),
+            });
+        }
+        if records.is_empty() {
+            return Ok(());
+        }
+        write_generated_out_dirs_map(manifest_dir, &records)?;
+        Ok(())
     }
 
     /// Shared read-only access to the underlying database.

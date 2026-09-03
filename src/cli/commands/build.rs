@@ -7402,18 +7402,130 @@ pub(crate) struct LibraryInspectionConstituent {
     pub artifacts: OvenRustcArtifactManifest,
     /// The bake's rust-inspect workspace, whose Cargo bootstrap wrote the build-script output to seal.
     pub rust_inspect_manifest_dir: Option<PathBuf>,
+    /// The generated project's selected Cargo target, where the bounded compatibility baker's unified Cargo
+    /// invocation wrote its build-script output when the closure was not loadable as independently compiled parts.
+    pub cargo_target_dir: Option<PathBuf>,
+    /// The generated project directory, beside which the compatibility build records which package version each
+    /// executed build script's output belongs to.
+    pub generated_project_dir: Option<PathBuf>,
 }
 
-/// Return the build-script output directories the explicit bake's Cargo bootstrap left for one inspection workspace.
+/// Return every build-script output directory the explicit bake can seal for one library, versioned where known.
 ///
-/// The workspace's Cargo config names the target directory. Oven's bootstrap lays build units out as
-/// `debug/build/<crate>/<hash>/out`; a plain Cargo target uses `debug/build/<crate>-<hash>/out`. Every `out` that
-/// holds generated Rust is returned with its package name and the build-unit path below `build/`, so the sealed copy
-/// keeps the layout the generated-code route already recognizes.
-fn bake_generated_out_dirs(rust_inspect_manifest_dir: &Path) -> CliResult<Vec<BakeGeneratedOutDir>> {
+/// Units named by a package-keyed map come first: the inspection workspace loader writes one from rust-analyzer's
+/// crate graph, and the compatibility build writes one from Cargo's own messages. A directory scan of the same
+/// Cargo targets then adds any unit the maps did not name, without a version. Units are deduplicated by build-unit
+/// path, so a directory the maps already named is not sealed twice.
+fn bake_generated_out_dir_units(library: &LibraryInspectionConstituent) -> CliResult<Vec<BakeGeneratedOutDir>> {
+    let mut units = Vec::new();
+    let mut seen = BTreeSet::new();
+    for map_dir in [
+        library.rust_inspect_manifest_dir.as_deref(),
+        library.generated_project_dir.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for (package, version, out_dir) in generated_out_dir_map_records(map_dir) {
+            let Some(unit_relative_path) = build_unit_relative_path(&out_dir) else {
+                continue;
+            };
+            if !out_dir_holds_rust(&out_dir) || !seen.insert(unit_relative_path.clone()) {
+                continue;
+            }
+            units.push(BakeGeneratedOutDir {
+                crate_name: package,
+                unit_relative_path,
+                out_dir,
+                version: Some(version),
+            });
+        }
+    }
+    for target_dir in bake_generated_out_dir_targets(library)? {
+        for generated in bake_generated_out_dirs(&target_dir)? {
+            if seen.insert(generated.unit_relative_path.clone()) {
+                units.push(generated);
+            }
+        }
+    }
+    Ok(units)
+}
+
+/// Read the package-keyed build-script output map written beside `dir`, as `(package, version, OUT_DIR)`.
+#[allow(unused_variables)]
+fn generated_out_dir_map_records(dir: &Path) -> Vec<(String, String, PathBuf)> {
+    #[cfg(feature = "rust_inspect")]
+    let records = crate::rust_inspect::read_generated_out_dirs_map(dir)
+        .into_iter()
+        .map(|record| (record.package, record.version, record.out_dir))
+        .collect();
+    #[cfg(not(feature = "rust_inspect"))]
+    let records = Vec::new();
+    records
+}
+
+/// Return the build-unit path below `build/` for one `out` directory, in either layout.
+///
+/// Oven's bootstrap lays build units out as `build/<crate>/<hash>/out`; a plain Cargo target uses
+/// `build/<crate>-<hash>/out`. Anything else is not a build-script output directory this bake seals.
+fn build_unit_relative_path(out_dir: &Path) -> Option<String> {
+    if out_dir.file_name()? != "out" {
+        return None;
+    }
+    let mut components = Vec::new();
+    let mut cursor = out_dir.parent()?;
+    loop {
+        let name = cursor.file_name()?.to_str()?;
+        if name == "build" {
+            break;
+        }
+        if components.len() == 2 {
+            return None;
+        }
+        components.push(name.to_string());
+        cursor = cursor.parent()?;
+    }
+    components.reverse();
+    Some(components.join("/"))
+}
+
+/// Return whether one build-script output directory holds generated Rust worth sealing.
+fn out_dir_holds_rust(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
+        })
+        .unwrap_or(false)
+}
+
+/// Return the Cargo target directories whose build-script output the explicit bake can seal for one library.
+///
+/// Generated Rust reaches the bake by two routes. A direct-rustc bake's rust-inspect workspace names its Cargo
+/// target through `.cargo/config.toml`; the bounded compatibility baker builds the library through one unified Cargo
+/// invocation in the generated project's own selected target and leaves no rust-inspect config behind. Either can
+/// exist alone, so both are offered, in that order, and the sealer deduplicates by build unit.
+fn bake_generated_out_dir_targets(library: &LibraryInspectionConstituent) -> CliResult<Vec<PathBuf>> {
+    let mut targets = Vec::new();
+    if let Some(manifest_dir) = library.rust_inspect_manifest_dir.as_deref()
+        && let Some(target_dir) = rust_inspect_workspace_cargo_target(manifest_dir)?
+    {
+        targets.push(target_dir);
+    }
+    if let Some(target_dir) = library.cargo_target_dir.clone()
+        && !targets.contains(&target_dir)
+    {
+        targets.push(target_dir);
+    }
+    Ok(targets)
+}
+
+/// Return the Cargo target a rust-inspect workspace names through its `.cargo/config.toml`, if it names one.
+fn rust_inspect_workspace_cargo_target(rust_inspect_manifest_dir: &Path) -> CliResult<Option<PathBuf>> {
     let config_path = rust_inspect_manifest_dir.join(".cargo").join("config.toml");
     let Ok(config) = fs::read_to_string(&config_path) else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let config = toml::from_str::<toml::Value>(&config).map_err(|error| {
         CliError::failure(format!(
@@ -7421,26 +7533,24 @@ fn bake_generated_out_dirs(rust_inspect_manifest_dir: &Path) -> CliResult<Vec<Ba
             config_path.display()
         ))
     })?;
-    let Some(target_dir) = config
+    Ok(config
         .get("build")
         .and_then(|build| build.get("target-dir"))
         .and_then(toml::Value::as_str)
-    else {
-        return Ok(Vec::new());
-    };
-    let build_dir = Path::new(target_dir).join("debug").join("build");
+        .map(PathBuf::from))
+}
+
+/// Return the build-script output directories the explicit bake's Cargo bootstrap left below one Cargo target.
+///
+/// Oven's bootstrap lays build units out as `debug/build/<crate>/<hash>/out`; a plain Cargo target uses
+/// `debug/build/<crate>-<hash>/out`. Every `out` that holds generated Rust is returned with its package name and the
+/// build-unit path below `build/`, so the sealed copy keeps the layout the generated-code route already recognizes.
+fn bake_generated_out_dirs(cargo_target_dir: &Path) -> CliResult<Vec<BakeGeneratedOutDir>> {
+    let build_dir = cargo_target_dir.join("debug").join("build");
     let Ok(units) = fs::read_dir(&build_dir) else {
         return Ok(Vec::new());
     };
-    let holds_rust = |dir: &Path| {
-        fs::read_dir(dir)
-            .map(|entries| {
-                entries
-                    .flatten()
-                    .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
-            })
-            .unwrap_or(false)
-    };
+    let holds_rust = out_dir_holds_rust;
     let mut out_dirs = Vec::new();
     for unit in units.flatten() {
         let unit_name = unit.file_name().to_string_lossy().into_owned();
@@ -7454,6 +7564,7 @@ fn bake_generated_out_dirs(rust_inspect_manifest_dir: &Path) -> CliResult<Vec<Ba
                     crate_name: crate_name.to_string(),
                     unit_relative_path: unit_name.clone(),
                     out_dir: direct_out,
+                    version: None,
                 });
             }
             continue;
@@ -7469,6 +7580,7 @@ fn bake_generated_out_dirs(rust_inspect_manifest_dir: &Path) -> CliResult<Vec<Ba
                     crate_name: unit_name.clone(),
                     unit_relative_path: format!("{unit_name}/{}", hash.file_name().to_string_lossy()),
                     out_dir,
+                    version: None,
                 });
             }
         }
@@ -7484,6 +7596,8 @@ struct BakeGeneratedOutDir {
     /// Build-unit path below the target's `build/` directory, in whichever layout the bootstrap used.
     unit_relative_path: String,
     out_dir: PathBuf,
+    /// Exact package version whose build script wrote the directory, when a package-keyed map named it.
+    version: Option<String>,
 }
 
 fn publish_project_inspection_authority(
@@ -7750,12 +7864,17 @@ fn publish_project_inspection_authority(
     // form in which prost's `include!`d modules exist; a normal command has no Cargo to regenerate them, so the
     // authority carries them and direct inspection workspaces read them from here.
     let mut generated_out_dirs = Vec::new();
-    if let Some(manifest_dir) = library.and_then(|library| library.rust_inspect_manifest_dir.as_deref()) {
-        for generated in bake_generated_out_dirs(manifest_dir)? {
+    let generated_units = library
+        .map(bake_generated_out_dir_units)
+        .transpose()?
+        .unwrap_or_default();
+    for generated in generated_units {
+        {
             let BakeGeneratedOutDir {
                 crate_name,
                 unit_relative_path,
                 out_dir,
+                version,
             } = generated;
             let relative_root = format!("generated-out-dirs/build/{unit_relative_path}/out");
             let mut sealed = false;
@@ -7778,6 +7897,7 @@ fn publish_project_inspection_authority(
                 generated_out_dirs.push(OvenProjectInspectionGeneratedOutDir {
                     crate_name,
                     relative_root,
+                    version,
                 });
             }
         }
@@ -13794,17 +13914,34 @@ pub(crate) fn bake_oven_project_targets(
                     if profile == "debug" {
                         debug_target_receipts.push(selected_profile.receipt.clone());
                     }
-                    if profile == "debug"
-                        && let OvenDirectRustcPlanSelection::Stored(plan) = &selected_profile.plan_selection
-                    {
+                    if profile == "debug" {
                         // The library's debug plan is the constituent that lets a test unit inspect the library's
-                        // dependencies; its rust-inspect workspace holds the Cargo bootstrap's generated Rust.
-                        library_inspection_constituent = Some(LibraryInspectionConstituent {
-                            identity: plan.identity.clone(),
-                            receipt: selected_profile.receipt.clone(),
-                            artifacts: plan.artifacts.clone(),
-                            rust_inspect_manifest_dir: prepared.rust_inspect_manifest_dir.clone(),
-                        });
+                        // dependencies. A direct-rustc bake stores it whole, and its rust-inspect workspace holds
+                        // the Cargo bootstrap's generated Rust. When the closure is not loadable as independently
+                        // compiled parts, the bounded compatibility baker publishes the library as a store-owned
+                        // extension of a compiler Loaf instead; the composed manifest under the extension's
+                        // identity is the same constituent, and the generated project's own Cargo target holds
+                        // the generated Rust.
+                        let constituent = match &selected_profile.plan_selection {
+                            OvenDirectRustcPlanSelection::Stored(plan) => {
+                                Some((plan.identity.clone(), plan.artifacts.clone()))
+                            }
+                            OvenDirectRustcPlanSelection::ProjectExtension(extension) => {
+                                Some((extension.extension.identity.clone(), extension.artifacts.clone()))
+                            }
+                            OvenDirectRustcPlanSelection::ToolchainLoaf(_)
+                            | OvenDirectRustcPlanSelection::PackagedProvider(_) => None,
+                        };
+                        if let Some((identity, artifacts)) = constituent {
+                            library_inspection_constituent = Some(LibraryInspectionConstituent {
+                                identity,
+                                receipt: selected_profile.receipt.clone(),
+                                artifacts,
+                                rust_inspect_manifest_dir: prepared.rust_inspect_manifest_dir.clone(),
+                                cargo_target_dir: Some(prepared.generator.cargo_target_dir()),
+                                generated_project_dir: Some(prepared.generator.output_dir().to_path_buf()),
+                            });
+                        }
                     }
                     let bake = bake_oven_library(&prepared, selected, profile, Some(&mut authority_context))?;
                     let library_relative_path = bake
@@ -15325,7 +15462,10 @@ headers = ["interop/include/bridge.h"]
         fs::write(cargo_out.join("types.rs"), "pub struct Duration;\n")?;
         fs::write(plain_out.join("flags"), "")?;
 
-        let dirs = bake_generated_out_dirs(&manifest_dir)?;
+        let named_target =
+            rust_inspect_workspace_cargo_target(&manifest_dir)?.ok_or("the workspace config names a Cargo target")?;
+        assert_eq!(named_target, target_dir);
+        let dirs = bake_generated_out_dirs(&named_target)?;
 
         assert_eq!(
             dirs,
@@ -15333,18 +15473,38 @@ headers = ["interop/include/bridge.h"]
                 BakeGeneratedOutDir {
                     crate_name: "prost-types".to_string(),
                     unit_relative_path: "prost-types-9741e23407182c1c".to_string(),
-                    out_dir: cargo_out,
+                    out_dir: cargo_out.clone(),
+                    version: None,
                 },
                 BakeGeneratedOutDir {
                     crate_name: "substrait".to_string(),
                     unit_relative_path: "substrait/157348677c93f659".to_string(),
-                    out_dir: oven_out,
+                    out_dir: oven_out.clone(),
+                    version: None,
                 },
             ]
         );
         assert!(
-            bake_generated_out_dirs(tmp.path())?.is_empty(),
-            "a workspace without a Cargo config seals nothing"
+            rust_inspect_workspace_cargo_target(tmp.path())?.is_none(),
+            "a workspace without a Cargo config names no target"
+        );
+        assert!(
+            bake_generated_out_dirs(&tmp.path().join("never-built"))?.is_empty(),
+            "a Cargo target without build units seals nothing"
+        );
+        // The build-unit path is read from either layout and only below a `build` directory.
+        assert_eq!(
+            build_unit_relative_path(&cargo_out).as_deref(),
+            Some("prost-types-9741e23407182c1c")
+        );
+        assert_eq!(
+            build_unit_relative_path(&oven_out).as_deref(),
+            Some("substrait/157348677c93f659")
+        );
+        assert_eq!(build_unit_relative_path(&tmp.path().join("deps/out")), None);
+        assert_eq!(
+            build_unit_relative_path(&target_dir.join("debug/build/x/y/z/out")),
+            None
         );
         Ok(())
     }

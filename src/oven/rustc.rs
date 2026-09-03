@@ -371,6 +371,10 @@ pub(crate) struct OvenProjectInspectionGeneratedOutDir {
     pub crate_name: String,
     /// Directory below the authority's artifact root holding the sealed `*.rs` output.
     pub relative_root: String,
+    /// Exact package version whose build script wrote the directory, when the bake knew it. A closure can hold
+    /// several build units of one package, and a consumer reads only the unit built from the version it inspects.
+    #[serde(default)]
+    pub version: Option<String>,
 }
 
 /// Exact authority entry named by a source-current completed project output.

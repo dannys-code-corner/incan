@@ -293,6 +293,93 @@ name = "foo_bar"
     Ok(())
 }
 
+#[test]
+fn lock_fallback_selects_the_version_the_root_manifest_requires() -> Result<(), Box<dyn std::error::Error>> {
+    // The lock holds two versions of one package: the root's own `substrait = "0.63"` beside the 0.62 that an
+    // adapter pins. The older entry sorts first, and only the root's requirement says which one the root links.
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    fs::create_dir_all(root.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        r#"[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies.substrait]
+features = ["protoc"]
+version = "0.63"
+
+[dependencies]
+adapter = "1"
+"#,
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        r#"version = 3
+
+[[package]]
+name = "adapter"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "substrait"
+version = "0.62.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "substrait"
+version = "0.63.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "transitive"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+
+[[package]]
+name = "transitive"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+"#,
+    )?;
+    let registry_src_root = tmp.path().join("cargo-home/registry/src");
+    let mut dirs = std::collections::HashMap::new();
+    for (name, version) in [
+        ("substrait", "0.62.2"),
+        ("substrait", "0.63.0"),
+        ("transitive", "0.2.0"),
+        ("transitive", "0.3.0"),
+    ] {
+        let dir = registry_src_root
+            .join("index.crates.io-test")
+            .join(format!("{name}-{version}"));
+        fs::create_dir_all(dir.join("src"))?;
+        fs::write(
+            dir.join("Cargo.toml"),
+            format!("[package]\nname = \"{name}\"\nversion = \"{version}\"\nedition = \"2021\"\n"),
+        )?;
+        fs::write(dir.join("src/lib.rs"), "pub fn item() {}\n")?;
+        dirs.insert((name, version), dir);
+    }
+
+    let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "substrait", &[registry_src_root.clone()])
+        .ok_or_else(|| std::io::Error::other("expected the lock fallback to resolve substrait"))?;
+    assert_eq!(
+        resolved,
+        dirs[&("substrait", "0.63.0")],
+        "the root's requirement selects 0.63.0 over the older entry that sorts first"
+    );
+    // A crate the root reaches only transitively keeps lock order: nothing in the root says which one it links.
+    let transitive = dependency_manifest_dir_from_lock_with_search_roots(&root, "transitive", &[registry_src_root])
+        .ok_or_else(|| std::io::Error::other("expected the lock fallback to resolve transitive"))?;
+    assert_eq!(transitive, dirs[&("transitive", "0.2.0")]);
+    Ok(())
+}
+
 /// A sealed Oven source root has no nested `Cargo.lock`; a public facade re-export must therefore resolve its
 /// external target through the generated root's locked selection, never through ambient Cargo sources.
 #[test]
@@ -411,6 +498,72 @@ fn source_route_records_boxed_variant_payloads_as_the_semantic_type_with_their_c
 }
 
 #[test]
+fn direct_workspace_reads_the_sealed_build_unit_of_the_inspected_version() -> Result<(), Box<dyn std::error::Error>> {
+    // A closure can hold two build units of one package (IncQL's `substrait` beside the one a DataFusion adapter
+    // pins). Both seal a `gen.rs`; only the unit built from the inspected dependency's version defines its items.
+    // The wrong unit is named so it sorts first, so this passes only because the recorded version filters it out.
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let inner = tmp.path().join("inner-0.1.0");
+    let wrong_out = tmp.path().join("plan/target/debug/build/inner-0000000000000000/out");
+    let right_out = tmp.path().join("plan/target/debug/build/inner-ffffffffffffffff/out");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(inner.join("src"))?;
+    fs::create_dir_all(&wrong_out)?;
+    fs::create_dir_all(&right_out)?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        "version = 3\n\n[[package]]\nname = \"inner\"\nversion = \"0.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+    )?;
+    fs::write(
+        inner.join("Cargo.toml"),
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        inner.join("src/lib.rs"),
+        "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));\n",
+    )?;
+    fs::write(
+        wrong_out.join("gen.rs"),
+        "pub mod kind {\n    pub enum Kind {\n        Other(u8),\n        Empty,\n    }\n}\n",
+    )?;
+    fs::write(
+        right_out.join("gen.rs"),
+        "pub struct Node;\npub mod kind {\n    pub enum Kind {\n        Node(::prost::alloc::boxed::Box<super::Node>),\n        Empty,\n    }\n}\n",
+    )?;
+    crate::loader::write_oven_generated_out_dirs(
+        &root,
+        &[
+            crate::loader::SealedGeneratedOutDir {
+                out_dir: wrong_out,
+                version: Some("0.2.0".to_string()),
+            },
+            crate::loader::SealedGeneratedOutDir {
+                out_dir: right_out,
+                version: Some("0.1.0".to_string()),
+            },
+        ],
+    )?;
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "inner::kind::Kind", std::slice::from_ref(&inner))?
+        .ok_or_else(|| std::io::Error::other("expected generated enum metadata through the sealed out dir"))?;
+    let incan_core::interop::RustItemKind::Type(info) = &hit.metadata.kind else {
+        return Err(std::io::Error::other("expected a type item").into());
+    };
+    let mut names = info.variants.iter().map(|variant| variant.name.as_str()).collect::<Vec<_>>();
+    names.sort_unstable();
+    assert_eq!(names, vec!["Empty", "Node"], "the 0.1.0 unit defines the inspected enum: {names:?}");
+    Ok(())
+}
+
+#[test]
 fn direct_workspace_reads_sealed_build_script_output_for_generated_enums() -> Result<(), Box<dyn std::error::Error>> {
     // A normal Oven command never runs Cargo, so a dependency whose items live in build-script output (prost's
     // generated modules) is visible only through the sealed plan directories the installer records. Without that
@@ -447,7 +600,13 @@ fn direct_workspace_reads_sealed_build_script_output_for_generated_enums() -> Re
         out_dir.join("gen.rs"),
         "pub struct Node;\npub mod kind {\n    pub enum Kind {\n        Node(::prost::alloc::boxed::Box<super::Node>),\n        Empty,\n    }\n}\n",
     )?;
-    crate::loader::write_oven_generated_out_dirs(&root, std::slice::from_ref(&out_dir))?;
+    crate::loader::write_oven_generated_out_dirs(
+        &root,
+        &[crate::loader::SealedGeneratedOutDir {
+            out_dir: out_dir.clone(),
+            version: None,
+        }],
+    )?;
 
     let cache = RustMetadataCache::new();
     let hit = cache
