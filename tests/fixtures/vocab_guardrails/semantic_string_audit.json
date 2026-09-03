@@ -21,14 +21,14 @@
     {
       "path": "crates/rust_inspect/src/cache.rs",
       "category": "rust-inspect cache migration and generated Rust syntax metadata compatibility",
-      "expected_count": 27,
-      "expected_fingerprint": "0x8fe006273640352e"
+      "expected_count": 28,
+      "expected_fingerprint": "0x4621943948601e8b"
     },
     {
       "path": "crates/rust_inspect/src/cache_tests.rs",
       "category": "rust-inspect generated metadata regression assertions",
-      "expected_count": 20,
-      "expected_fingerprint": "0x7e81de1942d4d62e"
+      "expected_count": 22,
+      "expected_fingerprint": "0x3c98d6f47b21097f"
     },
     {
       "path": "crates/rust_inspect/src/cache_timing.rs",

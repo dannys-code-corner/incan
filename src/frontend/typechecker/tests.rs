@@ -5963,10 +5963,12 @@ def f() -> None:
                         RustVariantInfo {
                             name: "Unit".to_string(),
                             fields: vec![],
+                            field_carriers: Vec::new(),
                         },
                         RustVariantInfo {
                             name: "Tuple".to_string(),
                             fields: vec![RustTypeShape::Int],
+                            field_carriers: Vec::new(),
                         },
                     ],
                 }),
@@ -6044,6 +6046,92 @@ def f() -> None:
             "expected imported Rust unit variants and zero-field constructors to typecheck: {errs:?}"
         ))
     })?;
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn test_imported_rust_boxed_variant_payload_records_box_payload_coercion() -> Result<(), Box<dyn std::error::Error>> {
+    // prost stores a recursive `oneof` payload as `Box<T>`; Incan records the payload as `T` and remembers the
+    // carrier, so the source passes `T` and lowering must wrap it. The coercion recorded on the argument is that
+    // contract (#1229 follow-up).
+    let source = r#"
+from rust::demo import Kind, accept_kind
+
+def f() -> None:
+  accept_kind(Kind.Tuple(1))
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker
+        .rust_inspect_cache
+        .insert_test_item(
+            &manifest_dir,
+            RustItemMetadata {
+                canonical_path: "demo::Kind".to_string(),
+                definition_path: Some("demo::Kind".to_string()),
+                visibility: RustVisibility::Public,
+                kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
+                    has_const_params: false,
+                    alias_target: None,
+                    metadata_completeness: Default::default(),
+                    methods: vec![],
+                    implemented_traits: Vec::new(),
+                    fields: vec![],
+                    variants: vec![RustVariantInfo {
+                        name: "Tuple".to_string(),
+                        fields: vec![RustTypeShape::Int],
+                        field_carriers: vec![incan_core::interop::RustPayloadCarrier::Boxed],
+                    }],
+                }),
+            },
+        )
+        .map_err(|e| std::io::Error::other(format!("seed rust-inspect kind: {e}")))?;
+    checker
+        .rust_inspect_cache
+        .insert_test_item(
+            &manifest_dir,
+            RustItemMetadata {
+                canonical_path: "demo::accept_kind".to_string(),
+                definition_path: Some("demo::accept_kind".to_string()),
+                visibility: RustVisibility::Public,
+                kind: RustItemKind::Function(RustFunctionSig {
+                    type_params: Vec::new(),
+                    params: vec![RustParam {
+                        name: Some("value".to_string()),
+                        type_display: "demo::Kind".to_string(),
+                    }],
+                    return_type: "()".to_string(),
+                    is_async: false,
+                    is_unsafe: false,
+                }),
+            },
+        )
+        .map_err(|e| std::io::Error::other(format!("seed rust-inspect accept_kind: {e}")))?;
+    checker
+        .check_program(&ast)
+        .map_err(|errs| std::io::Error::other(format!("expected the semantic payload to typecheck: {errs:?}")))?;
+    let payload_start = source.find("Kind.Tuple(1)").ok_or("constructor missing from source")? + "Kind.Tuple(".len();
+    let coercion = checker
+        .type_info
+        .rust
+        .arg_coercions
+        .get(&(payload_start, payload_start + 1))
+        .ok_or("expected a coercion recorded on the boxed payload argument")?;
+    assert_eq!(
+        coercion.kind,
+        crate::frontend::typechecker::type_info::RustArgCoercionKind::BoxPayload,
+        "boxed variant payload must record the carrier lowering restores"
+    );
+    assert_eq!(coercion.target_type, ResolvedType::Int);
     Ok(())
 }
 
@@ -7173,6 +7261,7 @@ def inspect(rel: Rel) -> None:
                             path: "demo::ReadRel".to_string(),
                             args: vec![],
                         }],
+                        field_carriers: Vec::new(),
                     }],
                 }),
             },
@@ -7234,6 +7323,7 @@ def inspect(rel: Rel) -> None:
                             path: "demo::NamedTable".to_string(),
                             args: vec![],
                         }],
+                        field_carriers: Vec::new(),
                     }],
                 }),
             },

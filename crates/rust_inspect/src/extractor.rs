@@ -6,9 +6,10 @@ use incan_core::interop::{
     RustAssociatedTypeBinding, RustAssociatedTypeRequirement, RustExpandedDeriveTrait, RustFieldInfo, RustFunctionSig,
     RustImplementedTrait, RustItemKind, RustItemMetadata, RustMacroInfo, RustMethodSig, RustModuleChild,
     RustModuleChildKind, RustModuleInfo, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustParam,
-    RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustTypeShapePathFallback, RustVariantInfo,
-    RustVisibility, parse_rust_type_shape_text, render_rust_type_shape, rust_source_borrowed_type_param_bound_display,
-    rust_source_callable_bound_for_type_param, rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
+    RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustTypeShapePathFallback,
+    RustVariantInfo, RustVisibility, parse_rust_type_shape_text, render_rust_type_shape,
+    rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
+    rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
 };
 use ra_ap_hir::{
     Adt, AssocItem, Const as HirConst, Crate, DisplayTarget, Enum, FieldSource, Function, GenericDef, GenericParam,
@@ -463,14 +464,18 @@ fn source_field_constructor_label(field: &ra_ap_hir::Field, db: &RootDatabase) -
     }
 }
 
-fn normalize_variant_payload_shape(shape: RustTypeShape) -> RustTypeShape {
+/// Record a variant payload as its semantic type, remembering a stripped `Box<T>` carrier so lowering can restore it.
+fn normalize_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
         RustTypeShape::RustPath { path, args }
             if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
         {
-            args.into_iter().next().unwrap_or(RustTypeShape::Unknown)
+            (
+                args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+                RustPayloadCarrier::Boxed,
+            )
         }
-        other => other,
+        other => (other, RustPayloadCarrier::Direct),
     }
 }
 
@@ -1518,9 +1523,13 @@ fn collect_enum_variant_payloads(
     let type_args: Vec<Type<'_>> = ty.type_arguments().collect();
     let mut variants = Vec::new();
     for variant in enum_.variants(db) {
+        let (fields, field_carriers) = collect_variant_payloads(variant, &type_args, db, dt, crate_name)
+            .into_iter()
+            .unzip();
         variants.push(RustVariantInfo {
             name: variant.name(db).as_str().to_owned(),
-            fields: collect_variant_payload_shapes(variant, &type_args, db, dt, crate_name),
+            fields,
+            field_carriers,
         });
     }
     variants.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1528,13 +1537,15 @@ fn collect_enum_variant_payloads(
 }
 
 /// Collect one enum variant's exported payload fields using source-preserved type identities where available.
-fn collect_variant_payload_shapes(
+///
+/// Each entry pairs the semantic payload shape with the storage carrier the Rust field actually uses.
+fn collect_variant_payloads(
     variant: Variant,
     type_args: &[Type<'_>],
     db: &RootDatabase,
     dt: DisplayTarget,
     crate_name: &str,
-) -> Vec<RustTypeShape> {
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     variant
         .fields(db)
         .iter()

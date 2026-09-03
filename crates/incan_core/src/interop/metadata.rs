@@ -1282,16 +1282,42 @@ pub struct RustFieldInfo {
     pub type_shape: RustTypeShape,
 }
 
+/// How a Rust enum variant stores one payload field, relative to the semantic type Incan records for it.
+///
+/// prost writes recursive `oneof` payloads as `Box<T>`. Incan records the payload as `T` (see [`RustVariantInfo`]), so
+/// a constructor call passes `T` and a pattern binds `T`; the carrier is what lowering must reintroduce when it emits
+/// the Rust constructor. Recording it beside the shape keeps that decision in metadata rather than in a display
+/// heuristic at the emission site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum RustPayloadCarrier {
+    /// The Rust field stores the semantic type directly.
+    #[default]
+    Direct,
+    /// The Rust field stores `Box<T>`; lowering wraps a constructor argument in `Box::new`.
+    Boxed,
+}
+
 /// One enum variant and its payload field types.
 ///
 /// Payload shapes are normalized for matching. For example, prost-style `Box<T>` payloads are recorded as `T` because
-/// that is what Incan binds in constructor patterns.
+/// that is what Incan binds in constructor patterns; the stripped carrier is remembered in `field_carriers`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RustVariantInfo {
     /// Variant name as it appears in Rust.
     pub name: String,
     /// Positional payload field shapes in declaration order.
     pub fields: Vec<RustTypeShape>,
+    /// Storage carrier per payload field, parallel to `fields`. Entries an older cache did not record mean
+    /// [`RustPayloadCarrier::Direct`].
+    #[serde(default)]
+    pub field_carriers: Vec<RustPayloadCarrier>,
+}
+
+impl RustVariantInfo {
+    /// Return how the Rust variant stores payload field `index`.
+    pub fn field_carrier(&self, index: usize) -> RustPayloadCarrier {
+        self.field_carriers.get(index).copied().unwrap_or_default()
+    }
 }
 
 /// One foreign-generic parameter that can be satisfied through a mutable Rust reference.

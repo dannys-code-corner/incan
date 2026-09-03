@@ -1,5 +1,7 @@
-use crate::cache_resolve::{dependency_manifest_dir_from_lock_with_search_roots, dependency_manifest_dir_from_manifest};
 use super::*;
+use crate::cache_resolve::{
+    dependency_manifest_dir_from_lock_with_search_roots, dependency_manifest_dir_from_manifest,
+};
 use incan_core::interop::{
     RustFunctionSig, RustItemKind, RustParam, RustTraitAssoc, RustTypeInfo, RustTypeShape, RustVisibility,
 };
@@ -124,11 +126,7 @@ fn source_type_display_resolves_public_reexport_after_qualifying_super_path() {
         "datafusion::execution::options::ParquetReadOptions".to_string(),
         "datafusion::datasource::file_format::options::ParquetReadOptions".to_string(),
     )]);
-    let module_path = [
-        "execution".to_string(),
-        "context".to_string(),
-        "parquet".to_string(),
-    ];
+    let module_path = ["execution".to_string(), "context".to_string(), "parquet".to_string()];
     let context = SourceMetadataContext {
         crate_name: "datafusion",
         module_path: &module_path,
@@ -146,8 +144,8 @@ fn source_type_display_resolves_public_reexport_after_qualifying_super_path() {
 
 /// Sysroot namespace inspection follows public re-exports and inherited `extern crate` aliases without Cargo.
 #[test]
-fn sysroot_source_metadata_resolves_public_identity_across_std_alloc_and_core()
--> Result<(), Box<dyn std::error::Error>> {
+fn sysroot_source_metadata_resolves_public_identity_across_std_alloc_and_core() -> Result<(), Box<dyn std::error::Error>>
+{
     let tmp = tempfile::tempdir()?;
     let library_root = tmp.path().join("library");
     let generated_root = tmp.path().join("generated");
@@ -157,9 +155,7 @@ fn sysroot_source_metadata_resolves_public_identity_across_std_alloc_and_core()
         fs::create_dir_all(crate_root.join("src/io/error"))?;
         fs::write(
             crate_root.join("Cargo.toml"),
-            format!(
-                "[package]\nname = \"{crate_name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"
-            ),
+            format!("[package]\nname = \"{crate_name}\"\nversion = \"0.0.0\"\nedition = \"2021\"\n"),
         )?;
     }
     fs::write(
@@ -175,19 +171,13 @@ fn sysroot_source_metadata_resolves_public_identity_across_std_alloc_and_core()
         "pub struct SystemTime;\npub const UNIX_EPOCH: SystemTime = SystemTime;\n",
     )?;
     fs::write(library_root.join("alloc/src/lib.rs"), "pub mod io;\n")?;
-    fs::write(
-        library_root.join("alloc/src/io/mod.rs"),
-        "pub use core::io::Error;\n",
-    )?;
+    fs::write(library_root.join("alloc/src/io/mod.rs"), "pub use core::io::Error;\n")?;
     fs::write(library_root.join("core/src/lib.rs"), "pub mod io;\n")?;
     fs::write(
         library_root.join("core/src/io/mod.rs"),
         "mod error;\npub use error::Error;\n",
     )?;
-    fs::write(
-        library_root.join("core/src/io/error.rs"),
-        "pub struct Error;\n",
-    )?;
+    fs::write(library_root.join("core/src/io/error.rs"), "pub struct Error;\n")?;
 
     let mut inner = CacheInner {
         rust_library_source_root: Some(Some(library_root)),
@@ -287,8 +277,11 @@ name = "foo_bar"
     let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", &[registry_src_root])
         .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to resolve foo-bar source dir"))?;
     assert_eq!(resolved, dep_dir);
-    let sealed_root = dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", std::slice::from_ref(&dep_dir))
-        .ok_or_else(|| std::io::Error::other("expected Cargo.lock fallback to accept an exact sealed source root"))?;
+    let sealed_root =
+        dependency_manifest_dir_from_lock_with_search_roots(&root, "foo_bar", std::slice::from_ref(&dep_dir))
+            .ok_or_else(|| {
+                std::io::Error::other("expected Cargo.lock fallback to accept an exact sealed source root")
+            })?;
     assert_eq!(sealed_root, dep_dir);
 
     let cache = RustMetadataCache::new();
@@ -303,7 +296,8 @@ name = "foo_bar"
 /// A sealed Oven source root has no nested `Cargo.lock`; a public facade re-export must therefore resolve its
 /// external target through the generated root's locked selection, never through ambient Cargo sources.
 #[test]
-fn sealed_registry_sources_resolve_nested_public_reexports_from_generated_lock() -> Result<(), Box<dyn std::error::Error>> {
+fn sealed_registry_sources_resolve_nested_public_reexports_from_generated_lock()
+-> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let root = tmp.path().join("generated_lock");
     let facade = tmp.path().join("facade-0.1.0");
@@ -344,11 +338,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
     let cache = RustMetadataCache::new();
     let hit = cache
-        .get_cached_or_extract_fast_with_registry_src_roots(
-            &root,
-            "facade::Vec2",
-            &[facade.clone(), inner.clone()],
-        )?
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "facade::Vec2", &[facade.clone(), inner.clone()])?
         .ok_or_else(|| std::io::Error::other("expected sealed facade re-export metadata"))?;
     assert_eq!(hit.metadata.canonical_path, "facade::Vec2");
     assert_eq!(hit.metadata.definition_path.as_deref(), Some("inner::Vec2"));
@@ -356,6 +346,70 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 }
 
 /// Public trait methods from a path dependency must retain their callable shapes on the fast namespace route.
+#[test]
+fn source_route_records_boxed_variant_payloads_as_the_semantic_type_with_their_carrier()
+-> Result<(), Box<dyn std::error::Error>> {
+    // A registry crate reached without rust-analyzer spells a recursive payload as `Box<T>`. The prelude `Box` is
+    // not an item of the owning module: it must canonicalize like the HIR route (semantic `T` plus a `Boxed`
+    // carrier) rather than owner-join into `inner::Box` and escape the payload stripper (#1229).
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("generated_lock");
+    let inner = tmp.path().join("inner-0.1.0");
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(inner.join("src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("src/lib.rs"), "pub fn keep() {}\n")?;
+    fs::write(
+        root.join("Cargo.lock"),
+        "version = 3\n\n[[package]]\nname = \"inner\"\nversion = \"0.1.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n",
+    )?;
+    fs::write(
+        inner.join("Cargo.toml"),
+        "[package]\nname = \"inner\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        inner.join("src/lib.rs"),
+        "pub struct WindowFunction;\npub enum Expr {\n    WindowFunction(Box<WindowFunction>),\n    Literal(i64),\n}\n",
+    )?;
+
+    let cache = RustMetadataCache::new();
+    let hit = cache
+        .get_cached_or_extract_fast_with_registry_src_roots(&root, "inner::Expr", &[inner.clone()])?
+        .ok_or_else(|| std::io::Error::other("expected sealed source enum metadata"))?;
+    let incan_core::interop::RustItemKind::Type(info) = &hit.metadata.kind else {
+        return Err(std::io::Error::other("expected a type item").into());
+    };
+    let boxed = info
+        .variants
+        .iter()
+        .find(|variant| variant.name == "WindowFunction")
+        .ok_or_else(|| std::io::Error::other("WindowFunction variant missing"))?;
+    assert_eq!(
+        boxed.fields,
+        vec![incan_core::interop::RustTypeShape::RustPath {
+            path: "inner::WindowFunction".to_string(),
+            args: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        boxed.field_carriers,
+        vec![incan_core::interop::RustPayloadCarrier::Boxed]
+    );
+    let plain = info
+        .variants
+        .iter()
+        .find(|variant| variant.name == "Literal")
+        .ok_or_else(|| std::io::Error::other("Literal variant missing"))?;
+    assert_eq!(
+        plain.field_carriers,
+        vec![incan_core::interop::RustPayloadCarrier::Direct]
+    );
+    Ok(())
+}
+
 #[test]
 fn fast_source_metadata_retains_cross_crate_trait_method_signatures() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
@@ -437,8 +491,14 @@ renamed_dep = { package = "source-dep", path = "../source-dep" }
     )?;
     let dependency = dependency.canonicalize()?;
 
-    assert_eq!(dependency_manifest_dir_from_manifest(&root, "renamed_dep"), Some(dependency.clone()));
-    assert_eq!(dependency_manifest_dir_from_manifest(&root, "source_dep"), Some(dependency));
+    assert_eq!(
+        dependency_manifest_dir_from_manifest(&root, "renamed_dep"),
+        Some(dependency.clone())
+    );
+    assert_eq!(
+        dependency_manifest_dir_from_manifest(&root, "source_dep"),
+        Some(dependency)
+    );
     Ok(())
 }
 
@@ -471,8 +531,7 @@ fn disk_cache_round_trips_inserted_items() -> Result<(), Box<dyn std::error::Err
 
 /// Complete type metadata must not persist downstream consumer-only implementations as intrinsic type facts.
 #[test]
-fn complete_metadata_excludes_root_only_cross_crate_implementations()
--> Result<(), Box<dyn std::error::Error>> {
+fn complete_metadata_excludes_root_only_cross_crate_implementations() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     let trait_owner = tmp.path().join("trait-owner");
     let type_owner = tmp.path().join("type-owner");
@@ -522,10 +581,12 @@ type-owner = { path = "../type-owner" }
     let RustItemKind::Type(info) = &cached.metadata.kind else {
         return Err("expected type metadata".into());
     };
-    assert!(!info
-        .implemented_traits
-        .iter()
-        .any(|implementation| implementation.path == "trait_owner::Marker"));
+    assert!(
+        !info
+            .implemented_traits
+            .iter()
+            .any(|implementation| implementation.path == "trait_owner::Marker")
+    );
     Ok(())
 }
 
@@ -605,8 +666,8 @@ fn complete_disk_cache_reuses_stable_negative_lookup() -> Result<(), Box<dyn std
 
 /// A deferred complete extraction must flush its completeness evidence once for a later compiler process.
 #[test]
-fn deferred_complete_function_extraction_flushes_without_reopening_workspace()
--> Result<(), Box<dyn std::error::Error>> {
+fn deferred_complete_function_extraction_flushes_without_reopening_workspace() -> Result<(), Box<dyn std::error::Error>>
+{
     let tmp = tempfile::tempdir()?;
     fs::create_dir_all(tmp.path().join("src"))?;
     fs::write(
@@ -952,10 +1013,7 @@ fn definition_path_alias_hits_existing_cached_reexport() -> Result<(), Box<dyn s
         .get_cached(tmp.path(), "bridge::udf::ScalarUDF")?
         .ok_or_else(|| std::io::Error::other("expected definition-path cache alias hit"))?;
     assert_eq!(hit.metadata.canonical_path, "bridge::udf::ScalarUDF");
-    assert_eq!(
-        hit.metadata.definition_path.as_deref(),
-        Some("bridge::udf::ScalarUDF")
-    );
+    assert_eq!(hit.metadata.definition_path.as_deref(), Some("bridge::udf::ScalarUDF"));
     assert!(hit.alias_used);
 
     let extracted = cache.get_or_extract(tmp.path(), "bridge::udf::ScalarUDF", &|_| ())?;
@@ -964,8 +1022,7 @@ fn definition_path_alias_hits_existing_cached_reexport() -> Result<(), Box<dyn s
 }
 
 #[test]
-fn repeated_missing_lookup_hits_negative_cache_without_new_workspace_load()
--> Result<(), Box<dyn std::error::Error>> {
+fn repeated_missing_lookup_hits_negative_cache_without_new_workspace_load() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
     fs::write(
         tmp.path().join("Cargo.toml"),
@@ -991,9 +1048,7 @@ fn repeated_missing_lookup_hits_negative_cache_without_new_workspace_load()
             .inner
             .lock()
             .map_err(|_| std::io::Error::other("poisoned cache"))?;
-        assert!(inner
-            .failed_items
-            .contains_key(&(root.clone(), query.to_string())));
+        assert!(inner.failed_items.contains_key(&(root.clone(), query.to_string())));
         inner.workspaces.len()
     };
 
@@ -1033,9 +1088,11 @@ fn dependency_manifest_resolution_is_cached_per_manifest_root() -> Result<(), Bo
     let crate_name = "definitely_missing_dependency";
 
     assert!(resolve_dependency_manifest_dir(&mut inner, &root, crate_name, Some(&[])).is_none());
-    assert!(inner
-        .dependency_manifest_dirs
-        .contains_key(&(root.clone(), crate_name.to_string())));
+    assert!(
+        inner
+            .dependency_manifest_dirs
+            .contains_key(&(root.clone(), crate_name.to_string()))
+    );
     let cached_entries = inner.dependency_manifest_dirs.len();
 
     assert!(resolve_dependency_manifest_dir(&mut inner, &root, crate_name, Some(&[])).is_none());
@@ -1067,9 +1124,11 @@ fn dependency_manifest_resolution_cache_normalizes_crate_spelling() -> Result<()
         cached_entries,
         "hyphen and underscore crate spellings should share dependency-root resolution cache entries"
     );
-    assert!(inner
-        .dependency_manifest_dirs
-        .contains_key(&(root, "foo_bar".to_string())));
+    assert!(
+        inner
+            .dependency_manifest_dirs
+            .contains_key(&(root, "foo_bar".to_string()))
+    );
     Ok(())
 }
 
@@ -1180,10 +1239,7 @@ fn dependency_source_metadata_resolves_public_reexported_functions_and_aliases_w
         dep.join("src").join("lib.rs"),
         "pub use function::ScalarFunctionImplementation;\npub use udf::create_udf;\npub mod async_api;\npub mod audio;\npub mod catalog;\npub mod datasource;\npub mod execution;\npub mod expr_fn { pub use super::math::expr_fn::*; }\npub mod frame;\npub mod frame_ext;\npub mod function;\npub mod math;\npub mod table;\npub mod types;\npub mod udf;\n",
     )?;
-    fs::write(
-        dep.join("src").join("catalog.rs"),
-        "pub trait TableProvider {}\n",
-    )?;
+    fs::write(dep.join("src").join("catalog.rs"), "pub trait TableProvider {}\n")?;
     fs::write(
         dep.join("src").join("datasource.rs"),
         "pub use crate::catalog::TableProvider;\n",
@@ -1390,10 +1446,7 @@ impl NestedFrame {
         sig.params[1].type_display,
         "Vec<public_api::arrow::datatypes::DataType>"
     );
-    assert_eq!(
-        sig.params[2].type_display,
-        "source_dep::ScalarFunctionImplementation"
-    );
+    assert_eq!(sig.params[2].type_display, "source_dep::ScalarFunctionImplementation");
     assert_eq!(sig.return_type, "source_dep::types::ScalarUDF");
 
     let default_frame = cache.get_or_extract(&root, "source_dep::types::DEFAULT_FRAME", &|_| ())?;
@@ -1451,11 +1504,11 @@ impl NestedFrame {
         async_function.definition_path.as_deref(),
         Some("source_dep::async_api::plan::load_plan")
     );
-    assert!(sig.is_async, "source metadata should preserve async functions reached through glob reexports");
-    assert_eq!(
-        sig.return_type,
-        "Result<public_api::logical_expr::Expr, String>"
+    assert!(
+        sig.is_async,
+        "source metadata should preserve async functions reached through glob reexports"
     );
+    assert_eq!(sig.return_type, "Result<public_api::logical_expr::Expr, String>");
 
     let device = cache.get_or_extract(&root, "source_dep::audio::Device", &|_| ())?;
     let RustItemKind::Type(type_info) = &device.kind else {
@@ -1470,10 +1523,7 @@ impl NestedFrame {
         build_output.signature.params[1].type_display,
         "impl FnMut(&mut source_dep::audio::Data, &source_dep::audio::OutputCallbackInfo)"
     );
-    assert_eq!(
-        build_output.signature.params[2].type_display,
-        "impl FnMut(String)"
-    );
+    assert_eq!(build_output.signature.params[2].type_display, "impl FnMut(String)");
     let build_output_inline = type_info
         .methods
         .iter()
@@ -1583,10 +1633,7 @@ impl NestedFrame {
     assert!(write_csv.signature.is_async);
     assert_eq!(write_csv.signature.params.len(), 2);
     assert_eq!(write_csv.signature.params[0].name.as_deref(), Some("self"));
-    assert_eq!(
-        write_csv.signature.params[0].type_display,
-        "source_dep::types::Frame"
-    );
+    assert_eq!(write_csv.signature.params[0].type_display, "source_dep::types::Frame");
     assert_eq!(write_csv.signature.params[1].type_display, "&str");
     let renamed = frame_info
         .methods
@@ -1750,10 +1797,7 @@ pub use writer::Builder;
         .iter()
         .find(|method| method.name == "append_data")
         .ok_or("expected append_data method metadata")?;
-    assert_eq!(
-        append_data.signature.params[1].type_display,
-        "&mut source_dep::Header"
-    );
+    assert_eq!(append_data.signature.params[1].type_display, "&mut source_dep::Header");
     let repeated = complete_cache.get_or_extract_complete(&root, "source_dep::Builder", &|_| ())?;
     assert!(
         std::sync::Arc::ptr_eq(&metadata, &repeated),
@@ -1860,10 +1904,7 @@ fn dependency_source_metadata_resolves_public_globs_through_local_aliases_withou
         dep.join("Cargo.toml"),
         "[package]\nname = \"rustix-sim\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n[lib]\nname = \"rustix\"\n",
     )?;
-    fs::write(
-        dep.join("src").join("lib.rs"),
-        "mod backend;\npub mod fs;\n",
-    )?;
+    fs::write(dep.join("src").join("lib.rs"), "mod backend;\npub mod fs;\n")?;
     fs::write(
         dep.join("src").join("fs").join("mod.rs"),
         "mod constants;\npub(crate) mod fd;\npub use constants::*;\npub use fd::*;\n",
@@ -1876,10 +1917,7 @@ fn dependency_source_metadata_resolves_public_globs_through_local_aliases_withou
         dep.join("src").join("fs").join("fd.rs"),
         "use crate::backend::fs::types::StatVfs;\n\npub fn fstatvfs() -> StatVfs { todo!() }\n",
     )?;
-    fs::write(
-        dep.join("src").join("backend").join("mod.rs"),
-        "pub mod fs;\n",
-    )?;
+    fs::write(dep.join("src").join("backend").join("mod.rs"), "pub mod fs;\n")?;
     fs::write(
         dep.join("src").join("backend").join("fs").join("mod.rs"),
         "pub mod types;\n",
@@ -1927,7 +1965,8 @@ fn dependency_source_metadata_resolves_public_globs_through_local_aliases_withou
     Ok(())
 }
 
-/// Dependency items generated into `OUT_DIR` should resolve through the root workspace that checked those build scripts.
+/// Dependency items generated into `OUT_DIR` should resolve through the root workspace that checked those build
+/// scripts.
 #[test]
 fn dependency_generated_out_dir_items_resolve_through_root_workspace() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;
@@ -1970,7 +2009,12 @@ fn dependency_generated_out_dir_items_resolve_through_root_workspace() -> Result
         dep.join("src").join("proto.rs"),
         "include!(concat!(env!(\"OUT_DIR\"), \"/external.rs\"));\n",
     )?;
-    let out_dir = root.join("target").join("debug").join("build").join("generated_dep-fixture").join("out");
+    let out_dir = root
+        .join("target")
+        .join("debug")
+        .join("build")
+        .join("generated_dep-fixture")
+        .join("out");
     fs::create_dir_all(&out_dir)?;
     fs::write(
         out_dir.join("generated.rs"),
@@ -2029,10 +2073,7 @@ pub mod nested {
     };
     assert_eq!(nested_info.fields.len(), 1);
     assert_eq!(nested_info.fields[0].name, "parent");
-    assert_eq!(
-        nested_info.fields[0].type_display,
-        "generated_dep::generated::Nested"
-    );
+    assert_eq!(nested_info.fields[0].type_display, "generated_dep::generated::Nested");
 
     let choice = cache.get_or_extract(&root, "generated_dep::generated::GeneratedChoice", &|_| ())?;
     let RustItemKind::Type(choice_info) = &choice.kind else {
@@ -2106,8 +2147,7 @@ fn dependency_reexport_alias_candidate_uses_public_crate_reexports() -> Result<(
         Some("inner_crate::Thing")
     );
     assert_eq!(
-        dependency_reexport_alias_candidate(&mut inner, dep_root.as_path(), "wrapper_crate::renamed::Thing")
-            .as_deref(),
+        dependency_reexport_alias_candidate(&mut inner, dep_root.as_path(), "wrapper_crate::renamed::Thing").as_deref(),
         Some("renamed_crate::Thing")
     );
     assert_eq!(

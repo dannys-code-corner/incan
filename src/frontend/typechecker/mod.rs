@@ -96,7 +96,7 @@ use crate::rust_inspect::{
 use helpers::{collection_name, collection_type_id, render_resolved_type_as_rust_arg, stringlike_type_id};
 use incan_core::interop::{
     RUST_NEVER_TYPE_DISPLAY, RustExpandedDeriveTrait, RustFunctionSig, RustItemKind, RustItemMetadata,
-    RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustParam, RustTypeShape,
+    RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustParam, RustPayloadCarrier, RustTypeShape,
     metadata_free_method_signature, render_rust_type_shape_path, rust_display_is_owned_string,
     split_top_level_rust_args, strip_rust_borrow_lifetimes,
 };
@@ -1850,6 +1850,27 @@ impl TypeChecker {
                 .fields
                 .iter()
                 .map(|field| CallableParam::positional(self.resolved_type_from_rust_shape(field)))
+                .collect(),
+        )
+    }
+
+    /// Return the storage carrier of each payload field of one rust-inspect-backed enum variant.
+    ///
+    /// The callable parameters above are the semantic payload types; this is the parallel fact lowering needs to
+    /// emit the Rust constructor, such as the `Box<T>` prost writes around a recursive `oneof` payload.
+    pub(crate) fn rust_variant_payload_carriers(
+        &self,
+        rust_path: &str,
+        variant: &str,
+    ) -> Option<Vec<RustPayloadCarrier>> {
+        let metadata = self.rust_item_metadata_for_path(rust_path)?;
+        let RustItemKind::Type(info) = &metadata.kind else {
+            return None;
+        };
+        let variant = info.variants.iter().find(|candidate| candidate.name == variant)?;
+        Some(
+            (0..variant.fields.len())
+                .map(|index| variant.field_carrier(index))
                 .collect(),
         )
     }

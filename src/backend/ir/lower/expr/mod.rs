@@ -1615,10 +1615,12 @@ impl AstLowering {
                         | ast::CallArg::PositionalUnpack(expr)
                         | ast::CallArg::KeywordUnpack(expr) => expr.span,
                     };
+                    // A concrete borrow or a boxed variant payload is a Rust storage fact, not a shape preference:
+                    // the emitted constructor is wrong without it, whatever the receiver's argument policy says.
                     let has_required_concrete_borrow = self.type_info.as_ref().is_some_and(|info| {
                         matches!(
                             info.rust_arg_coercion(arg_span).map(|coercion| coercion.kind),
-                            Some(RustArgCoercionKind::Borrow { .. })
+                            Some(RustArgCoercionKind::Borrow { .. } | RustArgCoercionKind::BoxPayload)
                         )
                     });
                     if !matches!(arg_policy, MethodCallArgPolicy::PreserveShape) || has_required_concrete_borrow {

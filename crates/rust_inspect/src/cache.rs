@@ -15,7 +15,7 @@ use std::time::Instant;
 
 use incan_core::interop::{
     RUST_NEVER_TYPE_DISPLAY, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam,
-    RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeMetadataCompleteness, RustTypeShape,
+    RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeMetadataCompleteness, RustTypeShape,
     RustTypeShapePathFallback, RustVariantInfo, RustVisibility, parse_rust_type_shape_text,
     rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
     rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
@@ -174,7 +174,7 @@ struct DiskCacheEnvelope {
 }
 
 // Bump when extracted metadata semantics change in a way that makes previously persisted items unsafe to reuse.
-const DISK_CACHE_FORMAT: u32 = 37;
+const DISK_CACHE_FORMAT: u32 = 38;
 const DISK_CACHE_FILE: &str = ".incan_rust_inspect_cache.json";
 // Backward-compatibility read path for caches written before the crate/module rename.
 const LEGACY_DISK_CACHE_FILE: &str = ".incan_rust_metadata_cache.json";
@@ -1647,6 +1647,10 @@ fn source_type_path_display(path: &str, context: &SourceMetadataContext<'_>, typ
         "bool" | "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
         | "u128" | "usize" | "str" | "String" | "()" | "[u8]" => return compact,
         "alloc::string::String" | "std::string::String" => return "String".to_string(),
+        // The prelude `Box` is not an item of the owning module. Left to the owner-join below it became
+        // `datafusion_expr::expr::Box<..>`, a path no consumer can name and the payload stripper cannot see
+        // (#1229); the generated-code route already canonicalizes every spelling to the same short display.
+        "alloc::boxed::Box" | "std::boxed::Box" | "prost::alloc::boxed::Box" | "Box" => return "Box".to_string(),
         _ => {}
     }
 
@@ -2712,8 +2716,16 @@ fn source_struct_metadata(
     })
 }
 
-/// Extract payload shapes from a source enum variant.
-fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataContext<'_>) -> Vec<RustTypeShape> {
+/// Extract payload shapes and their storage carriers from a source enum variant.
+///
+/// Registry crates such as `datafusion_expr` reach this syntactic route, and they spell recursive payloads exactly
+/// as prost does (`WindowFunction(Box<WindowFunction>)`). The payload is recorded as the semantic type with its
+/// carrier beside it, the same contract the HIR extractor and the generated-code route keep; a route that left the
+/// bare `Box` in place made the typechecker owner-join it into `datafusion_expr::expr::Box<..>` (#1229).
+fn source_variant_payloads(
+    variant: ast::Variant,
+    ctx: &SourceMetadataContext<'_>,
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     let Some(field_list) = variant.field_list() else {
         return Vec::new();
     };
@@ -2723,7 +2735,7 @@ fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataCont
             .filter_map(|field| field.ty())
             .map(|ty| {
                 let display = ctx.type_display(ty.syntax().text().to_string().as_str());
-                generated_type_shape(display.as_str())
+                normalize_generated_variant_payload_shape(generated_type_shape(display.as_str()))
             })
             .collect(),
         ast::FieldList::RecordFieldList(fields) => fields
@@ -2731,7 +2743,9 @@ fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataCont
             .filter_map(|field| {
                 let ty = field.ty()?;
                 let display = ctx.type_display(ty.syntax().text().to_string().as_str());
-                Some(generated_type_shape(display.as_str()))
+                Some(normalize_generated_variant_payload_shape(generated_type_shape(
+                    display.as_str(),
+                )))
             })
             .collect(),
     }
@@ -2766,9 +2780,11 @@ fn source_enum_metadata(
         .variants()
         .filter_map(|variant| {
             let name = variant.name()?.to_string();
+            let (fields, field_carriers) = source_variant_payloads(variant, ctx).into_iter().unzip();
             Some(RustVariantInfo {
                 name,
-                fields: source_variant_payload_shapes(variant, ctx),
+                fields,
+                field_carriers,
             })
         })
         .collect::<Vec<_>>();
@@ -3657,25 +3673,29 @@ fn generated_struct_metadata(
 }
 
 /// Remove transparent generated `Box<T>` payload wrappers from enum variant shapes because Incan pattern/coercion logic
-/// cares about the semantic payload type, not prost's storage carrier.
-fn normalize_generated_variant_payload_shape(shape: RustTypeShape) -> RustTypeShape {
+/// cares about the semantic payload type, not prost's storage carrier. The carrier is returned beside the shape so
+/// lowering can restore it at the Rust constructor.
+fn normalize_generated_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
         RustTypeShape::RustPath { path, args }
             if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
         {
-            args.into_iter().next().unwrap_or(RustTypeShape::Unknown)
+            (
+                args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+                RustPayloadCarrier::Boxed,
+            )
         }
-        other => other,
+        other => (other, RustPayloadCarrier::Direct),
     }
 }
 
-/// Extract tuple variant payload shapes from a generated Rust enum variant.
-fn generated_variant_payload_shapes(
+/// Extract tuple variant payload shapes and their storage carriers from a generated Rust enum variant.
+fn generated_variant_payloads(
     variant: ast::Variant,
     crate_name: &str,
     module_path: &[String],
     external_crates: &HashSet<String>,
-) -> Vec<RustTypeShape> {
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     let Some(ast::FieldList::TupleFieldList(fields)) = variant.field_list() else {
         return Vec::new();
     };
@@ -3709,9 +3729,14 @@ fn generated_enum_metadata(
         .variants()
         .filter_map(|variant| {
             let name = variant.name()?.to_string();
+            let (fields, field_carriers) =
+                generated_variant_payloads(variant, crate_name, module_path, external_crates)
+                    .into_iter()
+                    .unzip();
             Some(RustVariantInfo {
                 name,
-                fields: generated_variant_payload_shapes(variant, crate_name, module_path, external_crates),
+                fields,
+                field_carriers,
             })
         })
         .collect::<Vec<_>>();
