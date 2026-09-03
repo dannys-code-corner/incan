@@ -3120,26 +3120,11 @@ impl TypeChecker {
     /// directly, the same way function calls do.
     fn resolve_unambiguous_source_method_without_arg_prepass(
         &mut self,
-        base_ty: &ResolvedType,
-        method: &str,
-        receiver_surface: MemberBindingSurface,
-        type_args: &[Spanned<Type>],
-        args: &[CallArg],
-        span: Span,
-        expected_return_ty: Option<&ResolvedType>,
+        call: &SourceMethodPrepass<'_>,
     ) -> Option<ResolvedType> {
-        let type_name = match base_ty {
+        let type_name = match call.receiver_ty {
             ResolvedType::Named(name) | ResolvedType::Generic(name, _) => name,
             _ => return None,
-        };
-        let call = SourceMethodPrepass {
-            method,
-            receiver_surface,
-            type_args,
-            args,
-            span,
-            receiver_ty: base_ty,
-            expected_return_ty,
         };
         let type_info = self.lookup_semantic_type_info(type_name).cloned().or_else(|| {
             if type_name == "Logger" {
@@ -3151,7 +3136,7 @@ impl TypeChecker {
         });
         let Some(type_info) = type_info else {
             self.lookup_semantic_trait_info(type_name)?;
-            let trait_args = match base_ty {
+            let trait_args = match call.receiver_ty {
                 ResolvedType::Generic(_, args) => args.clone(),
                 _ => Vec::new(),
             };
@@ -3163,7 +3148,7 @@ impl TypeChecker {
                 implementation_type_params: Vec::new(),
             };
             return self
-                .resolve_unambiguous_adopted_trait_method_without_arg_prepass(std::slice::from_ref(&adoption), &call);
+                .resolve_unambiguous_adopted_trait_method_without_arg_prepass(std::slice::from_ref(&adoption), call);
         };
         match type_info {
             TypeInfo::Model(model) => {
@@ -3172,7 +3157,7 @@ impl TypeChecker {
                     &model.methods,
                     &model.method_overloads,
                     &trait_adoptions,
-                    &call,
+                    call,
                 )
             }
             TypeInfo::Class(class) => {
@@ -3181,7 +3166,7 @@ impl TypeChecker {
                     &class.methods,
                     &class.method_overloads,
                     &trait_adoptions,
-                    &call,
+                    call,
                 )
             }
             TypeInfo::Enum(en) => {
@@ -3190,14 +3175,19 @@ impl TypeChecker {
                     &en.methods,
                     &en.method_overloads,
                     &trait_adoptions,
-                    &call,
+                    call,
                 )
             }
             TypeInfo::Newtype(nt) => {
-                let resolved_method = self.resolve_newtype_method_name(&nt, method);
+                let resolved_method = self.resolve_newtype_method_name(&nt, call.method);
                 let resolved_call = SourceMethodPrepass {
                     method: resolved_method,
-                    ..call
+                    receiver_surface: call.receiver_surface,
+                    type_args: call.type_args,
+                    args: call.args,
+                    span: call.span,
+                    receiver_ty: call.receiver_ty,
+                    expected_return_ty: call.expected_return_ty,
                 };
                 let ret = self.resolve_source_owner_method_without_arg_prepass(
                     &nt.methods,
@@ -3206,7 +3196,7 @@ impl TypeChecker {
                     &resolved_call,
                 )?;
                 if nt.is_rusttype {
-                    self.maybe_record_rusttype_return_coercion(&nt, resolved_method, &ret, span);
+                    self.maybe_record_rusttype_return_coercion(&nt, resolved_method, &ret, call.span);
                 }
                 Some(ret)
             }
@@ -4531,15 +4521,16 @@ impl TypeChecker {
             return ResolvedType::Unknown;
         }
 
-        if let Some(ret) = self.resolve_unambiguous_source_method_without_arg_prepass(
-            &base_ty,
+        let source_method_prepass = SourceMethodPrepass {
             method,
             receiver_surface,
             type_args,
             args,
             span,
+            receiver_ty: &base_ty,
             expected_return_ty,
-        ) {
+        };
+        if let Some(ret) = self.resolve_unambiguous_source_method_without_arg_prepass(&source_method_prepass) {
             self.type_info.inherit_same_trait_method_module(base.span, span);
             return ret;
         }
