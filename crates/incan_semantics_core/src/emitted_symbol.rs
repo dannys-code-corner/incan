@@ -101,7 +101,9 @@ pub fn decode_incan_symbol_identity(identifier: &str) -> Result<Option<Canonical
     }
     let bytes = hex
         .as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let high = decode_hex_digit(pair[0])?;
             let low = decode_hex_digit(pair[1])?;
@@ -150,6 +152,7 @@ pub fn decode_incan_identity_from_demangled_symbol(
     candidate.map_or(Ok(None), decode_incan_symbol_identity)
 }
 
+/// Encode one canonical symbol namespace as its stable payload tag.
 fn namespace_tag(namespace: SymbolNamespace) -> u8 {
     match namespace {
         SymbolNamespace::OrdinaryLexical => 0,
@@ -158,6 +161,7 @@ fn namespace_tag(namespace: SymbolNamespace) -> u8 {
     }
 }
 
+/// Decode one stable namespace tag, rejecting values outside the v1 contract.
 fn decode_namespace(tag: u8) -> Result<SymbolNamespace, EmittedSymbolDecodeError> {
     match tag {
         0 => Ok(SymbolNamespace::OrdinaryLexical),
@@ -167,6 +171,7 @@ fn decode_namespace(tag: u8) -> Result<SymbolNamespace, EmittedSymbolDecodeError
     }
 }
 
+/// Append one canonical symbol origin to an emitted-symbol payload.
 fn encode_origin(out: &mut Vec<u8>, origin: &SymbolOrigin) {
     match origin {
         SymbolOrigin::Module(path) => {
@@ -186,6 +191,7 @@ fn encode_origin(out: &mut Vec<u8>, origin: &SymbolOrigin) {
     }
 }
 
+/// Decode one canonical symbol origin from an emitted-symbol payload.
 fn decode_origin(reader: &mut PayloadReader<'_>) -> Result<SymbolOrigin, EmittedSymbolDecodeError> {
     match reader.byte("origin")? {
         0 => Ok(SymbolOrigin::Module(reader.strings("origin.module")?)),
@@ -199,6 +205,7 @@ fn decode_origin(reader: &mut PayloadReader<'_>) -> Result<SymbolOrigin, Emitted
     }
 }
 
+/// Append one semantic declaration-kind tag and any associated spelling.
 fn encode_kind(out: &mut Vec<u8>, kind: &SemanticSourceTargetKind) {
     let tag = match kind {
         SemanticSourceTargetKind::Function => 0,
@@ -232,6 +239,7 @@ fn encode_kind(out: &mut Vec<u8>, kind: &SemanticSourceTargetKind) {
     }
 }
 
+/// Decode one semantic declaration kind from its stable payload representation.
 fn decode_kind(reader: &mut PayloadReader<'_>) -> Result<SemanticSourceTargetKind, EmittedSymbolDecodeError> {
     match reader.byte("kind")? {
         0 => Ok(SemanticSourceTargetKind::Function),
@@ -262,6 +270,7 @@ fn decode_kind(reader: &mut PayloadReader<'_>) -> Result<SemanticSourceTargetKin
     }
 }
 
+/// Append a length-prefixed sequence of UTF-8 strings.
 fn write_strings(out: &mut Vec<u8>, values: &[String]) {
     write_u64(out, values.len() as u64);
     for value in values {
@@ -269,19 +278,23 @@ fn write_strings(out: &mut Vec<u8>, values: &[String]) {
     }
 }
 
+/// Append one length-prefixed UTF-8 string.
 fn write_string(out: &mut Vec<u8>, value: &str) {
     write_u64(out, value.len() as u64);
     out.extend_from_slice(value.as_bytes());
 }
 
+/// Append one unsigned integer in canonical big-endian form.
 fn write_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
+/// Append one platform-sized value using the payload's fixed-width integer representation.
 fn write_usize(out: &mut Vec<u8>, value: usize) {
     out.extend_from_slice(&(value as u64).to_be_bytes());
 }
 
+/// Decode one lowercase hexadecimal byte used by a Rust-safe symbol spelling.
 fn decode_hex_digit(value: u8) -> Result<u8, EmittedSymbolDecodeError> {
     match value {
         b'0'..=b'9' => Ok(value - b'0'),
@@ -295,14 +308,17 @@ struct PayloadReader<'a> {
 }
 
 impl<'a> PayloadReader<'a> {
+    /// Start reading a canonical emitted-symbol payload.
     fn new(bytes: &'a [u8]) -> Self {
         Self { remaining: bytes }
     }
 
+    /// Return the payload bytes that have not yet been consumed.
     fn remaining(&self) -> &'a [u8] {
         self.remaining
     }
 
+    /// Consume exactly `length` bytes or attribute a truncated payload to `field`.
     fn take(&mut self, length: usize, field: &'static str) -> Result<&'a [u8], EmittedSymbolDecodeError> {
         if self.remaining.len() < length {
             return Err(EmittedSymbolDecodeError::InvalidPayload(field));
@@ -312,10 +328,12 @@ impl<'a> PayloadReader<'a> {
         Ok(head)
     }
 
+    /// Consume one tagged byte for `field`.
     fn byte(&mut self, field: &'static str) -> Result<u8, EmittedSymbolDecodeError> {
         Ok(self.take(1, field)?[0])
     }
 
+    /// Consume one fixed-width integer and convert it to the host index type.
     fn usize(&mut self, field: &'static str) -> Result<usize, EmittedSymbolDecodeError> {
         let bytes: [u8; 8] = self
             .take(8, field)?
@@ -324,12 +342,14 @@ impl<'a> PayloadReader<'a> {
         usize::try_from(u64::from_be_bytes(bytes)).map_err(|_| EmittedSymbolDecodeError::IntegerOverflow)
     }
 
+    /// Consume one length-prefixed UTF-8 string.
     fn string(&mut self, field: &'static str) -> Result<String, EmittedSymbolDecodeError> {
         let length = self.usize(field)?;
         let bytes = self.take(length, field)?;
         String::from_utf8(bytes.to_vec()).map_err(|_| EmittedSymbolDecodeError::InvalidUtf8)
     }
 
+    /// Consume one bounded sequence of length-prefixed UTF-8 strings.
     fn strings(&mut self, field: &'static str) -> Result<Vec<String>, EmittedSymbolDecodeError> {
         let length = self.usize(field)?;
         // Every encoded string needs at least its eight-byte length prefix. Bound the advertised count before

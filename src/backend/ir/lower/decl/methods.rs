@@ -144,6 +144,7 @@ impl AstLowering {
     }
 
     /// Pair Rust trait slots with exact method identities without reconstructing either from a spelling.
+    #[allow(clippy::too_many_arguments)] // Keeps each checked trait and owner axis explicit.
     fn trait_method_projections(
         &mut self,
         methods: &[IrFunction],

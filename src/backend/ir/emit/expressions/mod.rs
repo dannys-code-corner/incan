@@ -913,6 +913,7 @@ impl<'a> IrEmitter<'a> {
         }
     }
 
+    /// Recover the source static or local binding at the root of an assignable expression.
     pub(super) fn expr_storage_root(expr: &TypedExpr) -> Option<StorageRoot> {
         match &expr.kind {
             IrExprKind::StaticRead { name, reference_kind } => Some(StorageRoot::Static {

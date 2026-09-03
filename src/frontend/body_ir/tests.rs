@@ -6021,7 +6021,7 @@ fn a_pattern_assertion_binding_is_a_declared_local_read_by_the_statements_after_
         variant,
         fields,
         ..
-    } = pattern
+    } = pattern.as_ref()
     else {
         return Err(format!("expected `Some(..)` to lower to a constructor pattern: {pattern:?}").into());
     };

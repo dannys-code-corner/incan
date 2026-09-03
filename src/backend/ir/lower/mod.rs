@@ -1539,6 +1539,7 @@ impl AstLowering {
         let _ = self.nominal_callable_scopes.pop();
     }
 
+    /// Define a local value and its static-binding classification in the current lowering scope.
     pub(super) fn define_local_binding(&mut self, name: String, ty: IrType, is_static_binding: bool) {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name.clone(), ty);

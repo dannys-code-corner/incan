@@ -124,10 +124,14 @@ fn selected_builtin_argument_type(
         read.place.projection.is_empty(),
         "the source probe must stay a bare local read"
     );
+    let local_id = read
+        .place
+        .local_id()
+        .ok_or_else(|| std::io::Error::other("selected builtin argument must use local storage"))?;
     let body = body_named(module, body_name)?;
     body.locals
         .iter()
-        .find(|local| local.id == read.place.local)
+        .find(|local| local.id == local_id)
         .map(|local| local.ty.to_string())
         .ok_or_else(|| std::io::Error::other("selected builtin argument local is missing its declared type"))
         .map_err(Into::into)

@@ -2396,6 +2396,7 @@ fn sanitize_record_label(label: &str) -> String {
 }
 
 /// Build one import record from source AST import syntax.
+#[allow(clippy::too_many_arguments)] // The constructor mirrors the independent persisted import-record fields.
 fn import_record(
     module: &ParsedModule,
     module_id: &str,
@@ -2446,6 +2447,7 @@ fn containment_record(
 }
 
 /// Build one public export fact from either a declaration or public import source record.
+#[allow(clippy::too_many_arguments)] // The constructor mirrors the independent persisted export-record fields.
 fn export_record(
     module: &ParsedModule,
     module_id: &str,

@@ -97,8 +97,9 @@ fn builtin_call_destination_in_statements(statements: &[Statement], builtin: Bui
             && target.direct_call_id.is_none()
             && target.builtin == Some(builtin)
             && destination.projection.is_empty()
+            && let Some(local) = destination.local_id()
         {
-            return Some(destination.local);
+            return Some(local);
         }
         if let Some(destination) = builtin_call_destination_in_nested_statement(statement, builtin) {
             return Some(destination);
@@ -243,8 +244,9 @@ fn builtin_iter_next_destination_in_statements(statements: &[Statement]) -> Opti
             ..
         } = &statement.kind
             && destination.projection.is_empty()
+            && let Some(local) = destination.local_id()
         {
-            return Some((destination.local, statement.span));
+            return Some((local, statement.span));
         }
         let nested = match &statement.kind {
             StatementKind::If {
@@ -289,7 +291,7 @@ fn assignment_destination_span(statements: &[Statement], destination: LocalId) -
     for statement in statements {
         if let StatementKind::Assign { place, .. } = &statement.kind
             && place.projection.is_empty()
-            && place.local == destination
+            && place.local_id() == Some(destination)
         {
             return Some(statement.span);
         }

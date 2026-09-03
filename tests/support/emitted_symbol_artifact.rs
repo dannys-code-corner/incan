@@ -212,57 +212,6 @@ impl<'a> FixtureDemangledSymbol<'a> {
     }
 }
 
-#[cfg(test)]
-mod fixture_demangled_symbol_tests {
-    use super::{FIXTURE_CRATE_NAME, FixtureDemangledSymbol, content_identity};
-
-    #[test]
-    fn content_identity_binds_bytes_and_chunk_boundaries() {
-        assert_ne!(content_identity(&[b"artifact-a"]), content_identity(&[b"artifact-b"]));
-        assert_ne!(content_identity(&[b"ab", b"c"]), content_identity(&[b"a", b"bc"]));
-    }
-
-    #[test]
-    fn host_bridge_match_rejects_path_and_identifier_lookalikes() {
-        let exact = FixtureDemangledSymbol::parse("incan_symbol_fixture::host_bridge");
-        assert!(exact.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, "host_bridge", None)));
-
-        for lookalike in [
-            "incan_symbol_fixture::host_bridge_adapter",
-            "incan_symbol_fixture::nested::host_bridge",
-            "incan_symbol_fixture_lookalike::host_bridge",
-            "incan_symbol_fixture::host_bridge::<u64>",
-        ] {
-            let parsed = FixtureDemangledSymbol::parse(lookalike);
-            assert!(
-                !parsed.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, "host_bridge", None)),
-                "lookalike `{lookalike}` must not satisfy host-symbol evidence"
-            );
-        }
-    }
-
-    #[test]
-    fn generic_match_requires_exact_item_path_and_u64_suffix() {
-        let projected = "__incan_v1_0102";
-        let exact = FixtureDemangledSymbol::parse("incan_symbol_fixture::__incan_v1_0102::<u64>");
-        assert!(exact.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, projected, Some("u64"))));
-
-        for lookalike in [
-            "incan_symbol_fixture::__incan_v1_0102_adapter::<u64>",
-            "incan_symbol_fixture::nested::__incan_v1_0102::<u64>",
-            "incan_symbol_fixture::__incan_v1_0102::<u64x>",
-            "incan_symbol_fixture::__incan_v1_0102::<Vec<u64>>",
-            "incan_symbol_fixture::__incan_v1_0102_u64",
-        ] {
-            let parsed = FixtureDemangledSymbol::parse(lookalike);
-            assert!(
-                !parsed.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, projected, Some("u64"))),
-                "lookalike `{lookalike}` must not satisfy generic-specialization evidence"
-            );
-        }
-    }
-}
-
 fn selected_rustc() -> Result<(PathBuf, String), Box<dyn Error>> {
     let output = Command::new("rustup")
         .args(["which", "--toolchain", SELECTED_RUST, "rustc"])
@@ -417,4 +366,55 @@ fn fixture_identities() -> Vec<CanonicalSymbolId> {
             declaration_span: HirSourceSpan::new(140, 167),
         },
     ]
+}
+
+#[cfg(test)]
+mod fixture_demangled_symbol_tests {
+    use super::{FIXTURE_CRATE_NAME, FixtureDemangledSymbol, content_identity};
+
+    #[test]
+    fn content_identity_binds_bytes_and_chunk_boundaries() {
+        assert_ne!(content_identity(&[b"artifact-a"]), content_identity(&[b"artifact-b"]));
+        assert_ne!(content_identity(&[b"ab", b"c"]), content_identity(&[b"a", b"bc"]));
+    }
+
+    #[test]
+    fn host_bridge_match_rejects_path_and_identifier_lookalikes() {
+        let exact = FixtureDemangledSymbol::parse("incan_symbol_fixture::host_bridge");
+        assert!(exact.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, "host_bridge", None)));
+
+        for lookalike in [
+            "incan_symbol_fixture::host_bridge_adapter",
+            "incan_symbol_fixture::nested::host_bridge",
+            "incan_symbol_fixture_lookalike::host_bridge",
+            "incan_symbol_fixture::host_bridge::<u64>",
+        ] {
+            let parsed = FixtureDemangledSymbol::parse(lookalike);
+            assert!(
+                !parsed.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, "host_bridge", None)),
+                "lookalike `{lookalike}` must not satisfy host-symbol evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn generic_match_requires_exact_item_path_and_u64_suffix() {
+        let projected = "__incan_v1_0102";
+        let exact = FixtureDemangledSymbol::parse("incan_symbol_fixture::__incan_v1_0102::<u64>");
+        assert!(exact.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, projected, Some("u64"))));
+
+        for lookalike in [
+            "incan_symbol_fixture::__incan_v1_0102_adapter::<u64>",
+            "incan_symbol_fixture::nested::__incan_v1_0102::<u64>",
+            "incan_symbol_fixture::__incan_v1_0102::<u64x>",
+            "incan_symbol_fixture::__incan_v1_0102::<Vec<u64>>",
+            "incan_symbol_fixture::__incan_v1_0102_u64",
+        ] {
+            let parsed = FixtureDemangledSymbol::parse(lookalike);
+            assert!(
+                !parsed.is_some_and(|symbol| symbol.matches(FIXTURE_CRATE_NAME, projected, Some("u64"))),
+                "lookalike `{lookalike}` must not satisfy generic-specialization evidence"
+            );
+        }
+    }
 }

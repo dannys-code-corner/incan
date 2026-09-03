@@ -91,11 +91,11 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
         }
 
         self.materialized_range_locals = saved_materialized_range_locals;
-        bir::CallableParamDefault::Source(bir::DefaultComputation {
+        bir::CallableParamDefault::Source(Box::new(bir::DefaultComputation {
             span: hir_span(default_expr.span),
             stmts,
             result,
-        })
+        }))
     }
 
     // ---- Expressions ----

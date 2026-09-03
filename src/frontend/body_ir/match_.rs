@@ -243,6 +243,7 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
     }
 
     #[allow(clippy::too_many_arguments)] // Carries one recursive pattern-lowering context; see the arm helper above.
+    /// Lower one checked source pattern while retaining canonical binding and ownership facts.
     pub(super) fn lower_match_pattern(
         &mut self,
         pattern: &ast::Spanned<ast::Pattern>,

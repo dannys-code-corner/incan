@@ -4346,6 +4346,7 @@ fn identifier_spans(span: Span, source: &str) -> Vec<(String, Span)> {
         .collect()
 }
 
+/// Return the first identifier token named `name` within a checked source span.
 fn first_identifier_span_named(source: &str, span: Span, name: &str) -> Option<Span> {
     identifier_spans(span, source)
         .into_iter()
@@ -4366,6 +4367,7 @@ fn checked_reference_token_span(source: &str, span: Span, identity: &CanonicalSy
         .map(|(_, span)| *span)
 }
 
+/// Convert a semantics-core source span into the frontend span representation.
 fn source_span(span: HirSourceSpan) -> Span {
     Span::new(span.start, span.end)
 }
@@ -4486,6 +4488,7 @@ fn checked_reference_locations<'a>(
     locations
 }
 
+/// Return whether this document contains the exact declaration named by a canonical identity.
 fn canonical_declaration_is_in_document(
     identity: &CanonicalSymbolId,
     document_uri: &Url,
@@ -4499,6 +4502,7 @@ fn canonical_declaration_is_in_document(
         && source_span(identity.declaration_span) == enclosing_span
 }
 
+/// Build an LSP location only when the checked source span is nonempty and in bounds.
 fn checked_source_location(uri: &Url, source: &str, span: Span) -> Option<Location> {
     if span.start >= span.end || source.get(span.start..span.end).is_none() {
         return None;
@@ -4509,6 +4513,7 @@ fn checked_source_location(uri: &Url, source: &str, span: Span) -> Option<Locati
     })
 }
 
+/// Append an LSP location once, keyed by URI and exact range.
 fn push_unique_location(
     locations: &mut Vec<Location>,
     seen: &mut HashSet<(String, u32, u32, u32, u32)>,

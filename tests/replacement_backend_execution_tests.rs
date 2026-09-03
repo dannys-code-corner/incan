@@ -57,7 +57,7 @@ fn pair_constructor_target_mut(
             StatementKind::Assign {
                 rvalue: Rvalue::Aggregate(incan_semantics_core::body_ir::AggregateKind::Constructor(target), _),
                 ..
-            } => Some(target),
+            } => Some(target.as_mut()),
             _ => None,
         })
         .ok_or("fixture must lower its model construction as a constructor aggregate".into())
@@ -902,7 +902,7 @@ fn replacement_refuses_a_reordered_nominal_declaration_layout_at_the_original_co
 
     assert_malformed_pair_constructor_refusal(
         &module,
-        "canonical field layout disagrees with checked constructor facts",
+        "constructor canonical target disagrees with the retained declaration identity",
     )
 }
 
@@ -966,7 +966,7 @@ fn replacement_refuses_a_foreign_nominal_constructor_identity_at_the_original_sp
 
     assert_malformed_pair_constructor_refusal(
         &module,
-        "constructor `Pair` targets a declaration outside this Body-IR module",
+        "constructor canonical target disagrees with its physical Body-IR declaration",
     )
 }
 
@@ -3632,11 +3632,6 @@ fn replacement_cli_refuses_module_boundaries_with_primary_spans() -> Result<(), 
             "import declaration",
         ),
         (
-            "duplicate-async-activation",
-            "import std.async\nimport std.async\n\ndef main() -> int:\n  return 42\n",
-            "duplicate `import std.async` replacement activation",
-        ),
-        (
             "from-async-service",
             "from std.async.time import sleep\n\ndef main() -> int:\n  return 42\n",
             "import declaration",
@@ -3712,13 +3707,7 @@ fn replacement_cli_refuses_module_boundaries_with_primary_spans() -> Result<(), 
             combined.contains(&format!(
                 "primary Incan source location: {}:{}..",
                 entrypoint.display(),
-                if name == "duplicate-async-activation" {
-                    source
-                        .rfind("import std.async")
-                        .ok_or("duplicate activation fixture must name its second import")?
-                } else {
-                    0
-                }
+                0
             )),
             "refusal must retain its actual unsupported source span: {combined}"
         );
@@ -3728,6 +3717,47 @@ fn replacement_cli_refuses_module_boundaries_with_primary_spans() -> Result<(), 
             "{name} refusal must not create legacy output or a replacement receipt"
         );
     }
+    Ok(())
+}
+
+/// Duplicate standard-library activation is a canonical binding error before backend selection begins.
+#[test]
+fn duplicate_async_activation_fails_during_typechecking() -> Result<(), Box<dyn std::error::Error>> {
+    let source = "import std.async\nimport std.async\n\ndef main() -> int:\n  return 42\n";
+    let temporary = tempfile::tempdir()?;
+    let entrypoint = temporary.path().join("duplicate-async-activation.incn");
+    fs::write(&entrypoint, source)?;
+    let output = Command::new(incan_binary())
+        .args([
+            "build",
+            entrypoint.to_string_lossy().as_ref(),
+            "--backend",
+            "replacement",
+            "--backend-fallback",
+            "refuse",
+        ])
+        .output()?;
+    assert!(!output.status.success(), "duplicate activation must not compile");
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("Duplicate definition of 'async'")
+            && combined.contains("First canonical identity:")
+            && combined.contains("Second canonical identity:"),
+        "duplicate activation must report its conflicting canonical bindings: {combined}"
+    );
+    assert!(
+        !combined.contains("INCAN-R988-UNSUPPORTED"),
+        "backend refusal must not replace the earlier type error: {combined}"
+    );
+    assert!(
+        !temporary.path().join("target/incan").exists()
+            && !temporary.path().join(".incan/backend/receipt.json").exists(),
+        "a compile-time binding error must not create backend output or a receipt"
+    );
     Ok(())
 }
 

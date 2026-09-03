@@ -2778,6 +2778,7 @@ impl TypeChecker {
     }
 
     /// Define one symbol imported from a public library manifest.
+    #[allow(clippy::too_many_arguments)] // Keeps provider, projection, alias, and source evidence explicit.
     fn define_pub_import_symbol(
         &mut self,
         library: &str,

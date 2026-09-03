@@ -168,6 +168,7 @@ enum MemberBindingKind {
 }
 
 impl MemberBindingKind {
+    /// Return the source-facing category label used in duplicate-member diagnostics.
     const fn label(self) -> &'static str {
         match self {
             Self::Field => "field",
@@ -180,6 +181,7 @@ impl MemberBindingKind {
         }
     }
 
+    /// Map declaration-owning member categories to their canonical semantic kind.
     const fn declaration_kind(self) -> Option<SemanticSourceTargetKind> {
         match self {
             Self::Field => Some(SemanticSourceTargetKind::Field),

@@ -81,6 +81,7 @@ struct IndependentIsInstanceChain {
 }
 
 impl AstLowering {
+    /// Resolve a named assignment to the nearest local, static binding, or source static target.
     fn resolve_named_assign_target(&self, name: &str) -> AssignTarget {
         let direct_static = self
             .type_info
@@ -114,6 +115,7 @@ impl AstLowering {
         }
     }
 
+    /// Build a typed read of a source static binding.
     fn make_static_binding_expr(&self, name: String, ty: IrType) -> TypedExpr {
         TypedExpr::new(
             IrExprKind::StaticBinding {

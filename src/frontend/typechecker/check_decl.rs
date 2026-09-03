@@ -5374,9 +5374,7 @@ impl TypeChecker {
                 ));
                 return None;
             };
-            let Some(symbol) = self.symbols.get(symbol_id) else {
-                return None;
-            };
+            let symbol = self.symbols.get(symbol_id)?;
             if !matches!(symbol.kind, SymbolKind::Capability(_)) {
                 self.errors.push(CompileError::type_error(
                     format!("@provider_operation reference `{rendered}` does not name a capability"),
@@ -5393,9 +5391,7 @@ impl TypeChecker {
             };
             return Some(identity);
         }
-        let Some((root, nested)) = module.split_first() else {
-            return None;
-        };
+        let (root, nested) = module.split_first()?;
         let Some(mut module_path) = self.lookup_symbol(root).and_then(|symbol| match &symbol.kind {
             SymbolKind::Module(info) if !info.is_python => Some(info.path.clone()),
             _ => None,

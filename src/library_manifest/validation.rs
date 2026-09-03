@@ -772,6 +772,7 @@ fn canonical_identity_matches_path(
     local_path == path
 }
 
+/// Validate all canonical field identities exported for one nominal declaration.
 fn validate_nominal_member_identities(
     owner: &str,
     owner_identity: Option<&CanonicalIdentityExport>,
@@ -806,6 +807,7 @@ fn validate_nominal_member_identities(
     validate_method_identities(owner, owner_identity, methods, required, Some(&mut seen))
 }
 
+/// Validate all canonical method identities exported for one nominal declaration.
 fn validate_method_identities(
     owner: &str,
     owner_identity: Option<&CanonicalIdentityExport>,
@@ -839,6 +841,7 @@ fn validate_method_identities(
     Ok(())
 }
 
+/// Validate one member identity against its owning root declaration and public metadata.
 fn validate_member_identity(
     owner: &str,
     expected_name: &str,
@@ -894,6 +897,7 @@ fn validate_member_identity(
     Ok(())
 }
 
+/// Record one member identity and reject duplicate canonical members on the same owner.
 fn record_member_identity(
     owner: &str,
     public_name: &str,
@@ -911,6 +915,7 @@ fn record_member_identity(
     Ok(())
 }
 
+/// Find the canonical root identity for one top-level exported nominal declaration.
 fn root_canonical_identity<'a>(
     raw: &'a RawLibraryManifest,
     kind: ExportIdentityKind,
@@ -924,6 +929,7 @@ fn root_canonical_identity<'a>(
         .and_then(|entry| entry.canonical.as_ref())
 }
 
+/// Validate the structural invariants shared by root and member canonical identities.
 fn validate_canonical_identity(
     identity: &CanonicalIdentityExport,
     owner: &str,

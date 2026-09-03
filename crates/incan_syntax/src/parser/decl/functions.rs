@@ -1,3 +1,6 @@
+/// Parsed receiver facts and remaining explicit parameters for one method declaration.
+type ParsedReceiverAndParams = (Option<Receiver>, Option<Spanned<Ident>>, Vec<Spanned<Param>>);
+
 /// Function and method parsing (including parameters and receivers).
 impl<'a> Parser<'a> {
     /// Parse a function declaration.
@@ -200,7 +203,7 @@ impl<'a> Parser<'a> {
     fn receiver_and_params(
         &mut self,
         is_classmethod: bool,
-    ) -> Result<(Option<Receiver>, Option<Spanned<Ident>>, Vec<Spanned<Param>>), CompileError> {
+    ) -> Result<ParsedReceiverAndParams, CompileError> {
         self.skip_newlines();
 
         // Check for receiver

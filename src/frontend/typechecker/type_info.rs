@@ -100,6 +100,7 @@ impl CheckedImportBindings {
         self.paths.iter().map(|(name, path)| (name.as_str(), path.as_slice()))
     }
 
+    /// Build checked import bindings from compiler-resolved local names and source paths.
     pub(crate) fn from_paths(paths: impl IntoIterator<Item = (String, Vec<String>)>) -> Self {
         Self {
             paths: paths.into_iter().collect(),

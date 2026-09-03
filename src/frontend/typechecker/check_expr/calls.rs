@@ -1912,6 +1912,7 @@ impl TypeChecker {
     }
 
     /// Resolve a direct source overload call and publish only the selected declaration at the callee token.
+    #[allow(clippy::too_many_arguments)] // The wrapper keeps overload inputs and the exact callee span distinct.
     fn validate_direct_function_overload_call(
         &mut self,
         func_name: &str,
@@ -1934,6 +1935,7 @@ impl TypeChecker {
     }
 
     /// Resolve an overload call, optionally recording a direct callee reference after unique candidate selection.
+    #[allow(clippy::too_many_arguments)] // Candidate selection consumes independent call and identity evidence axes.
     pub(in crate::frontend::typechecker::check_expr) fn validate_function_overload_call_with_callee_span(
         &mut self,
         func_name: &str,

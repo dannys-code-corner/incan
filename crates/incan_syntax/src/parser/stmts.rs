@@ -904,6 +904,7 @@ impl<'a> Parser<'a> {
         Ok(Spanned::new(Pattern::Binding(name), span))
     }
 
+    /// Parse a named assignment or tuple-unpacking statement.
     fn assignment_stmt(&mut self) -> Result<Statement, CompileError> {
         let binding = if self.match_token(&TokenKind::Keyword(KeywordId::Let)) {
             BindingKind::Let

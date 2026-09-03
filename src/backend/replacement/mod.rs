@@ -780,6 +780,7 @@ fn valid_local_enum_declaration<T>(
         })
 }
 
+/// Return whether a retained fieldless enum is internally bound to this Body-IR module.
 fn valid_local_fieldless_enum_declaration(module: &BodyIrModule, declaration: &FieldlessEnumDeclaration) -> bool {
     valid_local_enum_declaration(
         module,
@@ -797,6 +798,7 @@ fn valid_local_fieldless_enum_declaration(module: &BodyIrModule, declaration: &F
     )
 }
 
+/// Return whether a retained value enum is internally bound to this Body-IR module.
 fn valid_local_value_enum_declaration(module: &BodyIrModule, declaration: &ValueEnumDeclaration) -> bool {
     valid_local_enum_declaration(
         module,
@@ -1284,8 +1286,9 @@ fn validate_direct_body_profile(body: &Body) -> Result<(), ReplacementExecutionE
 
 /// Resolve one named call by its retained same-module identity for both preflight and runtime dispatch.
 ///
-/// The source name is only a consistency check after unique, module-scoped identity selection. Neither caller may
-/// fall back to a name lookup, an imported target or a malformed body identity.
+/// The source name is diagnostic spelling only after unique, module-scoped identity selection. Neither caller may
+/// validate or dispatch by that spelling, fall back to a name lookup, or admit an imported or malformed body
+/// identity.
 fn named_callable_body<'module>(
     module: &'module BodyIrModule,
     target: &NamedCallableTarget,
@@ -1359,15 +1362,6 @@ fn named_callable_body<'module>(
         return Err(unsupported(
             format!(
                 "named callable `{}` body does not retain its canonical declaration identity",
-                target.name
-            ),
-            span,
-        ));
-    }
-    if body.name != target.name {
-        return Err(unsupported(
-            format!(
-                "named callable `{}` disagrees with its same-module declaration identity",
                 target.name
             ),
             span,

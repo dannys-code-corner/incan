@@ -350,13 +350,13 @@ impl<'type_info, 'source> BodyBuilder<'type_info, 'source> {
             .unwrap_or((None, None));
         self.push_assign_temp(
             bir::Rvalue::Aggregate(
-                bir::AggregateKind::Constructor(bir::ConstructorTarget {
+                bir::AggregateKind::Constructor(Box::new(bir::ConstructorTarget {
                     name: name.to_string(),
                     canonical,
                     direct_declaration_id,
                     canonical_field_layout,
                     binding,
-                }),
+                })),
                 fixed_elements(operands),
             ),
             ty,

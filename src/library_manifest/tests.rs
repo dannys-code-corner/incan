@@ -1748,7 +1748,7 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
     };
     let tmp = tempfile::tempdir()?;
 
-    let mut malformed = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut malformed = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     let malformed_identity = malformed
         .contract_metadata
         .identity_graph
@@ -1764,7 +1764,8 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("unknown canonical declaration kind `not_a_semantic_kind`")
     ));
 
-    let mut wrong_known_kind = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut wrong_known_kind =
+        LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     wrong_known_kind.contract_metadata.identity_graph.exports[0]
         .canonical
         .as_mut()
@@ -1777,7 +1778,7 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical kind `const` instead of `function`")
     ));
 
-    let mut wrong_source = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut wrong_source = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     wrong_source.contract_metadata.identity_graph.exports[0].source_path =
         vec!["other".to_string(), "parse".to_string()];
     let wrong_source_error = wrong_source.write_to_path(&tmp.path().join("wrong-source.incnlib"));
@@ -1787,7 +1788,8 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical identity disagrees with its authoritative source/projection path")
     ));
 
-    let mut builtin_direct = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut builtin_direct =
+        LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     builtin_direct.contract_metadata.identity_graph.exports[0].source_path = vec!["parse".to_string()];
     builtin_direct.contract_metadata.identity_graph.exports[0]
         .canonical
@@ -1801,7 +1803,7 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical origin outside manifest package `codec_lib`")
     ));
 
-    let mut rust_direct = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut rust_direct = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     rust_direct.contract_metadata.identity_graph.exports[0].source_path =
         vec!["rust".to_string(), "codec".to_string(), "parse".to_string()];
     rust_direct.contract_metadata.identity_graph.exports[0]
@@ -1818,7 +1820,8 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical origin outside manifest package `codec_lib`")
     ));
 
-    let mut external_direct = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut external_direct =
+        LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     external_direct.contract_metadata.identity_graph.exports[0].source_path = vec![
         "pub".to_string(),
         "dependency".to_string(),
@@ -1840,7 +1843,7 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical origin outside manifest package `codec_lib`")
     ));
 
-    let mut missing_graph = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut missing_graph = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     missing_graph.contract_metadata.identity_graph.exports.clear();
     let missing_graph_error = missing_graph.write_to_path(&tmp.path().join("missing-graph.incnlib"));
     assert!(matches!(
@@ -1849,7 +1852,7 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("publishes 0 root Function identities named `parse` for 1 raw declarations")
     ));
 
-    let mut duplicate = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[checked.clone()]);
+    let mut duplicate = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     let duplicate_entry = duplicate
         .contract_metadata
         .identity_graph
@@ -1910,7 +1913,8 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             }),
         }),
     };
-    let mut mismatched_callable_alias = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[alias.clone()]);
+    let mut mismatched_callable_alias =
+        LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&alias));
     mismatched_callable_alias.exports.aliases[0]
         .projected_function
         .as_mut()
@@ -1924,7 +1928,8 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("callable projection is named `parse` instead of `safe_parse`")
     ));
 
-    let mut missing_callable_alias = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", &[alias.clone()]);
+    let mut missing_callable_alias =
+        LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&alias));
     missing_callable_alias.exports.aliases[0].projected_function = None;
     let missing_callable_alias_error =
         missing_callable_alias.write_to_path(&tmp.path().join("missing-callable-alias.incnlib"));

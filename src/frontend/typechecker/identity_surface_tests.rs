@@ -4,11 +4,13 @@ use super::*;
 use crate::frontend::{lexer, parser};
 use incan_semantics_core::{SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin};
 
+/// Parse one focused identity fixture and preserve compiler diagnostics on failure.
 fn parse(source: &str) -> Result<Program, String> {
     let tokens = lexer::lex(source).map_err(|errors| format!("lex failed: {errors:?}"))?;
     parser::parse(&tokens).map_err(|errors| format!("parse failed: {errors:?}"))
 }
 
+/// Return the exact source span of the indexed fixture spelling.
 fn nth_span(source: &str, needle: &str, index: usize) -> Result<Span, String> {
     source
         .match_indices(needle)
@@ -17,6 +19,7 @@ fn nth_span(source: &str, needle: &str, index: usize) -> Result<Span, String> {
         .ok_or_else(|| format!("missing occurrence {index} of `{needle}`"))
 }
 
+/// Module aliases resolve to the provider module's single canonical path identity.
 #[test]
 fn module_aliases_preserve_one_resolved_module_path_identity() -> Result<(), String> {
     let provider = parse("pub def answer() -> int:\n  return 42\n")?;
@@ -49,6 +52,7 @@ fn module_aliases_preserve_one_resolved_module_path_identity() -> Result<(), Str
     Ok(())
 }
 
+/// Standard-library constant access retains the declaration identity owned by its module.
 #[test]
 fn stdlib_module_constant_access_retains_its_declaration_identity() -> Result<(), String> {
     let source = "import std.math as math\n\ndef circle_constant() -> float:\n  return math.PI\n";
@@ -73,6 +77,7 @@ fn stdlib_module_constant_access_retains_its_declaration_identity() -> Result<()
     Ok(())
 }
 
+/// A qualified source type alias resolves to its provider declaration rather than its local spelling.
 #[test]
 fn dotted_source_type_alias_resolves_to_the_provider_declaration() -> Result<(), String> {
     let provider = parse("pub model Payload:\n  value: int\n")?;
@@ -99,6 +104,7 @@ fn dotted_source_type_alias_resolves_to_the_provider_declaration() -> Result<(),
     Ok(())
 }
 
+/// Qualified and direct Rust imports retain one resolved crate-item identity.
 #[test]
 fn rust_qualified_type_uses_the_resolved_crate_path_not_the_alias() -> Result<(), String> {
     let source = "import rust::std::path as filesystem\nfrom rust::std::path import Path as DirectPath\n\ndef echo(value: filesystem::Path) -> DirectPath:\n  return value\n";
@@ -130,6 +136,7 @@ fn rust_qualified_type_uses_the_resolved_crate_path_not_the_alias() -> Result<()
     Ok(())
 }
 
+/// Compiler-owned builtin members carry owner-discriminated canonical identities.
 #[test]
 fn compiler_builtin_members_are_canonicalized_and_owner_discriminated() -> Result<(), String> {
     let source = r#"
@@ -168,6 +175,7 @@ def inspect(values: List[int], seen: Set[int], text: str) -> bool:
     Ok(())
 }
 
+/// Synthetic enum members with equal spellings remain distinct across nominal owners.
 #[test]
 fn compiler_synthetic_enum_members_are_owner_discriminated() -> Result<(), String> {
     let source = r#"
@@ -206,6 +214,7 @@ def second_message(value: Second) -> str:
     Ok(())
 }
 
+/// Decorator and provider-operation arguments retain compiler-owned target identities.
 #[test]
 fn decorator_and_provider_operation_arguments_record_compiler_owned_targets() -> Result<(), String> {
     let source = r#"
@@ -243,6 +252,7 @@ def charge(amount: int) -> int:
     Ok(())
 }
 
+/// Qualified provider-operation arguments preserve the imported capability's identity.
 #[test]
 fn qualified_provider_operation_argument_preserves_the_imported_capability_identity() -> Result<(), String> {
     let provider = parse("pub capability audit_write:\n  description = \"Append to the audit log\"\n")?;

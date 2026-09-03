@@ -1354,7 +1354,7 @@ pub enum CallableParamDefault {
     /// frame receives an argument for this parameter. Its lowering deliberately refuses reads that would require a
     /// callable-local binding, so a direct consumer must execute the stored computation as-is and then bind its
     /// result to [`CallableParam::local`].
-    Source(DefaultComputation),
+    Source(Box<DefaultComputation>),
     /// A partial-callable value captured when the partial was constructed and still overrideable by the caller.
     PartialPreset {
         /// The closure-frame local populated from the matching captured operand.
@@ -1775,7 +1775,7 @@ pub enum FormatPart {
     /// An interpolated `{expr}` or `{expr!r}` segment.
     Expr {
         /// The already-lowered embedded expression's value.
-        operand: Operand,
+        operand: Box<Operand>,
         /// Which formatting style the source syntax requested for this interpolation.
         style: FormatStyle,
     },
@@ -2015,7 +2015,7 @@ pub enum SpreadKind {
 #[derive(Debug, Clone, PartialEq)]
 pub enum DictEntry {
     /// A `key: value` pair. Both operands are evaluated, key first.
-    Pair(Operand, Operand),
+    Pair(Operand, Box<Operand>),
     /// A `**source` spread. Its entries are spliced in at this position, and its key set is a runtime fact.
     Spread(SpreadElement),
 }
@@ -2054,7 +2054,7 @@ pub enum AggregateKind {
     /// loop that later iterates it need not be the same statement, so a consumer holding only the value must be
     /// able to read which one it is instead of having to prove where it came from.
     Range,
-    Constructor(ConstructorTarget),
+    Constructor(Box<ConstructorTarget>),
 }
 
 impl AggregateKind {
@@ -3227,7 +3227,7 @@ pub enum AssertionKind {
     /// than an unresolved name. `scrutinee` is read as [`OwnershipFact::Borrow`] for the same reason
     /// [`Rvalue::Match::scrutinee`] is: the overall read must not risk an unconditional move while individual
     /// bindings compute their own, more precise facts against places projected out of it.
-    Pattern { scrutinee: Operand, pattern: Pattern },
+    Pattern { scrutinee: Operand, pattern: Box<Pattern> },
     /// `assert call() raises E`: evaluates `call`, expecting it to raise a runtime error of type `E`, and panics
     /// when it does not.
     ///
@@ -3523,7 +3523,7 @@ mod tests {
             }),
             DictEntry::Pair(
                 Operand::Constant(Constant::Str("x".to_string())),
-                Operand::Constant(Constant::Int(1)),
+                Box::new(Operand::Constant(Constant::Int(1))),
             ),
         ];
 
@@ -3627,11 +3627,11 @@ mod tests {
                 name: "suffix".to_string(),
                 ty: IncanType::Primitive(IncanPrimitiveType::Str),
                 span: HirSourceSpan::new(12, 18),
-                default: CallableParamDefault::Source(DefaultComputation {
+                default: CallableParamDefault::Source(Box::new(DefaultComputation {
                     span: HirSourceSpan::new(21, 27),
                     stmts: Vec::new(),
                     result: Operand::Constant(Constant::Str("txt".to_string())),
-                }),
+                })),
             }
             .render_snapshot(),
             "suffix: str local=_7 span=12..18 = source_default(span=21..27 result: const(\"txt\"))"
@@ -3645,7 +3645,7 @@ mod tests {
             name: "limit".to_string(),
             ty: IncanType::Primitive(IncanPrimitiveType::Int),
             span: HirSourceSpan::new(4, 14),
-            default: CallableParamDefault::Source(DefaultComputation {
+            default: CallableParamDefault::Source(Box::new(DefaultComputation {
                 span: HirSourceSpan::new(12, 13),
                 stmts: vec![Statement {
                     kind: StatementKind::Assign {
@@ -3655,7 +3655,7 @@ mod tests {
                     span: HirSourceSpan::new(12, 13),
                 }],
                 result: Operand::place(Place::from_local(LocalId(3)), OwnershipFact::Copy, true),
-            }),
+            })),
         };
         let preset = CallableParam {
             local: LocalId(2),
@@ -3699,7 +3699,7 @@ mod tests {
                     place: Place::from_local(LocalId(2)),
                     rvalue: Rvalue::Dict(vec![DictEntry::Pair(
                         Operand::Constant(Constant::Str("a".to_string())),
-                        Operand::Constant(Constant::Int(1)),
+                        Box::new(Operand::Constant(Constant::Int(1))),
                     )]),
                 },
                 span: HirSourceSpan::new(0, 1),
@@ -3843,12 +3843,20 @@ mod tests {
                     rvalue: Rvalue::Format(vec![
                         FormatPart::Literal("x=".to_string()),
                         FormatPart::Expr {
-                            operand: Operand::place(Place::from_local(LocalId(0)), OwnershipFact::Copy, false),
+                            operand: Box::new(Operand::place(
+                                Place::from_local(LocalId(0)),
+                                OwnershipFact::Copy,
+                                false,
+                            )),
                             style: FormatStyle::Display,
                         },
                         FormatPart::Literal(" y=".to_string()),
                         FormatPart::Expr {
-                            operand: Operand::place(Place::from_local(LocalId(1)), OwnershipFact::Borrow, false),
+                            operand: Box::new(Operand::place(
+                                Place::from_local(LocalId(1)),
+                                OwnershipFact::Borrow,
+                                false,
+                            )),
                             style: FormatStyle::Debug,
                         },
                     ]),

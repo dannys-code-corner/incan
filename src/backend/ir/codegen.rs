@@ -74,6 +74,7 @@ use string_try_from_bridge::{
     StringTryFromBridgeConfig, compilation_imports_std_string_try_from_contract, imports_std_string_try_from_contract,
 };
 
+/// Resolve and canonicalize the source module path used for emitted identity projection.
 fn source_module_identity_path(
     program: &Program,
     explicit_path: Option<Vec<String>>,

@@ -553,6 +553,7 @@ impl LibraryIdentityGraph {
         Ok(())
     }
 
+    /// Canonicalize exported identities into deterministic order without duplicate projections.
     fn sort_and_deduplicate(&mut self) {
         self.exports.sort_by(|left, right| {
             left.public_path
