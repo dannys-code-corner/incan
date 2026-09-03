@@ -293,6 +293,8 @@ name = "foo_bar"
     Ok(())
 }
 
+/// When the lock holds several versions of one package, the fallback resolves the root's declared dependency to the
+/// version the root manifest requires and keeps lock order for a crate the root reaches only transitively.
 #[test]
 fn lock_fallback_selects_the_version_the_root_manifest_requires() -> Result<(), Box<dyn std::error::Error>> {
     // The lock holds two versions of one package: the root's own `substrait = "0.63"` beside the 0.62 that an
@@ -366,7 +368,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         dirs.insert((name, version), dir);
     }
 
-    let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "substrait", &[registry_src_root.clone()])
+    let resolved = dependency_manifest_dir_from_lock_with_search_roots(&root, "substrait", std::slice::from_ref(&registry_src_root))
         .ok_or_else(|| std::io::Error::other("expected the lock fallback to resolve substrait"))?;
     assert_eq!(
         resolved,
@@ -497,6 +499,8 @@ fn source_route_records_boxed_variant_payloads_as_the_semantic_type_with_their_c
     Ok(())
 }
 
+/// With two sealed build units of one package, the generated-code route reads the unit whose recorded version matches
+/// the inspected dependency, even when the other unit sorts first.
 #[test]
 fn direct_workspace_reads_the_sealed_build_unit_of_the_inspected_version() -> Result<(), Box<dyn std::error::Error>> {
     // A closure can hold two build units of one package (IncQL's `substrait` beside the one a DataFusion adapter
@@ -563,6 +567,8 @@ fn direct_workspace_reads_the_sealed_build_unit_of_the_inspected_version() -> Re
     Ok(())
 }
 
+/// A direct-inspection workspace resolves a prost-style generated `oneof` enum, carrier included, through the sealed
+/// build-script output the installer records for it.
 #[test]
 fn direct_workspace_reads_sealed_build_script_output_for_generated_enums() -> Result<(), Box<dyn std::error::Error>> {
     // A normal Oven command never runs Cargo, so a dependency whose items live in build-script output (prost's
@@ -634,6 +640,8 @@ fn direct_workspace_reads_sealed_build_script_output_for_generated_enums() -> Re
     Ok(())
 }
 
+/// The owning crate of a sealed build-script output directory is read from Oven's `build/<crate>/<hash>/out` layout and
+/// from Cargo's `build/<crate>-<hash>/out` layout alike.
 #[test]
 fn sealed_out_dir_owner_is_read_from_both_build_layouts() {
     use std::path::Path;
@@ -1261,6 +1269,8 @@ fn definition_path_alias_hits_existing_cached_reexport() -> Result<(), Box<dyn s
     Ok(())
 }
 
+/// A second lookup of an item that is absent from the workspace is answered from the negative cache without loading
+/// the workspace again.
 #[test]
 fn repeated_missing_lookup_hits_negative_cache_without_new_workspace_load() -> Result<(), Box<dyn std::error::Error>> {
     let tmp = tempfile::tempdir()?;

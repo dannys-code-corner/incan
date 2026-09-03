@@ -7624,6 +7624,11 @@ struct BakeGeneratedOutDir {
     version: Option<String>,
 }
 
+/// Seal the project's inspection authority: the constituents a normal command may inspect through, the registry
+/// sources each one owns, the test-dependency envelope, and the build-script output the bake's Cargo targets wrote.
+///
+/// The library constituent, when the bake produced one, joins the constituents under the kind and base its selection
+/// had, and its registry sources are added only where no earlier constituent already names the locked package.
 fn publish_project_inspection_authority(
     store: &OvenStore,
     project_root: &Path,

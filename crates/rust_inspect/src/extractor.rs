@@ -75,6 +75,9 @@ fn field_module(field: &ra_ap_hir::Field, db: &RootDatabase) -> Module {
     }
 }
 
+/// Resolve a written path relative to the module that declares it: `self::` and `super::` markers walk the module
+/// tree, and a bare path joins onto the declaring module. An absolute `::` path is not owner-relative and returns
+/// unchanged rather than being joined onto the module; `resolve_source_path` handles that form.
 fn resolve_relative_source_path(text: &str, crate_name: &str, module: Module, db: &RootDatabase) -> Option<String> {
     let text = text.trim();
     if let Some(absolute) = text.strip_prefix("::") {
@@ -292,6 +295,11 @@ fn source_static_type_identity_display(static_: HirStatic, db: &RootDatabase) ->
     source_module_type_identity_display(static_.module(db), text.as_str(), db)
 }
 
+/// Resolve a path as written in Rust source to the canonical spelling inspection records for it.
+///
+/// Whitespace is dropped, a leading `::` selects the absolute form, and every other spelling is resolved relative to
+/// the declaring module through `resolve_relative_source_path`. The result is the ancestral path a consumer compares
+/// against, so a re-export such as `::prost::alloc::boxed::Box` names the same item wherever it is written.
 fn resolve_source_path(text: &str, crate_name: &str, module: Module, db: &RootDatabase) -> Option<String> {
     let text = text.trim().replace(' ', "");
     if text.is_empty() {
@@ -1509,6 +1517,10 @@ fn collect_public_fields(ty: Type<'_>, db: &RootDatabase, dt: DisplayTarget, cra
     fields
 }
 
+/// Record every variant of an enum with the semantic shape of each payload field and the carrier it is stored in.
+///
+/// A payload written as `Box<T>` through any re-export of `alloc::boxed::Box` is recorded as `T` with a `Boxed`
+/// carrier, so consumers see the semantic type while lowering can restore the storage the constructor needs.
 fn collect_enum_variant_payloads(
     enum_: Enum,
     ty: Type<'_>,
