@@ -7398,6 +7398,11 @@ fn project_inspection_test_dependency_roots(
 /// the authority and never runs Cargo, so without this constituent it could not see those items at all.
 pub(crate) struct LibraryInspectionConstituent {
     pub identity: String,
+    /// How the store holds the constituent: a self-contained direct-rustc plan, or a project payload that extends
+    /// the compiler Loaf named by `base_loaf_identity`. The authority records the same shape, because a consumer
+    /// validates every constituent against its sealed kind before trusting it.
+    pub artifact_kind: OvenArtifactKind,
+    pub base_loaf_identity: Option<String>,
     pub receipt: crate::oven::OvenReceipt,
     pub artifacts: OvenRustcArtifactManifest,
     /// The bake's rust-inspect workspace, whose Cargo bootstrap wrote the build-script output to seal.
@@ -7778,9 +7783,9 @@ fn publish_project_inspection_authority(
         let index = constituents.len();
         constituents.push(OvenProjectInspectionConstituent::Stored {
             identity: library.identity.clone(),
-            artifact_kind: OvenArtifactKind::DirectRustcPlan,
+            artifact_kind: library.artifact_kind,
             receipt: library.receipt.clone(),
-            base_loaf_identity: None,
+            base_loaf_identity: library.base_loaf_identity.clone(),
         });
         // The library's registry sources overlap the test envelope's almost entirely; only the sources absent from
         // every earlier constituent are added, because the authority may name each locked package once.
@@ -13923,18 +13928,26 @@ pub(crate) fn bake_oven_project_targets(
                         // identity is the same constituent, and the generated project's own Cargo target holds
                         // the generated Rust.
                         let constituent = match &selected_profile.plan_selection {
-                            OvenDirectRustcPlanSelection::Stored(plan) => {
-                                Some((plan.identity.clone(), plan.artifacts.clone()))
-                            }
-                            OvenDirectRustcPlanSelection::ProjectExtension(extension) => {
-                                Some((extension.extension.identity.clone(), extension.artifacts.clone()))
-                            }
+                            OvenDirectRustcPlanSelection::Stored(plan) => Some((
+                                plan.identity.clone(),
+                                plan.artifacts.clone(),
+                                OvenArtifactKind::DirectRustcPlan,
+                                None,
+                            )),
+                            OvenDirectRustcPlanSelection::ProjectExtension(extension) => Some((
+                                extension.extension.identity.clone(),
+                                extension.artifacts.clone(),
+                                OvenArtifactKind::ProjectPayload,
+                                Some(extension.base.loaf_identity.clone()),
+                            )),
                             OvenDirectRustcPlanSelection::ToolchainLoaf(_)
                             | OvenDirectRustcPlanSelection::PackagedProvider(_) => None,
                         };
-                        if let Some((identity, artifacts)) = constituent {
+                        if let Some((identity, artifacts, artifact_kind, base_loaf_identity)) = constituent {
                             library_inspection_constituent = Some(LibraryInspectionConstituent {
                                 identity,
+                                artifact_kind,
+                                base_loaf_identity,
                                 receipt: selected_profile.receipt.clone(),
                                 artifacts,
                                 rust_inspect_manifest_dir: prepared.rust_inspect_manifest_dir.clone(),

@@ -1719,15 +1719,20 @@ fn select_existing_project_extension_identity(
                 "stored project extension candidate {identity} has an invalid payload: {error}"
             ))
         })?;
-        if validate_project_extension_payload_against_base(
+        match validate_project_extension_payload_against_base(
             &payload,
             &base.loaf_identity,
             &base.build_unit_identity,
             base.artifacts,
-        )
-        .is_ok()
-        {
-            identities.push(identity);
+        ) {
+            Ok(_) => identities.push(identity),
+            // A receipt-exact extension that no longer validates against the selected base is a publisher
+            // decision worth seeing: the caller will seal a second extension for the same receipt, and every later
+            // selection for that receipt then has two candidates.
+            Err(error) => tracing::debug!(
+                "stored project extension {identity} is not reusable against base {}: {error}",
+                base.loaf_identity
+            ),
         }
     }
     match identities.as_slice() {
