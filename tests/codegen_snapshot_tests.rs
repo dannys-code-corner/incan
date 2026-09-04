@@ -5433,8 +5433,8 @@ def main() -> str:
     let rust_code = generate_rust(source);
     let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
     assert!(
-        compact.contains("self.to_json()"),
-        "expected the recoverable source projection to reuse the method's borrowed self receiver; generated:\n{rust_code}"
+        compact.contains("json::Serialize::to_json(self)"),
+        "expected the Rust-native trait slot to reuse the method's borrowed self receiver; generated:\n{rust_code}"
     );
     assert!(
         !compact.contains("returnSerialize::to_json(&self)") && !compact.contains("returnself.to_json(&self)"),
@@ -5478,8 +5478,8 @@ from crate.models import Item
     let compact = rust_code.chars().filter(|ch| !ch.is_whitespace()).collect::<String>();
 
     assert!(
-        compact.contains("item.to_json()"),
-        "directly imported source traits must retain their recoverable member projection in each generated module:\n{rust_code}"
+        compact.contains("crate::__incan_std::serde::json::Serialize::to_json(&item)"),
+        "the encoder module must reach the trait through its canonical owner:\n{rust_code}"
     );
     assert!(
         !compact.contains("returnjson::Serialize::to_json(&item)"),

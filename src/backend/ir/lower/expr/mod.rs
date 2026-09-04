@@ -42,6 +42,15 @@ use incan_core::lang::types::collections::{self as collection_types, CollectionT
 use incan_core::lang::{stdlib, trait_bounds};
 use incan_semantics_core::SurfaceExprLoweringAction;
 
+/// Return the trait's declaration name from however the call site's module spelled it.
+///
+/// A trait imported directly is spelled `Serialize`; the same declaration reached through its owning module is
+/// spelled `json.Serialize`. Registries keyed on the declaration name must see one string for both.
+fn trait_declaration_name(dispatch: &IrTraitDispatch) -> &str {
+    let name = dispatch.trait_source_name.as_str();
+    name.rsplit('.').next().unwrap_or(name)
+}
+
 /// Whether a call receiver has a statically nameable source-owned method projection.
 ///
 /// Bare generic and trait-object receivers must keep trait dispatch because no inherent owner is statically nameable.
@@ -55,7 +64,7 @@ fn can_use_source_method_projection(receiver: &TypedExpr, dispatch: Option<&IrMe
     let dispatch_uses_rust_native_trait_slot = matches!(
         dispatch,
         Some(IrMethodDispatch::Trait(trait_dispatch))
-            if trait_bounds::incan_to_rust(&trait_dispatch.trait_source_name).is_some()
+            if trait_bounds::incan_to_rust(trait_declaration_name(trait_dispatch)).is_some()
     );
 
     !dispatch_uses_rust_native_trait_slot
