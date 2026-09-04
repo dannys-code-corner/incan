@@ -8,6 +8,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod support;
 
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
+
+/// Read generated Rust with RFC 120 projections decoded back to the spellings the source used.
+///
+/// Every linker-visible Incan-origin declaration reaches generated Rust as an encoded projection, so an assertion
+/// written against a source spelling can only be evaluated after decoding. Decoding preserves the generated header
+/// comment; the caller compares against this text rather than the raw file.
+fn read_generated_rust(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let decoded = canonical_projection::decoded_source_spellings(&fs::read_to_string(path)?);
+    Ok(canonical_projection::reformatted_after_decode(&decoded).unwrap_or(decoded))
+}
+
 use incan::frontend::module::{ExportedTypeLikeDoc, ExportedTypeLikeKind, exported_type_like_docs};
 use incan::frontend::{lexer, parser, typechecker};
 
@@ -337,7 +350,7 @@ def main() -> None:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let generated = read_generated_rust(&out_dir.join("src/main.rs"))?;
     assert!(
         generated.contains("fn replace_items(_: ProviderHandle<(&mut i64, &mut i64)>)"),
         "normal CLI codegen must preserve explicit mutable Rust references through an alias, got:\n{generated}"
@@ -430,7 +443,7 @@ def main() -> None:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let generated = read_generated_rust(&out_dir.join("src/main.rs"))?;
     let projected = "ProviderHandle<(&mut i64, &mut i64)>";
     assert!(
         generated.match_indices(projected).count() >= 3,

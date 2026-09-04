@@ -4,6 +4,19 @@ use std::process::{Command, Output, Stdio};
 
 mod support;
 
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
+
+/// Read generated Rust with RFC 120 projections decoded back to the spellings the source used.
+///
+/// Every linker-visible Incan-origin declaration reaches generated Rust as an encoded projection, so an assertion
+/// written against a source spelling can only be evaluated after decoding. Decoding preserves the generated header
+/// comment; the caller compares against this text rather than the raw file.
+fn read_generated_rust(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let decoded = canonical_projection::decoded_source_spellings(&fs::read_to_string(path)?);
+    Ok(canonical_projection::reformatted_after_decode(&decoded).unwrap_or(decoded))
+}
+
 fn incan_binary() -> PathBuf {
     if let Ok(path) = std::env::var("CARGO_BIN_EXE_incan") {
         return PathBuf::from(path);
@@ -1065,7 +1078,7 @@ def main() -> None:
         !output_dir.join("src/__incan_std").exists(),
         "migrated std.fs source closure must not be materialized into the consumer"
     );
-    let main_rust = fs::read_to_string(output_dir.join("src/main.rs"))?;
+    let main_rust = read_generated_rust(&output_dir.join("src/main.rs"))?;
     assert!(
         main_rust.contains("pub use incan_stdlib_system::__incan_std::*;")
             && main_rust.contains("pub use crate::__incan_std::fs::glob::matches;"),
