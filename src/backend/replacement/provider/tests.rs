@@ -38,11 +38,9 @@ type TestResult = Result<(), Box<dyn std::error::Error>>;
 /// The module the fixture operation is declared in.
 const MODULE_PATH: &[&str] = &["app"];
 
-/// The grant spelling the selected capability renders to, and therefore the one a governed run must hold.
+/// The diagnostic grant spelling the selected capability renders to.
 ///
-/// It is derived from the fixture's own `capability ledger_charge` declaration rather than chosen here, because the
-/// decorator resolves the capability the provider manifest publishes. A grant spelling invented by the test would
-/// prove the executor honours a string no declaration produces.
+/// Policy itself receives the canonical capability identity in [`LoweredFixture::capability`], never this string.
 const LEDGER_GRANT: &str = "app.ledger_charge";
 
 /// One ledger charge, plus a same-module caller that invokes it.
@@ -241,6 +239,7 @@ fn ledger_capability(kind: SemanticSourceTargetKind) -> CanonicalSymbolId {
 struct LoweredFixture {
     module: bir::BodyIrModule,
     operation: CanonicalSymbolId,
+    capability: CanonicalSymbolId,
 }
 
 impl LoweredFixture {
@@ -351,16 +350,28 @@ fn lower_fixture_source(
     // private for exactly this reason: a test that registers its own entry would prove the executor works on a
     // catalogue no producer could actually have published, which is the handwritten module exception #1156 exists
     // to rule out. This shares the builder with #1213's own tests so both layers exercise one admission path.
+    let capability = checker
+        .type_info()
+        .declarations
+        .provider_operations
+        .values()
+        .next()
+        .map(|declared| declared.required_capability.clone())
+        .ok_or("the checked fixture exposes no provider capability")?;
     let provider_plan = provider_plan_from_checked_source(checker.type_info(), activation)?;
     let operation = local_function_identity(&program, "charge").ok_or("the fixture declares no `charge`")?;
     let module =
         build_body_ir_module_v0_with_provider_plan(&program, &module_path, checker.type_info(), &provider_plan)?;
-    Ok(LoweredFixture { module, operation })
+    Ok(LoweredFixture {
+        module,
+        operation,
+        capability,
+    })
 }
 
-/// Build the runtime one test runs against: a governed or permissive authority, and a ledger host.
-fn runtime(mode: AuthorityMode, grants: &[&str], host: Rc<LedgerHost>) -> Rc<ProviderRuntime> {
-    let authority = StaticAuthority::new(mode, grants.iter().map(|grant| (*grant).to_string()));
+/// Build the runtime one test runs against from an optional canonical capability grant and a ledger host.
+fn runtime(mode: AuthorityMode, grant: Option<&CanonicalSymbolId>, host: Rc<LedgerHost>) -> Rc<ProviderRuntime> {
+    let authority = StaticAuthority::new(mode, grant.into_iter().cloned());
     ProviderRuntime::new(Rc::new(authority), host)
 }
 
@@ -486,7 +497,7 @@ fn lifecycle_events(providers: &ProviderRuntime) -> Vec<&'static str> {
 fn an_allowed_provider_operation_executes_and_references_its_operation_receipt() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
 
     let execution = settle(&fixture.module, &providers)?;
 
@@ -544,18 +555,42 @@ fn an_allowed_provider_operation_executes_and_references_its_operation_receipt()
 // empty list flows through to an empty list, which asserts nothing. Neither is worth shipping. Once the
 // declaration side derives requirements, propagation belongs back here as a real assertion.
 
-/// Mode semantics belong to the authority seam: a permissive run allows a capability no grant set holds, and this
-/// backend neither knows nor decides that.
+/// Permissive is the reporting-disabled escape hatch: it executes an ungranted operation but retains neither an
+/// operation receipt nor a backend execution record that could claim to reference one.
 #[test]
-fn a_permissive_run_executes_an_ungranted_provider_operation() -> TestResult {
+fn a_permissive_run_executes_an_ungranted_provider_operation_without_receipts() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Permissive, &[], host.clone());
+    let providers = runtime(AuthorityMode::Permissive, None, host.clone());
 
     let execution = settle(&fixture.module, &providers)?;
 
     assert_eq!(execution.value, ReplacementValue::Int(255));
     assert_eq!(host.invocations(), vec![250]);
+    assert!(providers.operation_receipts().is_empty());
+    assert!(providers.provider_executions().is_empty());
+    assert_eq!(lifecycle_events(&providers), vec!["invoked", "completed", "released"]);
+    Ok(())
+}
+
+/// The project-default authority mode observes an invoked operation without treating its source declaration or import
+/// as a grant. The decision is made only after the plan reaches runtime invocation.
+#[test]
+fn the_default_authority_mode_observes_an_ungranted_provider_operation_at_invocation() -> TestResult {
+    let fixture = lower_fixture(ProviderActivationState::Active)?;
+    let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
+    let providers = ProviderRuntime::new(Rc::new(StaticAuthority::default()), host.clone());
+
+    let execution = settle(&fixture.module, &providers)?;
+
+    assert_eq!(execution.value, ReplacementValue::Int(255));
+    assert_eq!(host.invocations(), vec![250]);
+    let receipts = providers.operation_receipts();
+    let [receipt] = receipts.as_slice() else {
+        return Err(Box::from("one observed invocation must produce one operation receipt"));
+    };
+    assert_eq!(receipt.authority().mode, AuthorityMode::Observe);
+    assert_eq!(receipt.status(), ReceiptStatus::Observed);
     Ok(())
 }
 
@@ -572,7 +607,7 @@ fn a_permissive_run_executes_an_ungranted_provider_operation() -> TestResult {
 fn a_governed_denial_emits_a_denied_receipt_without_invoking_the_provider() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[], host.clone());
+    let providers = runtime(AuthorityMode::Governed, None, host.clone());
     let call_span = fixture.plan()?.call_span;
 
     let error = settle(&fixture.module, &providers)
@@ -637,8 +672,13 @@ fn a_governed_denial_emits_a_denied_receipt_without_invoking_the_provider() -> T
 fn a_host_ceiling_denial_is_reported_without_being_reinterpreted() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let authority = StaticAuthority::new(AuthorityMode::Governed, [LEDGER_GRANT.to_string()])
-        .with_ceiling(["host.fs.read".to_string()]);
+    let ceiling = CanonicalSymbolId::module_declaration(
+        vec!["host".to_string(), "fs".to_string()],
+        "read",
+        SemanticSourceTargetKind::Capability,
+        HirSourceSpan::new(30, 40),
+    );
+    let authority = StaticAuthority::new(AuthorityMode::Governed, [fixture.capability.clone()]).with_ceiling([ceiling]);
     let providers = ProviderRuntime::new(Rc::new(authority), host.clone());
 
     let error = settle(&fixture.module, &providers)
@@ -666,12 +706,34 @@ fn a_host_ceiling_denial_is_reported_without_being_reinterpreted() -> TestResult
 // Provider failure and lifecycle cleanup
 // ============================================================================
 
+/// A permissive failure remains source-visible but cannot create a receipt reference while reporting is disabled.
+#[test]
+fn a_permissive_provider_failure_is_unreported() -> TestResult {
+    let fixture = lower_fixture(ProviderActivationState::Active)?;
+    let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Decline));
+    let providers = runtime(AuthorityMode::Permissive, None, host.clone());
+
+    let error = settle(&fixture.module, &providers)
+        .err()
+        .ok_or("a declined permissive charge must surface as a failure")?;
+
+    assert!(matches!(
+        error,
+        ReplacementExecutionError::ProviderOperationFailed { .. }
+    ));
+    assert_eq!(error.operation_receipt(), None);
+    assert!(providers.operation_receipts().is_empty());
+    assert!(providers.provider_executions().is_empty());
+    assert_eq!(lifecycle_events(&providers), vec!["invoked", "failed", "released"]);
+    Ok(())
+}
+
 /// A provider failure keeps its allowing authority decision, and releases what the invocation acquired.
 #[test]
 fn a_provider_failure_keeps_allowed_authority_and_still_releases() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Decline));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
 
     let error = settle(&fixture.module, &providers)
         .err()
@@ -714,7 +776,7 @@ fn a_provider_failure_keeps_allowed_authority_and_still_releases() -> TestResult
 fn a_completed_invocation_releases_exactly_once_after_completing() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
 
     settle(&fixture.module, &providers)?;
 
@@ -740,7 +802,7 @@ fn a_withheld_attribute_classifies_the_receipt_as_redacted() -> TestResult {
         fixture.operation.clone(),
         LedgerBehavior::SettleWithSecretAccount,
     ));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host);
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host);
 
     let execution = settle(&fixture.module, &providers)?;
 
@@ -789,7 +851,7 @@ fn a_withheld_attribute_classifies_the_receipt_as_redacted() -> TestResult {
 fn a_disabled_provider_is_refused_by_lowering_before_a_plan_exists() -> TestResult {
     let fixture = lower_fixture(ProviderActivationState::Disabled)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
 
     assert!(
         fixture.plan().is_err(),
@@ -819,7 +881,7 @@ fn an_inactive_plan_is_refused_by_the_runtime_before_anything_executes() -> Test
     let mut fixture = lower_fixture(ProviderActivationState::Active)?;
     fixture.force_activation(ProviderActivationState::Unavailable);
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
     let call_span = fixture.plan()?.call_span;
 
     let error = prepare_free_function_execution_with_providers(
@@ -849,7 +911,7 @@ fn an_unresolved_provider_operation_is_refused_before_execution() -> TestResult 
     // whose provider set does not include the one the program invokes.
     let other_operation = ledger_capability(SemanticSourceTargetKind::Function);
     let host = Rc::new(LedgerHost::new(other_operation, LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
     let call_span = fixture.plan()?.call_span;
 
     let error = prepare_free_function_execution_with_providers(
@@ -913,12 +975,12 @@ fn provider_evidence_is_bound_into_the_execution_output_identity() -> TestResult
     let settled_host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
     let settled = settle(
         &fixture.module,
-        &runtime(AuthorityMode::Governed, &[LEDGER_GRANT], settled_host),
+        &runtime(AuthorityMode::Governed, Some(&fixture.capability), settled_host),
     )?;
     let repeat_host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
     let repeated = settle(
         &fixture.module,
-        &runtime(AuthorityMode::Governed, &[LEDGER_GRANT], repeat_host),
+        &runtime(AuthorityMode::Governed, Some(&fixture.capability), repeat_host),
     )?;
     assert_eq!(
         settled.output_identity, repeated.output_identity,
@@ -931,7 +993,7 @@ fn provider_evidence_is_bound_into_the_execution_output_identity() -> TestResult
     ));
     let redacted = settle(
         &fixture.module,
-        &runtime(AuthorityMode::Governed, &[LEDGER_GRANT], redacted_host),
+        &runtime(AuthorityMode::Governed, Some(&fixture.capability), redacted_host),
     )?;
     assert_ne!(
         settled.output_identity, redacted.output_identity,

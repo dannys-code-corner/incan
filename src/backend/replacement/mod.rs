@@ -1130,7 +1130,8 @@ pub enum ReplacementExecutionError {
     /// Authority was granted and the provider operation itself failed.
     ///
     /// Separate from a denial because the two have nothing in common but their visibility: here the operation ran,
-    /// its receipt records `failed` over an *allowing* decision, and any resource it acquired was released.
+    /// any resource it acquired was released, and governed or observed runs retain a failed receipt. Permissive
+    /// execution deliberately reports no receipt.
     #[error(
         "replacement backend provider operation `{operation}` failed at original Incan source span \
          {span_start}..{span_end}: {detail}"
@@ -1140,8 +1141,8 @@ pub enum ReplacementExecutionError {
         operation: String,
         /// Source-observable description of the provider's own failure.
         detail: String,
-        /// Sequence id of the failed RFC 104 operation receipt this invocation produced.
-        receipt_sequence_id: u64,
+        /// Sequence id of the failed RFC 104 operation receipt, when reporting was enabled.
+        receipt_sequence_id: Option<u64>,
         /// Original Incan source span carried by the operation's plan.
         span: HirSourceSpan,
         /// Start byte offset duplicated for typed error formatting.
@@ -1183,19 +1184,24 @@ impl ReplacementExecutionError {
 
     /// Return the RFC 104 operation receipt this outcome emitted, when it emitted one.
     ///
-    /// Only the two provider outcomes do. A refusal that happened before the operation was invoked — an unsupported
-    /// construct, an inactive provider, an unresolved operation — deliberately has no receipt to name, which is the
-    /// structural form of "nothing ran, so nothing was recorded".
+    /// Governed denials always do; provider failures do when reporting was enabled. A refusal that happened before
+    /// the operation was invoked — an unsupported construct, an inactive provider, an unresolved operation — and a
+    /// reporting-disabled permissive invocation deliberately have no receipt to name.
     pub const fn operation_receipt(&self) -> Option<super::replacement::provider::ProviderReceiptLink> {
         match self {
             Self::ProviderAuthorityDenied {
                 receipt_sequence_id, ..
-            }
-            | Self::ProviderOperationFailed {
-                receipt_sequence_id, ..
             } => Some(super::replacement::provider::ProviderReceiptLink {
                 sequence_id: *receipt_sequence_id,
             }),
+            Self::ProviderOperationFailed {
+                receipt_sequence_id, ..
+            } => match receipt_sequence_id {
+                Some(sequence_id) => Some(super::replacement::provider::ProviderReceiptLink {
+                    sequence_id: *sequence_id,
+                }),
+                None => None,
+            },
             Self::MissingFunction { .. }
             | Self::ArgumentCount { .. }
             | Self::Unsupported { .. }

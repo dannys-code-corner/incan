@@ -67,7 +67,7 @@ fn malformed_named_binding_refuses_at_the_caller_before_provider_discovery() -> 
 fn assert_hosted_deferred(source: &str, args: &[ReplacementValue], expected_stdout: &[u8]) -> TestResult {
     let fixture = lower_fixture_source(source, ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
     let prepared = prepare_free_function_execution_with_providers(&fixture.module, "settle", args, Some(&providers))?;
     assert!(host.invocations().is_empty());
     assert!(providers.operation_receipts().is_empty());
@@ -187,7 +187,7 @@ fn unreachable_provider_function_is_not_preflighted() -> TestResult {
 fn nested_hosted_operation_still_requires_invocation_authority() -> TestResult {
     let fixture = lower_fixture_source(STORED_CLOSURE_PROVIDER_FIXTURE_SOURCE, ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[], host.clone());
+    let providers = runtime(AuthorityMode::Governed, None, host.clone());
     let args = [ReplacementValue::Str("acct-1".to_string()), ReplacementValue::Int(250)];
     let prepared = prepare_free_function_execution_with_providers(&fixture.module, "settle", &args, Some(&providers))?;
     assert!(providers.operation_receipts().is_empty());
@@ -287,7 +287,7 @@ def settle() -> int:
         let span = unique_source_span(&source, "charge(\"acct-1\", 250)")?;
         assert_missing_host_preflight(&fixture, "settle", &args, span, b"")?;
         let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-        let providers = runtime(AuthorityMode::Governed, &[], host.clone());
+        let providers = runtime(AuthorityMode::Governed, None, host.clone());
         let prepared =
             prepare_free_function_execution_with_providers(&fixture.module, "settle", &args, Some(&providers))?;
         let mut stdout = Vec::new();
@@ -451,7 +451,7 @@ fn unhosted_provider_operation_in_reachable_sibling_refuses_during_preparation()
 fn reachable_sibling_provider_operation_uses_the_matching_host() -> TestResult {
     let fixture = lower_fixture_source(SIBLING_PROVIDER_SOURCE, ProviderActivationState::Active)?;
     let host = Rc::new(LedgerHost::new(fixture.operation.clone(), LedgerBehavior::Settle));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
     let args = [ReplacementValue::Str("acct-1".to_string()), ReplacementValue::Int(250)];
     let prepared = prepare_free_function_execution_with_providers(&fixture.module, "settle", &args, Some(&providers))?;
     assert_eq!(
@@ -504,7 +504,7 @@ fn reachable_sibling_provider_operation_with_mismatched_host_refuses_during_prep
         ledger_capability(SemanticSourceTargetKind::Function),
         LedgerBehavior::Settle,
     ));
-    let providers = runtime(AuthorityMode::Governed, &[LEDGER_GRANT], host.clone());
+    let providers = runtime(AuthorityMode::Governed, Some(&fixture.capability), host.clone());
     let args = [ReplacementValue::Str("acct-1".to_string()), ReplacementValue::Int(250)];
 
     match prepare_free_function_execution_with_providers(&fixture.module, "settle", &args, Some(&providers)) {
