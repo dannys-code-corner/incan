@@ -2582,6 +2582,56 @@ def unpack(vault: Vault) -> str:
     );
 }
 
+/// A public alias targeting a function in its own module publishes that function's callable metadata.
+///
+/// The projection pass keys candidates by resolved declaration path, `["provider", "helper"]`, while an alias whose
+/// target lives in its own module records the target as the source writes it, `["helper"]`. The two never met, so
+/// every same-module alias published `projected_function: None` and any consumer requiring callable metadata for a
+/// canonical callable target refused it.
+///
+/// The existing coverage did not catch this because it aliases across modules, where the recorded target is already
+/// qualified and the lookup happens to line up.
+#[test]
+fn a_same_module_public_alias_publishes_its_target_callable_metadata() -> Result<(), String> {
+    let source = "pub def helper(value: int) -> int:\n  return value + 1\n\npub run = alias helper\n";
+    let ast = parse_program(source, "same-module alias provider");
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["provider".to_string()]));
+    checker
+        .check_program(&ast)
+        .map_err(|errors| format!("same-module alias provider should typecheck: {errors:?}"))?;
+
+    let mut api_modules = vec![collect_checked_api_metadata(
+        &ast,
+        &checker,
+        vec!["provider".to_string()],
+    )];
+    materialize_api_alias_projections(&mut api_modules);
+
+    let alias = api_modules
+        .iter()
+        .flat_map(|module| module.declarations.iter())
+        .find_map(|declaration| match declaration {
+            ApiDeclaration::Alias(alias) if alias.name == "run" => Some(alias),
+            _ => None,
+        })
+        .ok_or("the checked API must publish the `run` alias")?;
+    let projected = alias
+        .projected_function
+        .as_ref()
+        .ok_or("a same-module alias must publish its target's callable metadata")?;
+    assert_eq!(
+        projected.callable.name, "run",
+        "a projection is published under the alias's own name"
+    );
+    assert_eq!(
+        projected.source_path,
+        vec!["provider".to_string(), "helper".to_string()],
+        "the projection must point at the declaration the alias targets"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_class_private_parent_field_access_rejected_in_child_method() {
     let source = r#"

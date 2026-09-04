@@ -837,6 +837,7 @@ pub fn materialize_api_alias_projections(modules: &mut [CheckedApiMetadata]) {
                 ApiDeclaration::Alias(alias) => aliases.push(ApiAliasProjectionRequest {
                     path: declaration_path(&module.module_path, &alias.name),
                     target_path: normalized_api_target_path(&alias.target_path),
+                    module_path: module.module_path.clone(),
                     name: alias.name.clone(),
                     anchor: alias.anchor.clone(),
                 }),
@@ -852,8 +853,24 @@ pub fn materialize_api_alias_projections(modules: &mut [CheckedApiMetadata]) {
             if projections.contains_key(&alias.path) {
                 continue;
             }
-            if let Some(target) = projections.get(&alias.target_path) {
-                projections.insert(alias.path.clone(), projected_function_for_alias(alias, target));
+            // An alias whose target lives in its own module records that target unqualified, because that is how the
+            // source writes it: `pub run = alias helper` inside `provider` records `["helper"]`. Projections are
+            // keyed by resolved declaration path, `["provider", "helper"]`, so the two never met and every
+            // same-module alias published no callable metadata at all.
+            //
+            // Resolve against the alias's own module first, then fall back to the path as written for a target that
+            // really is module-qualified. The recorded `target_path` is deliberately left alone: it is compared
+            // against the identity graph downstream, and rewriting it here would move that comparison rather than
+            // fix this one.
+            let qualified =
+                (alias.target_path.len() == 1).then(|| declaration_path(&alias.module_path, &alias.target_path[0]));
+            let resolved = qualified
+                .as_ref()
+                .and_then(|path| projections.get(path))
+                .or_else(|| projections.get(&alias.target_path));
+            if let Some(target) = resolved {
+                let projection = projected_function_for_alias(alias, target);
+                projections.insert(alias.path.clone(), projection);
                 changed = true;
             }
         }
@@ -1063,6 +1080,8 @@ pub fn api_declaration_public_name(declaration: &ApiDeclaration) -> Option<&str>
 struct ApiAliasProjectionRequest {
     path: Vec<String>,
     target_path: Vec<String>,
+    /// The module the alias is declared in, used to resolve a target written without a module qualifier.
+    module_path: Vec<String>,
     name: String,
     anchor: SourceAnchor,
 }
