@@ -1480,6 +1480,8 @@ pub enum RustArgCoercionKind {
     RustTypeUnwrap,
     /// Rusttype alias uses a declared `interop:` adapter edge.
     RustTypeInterop,
+    /// The Rust enum variant stores this payload as `Box<T>`; the argument is the semantic `T` and lowering boxes it.
+    BoxPayload,
     /// Rust metadata requires a concrete reference, so preserve its borrow shape during emission.
     Borrow {
         /// Whether Rust requires an exclusive mutable borrow.

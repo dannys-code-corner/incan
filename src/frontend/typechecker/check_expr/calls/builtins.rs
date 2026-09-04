@@ -199,8 +199,30 @@ impl TypeChecker {
                     Some(result_ty(ok_ty, err_ty))
                 }
                 ConstructorId::Some => {
-                    let arg_types = self.check_call_arg_types(args);
-                    let inner = arg_types.first().cloned().unwrap_or(ResolvedType::Unknown);
+                    // `Some(x)` checked against a known `Option[T]` must check `x` against `T`. Without that
+                    // expectation a Rust call inside it — `Some(Box.new(v))` against a field typed
+                    // `Option<Box<T>>` — types as its bare `Self` owner and never reconciles with `Box<T>`.
+                    let expected_inner = expected_return_ty.and_then(|expected| match expected {
+                        ResolvedType::Generic(name, inner)
+                            if collection_type_id(name.as_str()) == Some(CollectionTypeId::Option)
+                                && inner.len() == 1 =>
+                        {
+                            Some(&inner[0])
+                        }
+                        _ => None,
+                    });
+                    let inner = match (expected_inner, args) {
+                        (Some(expected_inner), [CallArg::Positional(expr)]) => {
+                            self.call_argument_depth += 1;
+                            let ty = self.check_expr_with_expected(expr, Some(expected_inner));
+                            self.call_argument_depth -= 1;
+                            ty
+                        }
+                        _ => {
+                            let arg_types = self.check_call_arg_types(args);
+                            arg_types.first().cloned().unwrap_or(ResolvedType::Unknown)
+                        }
+                    };
                     Some(option_ty(inner))
                 }
                 ConstructorId::None => Some(option_ty(ResolvedType::Unknown)),

@@ -305,6 +305,9 @@ impl ProjectGenerator {
             stdout: String::new(),
             stderr,
         };
+        if result.success {
+            self.record_generated_out_dirs(&cargo_messages.build_script_out_dirs)?;
+        }
         if result.success && self.is_binary {
             let executable = cargo_messages.executable.ok_or_else(|| {
                 io::Error::other(format!(
@@ -316,6 +319,34 @@ impl ProjectGenerator {
         }
         self.finish_generated_cache_lease()?;
         Ok(result)
+    }
+
+    /// Persist which package version each executed build script's `OUT_DIR` belongs to.
+    ///
+    /// Cargo reports every executed build script with its package id and output directory. The explicit bake seals
+    /// those directories for Cargo-free inspection and needs the version to seal them under, because one unified
+    /// build can hold several build units of one package. Written beside the generated project, where the bake
+    /// looks for it; a compiler built without Rust inspection has no consumer for it and writes nothing.
+    #[allow(unused_variables)]
+    fn record_generated_out_dirs(&self, out_dirs: &[(String, String, PathBuf)]) -> io::Result<()> {
+        #[cfg(feature = "rust_inspect")]
+        {
+            let records = out_dirs
+                .iter()
+                .map(
+                    |(package, version, out_dir)| crate::rust_inspect::GeneratedOutDirRecord {
+                        package: package.clone(),
+                        version: version.clone(),
+                        out_dir: out_dir.clone(),
+                    },
+                )
+                .collect::<Vec<_>>();
+            if !records.is_empty() {
+                crate::rust_inspect::write_generated_out_dirs_map(&self.output_dir, &records)
+                    .map_err(|error| io::Error::other(error.to_string()))?;
+            }
+        }
+        Ok(())
     }
 
     /// Run an isolated generated-project fixture using Cargo.
@@ -599,11 +630,32 @@ impl ProjectGenerator {
     }
 }
 
-/// Executable and rendered diagnostics selected from a Cargo JSON message stream.
+/// Executable, rendered diagnostics, and executed build scripts selected from a Cargo JSON message stream.
 #[derive(Default)]
 struct CargoJsonBuildOutput {
     executable: Option<PathBuf>,
     rendered: String,
+    /// `(package, version, OUT_DIR)` for every build script Cargo reported as executed.
+    build_script_out_dirs: Vec<(String, String, PathBuf)>,
+}
+
+/// Split a Cargo package id into its package name and version.
+///
+/// Cargo 1.77+ spells the id as a package-id spec (`registry+https://…/index#substrait@0.63.0`, or
+/// `path+file:///…/name#0.1.0` when the name is the last path segment); older releases spelled it
+/// `name version (source)`.
+fn cargo_package_id_name_version(package_id: &str) -> Option<(String, String)> {
+    if let Some((source, fragment)) = package_id.rsplit_once('#') {
+        if let Some((name, version)) = fragment.split_once('@') {
+            return Some((name.to_string(), version.to_string()));
+        }
+        let name = source.trim_end_matches('/').rsplit('/').next()?;
+        return Some((name.to_string(), fragment.to_string()));
+    }
+    let mut words = package_id.split_whitespace();
+    let name = words.next()?;
+    let version = words.next()?;
+    Some((name.to_string(), version.to_string()))
 }
 
 /// Parse Cargo-reported artifact locations instead of reconstructing profile/target-triple paths.
@@ -627,6 +679,17 @@ fn parse_cargo_json_build_output(stdout: &[u8], expected_target_name: &str) -> C
             Some("compiler-message") => {
                 if let Some(rendered) = message.pointer("/message/rendered").and_then(serde_json::Value::as_str) {
                     parsed.rendered.push_str(rendered);
+                }
+            }
+            Some("build-script-executed") => {
+                if let (Some(package_id), Some(out_dir)) = (
+                    message.get("package_id").and_then(serde_json::Value::as_str),
+                    message.get("out_dir").and_then(serde_json::Value::as_str),
+                ) && let Some((package, version)) = cargo_package_id_name_version(package_id)
+                {
+                    parsed
+                        .build_script_out_dirs
+                        .push((package, version, PathBuf::from(out_dir)));
                 }
             }
             _ => {}
@@ -895,8 +958,29 @@ mod tests {
         let payload = br#"{"reason":"compiler-artifact","target":{"name":"dependency"},"executable":null}
 {"reason":"compiler-message","message":{"rendered":"warning: probe\n"}}
 {"reason":"compiler-artifact","target":{"name":"demo_abcd"},"executable":"/cache/target/aarch64-unknown-linux-gnu/release/demo_abcd"}
+{"reason":"build-script-executed","package_id":"registry+https://github.com/rust-lang/crates.io-index#substrait@0.63.0","out_dir":"/cache/target/debug/build/substrait-fc49/out"}
+{"reason":"build-script-executed","package_id":"path+file:///work/incql#0.1.0","out_dir":"/cache/target/debug/build/incql-0a1b/out"}
 "#;
         let parsed = parse_cargo_json_build_output(payload, "demo_abcd");
+        assert_eq!(
+            parsed.build_script_out_dirs,
+            vec![
+                (
+                    "substrait".to_string(),
+                    "0.63.0".to_string(),
+                    PathBuf::from("/cache/target/debug/build/substrait-fc49/out")
+                ),
+                (
+                    "incql".to_string(),
+                    "0.1.0".to_string(),
+                    PathBuf::from("/cache/target/debug/build/incql-0a1b/out")
+                ),
+            ]
+        );
+        assert_eq!(
+            cargo_package_id_name_version("serde 1.0.219 (registry+https://github.com/rust-lang/crates.io-index)"),
+            Some(("serde".to_string(), "1.0.219".to_string()))
+        );
         assert_eq!(
             parsed.executable,
             Some(PathBuf::from(

@@ -364,8 +364,8 @@ impl TypeChecker {
 
     /// Return whether a Rust type display names a generic type parameter.
     fn is_rust_generic_type_param_display(rust_ty: &str) -> bool {
-        let normalized = rust_ty.trim().replace(' ', "");
-        if let Some(tail) = normalized.strip_prefix("impl") {
+        let normalized = Self::compact_rust_display(rust_ty);
+        if let Some(tail) = normalized.strip_prefix("impl").map(str::trim_start) {
             return !tail.is_empty()
                 && (tail.contains("::") || tail.chars().next().is_some_and(|ch| ch.is_ascii_uppercase()));
         }
@@ -513,7 +513,7 @@ impl TypeChecker {
     /// boundary adapters.
     fn rust_arg_boundary_match(&self, arg_ty: &ResolvedType, rust_param_ty: &str) -> RustArgBoundaryMatch {
         let display = Self::rust_display_without_lifetimes(rust_param_ty);
-        let normalized = display.replace(' ', "");
+        let normalized = Self::compact_rust_display(&display);
         if let Some((is_mut, inner)) = Self::rust_display_borrow_kind(display.as_str())
             && Self::rust_display_is_trait_object(inner)
         {
@@ -522,6 +522,17 @@ impl TypeChecker {
                 || self.rust_type_implements_trait_object(arg_ty, inner)
             {
                 RustArgBoundaryMatch::Coercion(RustArgCoercionKind::TraitObjectBorrow { mutable: is_mut })
+            } else {
+                RustArgBoundaryMatch::NoMatch
+            };
+        }
+        // A by-value trait object reaches an argument through a specialized generic — `Arc::new(v)` checked
+        // against `Arc<dyn TableProvider>` asks whether `v` is a `dyn TableProvider`. Rust admits that by
+        // unsized coercion when `v`'s type implements the trait; the borrowed `&dyn Trait` branch above already
+        // proves exactly that from metadata, so reuse it rather than fall through to a display-string check.
+        if Self::rust_display_is_trait_object(display.as_str()) {
+            return if self.rust_type_implements_trait_object(arg_ty, display.as_str()) {
+                RustArgBoundaryMatch::Exact
             } else {
                 RustArgBoundaryMatch::NoMatch
             };
@@ -646,7 +657,7 @@ impl TypeChecker {
     ) {
         self.record_rust_callable_parameter_displays(rust_type_display, owner_path, arg_expr, arg_ty);
         let param_display = self.rust_display_for_owner_path(rust_type_display, owner_path);
-        let normalized = param_display.replace(' ', "");
+        let normalized = Self::compact_rust_display(&param_display);
         let target_ty =
             self.resolved_rust_boundary_target_from_param_display_for_owner_path(rust_type_display, owner_path);
         self.prewarm_rust_type_identity_metadata(arg_ty);
@@ -939,6 +950,29 @@ impl TypeChecker {
         )
     }
 
+    /// Return whether a call argument typed without context is a bare Rust owner that the parameter's generic
+    /// spelling of the same owner would specialize.
+    ///
+    /// Arguments are typed before the callee resolves, so a `Self`-returning constructor such as `Box.new(v)`
+    /// arrives as the bare owner `std::boxed::Box` while the parameter reads `Box<T>`. Re-checking that one
+    /// argument against its parameter lets the receiver reconcile — the same contextual path literals and closures
+    /// already take. Owners are compared in the ancestral namespace so every re-export spelling matches.
+    fn rust_call_arg_wants_owner_expectation(arg_ty: &ResolvedType, target_ty: &ResolvedType) -> bool {
+        // The uncontextual type may already carry the owner's own unresolved parameters (`RefCell<T>` from a
+        // `RefCell<T>`-returning `new`), so compare owners by base, not whole display.
+        let arg_owner = match arg_ty {
+            ResolvedType::RustPath(path) | ResolvedType::Named(path) => path.split('<').next().unwrap_or(path),
+            _ => return false,
+        };
+        let ResolvedType::RustPath(target) = target_ty else {
+            return false;
+        };
+        let Some((base, _)) = target.split_once('<') else {
+            return false;
+        };
+        incan_core::interop::ancestral_rust_path(base) == incan_core::interop::ancestral_rust_path(arg_owner)
+    }
+
     /// Validate a Rust method call (`receiver.method(...)`) against metadata and record required arg coercions.
     ///
     /// The receiver is already validated by access resolution; this function validates only post-receiver parameters.
@@ -985,6 +1019,8 @@ impl TypeChecker {
             let contextual_arg_ty = if (matches!(arg_expr.node, Expr::Closure(_, _))
                 && matches!(&target_ty, ResolvedType::Function(_, _)))
                 || matches!(arg_expr.node, Expr::Literal(_) | Expr::Unary(_, _))
+                || (matches!(arg_expr.node, Expr::Call(..) | Expr::MethodCall(..))
+                    && Self::rust_call_arg_wants_owner_expectation(binding.arg_ty, &target_ty))
             {
                 Some(self.check_expr_with_expected(arg_expr, Some(&target_ty)))
             } else {
@@ -1206,6 +1242,41 @@ mod validate_rust_function_call_tests {
             checker.rust_arg_boundary_match(&ResolvedType::Bytes, "alloc::vec::Vec<u8>"),
             RustArgBoundaryMatch::Exact
         );
+    }
+
+    #[test]
+    fn by_value_trait_object_inside_a_generic_matches_itself_on_every_route() {
+        // #1229: the argument side reaches `resolved_type_from_rust_display` with the raw display while the
+        // parameter side is compacted first. Both must land on one normal form, or `Arc<dyn Trait>` fails to match
+        // itself because one route kept the space after `dyn` and the other erased it.
+        let checker = TypeChecker::new();
+        let arg = checker.resolved_type_from_rust_display("alloc::sync::Arc<dyn demo::Adapter>");
+
+        assert_eq!(
+            checker.rust_arg_boundary_match(&arg, "alloc::sync::Arc<dyn demo::Adapter>"),
+            RustArgBoundaryMatch::Exact
+        );
+        assert_eq!(
+            checker.rust_arg_boundary_match(&arg, "alloc::sync::Arc< dyn demo::Adapter >"),
+            RustArgBoundaryMatch::Exact
+        );
+        assert_eq!(
+            TypeChecker::compact_rust_display("alloc::sync::Arc< dyn demo::Adapter >"),
+            "alloc::sync::Arc<dyn demo::Adapter>"
+        );
+    }
+
+    #[test]
+    fn anonymous_impl_trait_parameters_keep_by_value_shape_in_both_spellings() {
+        for display in ["impl demo::Buf", "implBuf", "impl Buf"] {
+            assert!(
+                TypeChecker::is_rust_generic_type_param_display(display),
+                "{display} must be a by-value generic boundary"
+            );
+            assert_eq!(TypeChecker::rust_display_type_var_name(display), Some(display));
+        }
+        assert_eq!(TypeChecker::rust_display_type_var_name("dyn demo::Adapter"), None);
+        assert_eq!(TypeChecker::rust_display_type_var_name("T"), Some("T"));
     }
 
     #[test]

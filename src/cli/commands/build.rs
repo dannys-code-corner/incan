@@ -80,7 +80,7 @@ use crate::oven::legacy_cargo::{
     OVEN_PROJECT_EXTENSION_PAYLOAD_SCHEMA_VERSION, OvenLegacyCargoBaseLoaf, OvenLegacyCargoDirectDependencyClosure,
     OvenLegacyCargoPrepareRequest, OvenLegacyCargoPublicationKind, OvenProjectExtensionPayload,
     OvenProjectRegistrySourceDependency, digest_local_cargo_workspace_authority, direct_rustc_compile_environment,
-    direct_rustc_reusable_project_plan_environment, prepare_direct_rustc_plan,
+    direct_rustc_reusable_project_plan_environment, prepare_direct_rustc_plan, stage_locked_loaf_fixture,
 };
 use crate::oven::loaf::{
     OVEN_DEPENDENCY_MISS_SUMMARY, OVEN_LOAF_ENV, OVEN_LOAF_MISS_GUIDANCE, OVEN_NESTED_DEPENDENCY_MISS_SUMMARY,
@@ -93,10 +93,10 @@ use crate::oven::rustc::direct_rustc_source_extern_names;
 use crate::oven::rustc::{
     OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION, OVEN_RUSTC_REGISTRY_LOCK_RELATIVE_PATH,
     OvenCallerOwnedRustcLibrary, OvenLoadedProjectInspectionAuthority, OvenProjectInspectionAuthorityPayload,
-    OvenProjectInspectionAuthorityRef, OvenProjectInspectionConstituent, OvenProjectInspectionRootDependency,
-    OvenProjectInspectionSource, OvenProjectInspectionSourceOwner, OvenProjectInspectionTestDependencyEnvelope,
-    OvenProjectInspectionTestDependencyRoot, OvenRegistryLeafAuthority, OvenRustcArtifactExtern,
-    OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcError, OvenRustcRegistryLeaf,
+    OvenProjectInspectionAuthorityRef, OvenProjectInspectionConstituent, OvenProjectInspectionGeneratedOutDir,
+    OvenProjectInspectionRootDependency, OvenProjectInspectionSource, OvenProjectInspectionSourceOwner,
+    OvenProjectInspectionTestDependencyEnvelope, OvenProjectInspectionTestDependencyRoot, OvenRegistryLeafAuthority,
+    OvenRustcArtifactExtern, OvenRustcArtifactManifest, OvenRustcArtifactPlan, OvenRustcError, OvenRustcRegistryLeaf,
     OvenRustcRegistrySourcePackage, OvenRustcSupportingArtifact, OvenSelectedPathRustcAuthority,
     OvenTrustedDirectRustcTargetRequest, OvenTrustedRustcArtifactRoot, attach_caller_owned_rustc_libraries,
     bake_trusted_direct_rustc_library, bake_trusted_direct_rustc_proc_macro, bake_trusted_direct_rustc_run,
@@ -205,6 +205,7 @@ struct OvenPreparedProject {
     receipt: crate::oven::OvenReceipt,
     plan_selection: OvenDirectRustcPlanSelection,
     materialization: OvenToolchainMaterialization,
+    cargo_process_started: bool,
     rustc: PathBuf,
     crate_name: String,
     rust_edition: String,
@@ -368,6 +369,19 @@ impl OvenToolchainMaterialization {
 enum OvenProjectPlanMode {
     ConsumeOnly,
     ExplicitBake,
+    /// Explicitly prepare the Rust-only base plan for one later native interop bake.
+    ///
+    /// The interop baker is a separate authority because it selects native toolchain facts and seals package-owned
+    /// native artifacts. This mode may publish the pre-interop Rust closure, but never emits a caller-visible
+    /// executable or pretends the package already has a final interop plan.
+    InteropBootstrap,
+}
+
+impl OvenProjectPlanMode {
+    /// Return whether this caller may invoke Oven's named compatibility publisher.
+    const fn is_explicit_publisher(self) -> bool {
+        matches!(self, Self::ExplicitBake | Self::InteropBootstrap)
+    }
 }
 
 /// Receipt and sealed-plan evidence emitted by explicit `incan oven bake` for one project target/profile.
@@ -1252,6 +1266,11 @@ fn select_receipt_project_extension_execution_plan(
         })
         .collect::<CliResult<Vec<_>>>()?;
     if selected.is_empty() {
+        tracing::debug!(
+            "no stored project extension matches receipt {} (build unit {})",
+            receipt.identity,
+            receipt.build_unit_identity
+        );
         return Ok(None);
     }
     if selected.len() != 1 {
@@ -1448,6 +1467,7 @@ fn select_published_project_extension_plan(
             OvenDirectRustcPlanPreparation {
                 plan_selection: OvenDirectRustcPlanSelection::ProjectExtension(Box::new(selected)),
                 materialization,
+                cargo_process_started: false,
             }
         }),
     )
@@ -1470,6 +1490,7 @@ fn select_published_project_plan(
         select_receipt_direct_rustc_execution_plan(store, receipt)?.map(|selected| OvenDirectRustcPlanPreparation {
             plan_selection: OvenDirectRustcPlanSelection::Stored(Box::new(selected)),
             materialization,
+            cargo_process_started: false,
         }),
     )
 }
@@ -4590,7 +4611,7 @@ fn import_packaged_provider_loafs_for_explicit_bake(
     consumer_store: &OvenStore,
     checked_profiles: &[CheckedPackagedProviderProfile],
 ) -> CliResult<()> {
-    if mode != OvenProjectPlanMode::ExplicitBake {
+    if !mode.is_explicit_publisher() {
         return Ok(());
     }
     for checked in checked_profiles {
@@ -5510,6 +5531,29 @@ fn declared_rust_libraries_missing_from_selected_plan_with_owned_roots(
         .collect()
 }
 
+/// Profiles an explicit `oven bake` materializes, and that its consumers then expect to find.
+///
+/// A bake normally produces every profile a later `build`, `test`, or `run` could select, so a project with a
+/// large `[rust-dependencies]` closure pays a full optimized build even when only `debug` is ever loaded. On
+/// IncQL that release half measured 2098 of 2717 rustc CPU seconds.
+///
+/// This is deliberately an environment policy rather than an `oven bake` flag. The profile set is not private to
+/// the bake: `build` verifies project inspection authority across the same set, and a narrowed bake seen by a
+/// consumer that still expects both profiles reports "no source-current project inspection authority is
+/// available" rather than the profile it is actually missing. An environment override applies to every command in
+/// a session — one `env:` block in CI covers `bake`, `build`, and `test` alike — whereas a per-invocation flag
+/// would leave the consumers disagreeing with the bake that produced their inputs.
+///
+/// A future change could record the materialized profile set in the authority itself and let each consumer check
+/// only the profile it needs; until then the set must be stated the same way to every command.
+fn explicit_bake_profiles() -> Vec<&'static str> {
+    match std::env::var("INCAN_OVEN_BAKE_PROFILES").ok().as_deref().map(str::trim) {
+        Some("debug") => vec!["debug"],
+        Some("release") => vec!["release"],
+        _ => vec!["debug", "release"],
+    }
+}
+
 /// Analyze, generate, receipt, and select the direct-Rustc plan for one normal Oven executable command.
 #[allow(clippy::too_many_arguments)]
 fn prepare_oven_project(
@@ -5632,6 +5676,12 @@ fn prepare_oven_project(
     generator.set_provider_plan(&provider_plan);
     generator.set_sdk_path_dependencies(project_requirements.sdk_path_dependencies.clone());
     generator.set_stdlib_features(project_requirements.stdlib_features.clone());
+    if oven_plan_mode == OvenProjectPlanMode::InteropBootstrap {
+        generator.enable_companion_library_target();
+    }
+    // An interop bootstrap must generate the exact normal executable source closure. It is allowed to publish that
+    // closure through the named compatibility boundary, but it cannot pull in publisher-only development inputs or
+    // its pre-interop receipt would not be selectable by the later normal direct-rustc consumer.
     generator.set_include_dev_dependencies(oven_plan_mode == OvenProjectPlanMode::ExplicitBake);
     let rust_edition = manifest
         .as_ref()
@@ -5695,7 +5745,9 @@ fn prepare_oven_project(
     let rustc = resolve_active_rustc().map_err(|error| CliError::failure(error.to_string()))?;
     let rustc_target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
     let rustc_toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
-    append_oven_interop_execution_build_inputs(&mut oven_build_inputs, manifest.as_ref(), &rustc_target)?;
+    if oven_plan_mode != OvenProjectPlanMode::InteropBootstrap {
+        append_oven_interop_execution_build_inputs(&mut oven_build_inputs, manifest.as_ref(), &rustc_target)?;
+    }
     let oven_store = open_default_oven_store()?;
 
     #[cfg(feature = "rust_inspect")]
@@ -5785,7 +5837,7 @@ fn prepare_oven_project(
     let rust_dependencies = resolved.dependencies.clone();
     let rust_dev_dependencies = resolved.dev_dependencies.clone();
     let requested_provider_profiles = if oven_plan_mode == OvenProjectPlanMode::ExplicitBake {
-        vec!["debug", "release"]
+        explicit_bake_profiles()
     } else {
         vec![profile]
     };
@@ -5849,8 +5901,9 @@ fn prepare_oven_project(
         receipt_request = receipt_request.with_build_unit_input(name.clone(), value.clone());
     }
     let receipt = receipt_generated_project(&receipt_request).map_err(|error| CliError::failure(error.to_string()))?;
-    write_receipt(&receipt, crate::oven::default_receipt_path(&project_root))
-        .map_err(|error| CliError::failure(error.to_string()))?;
+    let receipt_path =
+        prepared_oven_receipt_path(&project_root, oven_plan_mode, &receipt.intent.target, path, profile)?;
+    write_receipt(&receipt, &receipt_path).map_err(|error| CliError::failure(error.to_string()))?;
     let required_registry_dependencies = format_oven_registry_dependency_requirements(&oven_plan_dependencies);
     // An imported package Loaf is sufficient only for consume-only commands. The explicit baker must publish the
     // consumer's own direct registry roots with its complete generated source closure; otherwise the provider's
@@ -5864,6 +5917,7 @@ fn prepare_oven_project(
         Some(OvenDirectRustcPlanPreparation {
             plan_selection: selection,
             materialization: OvenToolchainMaterialization::Reused,
+            cargo_process_started: false,
         })
     } else {
         select_or_bake_generated_project_plan(
@@ -5887,7 +5941,7 @@ fn prepare_oven_project(
             required_registry_dependencies,
             receipt.identity,
             generator.output_dir().display(),
-            crate::oven::default_receipt_path(&project_root).display(),
+            receipt_path.display(),
         ))
     })?;
     let plan_selection = plan_preparation.plan_selection;
@@ -5978,6 +6032,7 @@ fn prepare_oven_project(
         receipt,
         plan_selection,
         materialization: plan_preparation.materialization,
+        cargo_process_started: plan_preparation.cargo_process_started,
         rustc,
         crate_name: ProjectGenerator::rust_target_name(&project_name),
         rust_edition,
@@ -5988,6 +6043,90 @@ fn prepare_oven_project(
             .as_ref()
             .map(|workspace| workspace.manifest_dir().to_path_buf()),
     })
+}
+
+/// Prepare the Rust-only direct-rustc base required before Oven can seal a package's declared native artifacts.
+///
+/// A checked C binding still lowers directly into the final generated Rust root. The compatibility publisher must
+/// nevertheless prepare its Rust dependency closure before that root can link a package-owned dynamic library. This
+/// dedicated bootstrap stops at that boundary: it publishes no caller-visible binary and does not select a native
+/// toolchain. `incan oven interop bake` alone performs those later actions.
+pub(crate) fn prepare_oven_interop_bootstrap(
+    project: &Path,
+    target: &str,
+) -> CliResult<(crate::oven::OvenReceipt, PathBuf, bool)> {
+    let project = project.to_str().ok_or_else(|| {
+        CliError::failure(format!(
+            "Oven interop project path is not valid UTF-8: {}",
+            project.display()
+        ))
+    })?;
+    let project_root = resolve_library_project_root(Some(project))?;
+    let (kind, entrypoint) = sole_oven_interop_executable_target(discover_oven_bake_project_targets(&project_root)?)?;
+    let entrypoint_text = entrypoint.to_str().ok_or_else(|| {
+        CliError::failure(format!(
+            "Oven interop entrypoint is not valid UTF-8: {}",
+            entrypoint.display()
+        ))
+    })?;
+    let prepared = prepare_oven_project(
+        entrypoint_text,
+        None,
+        &CargoPolicy::default(),
+        &FeatureSelection::default(),
+        None,
+        Vec::new(),
+        false,
+        false,
+        "debug",
+        OvenProjectPlanMode::InteropBootstrap,
+        None,
+        &BackendSelectionOptions::default(),
+    )?;
+    if prepared.receipt.intent.target != target {
+        return Err(CliError::failure(format!(
+            "Oven interop bootstrap prepared Rust target `{}`, but the declared native target is `{target}`; select a Rust toolchain for that target before baking native interop",
+            prepared.receipt.intent.target
+        )));
+    }
+    let receipt_path = interop_bootstrap_receipt_path(
+        &project_root,
+        &prepared.receipt.intent.target,
+        kind,
+        &entrypoint,
+        "debug",
+    )?;
+    Ok((prepared.receipt, receipt_path, prepared.cargo_process_started))
+}
+
+/// Select the one executable an automatic interop bootstrap may prepare.
+///
+/// An explicit `--base-receipt` remains available for packages whose author intentionally selects one of several
+/// scripts. Automatic selection must fail closed rather than letting filesystem or manifest discovery order decide
+/// which generated root becomes native-plan authority.
+fn sole_oven_interop_executable_target(
+    targets: Vec<(OvenBakeProjectTarget, PathBuf)>,
+) -> CliResult<(OvenBakeProjectTarget, PathBuf)> {
+    let executable_targets = targets
+        .into_iter()
+        .filter(|(kind, _)| *kind == OvenBakeProjectTarget::Executable)
+        .collect::<Vec<_>>();
+    match executable_targets.as_slice() {
+        [(kind, entrypoint)] => Ok((*kind, entrypoint.clone())),
+        [] => Err(CliError::failure(
+            "Oven interop bootstrap currently requires src/main.incn or one declared [project.scripts] executable entrypoint",
+        )),
+        _ => {
+            let entrypoints = executable_targets
+                .iter()
+                .map(|(_, entrypoint)| entrypoint.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            Err(CliError::failure(format!(
+                "Oven interop bootstrap requires one executable entrypoint, but this package declares: {entrypoints}; provide an explicit base receipt for the intended entrypoint",
+            )))
+        }
+    }
 }
 
 /// Return whether an explicit Loaf publisher is constructing its compiler-owned source closure.
@@ -6118,6 +6257,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
             return Ok(Some(OvenDirectRustcPlanPreparation {
                 plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(native)),
                 materialization: OvenToolchainMaterialization::ToolchainLoaf,
+                cargo_process_started: false,
             }));
         }
         return Err(CliError::failure(format!(
@@ -6129,7 +6269,10 @@ fn select_oven_direct_rustc_plan_with_materialization(
     }
 
     if receipt_requires_final_interop_plan(receipt) {
-        return Err(interop_final_plan_required_error());
+        return select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)?.map_or_else(
+            || Err(interop_final_plan_required_error()),
+            |selection| Ok(Some(selection)),
+        );
     }
     // A receipt-exact project Loaf is narrower than the release-wide standard-library family and must win when it
     // exists. Selecting the broad family first would expose its fixture-only direct externs to a normal project,
@@ -6143,6 +6286,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
         return Ok(Some(OvenDirectRustcPlanPreparation {
             plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(native)),
             materialization: OvenToolchainMaterialization::ToolchainLoaf,
+            cargo_process_started: false,
         }));
     }
     Ok(None)
@@ -6156,6 +6300,7 @@ fn select_oven_direct_rustc_plan_with_materialization(
 /// publishing the project delta, the baker canonicalizes compiler-owned runtime artifacts, overlapping locked registry
 /// units, and vocabulary auxiliaries against that exact base cohort. This prevents later consumers from observing
 /// distinct Incan release cohorts while preserving the project's own dependency lock.
+#[allow(clippy::too_many_arguments)] // Each input is a distinct publisher authority: store, receipt, roots, rustc, base Loaf, vocab support, kind.
 fn bake_generated_project_compatibility_plan(
     store: &OvenStore,
     receipt: &crate::oven::OvenReceipt,
@@ -6164,6 +6309,7 @@ fn bake_generated_project_compatibility_plan(
     rustc: &Path,
     base_loaf: Option<&OvenToolchainLoaf>,
     source_compiler_vocab_support: bool,
+    publication_kind: OvenLegacyCargoPublicationKind,
 ) -> CliResult<OvenToolchainMaterialization> {
     let compile_environment = direct_rustc_reusable_project_plan_environment(generated_project, generated_root)
         .map_err(|error| CliError::failure(error.to_string()))?;
@@ -6177,7 +6323,7 @@ fn bake_generated_project_compatibility_plan(
         sdk_inventory: None,
         compiler_loaf_root: None,
         domain: format!("incan-release-{INCAN_VERSION}"),
-        publication_kind: OvenLegacyCargoPublicationKind::Executable,
+        publication_kind,
         source_evidence_key: "generated-root".to_string(),
         compile_environment,
         // A project Loaf is the complete exact closure for its generated project, including caller-owned `pub::`
@@ -6441,10 +6587,24 @@ fn prepare_oven_test_dependency_envelope(
     let publisher_dependencies = test_dependency_publisher_dependencies(&dependencies, &packaged_provider_aliases);
     let publisher_dependency_surface_digest =
         digest_dependency_specs(&publisher_dependencies).map_err(|error| CliError::failure(error.to_string()))?;
-    for receipt in debug_target_receipts.iter().filter(|receipt| {
-        debug_target_receipt_covers_test_publisher_dependencies(receipt, &publisher_dependency_surface_digest)
-    }) {
+    for receipt in debug_target_receipts {
+        let covers =
+            debug_target_receipt_covers_test_publisher_dependencies(receipt, &publisher_dependency_surface_digest);
+        tracing::debug!(
+            "test dependency envelope: debug target receipt {} kind={:?} rust-dependencies={:?} publisher-surface={} covers={covers}",
+            receipt.identity,
+            receipt.compatibility.kind,
+            receipt.sources.build_unit_inputs.get("rust-dependencies"),
+            publisher_dependency_surface_digest
+        );
+        if !covers {
+            continue;
+        }
         let Some(plan_selection) = select_oven_direct_rustc_plan(store, receipt, &publisher_dependencies)? else {
+            tracing::debug!(
+                "test dependency envelope: receipt {} covers the surface but selects no stored plan",
+                receipt.identity
+            );
             continue;
         };
         if matches!(
@@ -6537,14 +6697,17 @@ fn select_or_bake_generated_project_plan(
     rustc: &Path,
 ) -> CliResult<Option<OvenDirectRustcPlanPreparation>> {
     if receipt_requires_final_interop_plan(receipt) {
-        return Err(interop_final_plan_required_error());
+        return select_published_project_plan(store, receipt, OvenToolchainMaterialization::Reused)?.map_or_else(
+            || Err(interop_final_plan_required_error()),
+            |selection| Ok(Some(selection)),
+        );
     }
     let source_compiler_vocab_support = receipt
         .sources
         .build_unit_inputs
         .get(OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT)
         .is_some_and(|value| value == "v1");
-    if mode == OvenProjectPlanMode::ExplicitBake {
+    if mode.is_explicit_publisher() {
         // The completed project-output Loaf owns generated project sources and the final native result. Do not bake
         // an empty project extension when the installed release Loaf already supplies the complete native dependency
         // closure: that would duplicate release-owned bytes without adding project authority.
@@ -6553,10 +6716,11 @@ fn select_or_bake_generated_project_plan(
         {
             return Ok(Some(selected));
         }
-        if dependency_surface
-            .selection
-            .iter()
-            .all(|dependency| matches!(dependency.source, DependencySource::Registry))
+        if mode == OvenProjectPlanMode::ExplicitBake
+            && dependency_surface
+                .selection
+                .iter()
+                .all(|dependency| matches!(dependency.source, DependencySource::Registry))
             && let Some(loaf) =
                 resolve_compiler_owned_loaf_for_registry_dependencies(receipt, dependency_surface.selection)
                     .map_err(|error| CliError::failure(error.to_string()))?
@@ -6564,8 +6728,29 @@ fn select_or_bake_generated_project_plan(
             return Ok(Some(OvenDirectRustcPlanPreparation {
                 plan_selection: OvenDirectRustcPlanSelection::ToolchainLoaf(Box::new(loaf)),
                 materialization: OvenToolchainMaterialization::ToolchainLoaf,
+                cargo_process_started: false,
             }));
         }
+        let bootstrap_lock_seeded = if mode == OvenProjectPlanMode::InteropBootstrap {
+            // The bootstrap has no caller-owned Rust registry inputs. Seed its generated manifest from the checked
+            // compiler lock, normalize the local path records offline, and make the later compatibility build
+            // unconditionally locked. That closes the first-plan loop without turning native interop into ambient
+            // Cargo or network discovery. The lock is resolved through the toolchain layout: an installed release
+            // carries it below `crates/Cargo.lock`, and only a development checkout keeps it at the workspace root.
+            let compiler_lock = crate::toolchain_layout::resolve_toolchain_runtime_lockfile();
+            let cargo = resolved_cargo_executable()
+                .map_err(|error| CliError::failure(format!("cannot resolve Cargo for interop bootstrap: {error}")))?;
+            stage_locked_loaf_fixture(&cargo, generated_project, &compiler_lock).map_err(|error| {
+                CliError::failure(format!("could not seed the interop bootstrap Cargo.lock: {error}"))
+            })?;
+            true
+        } else {
+            false
+        };
+        // A direct-C bootstrap must publish a project-owned base plan even when a compiler Loaf could otherwise
+        // satisfy the Rust closure. `oven interop bake` extends that exact stored plan with the locked native
+        // search paths and runtime bundles; a Loaf selected outside this store would leave no base artifact to
+        // extend, and would reintroduce the circular "link before sealed" failure.
         let base_loaf = project_extension_base_loaf(receipt)?;
         let materialization = bake_generated_project_compatibility_plan(
             store,
@@ -6575,14 +6760,18 @@ fn select_or_bake_generated_project_plan(
             rustc,
             base_loaf.as_ref(),
             source_compiler_vocab_support,
+            if mode == OvenProjectPlanMode::InteropBootstrap {
+                OvenLegacyCargoPublicationKind::InteropBootstrap
+            } else {
+                OvenLegacyCargoPublicationKind::Executable
+            },
         )?;
-        return select_published_project_plan(store, receipt, materialization)?
-            .ok_or_else(|| {
-                CliError::failure(
-                    "the explicit Oven project bake completed without a receipt-compatible direct-rustc plan",
-                )
-            })
-            .map(Some);
+        let mut prepared = select_published_project_plan(store, receipt, materialization)?.ok_or_else(|| {
+            CliError::failure("the explicit Oven project bake completed without a receipt-compatible direct-rustc plan")
+        })?;
+        prepared.cargo_process_started =
+            bootstrap_lock_seeded || materialization == OvenToolchainMaterialization::CompatibilityBaked;
+        return Ok(Some(prepared));
     }
     select_oven_direct_rustc_plan_with_materialization(store, receipt, dependency_surface.selection)
 }
@@ -6606,6 +6795,7 @@ fn interop_final_plan_required_error() -> CliError {
 struct OvenDirectRustcPlanPreparation {
     plan_selection: OvenDirectRustcPlanSelection,
     materialization: OvenToolchainMaterialization,
+    cargo_process_started: bool,
 }
 
 /// Render the registry requirements that made sealed Loaf selection impossible.
@@ -7272,6 +7462,225 @@ fn project_inspection_test_dependency_roots(
 }
 
 /// Publish and lease the receipt-bound project inspection authority for the selected execution plan.
+/// The library's own receipt-bound direct-rustc plan, named by the project inspection authority as a constituent.
+///
+/// It is the only sealed artifact that carries the build-script output (`OUT_DIR`) Rust generated while compiling the
+/// library's dependencies — prost's `oneof` enums, for one. A test unit inspects the library's dependencies through
+/// the authority and never runs Cargo, so without this constituent it could not see those items at all.
+pub(crate) struct LibraryInspectionConstituent {
+    pub identity: String,
+    /// How the store holds the constituent: a self-contained direct-rustc plan, or a project payload that extends
+    /// the compiler Loaf named by `base_loaf_identity`. The authority records the same shape, because a consumer
+    /// validates every constituent against its sealed kind before trusting it.
+    pub artifact_kind: OvenArtifactKind,
+    pub base_loaf_identity: Option<String>,
+    pub receipt: crate::oven::OvenReceipt,
+    pub artifacts: OvenRustcArtifactManifest,
+    /// The bake's rust-inspect workspace, whose Cargo bootstrap wrote the build-script output to seal.
+    pub rust_inspect_manifest_dir: Option<PathBuf>,
+    /// The generated project's selected Cargo target, where the bounded compatibility baker's unified Cargo
+    /// invocation wrote its build-script output when the closure was not loadable as independently compiled parts.
+    pub cargo_target_dir: Option<PathBuf>,
+    /// The generated project directory, beside which the compatibility build records which package version each
+    /// executed build script's output belongs to.
+    pub generated_project_dir: Option<PathBuf>,
+}
+
+/// Return every build-script output directory the explicit bake can seal for one library, versioned where known.
+///
+/// Units named by a package-keyed map come first: the inspection workspace loader writes one from rust-analyzer's
+/// crate graph, and the compatibility build writes one from Cargo's own messages. A directory scan of the same
+/// Cargo targets then adds any unit the maps did not name, without a version. Units are deduplicated by build-unit
+/// path, so a directory the maps already named is not sealed twice.
+fn bake_generated_out_dir_units(library: &LibraryInspectionConstituent) -> CliResult<Vec<BakeGeneratedOutDir>> {
+    let mut units = Vec::new();
+    let mut seen = BTreeSet::new();
+    for map_dir in [
+        library.rust_inspect_manifest_dir.as_deref(),
+        library.generated_project_dir.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        for (package, version, out_dir) in generated_out_dir_map_records(map_dir) {
+            let Some(unit_relative_path) = build_unit_relative_path(&out_dir) else {
+                continue;
+            };
+            if !out_dir_holds_rust(&out_dir) || !seen.insert(unit_relative_path.clone()) {
+                continue;
+            }
+            units.push(BakeGeneratedOutDir {
+                crate_name: package,
+                unit_relative_path,
+                out_dir,
+                version: Some(version),
+            });
+        }
+    }
+    for target_dir in bake_generated_out_dir_targets(library)? {
+        for generated in bake_generated_out_dirs(&target_dir)? {
+            if seen.insert(generated.unit_relative_path.clone()) {
+                units.push(generated);
+            }
+        }
+    }
+    Ok(units)
+}
+
+/// Read the package-keyed build-script output map written beside `dir`, as `(package, version, OUT_DIR)`.
+#[allow(unused_variables)]
+fn generated_out_dir_map_records(dir: &Path) -> Vec<(String, String, PathBuf)> {
+    #[cfg(feature = "rust_inspect")]
+    let records = crate::rust_inspect::read_generated_out_dirs_map(dir)
+        .into_iter()
+        .map(|record| (record.package, record.version, record.out_dir))
+        .collect();
+    #[cfg(not(feature = "rust_inspect"))]
+    let records = Vec::new();
+    records
+}
+
+/// Return the build-unit path below `build/` for one `out` directory, in either layout.
+///
+/// Oven's bootstrap lays build units out as `build/<crate>/<hash>/out`; a plain Cargo target uses
+/// `build/<crate>-<hash>/out`. Anything else is not a build-script output directory this bake seals.
+fn build_unit_relative_path(out_dir: &Path) -> Option<String> {
+    if out_dir.file_name()? != "out" {
+        return None;
+    }
+    let mut components = Vec::new();
+    let mut cursor = out_dir.parent()?;
+    loop {
+        let name = cursor.file_name()?.to_str()?;
+        if name == "build" {
+            break;
+        }
+        if components.len() == 2 {
+            return None;
+        }
+        components.push(name.to_string());
+        cursor = cursor.parent()?;
+    }
+    components.reverse();
+    Some(components.join("/"))
+}
+
+/// Return whether one build-script output directory holds generated Rust worth sealing.
+fn out_dir_holds_rust(dir: &Path) -> bool {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .any(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("rs"))
+        })
+        .unwrap_or(false)
+}
+
+/// Return the Cargo target directories whose build-script output the explicit bake can seal for one library.
+///
+/// Generated Rust reaches the bake by two routes. A direct-rustc bake's rust-inspect workspace names its Cargo
+/// target through `.cargo/config.toml`; the bounded compatibility baker builds the library through one unified Cargo
+/// invocation in the generated project's own selected target and leaves no rust-inspect config behind. Either can
+/// exist alone, so both are offered, in that order, and the sealer deduplicates by build unit.
+fn bake_generated_out_dir_targets(library: &LibraryInspectionConstituent) -> CliResult<Vec<PathBuf>> {
+    let mut targets = Vec::new();
+    if let Some(manifest_dir) = library.rust_inspect_manifest_dir.as_deref()
+        && let Some(target_dir) = rust_inspect_workspace_cargo_target(manifest_dir)?
+    {
+        targets.push(target_dir);
+    }
+    if let Some(target_dir) = library.cargo_target_dir.clone()
+        && !targets.contains(&target_dir)
+    {
+        targets.push(target_dir);
+    }
+    Ok(targets)
+}
+
+/// Return the Cargo target a rust-inspect workspace names through its `.cargo/config.toml`, if it names one.
+fn rust_inspect_workspace_cargo_target(rust_inspect_manifest_dir: &Path) -> CliResult<Option<PathBuf>> {
+    let config_path = rust_inspect_manifest_dir.join(".cargo").join("config.toml");
+    let Ok(config) = fs::read_to_string(&config_path) else {
+        return Ok(None);
+    };
+    let config = toml::from_str::<toml::Value>(&config).map_err(|error| {
+        CliError::failure(format!(
+            "rust-inspect Cargo config {} is not valid TOML: {error}",
+            config_path.display()
+        ))
+    })?;
+    Ok(config
+        .get("build")
+        .and_then(|build| build.get("target-dir"))
+        .and_then(toml::Value::as_str)
+        .map(PathBuf::from))
+}
+
+/// Return the build-script output directories the explicit bake's Cargo bootstrap left below one Cargo target.
+///
+/// Oven's bootstrap lays build units out as `debug/build/<crate>/<hash>/out`; a plain Cargo target uses
+/// `debug/build/<crate>-<hash>/out`. Every `out` that holds generated Rust is returned with its package name and the
+/// build-unit path below `build/`, so the sealed copy keeps the layout the generated-code route already recognizes.
+fn bake_generated_out_dirs(cargo_target_dir: &Path) -> CliResult<Vec<BakeGeneratedOutDir>> {
+    let build_dir = cargo_target_dir.join("debug").join("build");
+    let Ok(units) = fs::read_dir(&build_dir) else {
+        return Ok(Vec::new());
+    };
+    let holds_rust = out_dir_holds_rust;
+    let mut out_dirs = Vec::new();
+    for unit in units.flatten() {
+        let unit_name = unit.file_name().to_string_lossy().into_owned();
+        let direct_out = unit.path().join("out");
+        if direct_out.is_dir() {
+            // Cargo layout: `<crate>-<hash>/out`.
+            if let Some((crate_name, _)) = unit_name.rsplit_once('-')
+                && holds_rust(&direct_out)
+            {
+                out_dirs.push(BakeGeneratedOutDir {
+                    crate_name: crate_name.to_string(),
+                    unit_relative_path: unit_name.clone(),
+                    out_dir: direct_out,
+                    version: None,
+                });
+            }
+            continue;
+        }
+        // Oven layout: `<crate>/<hash>/out`.
+        let Ok(hashes) = fs::read_dir(unit.path()) else {
+            continue;
+        };
+        for hash in hashes.flatten() {
+            let out_dir = hash.path().join("out");
+            if out_dir.is_dir() && holds_rust(&out_dir) {
+                out_dirs.push(BakeGeneratedOutDir {
+                    crate_name: unit_name.clone(),
+                    unit_relative_path: format!("{unit_name}/{}", hash.file_name().to_string_lossy()),
+                    out_dir,
+                    version: None,
+                });
+            }
+        }
+    }
+    out_dirs.sort_by(|left, right| left.unit_relative_path.cmp(&right.unit_relative_path));
+    Ok(out_dirs)
+}
+
+/// One build-script output directory the explicit bake can seal for direct inspection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct BakeGeneratedOutDir {
+    crate_name: String,
+    /// Build-unit path below the target's `build/` directory, in whichever layout the bootstrap used.
+    unit_relative_path: String,
+    out_dir: PathBuf,
+    /// Exact package version whose build script wrote the directory, when a package-keyed map named it.
+    version: Option<String>,
+}
+
+/// Seal the project's inspection authority: the constituents a normal command may inspect through, the registry
+/// sources each one owns, the test-dependency envelope, and the build-script output the bake's Cargo targets wrote.
+///
+/// The library constituent, when the bake produced one, joins the constituents under the kind and base its selection
+/// had, and its registry sources are added only where no earlier constituent already names the locked package.
 fn publish_project_inspection_authority(
     store: &OvenStore,
     project_root: &Path,
@@ -7279,6 +7688,7 @@ fn publish_project_inspection_authority(
     registry_dependencies: &[DependencySpec],
     dev_registry_dependencies: &[DependencySpec],
     test_dependency_envelope: &PreparedOvenTestDependencyEnvelope,
+    library: Option<&LibraryInspectionConstituent>,
 ) -> CliResult<PublishedProjectInspectionAuthority> {
     let receipt = &test_dependency_envelope.receipt;
     let selection = &test_dependency_envelope.plan_selection;
@@ -7435,6 +7845,41 @@ fn publish_project_inspection_authority(
             ));
         }
     };
+    let mut constituents = constituents;
+    if let Some(library) = library
+        && !constituents.iter().any(|constituent| {
+            matches!(constituent, OvenProjectInspectionConstituent::Stored { identity, .. } if *identity == library.identity)
+        })
+    {
+        if library.artifacts.intent != library.receipt.intent {
+            return Err(CliError::failure(
+                "project inspection authority library constituent has a different build intent from its receipt",
+            ));
+        }
+        let index = constituents.len();
+        constituents.push(OvenProjectInspectionConstituent::Stored {
+            identity: library.identity.clone(),
+            artifact_kind: library.artifact_kind,
+            receipt: library.receipt.clone(),
+            base_loaf_identity: library.base_loaf_identity.clone(),
+        });
+        // The library's registry sources overlap the test envelope's almost entirely; only the sources absent from
+        // every earlier constituent are added, because the authority may name each locked package once.
+        for package in &library.artifacts.registry_sources {
+            let known = registry_sources.iter().any(|source| {
+                source.package.package == package.package
+                    && source.package.version == package.version
+                    && source.package.source.registry == package.source.registry
+                    && source.package.source.checksum == package.source.checksum
+            });
+            if !known {
+                registry_sources.push(OvenProjectInspectionSource {
+                    package: package.clone(),
+                    owner: OvenProjectInspectionSourceOwner::Constituent { index },
+                });
+            }
+        }
+    }
     registry_sources.sort_by(|left, right| {
         (
             &left.package.package,
@@ -7479,7 +7924,7 @@ fn publish_project_inspection_authority(
             })
         })
         .transpose()?;
-    let (registry_lock_digest, materialized_files) = if registry_sources.is_empty() {
+    let (registry_lock_digest, mut materialized_files) = if registry_sources.is_empty() {
         (digest_bytes(&[]), Vec::new())
     } else {
         let lock = fs::read(&lock_path).map_err(|error| {
@@ -7496,6 +7941,48 @@ fn publish_project_inspection_authority(
             }],
         )
     };
+    // Seal the generated Rust the Cargo bootstrap wrote for the library's dependencies. Those files are the only
+    // form in which prost's `include!`d modules exist; a normal command has no Cargo to regenerate them, so the
+    // authority carries them and direct inspection workspaces read them from here.
+    let mut generated_out_dirs = Vec::new();
+    let generated_units = library
+        .map(bake_generated_out_dir_units)
+        .transpose()?
+        .unwrap_or_default();
+    for generated in generated_units {
+        {
+            let BakeGeneratedOutDir {
+                crate_name,
+                unit_relative_path,
+                out_dir,
+                version,
+            } = generated;
+            let relative_root = format!("generated-out-dirs/build/{unit_relative_path}/out");
+            let mut sealed = false;
+            for entry in fs::read_dir(&out_dir)
+                .map_err(|error| CliError::failure(format!("cannot read {}: {error}", out_dir.display())))?
+                .flatten()
+            {
+                let path = entry.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("rs") {
+                    continue;
+                }
+                let file_name = entry.file_name().to_string_lossy().into_owned();
+                materialized_files.push(OvenArtifactMaterializedFile {
+                    source_path: path,
+                    relative_path: format!("{relative_root}/{file_name}"),
+                });
+                sealed = true;
+            }
+            if sealed {
+                generated_out_dirs.push(OvenProjectInspectionGeneratedOutDir {
+                    crate_name,
+                    relative_root,
+                    version,
+                });
+            }
+        }
+    }
     let payload = OvenProjectInspectionAuthorityPayload {
         schema_version: OVEN_PROJECT_INSPECTION_AUTHORITY_SCHEMA_VERSION,
         project_identity: baked_project_owner_identity(project_root)?,
@@ -7507,6 +7994,7 @@ fn publish_project_inspection_authority(
         test_dependency_envelope,
         constituents,
         registry_sources,
+        generated_out_dirs,
     };
     validate_project_inspection_authority_payload(&payload).map_err(oven_rustc_error)?;
     let payload = serde_json::to_vec(&payload)
@@ -8623,10 +9111,13 @@ fn completed_library_output_report(
                 .map(str::to_owned)
         })
         .unwrap_or_else(|| "incan_library".to_string());
+    // Prefer the release output, but accept the profile this project actually baked: a bake narrowed by
+    // `explicit_bake_profiles` has no release output, and this only names the reused library for the report.
     let release = outputs
         .iter()
         .find(|output| output.profile == "release")
-        .ok_or_else(|| CliError::failure("completed Oven library output is missing the release profile"))?;
+        .or_else(|| outputs.first())
+        .ok_or_else(|| CliError::failure("completed Oven library output has no profile to report"))?;
     let mut artifacts = Vec::new();
     for output in outputs {
         let native = output
@@ -9048,7 +9539,7 @@ fn select_default_library_project_outputs(
     let target = rustc_host_target(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
     let toolchain = rustc_identity(&rustc).map_err(|error| CliError::failure(error.to_string()))?;
     let mut outputs = Vec::new();
-    for profile in ["debug", "release"] {
+    for profile in explicit_bake_profiles() {
         let Some(selected) = select_baked_project_output_with_source_authority(
             &store,
             &project_root,
@@ -10367,7 +10858,7 @@ fn prepare_library_project(
             .ok_or_else(|| CliError::failure("normal Oven library build omitted toolchain"))?;
         checked_packaged_provider_profiles(
             &provider_plan,
-            &["debug", "release"],
+            &explicit_bake_profiles(),
             target,
             toolchain,
             authority_context,
@@ -10519,7 +11010,7 @@ fn prepare_library_project(
             "library_oven_receipt_source_evidence",
             oven_receipt_source_evidence_start,
         );
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             let mut receipt_request = OvenGeneratedProjectRequest::new(
                 &project_root,
                 &project_name,
@@ -10555,6 +11046,7 @@ fn prepare_library_project(
                 Some(OvenDirectRustcPlanPreparation {
                     plan_selection: selection,
                     materialization: OvenToolchainMaterialization::Reused,
+                    cargo_process_started: false,
                 })
             } else {
                 select_or_bake_generated_project_plan(
@@ -10667,10 +11159,14 @@ fn prepare_library_project(
     let oven_vocab_context_start = Instant::now();
     let normal_oven_vocab_context = if manifest.vocab().is_some() {
         if let Some(oven) = oven.as_ref() {
+            // Prefer the release selection, but fall back to whatever profile this bake actually prepared.
+            // An explicit bake may be narrowed to one profile (see `explicit_bake_profiles`), and the vocab
+            // helper is a wasm desugarer whose identity does not depend on the host profile that carried it.
             let release = oven
                 .profiles
                 .get("release")
-                .ok_or_else(|| CliError::failure("normal Oven library build did not prepare its release selection"))?;
+                .or_else(|| oven.profiles.values().next())
+                .ok_or_else(|| CliError::failure("normal Oven library build prepared no profile selection"))?;
             if release.plan_selection.artifacts().vocab_auxiliary_targets.is_empty() {
                 // A receipt-exact project closure may predate project-extension publication or legitimately own a
                 // disjoint Rust ABI universe. It must not manufacture compiler-private helper artifacts or invoke
@@ -10734,10 +11230,12 @@ fn prepare_library_project(
             &generator.output_dir().join("oven"),
         );
         report_draft.cargo = None;
+        // Report identities from the release selection when present, else the profile that was prepared.
         let release = oven
             .profiles
             .get("release")
-            .ok_or_else(|| CliError::failure("normal Oven library build did not prepare its release selection"))?;
+            .or_else(|| oven.profiles.values().next())
+            .ok_or_else(|| CliError::failure("normal Oven library build prepared no profile selection"))?;
         report_draft.oven = Some(BuildOvenReport {
             receipt_identity: release.receipt.identity.clone(),
             build_unit_identity: release.receipt.build_unit_identity.clone(),
@@ -12212,6 +12710,46 @@ fn project_bake_receipt_path(
     Ok(crate::oven::default_receipt_path(project_root).with_file_name(file_name))
 }
 
+/// Return the private pre-interop receipt path for one Rust target, entrypoint, and profile.
+///
+/// This never shares the ordinary explicit-bake receipt namespace: the automatic bootstrap deliberately excludes
+/// publisher-only development dependencies and is valid only as the base later extended by a selected native plan.
+fn interop_bootstrap_receipt_path(
+    project_root: &Path,
+    rust_target: &str,
+    target: OvenBakeProjectTarget,
+    entrypoint: &Path,
+    profile: &str,
+) -> CliResult<PathBuf> {
+    let target_identity = oven_bake_project_target_identity(project_root, target, entrypoint)?;
+    let identity = digest_bytes(format!("{rust_target}\0{target_identity}").as_bytes())
+        .trim_start_matches("sha256:")
+        .to_string();
+    Ok(crate::oven::default_receipt_path(project_root)
+        .with_file_name(format!("interop-bootstrap-{identity}-{profile}-receipt.json")))
+}
+
+/// Return the durable receipt path appropriate to one prepared Oven command mode.
+fn prepared_oven_receipt_path(
+    project_root: &Path,
+    mode: OvenProjectPlanMode,
+    rust_target: &str,
+    entrypoint: &Path,
+    profile: &str,
+) -> CliResult<PathBuf> {
+    if mode == OvenProjectPlanMode::InteropBootstrap {
+        interop_bootstrap_receipt_path(
+            project_root,
+            rust_target,
+            OvenBakeProjectTarget::Executable,
+            entrypoint,
+            profile,
+        )
+    } else {
+        Ok(crate::oven::default_receipt_path(project_root))
+    }
+}
+
 /// Restore and validate the portable package handoff carried by reused library outputs.
 fn restore_reused_library_package(
     project_root: &Path,
@@ -12369,7 +12907,7 @@ fn try_reuse_baked_project(
     let lock_dependencies_fingerprint = baked_project_lock_dependencies_fingerprint(project_root)?;
     let mut expected_outputs = Vec::new();
     for (project_target, entrypoint) in targets {
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             let receipt_path = project_bake_receipt_path(project_root, *project_target, entrypoint, profile)?;
             let receipt = match fs::read(&receipt_path)
                 .ok()
@@ -13233,13 +13771,15 @@ pub fn build_library(
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            // Prefer the release output's backend receipt, but accept the profile this project actually baked.
+            // A bake narrowed by `explicit_bake_profiles` has no release output to find, and the default backend
+            // receipt records the selected plan rather than anything profile-specific.
             let backend_receipt = outputs
                 .iter()
                 .find(|output| output.profile == "release")
+                .or_else(|| outputs.first())
                 .and_then(completed_output_default_backend_receipt)
-                .ok_or_else(|| {
-                    CliError::failure("completed Oven library output has no verified release backend receipt")
-                })?;
+                .ok_or_else(|| CliError::failure("completed Oven library output has no verified backend receipt"))?;
             for selected in outputs {
                 materialize_project_output(&project_root, &selected)?;
                 println!(
@@ -13434,6 +13974,14 @@ pub(crate) fn bake_oven_project_targets(
     let mut profiles = Vec::new();
     let mut pending_outputs = Vec::new();
     let mut debug_target_receipts = Vec::new();
+    let mut library_inspection_constituent: Option<LibraryInspectionConstituent> = None;
+    // Every prepared target keeps the store leases of the plans it selected or published. Those leases must outlive
+    // the whole bake, not just the target's own loop arm: the inspection authority sealed after the loop names those
+    // entries as constituents, and a later admission in the same bake (the test-dependency envelope, the authority
+    // itself) prunes unleased entries when the domain policy is tight. A bake that succeeds must leave a loadable
+    // closure, so its constituents stay leased until the authority is sealed; if the policy cannot hold them all,
+    // admission fails loudly instead.
+    let mut retained_preparations: Vec<PreparedLibraryProject> = Vec::new();
     #[cfg(feature = "rust_inspect")]
     let mut rust_inspect_manifest_dirs = BTreeSet::new();
 
@@ -13477,6 +14025,43 @@ pub(crate) fn bake_oven_project_targets(
                 for (profile, selected_profile) in &selected.profiles {
                     if profile == "debug" {
                         debug_target_receipts.push(selected_profile.receipt.clone());
+                    }
+                    if profile == "debug" {
+                        // The library's debug plan is the constituent that lets a test unit inspect the library's
+                        // dependencies. A direct-rustc bake stores it whole, and its rust-inspect workspace holds
+                        // the Cargo bootstrap's generated Rust. When the closure is not loadable as independently
+                        // compiled parts, the bounded compatibility baker publishes the library as a store-owned
+                        // extension of a compiler Loaf instead; the composed manifest under the extension's
+                        // identity is the same constituent, and the generated project's own Cargo target holds
+                        // the generated Rust.
+                        let constituent = match &selected_profile.plan_selection {
+                            OvenDirectRustcPlanSelection::Stored(plan) => Some((
+                                plan.identity.clone(),
+                                plan.artifacts.clone(),
+                                OvenArtifactKind::DirectRustcPlan,
+                                None,
+                            )),
+                            OvenDirectRustcPlanSelection::ProjectExtension(extension) => Some((
+                                extension.extension.identity.clone(),
+                                extension.artifacts.clone(),
+                                OvenArtifactKind::ProjectPayload,
+                                Some(extension.base.loaf_identity.clone()),
+                            )),
+                            OvenDirectRustcPlanSelection::ToolchainLoaf(_)
+                            | OvenDirectRustcPlanSelection::PackagedProvider(_) => None,
+                        };
+                        if let Some((identity, artifacts, artifact_kind, base_loaf_identity)) = constituent {
+                            library_inspection_constituent = Some(LibraryInspectionConstituent {
+                                identity,
+                                artifact_kind,
+                                base_loaf_identity,
+                                receipt: selected_profile.receipt.clone(),
+                                artifacts,
+                                rust_inspect_manifest_dir: prepared.rust_inspect_manifest_dir.clone(),
+                                cargo_target_dir: Some(prepared.generator.cargo_target_dir()),
+                                generated_project_dir: Some(prepared.generator.output_dir().to_path_buf()),
+                            });
+                        }
                     }
                     let bake = bake_oven_library(&prepared, selected, profile, Some(&mut authority_context))?;
                     let library_relative_path = bake
@@ -13588,6 +14173,7 @@ pub(crate) fn bake_oven_project_targets(
                     });
                 }
                 remove_completed_generated_cargo_lock(prepared.generator.output_dir())?;
+                retained_preparations.push(prepared);
             }
             OvenBakeProjectTarget::Executable => {
                 if published_project_lock.is_none() {
@@ -13616,7 +14202,7 @@ pub(crate) fn bake_oven_project_targets(
                         })
                     })
                     .transpose()?;
-                for profile in ["debug", "release"] {
+                for profile in explicit_bake_profiles() {
                     let prepared = prepare_oven_project(
                         entrypoint,
                         target_output_dir,
@@ -13712,6 +14298,7 @@ pub(crate) fn bake_oven_project_targets(
         &registry_dependencies,
         &dev_registry_dependencies,
         &test_dependency_envelope,
+        library_inspection_constituent.as_ref(),
     )?;
     let lock_dependencies_fingerprint = baked_project_lock_dependencies_fingerprint(&project_root)?;
     let mut published_outputs = Vec::with_capacity(pending_outputs.len());
@@ -13784,13 +14371,15 @@ pub(crate) fn build_library_report(
         {
             let project_root = resolve_library_project_root(file_path)?;
             warn_for_completed_output_lock_fingerprint_drift(&project_root, outputs.iter())?;
+            // Prefer the release output's backend receipt, but accept the profile this project actually baked.
+            // A bake narrowed by `explicit_bake_profiles` has no release output to find, and the default backend
+            // receipt records the selected plan rather than anything profile-specific.
             let backend_receipt = outputs
                 .iter()
                 .find(|output| output.profile == "release")
+                .or_else(|| outputs.first())
                 .and_then(completed_output_default_backend_receipt)
-                .ok_or_else(|| {
-                    CliError::failure("completed Oven library output has no verified release backend receipt")
-                })?;
+                .ok_or_else(|| CliError::failure("completed Oven library output has no verified backend receipt"))?;
             for output in &outputs {
                 materialize_project_output(&project_root, output)?;
             }
@@ -13837,7 +14426,7 @@ pub(crate) fn build_library_report(
             .as_ref()
             .ok_or_else(|| CliError::failure("normal Oven library build lost its prepared direct-rustc selection"))?;
         let mut bakes = Vec::new();
-        for profile in ["debug", "release"] {
+        for profile in explicit_bake_profiles() {
             bakes.push((profile, bake_oven_library(&prepared, oven, profile, None)?));
         }
         let oven_build_ms = elapsed_ms(oven_build_start);
@@ -14907,6 +15496,138 @@ headers = ["interop/include/bridge.h"]
             initial,
             digest_baked_project_source_authority(project.path())?,
             "a declared interop header mutation must invalidate a completed output after reselection"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn normal_oven_consumer_selects_a_sealed_final_interop_plan() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let generated = project.path().join("generated/src/main.rs");
+        fs::create_dir_all(generated.parent().ok_or("generated source parent missing")?)?;
+        fs::write(&generated, "fn main() {}\n")?;
+        let receipt = receipt_generated_project(
+            &OvenGeneratedProjectRequest::new(
+                project.path(),
+                "interop-final-consumer",
+                "0.1.0",
+                "aarch64-apple-darwin",
+                "rustc fixture",
+                "debug",
+                Vec::new(),
+            )
+            .with_generated_source("generated-root", &generated)
+            .with_build_unit_input(OVEN_INTEROP_EXECUTION_RECEIPT_INPUT, "sha256:selected-native-execution")
+            .with_build_unit_input(crate::oven::interop::OVEN_INTEROP_PLAN_SCHEMA_INPUT, "5"),
+        )?;
+        let store = OvenStore::new(
+            project.path().join("oven-store"),
+            crate::oven::store::OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024),
+        );
+        store.publish(&OvenArtifactPublishRequest {
+            receipt: receipt.clone(),
+            domain: "interop-final-consumer".to_string(),
+            kind: OvenArtifactKind::DirectRustcPlan,
+            payload: serde_json::to_vec(&OvenRustcArtifactManifest {
+                schema_version: crate::oven::rustc::OVEN_RUSTC_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+                intent: receipt.intent.clone(),
+                dependency_search_paths: Vec::new(),
+                native_search_paths: Vec::new(),
+                externs: Vec::new(),
+                entrypoint_externs: BTreeMap::new(),
+                registry_leaves: Vec::new(),
+                registry_sources: Vec::new(),
+                compile_environment: BTreeMap::new(),
+                vocab_auxiliary_targets: Vec::new(),
+                supporting_artifacts: Vec::new(),
+            })?,
+            materialized_files: Vec::new(),
+        })?;
+
+        let selected = select_or_bake_generated_project_plan(
+            OvenProjectPlanMode::ConsumeOnly,
+            &store,
+            &receipt,
+            OvenProjectDependencySurface { selection: &[] },
+            project.path(),
+            &generated,
+            &PathBuf::from("/usr/bin/rustc"),
+        )?
+        .ok_or("normal Oven consumer did not select its exact final interop plan")?;
+        assert!(matches!(
+            selected.plan_selection,
+            OvenDirectRustcPlanSelection::Stored(_)
+        ));
+        assert!(!selected.cargo_process_started);
+        Ok(())
+    }
+
+    #[test]
+    fn bake_generated_out_dirs_reads_only_rust_bearing_cargo_build_units() -> Result<(), Box<dyn std::error::Error>> {
+        // The bake's rust-inspect workspace names its Cargo target through `.cargo/config.toml`. Only build units
+        // whose `out` holds generated Rust are worth sealing, in Oven's `<crate>/<hash>/out` layout as well as
+        // Cargo's `<crate>-<hash>/out`.
+        let tmp = tempfile::tempdir()?;
+        let manifest_dir = tmp.path().join("inspect");
+        let target_dir = tmp.path().join("inspect-target");
+        fs::create_dir_all(manifest_dir.join(".cargo"))?;
+        fs::write(
+            manifest_dir.join(".cargo/config.toml"),
+            format!("[build]\ntarget-dir = \"{}\"\n", target_dir.display()),
+        )?;
+        let oven_out = target_dir.join("debug/build/substrait/157348677c93f659/out");
+        let cargo_out = target_dir.join("debug/build/prost-types-9741e23407182c1c/out");
+        let plain_out = target_dir.join("debug/build/cc/0123456789abcdef/out");
+        for dir in [&oven_out, &cargo_out, &plain_out] {
+            fs::create_dir_all(dir)?;
+        }
+        fs::write(oven_out.join("substrait.rs"), "pub mod proto {}\n")?;
+        fs::write(cargo_out.join("types.rs"), "pub struct Duration;\n")?;
+        fs::write(plain_out.join("flags"), "")?;
+
+        let named_target =
+            rust_inspect_workspace_cargo_target(&manifest_dir)?.ok_or("the workspace config names a Cargo target")?;
+        assert_eq!(named_target, target_dir);
+        let dirs = bake_generated_out_dirs(&named_target)?;
+
+        assert_eq!(
+            dirs,
+            vec![
+                BakeGeneratedOutDir {
+                    crate_name: "prost-types".to_string(),
+                    unit_relative_path: "prost-types-9741e23407182c1c".to_string(),
+                    out_dir: cargo_out.clone(),
+                    version: None,
+                },
+                BakeGeneratedOutDir {
+                    crate_name: "substrait".to_string(),
+                    unit_relative_path: "substrait/157348677c93f659".to_string(),
+                    out_dir: oven_out.clone(),
+                    version: None,
+                },
+            ]
+        );
+        assert!(
+            rust_inspect_workspace_cargo_target(tmp.path())?.is_none(),
+            "a workspace without a Cargo config names no target"
+        );
+        assert!(
+            bake_generated_out_dirs(&tmp.path().join("never-built"))?.is_empty(),
+            "a Cargo target without build units seals nothing"
+        );
+        // The build-unit path is read from either layout and only below a `build` directory.
+        assert_eq!(
+            build_unit_relative_path(&cargo_out).as_deref(),
+            Some("prost-types-9741e23407182c1c")
+        );
+        assert_eq!(
+            build_unit_relative_path(&oven_out).as_deref(),
+            Some("substrait/157348677c93f659")
+        );
+        assert_eq!(build_unit_relative_path(&tmp.path().join("deps/out")), None);
+        assert_eq!(
+            build_unit_relative_path(&target_dir.join("debug/build/x/y/z/out")),
+            None
         );
         Ok(())
     }
@@ -17429,6 +18150,60 @@ impl ChildId {
         assert_eq!(
             targets,
             vec![(OvenBakeProjectTarget::Executable, project.path().join("src/main.incn"))]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn oven_interop_bootstrap_selects_only_one_declared_executable() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let main = project.path().join("src/main.incn");
+        let extra = project.path().join("src/extra.incn");
+
+        let selected = sole_oven_interop_executable_target(vec![
+            (OvenBakeProjectTarget::Library, project.path().join("src/lib.incn")),
+            (OvenBakeProjectTarget::Executable, main.clone()),
+        ])?;
+        assert_eq!(selected, (OvenBakeProjectTarget::Executable, main));
+
+        let error = match sole_oven_interop_executable_target(vec![
+            (OvenBakeProjectTarget::Executable, project.path().join("src/main.incn")),
+            (OvenBakeProjectTarget::Executable, extra),
+        ]) {
+            Err(error) => error,
+            Ok(selected) => {
+                return Err(format!(
+                    "automatic interop bootstrap must not select one of several scripts, but selected {selected:?}"
+                )
+                .into());
+            }
+        };
+        assert!(error.to_string().contains("provide an explicit base receipt"));
+        Ok(())
+    }
+
+    #[test]
+    fn oven_interop_bootstrap_receipt_isolated_from_explicit_bake_receipts() -> Result<(), Box<dyn std::error::Error>> {
+        let project = tempfile::tempdir()?;
+        let entrypoint = project.path().join("src/main.incn");
+        let explicit =
+            project_bake_receipt_path(project.path(), OvenBakeProjectTarget::Executable, &entrypoint, "debug")?;
+        let bootstrap = interop_bootstrap_receipt_path(
+            project.path(),
+            "aarch64-apple-darwin",
+            OvenBakeProjectTarget::Executable,
+            &entrypoint,
+            "debug",
+        )?;
+
+        assert_ne!(bootstrap, explicit);
+        assert!(
+            bootstrap
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("interop-bootstrap-") && name.ends_with("-debug-receipt.json")),
+            "unexpected bootstrap receipt path: {}",
+            bootstrap.display()
         );
         Ok(())
     }

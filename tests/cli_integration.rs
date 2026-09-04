@@ -6533,6 +6533,146 @@ fn check_rejects_an_undeclared_interop_target() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// The only automatic Cargo use in the interop route is the explicit Oven bootstrap. Once Oven has sealed the
+/// selected native plan, a locked runtime invocation must consume that receipt and never rediscover Cargo.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn oven_interop_bake_bootstraps_direct_c_then_locked_run_uses_the_sealed_plan() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tmp = tempfile::tempdir()?;
+    let main_path = write_minimal_project(
+        tmp.path(),
+        "direct_c_interop_bootstrap",
+        r#"
+
+[sdk]
+profile = "minimal"
+
+[oven.interop]
+schema = 1
+
+[[oven.interop.targets]]
+target = "aarch64-apple-darwin"
+headers = ["interop/include/fixture.h"]
+
+[[oven.interop.targets.artifacts]]
+name = "fixture"
+kind = "static"
+path = "interop/lib/libfixture.a"
+
+[[oven.interop.targets.bindings]]
+module = ["fixture"]
+name = "Fixture"
+artifacts = ["fixture"]
+"#,
+    )?;
+    let include_dir = tmp.path().join("interop/include");
+    let library_dir = tmp.path().join("interop/lib");
+    fs::create_dir_all(&include_dir)?;
+    fs::create_dir_all(&library_dir)?;
+    fs::write(include_dir.join("fixture.h"), "int fixture_value(void);\n")?;
+    let fixture_source = tmp.path().join("interop/fixture.c");
+    fs::write(&fixture_source, "int fixture_value(void) { return 42; }\n")?;
+    let clang = c_abi_test_clang().ok_or("the macOS direct-C fixture requires clang")?;
+    let native_object = library_dir.join("fixture.o");
+    let native_compile = Command::new(clang)
+        .args(["-c", "-o"])
+        .arg(&native_object)
+        .arg(&fixture_source)
+        .output()?;
+    assert_success(&native_compile, "direct-C fixture object compilation");
+    let native_archive = library_dir.join("libfixture.a");
+    let native_archive_build = Command::new("ar")
+        .args(["rcs"])
+        .arg(&native_archive)
+        .arg(&native_object)
+        .output()?;
+    assert_success(&native_archive_build, "direct-C fixture static archive creation");
+    fs::write(
+        tmp.path().join("src/fixture.incn"),
+        r#"from std.interop import c
+
+
+binding Fixture:
+    header = "interop/include/fixture.h"
+    link = c.system_library("fixture")
+
+    symbol value() -> c.i32:
+        native = "fixture_value"
+
+
+pub def native_value() -> int:
+    unsafe:
+        return Fixture.value()
+"#,
+    )?;
+    fs::write(
+        &main_path,
+        r#"from fixture import native_value
+
+
+def main() -> None:
+    println(native_value())
+"#,
+    )?;
+    let main_arg = main_path.to_str().ok_or("main path was not valid UTF-8")?;
+    let sdk_inventory = std::env::var_os("INCAN_SDK_INVENTORY")
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(|| {
+            fs::read_dir(support::sdk_provider_store()).ok()?.find_map(|entry| {
+                let inventory = entry.ok()?.path().join("sdk-inventory.json");
+                inventory.is_file().then_some(inventory)
+            })
+        })
+        .ok_or("direct-C interop regression requires the sealed SDK inventory from test prewarm")?;
+    let sdk_inventory_text = sdk_inventory
+        .to_str()
+        .ok_or("sealed SDK inventory path was not valid UTF-8")?;
+
+    let lock = run_incan_with_env(
+        tmp.path(),
+        &["lock", main_arg],
+        &[("INCAN_SDK_INVENTORY", sdk_inventory_text)],
+    )?;
+    assert_success(&lock, "direct-C interop lock");
+    let bake = run_incan_with_env(
+        tmp.path(),
+        &[
+            "oven",
+            "interop",
+            "bake",
+            "--project",
+            ".",
+            "--target",
+            "aarch64-apple-darwin",
+        ],
+        &[("INCAN_SDK_INVENTORY", sdk_inventory_text)],
+    )?;
+    assert_success(&bake, "automatic direct-C interop bootstrap and bake");
+    assert!(
+        String::from_utf8_lossy(&bake.stdout).contains("named compatibility publisher"),
+        "automatic interop bake did not disclose its bounded bootstrap:\n{}",
+        String::from_utf8_lossy(&bake.stdout)
+    );
+
+    let cargo_marker = tmp.path().join("cargo-was-started");
+    let guarded_run = run_incan_with_failing_cargo_guard_and_env(
+        tmp.path(),
+        &["run", "--locked", main_arg],
+        &tmp.path().join("cargo-guard"),
+        &cargo_marker,
+        &[("INCAN_SDK_INVENTORY", sdk_inventory.as_path())],
+    )?;
+    assert_success(&guarded_run, "locked direct-C runtime after interop bake");
+    assert_eq!(String::from_utf8_lossy(&guarded_run.stdout).trim(), "42");
+    assert!(
+        !cargo_marker.exists(),
+        "locked direct-C runtime started Cargo after Oven sealed the native plan"
+    );
+    Ok(())
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn check_verifies_c_bindings_against_a_declared_ios_interop_target() -> Result<(), Box<dyn std::error::Error>> {

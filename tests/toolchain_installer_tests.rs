@@ -1670,6 +1670,10 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
             .contains(r#"__version__ = "0.4.0.dev6""#)
     );
     assert!(
+        fs::read_to_string(dist.join("_pip-package/src/incan_toolchain/__init__.py"))?
+            .contains(r#"__release_version__ = "0.4.0-dev.6""#)
+    );
+    assert!(
         dist.join("_pip-package/src/incan_toolchain/vendor/install-incan.sh")
             .exists()
     );
@@ -1690,6 +1694,10 @@ fn package_prepare_scripts_stage_versions_and_shared_installer() -> Result<(), B
     assert!(
         fs::read_to_string(dist.join("_pip-package/src/incan_toolchain/__init__.py"))?
             .contains(r#"__version__ = "0.4.0rc1""#)
+    );
+    assert!(
+        fs::read_to_string(dist.join("_pip-package/src/incan_toolchain/__init__.py"))?
+            .contains(r#"__release_version__ = "0.4.0-rc1""#)
     );
     Ok(())
 }

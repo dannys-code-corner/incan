@@ -15,8 +15,8 @@ use std::time::Instant;
 
 use incan_core::interop::{
     RUST_NEVER_TYPE_DISPLAY, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustMethodSig, RustParam,
-    RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeMetadataCompleteness, RustTypeShape,
-    RustTypeShapePathFallback, RustVariantInfo, RustVisibility, parse_rust_type_shape_text,
+    RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeMetadataCompleteness, RustTypeShape,
+    RustTypeShapePathFallback, RustVariantInfo, RustVisibility, is_box_carrier_path, parse_rust_type_shape_text,
     rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
     rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
 };
@@ -174,7 +174,7 @@ struct DiskCacheEnvelope {
 }
 
 // Bump when extracted metadata semantics change in a way that makes previously persisted items unsafe to reuse.
-const DISK_CACHE_FORMAT: u32 = 37;
+const DISK_CACHE_FORMAT: u32 = 38;
 const DISK_CACHE_FILE: &str = ".incan_rust_inspect_cache.json";
 // Backward-compatibility read path for caches written before the crate/module rename.
 const LEGACY_DISK_CACHE_FILE: &str = ".incan_rust_metadata_cache.json";
@@ -1050,10 +1050,44 @@ pub(crate) fn cargo_configured_target_dir(root: &Path) -> PathBuf {
     if path.is_absolute() { path } else { root.join(path) }
 }
 
+/// Read the exact version a dependency's manifest declares, if it declares one inline.
+///
+/// This is the version the generated-code route matches build units against: a closure can hold several build
+/// units of one package, and only the unit built from this version's sources defines the items this dependency
+/// exposes. A workspace-inherited version is not resolvable here and yields `None`, which disables the filter.
+fn dependency_manifest_version(dep_root: &Path) -> Option<String> {
+    let payload = fs::read_to_string(dep_root.join("Cargo.toml")).ok()?;
+    let manifest = toml::from_str::<toml::Value>(payload.as_str()).ok()?;
+    manifest.get("package")?.get("version")?.as_str().map(str::to_string)
+}
+
+/// Return the path form under which build-script output directories are compared.
+fn comparable_out_dir(out_dir: &Path) -> PathBuf {
+    fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf())
+}
+
+/// Return whether a build unit of a known version may define items for a dependency of `dep_version`.
+fn out_dir_version_matches(unit_version: Option<&str>, dep_version: Option<&str>) -> bool {
+    match (unit_version, dep_version) {
+        (Some(unit), Some(dep)) => unit == dep,
+        _ => true,
+    }
+}
+
 /// Find generated Rust files under build-script `OUT_DIR` directories that may define metadata for a dependency-owned
 /// item referenced through the root generated workspace.
+///
+/// Both routes below filter by package version whenever the version of a unit is known: a Cargo target's units
+/// through the map the workspace loader wrote from rust-analyzer's crate graph, sealed units through the version the
+/// bake recorded. A unit whose version is unknown stays a candidate, so a workspace without either record keeps
+/// today's behavior.
 fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) -> Vec<PathBuf> {
     let target_dir = cargo_configured_target_dir(root);
+    let dep_version = dependency_manifest_version(dep_root);
+    let mapped_versions = crate::loader::read_generated_out_dirs_map(root)
+        .into_iter()
+        .map(|record| (comparable_out_dir(&record.out_dir), record.version))
+        .collect::<HashMap<_, _>>();
     let mut crate_names = load_root_crate_names(dep_root);
     crate_names.push(normalized_crate_cache_key(crate_name));
     crate_names.sort();
@@ -1074,6 +1108,10 @@ fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) 
                 continue;
             }
             let out_dir = entry.path().join("out");
+            let unit_version = mapped_versions.get(&comparable_out_dir(&out_dir));
+            if !out_dir_version_matches(unit_version.map(String::as_str), dep_version.as_deref()) {
+                continue;
+            }
             let Ok(out_entries) = fs::read_dir(out_dir) else {
                 continue;
             };
@@ -1085,9 +1123,58 @@ fn generated_out_dir_candidates(root: &Path, dep_root: &Path, crate_name: &str) 
             }
         }
     }
+    // A direct Oven inspection workspace has no Cargo target directory. The sealed plan Loafs that compiled its
+    // dependencies keep their build-script output as `build/<crate>/<hash>/out`, and the installer lists the ones this
+    // workspace may read; without them prost's generated `oneof` enums are invisible to normal commands.
+    for sealed in crate::loader::read_oven_generated_out_dirs(root) {
+        if !out_dir_version_matches(sealed.version.as_deref(), dep_version.as_deref()) {
+            continue;
+        }
+        let out_dir = sealed.out_dir;
+        let Some(owner) = sealed_out_dir_crate_name(&out_dir) else {
+            continue;
+        };
+        let normalized = normalized_crate_cache_key(owner.as_str());
+        if !crate_names
+            .iter()
+            .any(|name| normalized == *name || normalized.starts_with(format!("{name}_").as_str()))
+        {
+            continue;
+        }
+        let Ok(out_entries) = fs::read_dir(&out_dir) else {
+            continue;
+        };
+        for out_entry in out_entries.flatten() {
+            let path = out_entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) == Some("rs") {
+                files.push(path);
+            }
+        }
+    }
     files.sort();
     files.dedup();
     files
+}
+
+/// Return the crate owning one build-script output directory.
+///
+/// Oven seals build units as `build/<crate>/<hash>/out`; Cargo lays them out as `build/<crate>-<hash>/out`.
+fn sealed_out_dir_crate_name(out_dir: &Path) -> Option<String> {
+    let build_unit = out_dir.parent()?;
+    let unit_name = build_unit.file_name()?.to_str()?;
+    let owner = build_unit.parent()?;
+    if owner.parent()?.file_name()?.to_str()? == "build" {
+        return Some(owner.file_name()?.to_str()?.to_string());
+    }
+    if owner.file_name()?.to_str()? == "build" {
+        return Some(
+            unit_name
+                .rsplit_once('-')
+                .map_or(unit_name, |(name, _)| name)
+                .to_string(),
+        );
+    }
+    None
 }
 
 /// Collect file names from `include!(concat!(env!("OUT_DIR"), "..."))` macro text.
@@ -1647,6 +1734,10 @@ fn source_type_path_display(path: &str, context: &SourceMetadataContext<'_>, typ
         "bool" | "f32" | "f64" | "i8" | "i16" | "i32" | "i64" | "i128" | "isize" | "u8" | "u16" | "u32" | "u64"
         | "u128" | "usize" | "str" | "String" | "()" | "[u8]" => return compact,
         "alloc::string::String" | "std::string::String" => return "String".to_string(),
+        // The prelude `Box` is not an item of the owning module. Left to the owner-join below it became
+        // `datafusion_expr::expr::Box<..>`, a path no consumer can name and the payload stripper cannot see
+        // (#1229); the generated-code route already canonicalizes every spelling to the same short display.
+        "alloc::boxed::Box" | "std::boxed::Box" | "prost::alloc::boxed::Box" | "Box" => return "Box".to_string(),
         _ => {}
     }
 
@@ -2712,8 +2803,16 @@ fn source_struct_metadata(
     })
 }
 
-/// Extract payload shapes from a source enum variant.
-fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataContext<'_>) -> Vec<RustTypeShape> {
+/// Extract payload shapes and their storage carriers from a source enum variant.
+///
+/// Registry crates such as `datafusion_expr` reach this syntactic route, and they spell recursive payloads exactly
+/// as prost does (`WindowFunction(Box<WindowFunction>)`). The payload is recorded as the semantic type with its
+/// carrier beside it, the same contract the HIR extractor and the generated-code route keep; a route that left the
+/// bare `Box` in place made the typechecker owner-join it into `datafusion_expr::expr::Box<..>` (#1229).
+fn source_variant_payloads(
+    variant: ast::Variant,
+    ctx: &SourceMetadataContext<'_>,
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     let Some(field_list) = variant.field_list() else {
         return Vec::new();
     };
@@ -2723,7 +2822,7 @@ fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataCont
             .filter_map(|field| field.ty())
             .map(|ty| {
                 let display = ctx.type_display(ty.syntax().text().to_string().as_str());
-                generated_type_shape(display.as_str())
+                normalize_generated_variant_payload_shape(generated_type_shape(display.as_str()))
             })
             .collect(),
         ast::FieldList::RecordFieldList(fields) => fields
@@ -2731,7 +2830,9 @@ fn source_variant_payload_shapes(variant: ast::Variant, ctx: &SourceMetadataCont
             .filter_map(|field| {
                 let ty = field.ty()?;
                 let display = ctx.type_display(ty.syntax().text().to_string().as_str());
-                Some(generated_type_shape(display.as_str()))
+                Some(normalize_generated_variant_payload_shape(generated_type_shape(
+                    display.as_str(),
+                )))
             })
             .collect(),
     }
@@ -2766,9 +2867,11 @@ fn source_enum_metadata(
         .variants()
         .filter_map(|variant| {
             let name = variant.name()?.to_string();
+            let (fields, field_carriers) = source_variant_payloads(variant, ctx).into_iter().unzip();
             Some(RustVariantInfo {
                 name,
-                fields: source_variant_payload_shapes(variant, ctx),
+                fields,
+                field_carriers,
             })
         })
         .collect::<Vec<_>>();
@@ -3657,25 +3760,25 @@ fn generated_struct_metadata(
 }
 
 /// Remove transparent generated `Box<T>` payload wrappers from enum variant shapes because Incan pattern/coercion logic
-/// cares about the semantic payload type, not prost's storage carrier.
-fn normalize_generated_variant_payload_shape(shape: RustTypeShape) -> RustTypeShape {
+/// cares about the semantic payload type, not prost's storage carrier. The carrier is returned beside the shape so
+/// lowering can restore it at the Rust constructor.
+fn normalize_generated_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
-        RustTypeShape::RustPath { path, args }
-            if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
-        {
-            args.into_iter().next().unwrap_or(RustTypeShape::Unknown)
-        }
-        other => other,
+        RustTypeShape::RustPath { path, args } if is_box_carrier_path(path.as_str()) => (
+            args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+            RustPayloadCarrier::Boxed,
+        ),
+        other => (other, RustPayloadCarrier::Direct),
     }
 }
 
-/// Extract tuple variant payload shapes from a generated Rust enum variant.
-fn generated_variant_payload_shapes(
+/// Extract tuple variant payload shapes and their storage carriers from a generated Rust enum variant.
+fn generated_variant_payloads(
     variant: ast::Variant,
     crate_name: &str,
     module_path: &[String],
     external_crates: &HashSet<String>,
-) -> Vec<RustTypeShape> {
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     let Some(ast::FieldList::TupleFieldList(fields)) = variant.field_list() else {
         return Vec::new();
     };
@@ -3709,9 +3812,14 @@ fn generated_enum_metadata(
         .variants()
         .filter_map(|variant| {
             let name = variant.name()?.to_string();
+            let (fields, field_carriers) =
+                generated_variant_payloads(variant, crate_name, module_path, external_crates)
+                    .into_iter()
+                    .unzip();
             Some(RustVariantInfo {
                 name,
-                fields: generated_variant_payload_shapes(variant, crate_name, module_path, external_crates),
+                fields,
+                field_carriers,
             })
         })
         .collect::<Vec<_>>();

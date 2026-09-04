@@ -2900,6 +2900,7 @@ impl AstLowering {
                 }
             }
             RustArgCoercionKind::TraitObjectBorrow { mutable } => IrInteropCoercionKind::TraitObjectBorrow { mutable },
+            RustArgCoercionKind::BoxPayload => IrInteropCoercionKind::BoxPayload,
         };
         Ok(TypedExpr::new(
             IrExprKind::InteropCoerce {

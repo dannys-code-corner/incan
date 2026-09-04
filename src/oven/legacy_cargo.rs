@@ -103,6 +103,12 @@ const OVEN_COMPILER_TEST_CARGO_PROFILE_MANIFEST: &str =
 pub enum OvenLegacyCargoPublicationKind {
     /// Build one generated executable/library root without test-only dependencies.
     Executable,
+    /// Build only a generated executable's publisher-only companion library before native interop is sealed.
+    ///
+    /// This preserves ordinary executable Cargo topology: only the explicit interop bootstrap emits and selects the
+    /// companion `src/main.rs` library target, so Cargo never links a package-owned native library before Oven has
+    /// sealed that library into the final direct-rustc plan.
+    InteropBootstrap,
     /// Build one library's libtest inputs with Cargo only at this explicit publisher boundary.
     LibraryTests,
 }
@@ -1305,11 +1311,10 @@ pub fn prepare_direct_rustc_plan(
                 .to_string(),
         });
     }
-    if (request.receipt.compatibility.kind == OvenCompatibilityKind::NativeCompilerTestSuite)
-        != (request.publication_kind == OvenLegacyCargoPublicationKind::LibraryTests)
-    {
+    let library_tests = request.publication_kind == OvenLegacyCargoPublicationKind::LibraryTests;
+    if (request.receipt.compatibility.kind == OvenCompatibilityKind::NativeCompilerTestSuite) != library_tests {
         return Err(OvenLegacyCargoError::ReceiptMismatch {
-            message: "native compiler-suite receipts require the explicit library-test publisher; generated-project receipts require the executable publisher".to_string(),
+            message: "native compiler-suite receipts require the explicit library-test publisher; generated-project receipts require an executable or interop-bootstrap publisher".to_string(),
         });
     }
     let rustc_identity = rustc_identity(&request.rustc).map_err(|error| OvenLegacyCargoError::InvalidInput {
@@ -1714,15 +1719,20 @@ fn select_existing_project_extension_identity(
                 "stored project extension candidate {identity} has an invalid payload: {error}"
             ))
         })?;
-        if validate_project_extension_payload_against_base(
+        match validate_project_extension_payload_against_base(
             &payload,
             &base.loaf_identity,
             &base.build_unit_identity,
             base.artifacts,
-        )
-        .is_ok()
-        {
-            identities.push(identity);
+        ) {
+            Ok(_) => identities.push(identity),
+            // A receipt-exact extension that no longer validates against the selected base is a publisher
+            // decision worth seeing: the caller will seal a second extension for the same receipt, and every later
+            // selection for that receipt then has two candidates.
+            Err(error) => tracing::debug!(
+                "stored project extension {identity} is not reusable against base {}: {error}",
+                base.loaf_identity
+            ),
         }
     }
     match identities.as_slice() {
@@ -3164,13 +3174,16 @@ fn run_legacy_cargo(
         features,
         transient_limit,
         match publication_kind {
-            OvenLegacyCargoPublicationKind::Executable => "build",
+            OvenLegacyCargoPublicationKind::Executable | OvenLegacyCargoPublicationKind::InteropBootstrap => "build",
             OvenLegacyCargoPublicationKind::LibraryTests => "test",
         },
-        &if publication_kind == OvenLegacyCargoPublicationKind::LibraryTests {
-            OvenLegacyCargoInvocationTarget::PackageLibrary
-        } else {
-            OvenLegacyCargoInvocationTarget::None
+        &match publication_kind {
+            // The interop bootstrap alone emits the companion target. Publishing the library validates the exact
+            // Rust closure without prematurely linking the package-owned native artifact.
+            OvenLegacyCargoPublicationKind::InteropBootstrap | OvenLegacyCargoPublicationKind::LibraryTests => {
+                OvenLegacyCargoInvocationTarget::PackageLibrary
+            }
+            OvenLegacyCargoPublicationKind::Executable => OvenLegacyCargoInvocationTarget::None,
         },
         false,
         compact_debug_info,
@@ -9106,10 +9119,11 @@ mod tests {
         prepare_compiler_test_suite, prepare_direct_rustc_plan, project_registry_source_dependencies,
         publisher_direct_dependencies, publisher_registry_source_catalog, read_legacy_cargo_metadata_with_lock_policy,
         reclaim_unmaterialized_compiler_suite_target_files, release_cohort_generated_project_lock,
-        resolve_direct_dependency_packages, run_legacy_cargo_invocation, select_compiler_test_suite_identity,
-        select_existing_project_extension_identity, source_compiler_vocab_support_paths_are_available,
-        stage_compiler_suite_shard_files, stage_registry_source_directory, stage_self_contained_sdk_provider_tree,
-        validate_compiler_suite_unit_graph, validate_generated_registry_lock, validate_release_cohort_registry_lock,
+        resolve_direct_dependency_packages, run_legacy_cargo, run_legacy_cargo_invocation,
+        select_compiler_test_suite_identity, select_existing_project_extension_identity,
+        source_compiler_vocab_support_paths_are_available, stage_compiler_suite_shard_files,
+        stage_registry_source_directory, stage_self_contained_sdk_provider_tree, validate_compiler_suite_unit_graph,
+        validate_generated_registry_lock, validate_release_cohort_registry_lock,
     };
     use crate::oven::loaf::{
         OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION, OVEN_LOAF_SCHEMA_VERSION, OvenLoaf, OvenLoafEnvelopeManifest,
@@ -12022,6 +12036,53 @@ version = "1.0.0"
         );
         assert!(!environment.contains_key("CARGO_PKG_NAME"));
         assert!(!environment.contains_key("CARGO_PKG_VERSION"));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn interop_bootstrap_publisher_compiles_the_companion_library_before_native_interop_is_sealed()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let fixture = tempfile::tempdir()?;
+        let project = fixture.path().join("generated-project");
+        let source = project.join("src/main.rs");
+        fs::create_dir_all(source.parent().ok_or("source parent missing")?)?;
+        fs::write(
+            project.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\n[lib]\nname = \"fixture\"\npath = \"src/main.rs\"\n\n[[bin]]\nname = \"fixture\"\npath = \"src/main.rs\"\n",
+        )?;
+        // A binary target would need this absent native library at link time. The compatibility publisher must
+        // instead compile the companion library target and leave native linking to the sealed interop plan.
+        fs::write(
+            &source,
+            "#[link(name = \"not-yet-sealed-native\")]\nunsafe extern \"C\" {}\nfn main() {}\n",
+        )?;
+        fs::write(
+            project.join("Cargo.lock"),
+            "# This file is automatically @generated by Cargo.\n# It is not intended for manual editing.\nversion = 4\n\n[[package]]\nname = \"fixture\"\nversion = \"0.1.0\"\n",
+        )?;
+        let cargo_output = Command::new("rustup").args(["which", "cargo"]).output()?;
+        assert!(cargo_output.status.success(), "rustup which cargo failed");
+        let cargo = PathBuf::from(String::from_utf8(cargo_output.stdout)?.trim());
+        let rustc_output = Command::new("rustup").args(["which", "rustc"]).output()?;
+        assert!(rustc_output.status.success(), "rustup which rustc failed");
+        let rustc = PathBuf::from(String::from_utf8(rustc_output.stdout)?.trim());
+
+        let outputs = run_legacy_cargo(
+            &cargo,
+            &rustc,
+            &project.join("Cargo.toml"),
+            &fixture.path().join("target"),
+            &rustc_host_target(&rustc)?,
+            "debug",
+            &[],
+            1024 * 1024,
+            OvenLegacyCargoPublicationKind::InteropBootstrap,
+            false,
+            false,
+        )?;
+
+        assert_eq!(outputs.len(), 1);
         Ok(())
     }
 

@@ -276,6 +276,8 @@ pub struct ProjectGenerator {
     pub(super) package_license: Option<String>,
     /// Whether this is a binary (true) or library (false)
     pub(super) is_binary: bool,
+    /// Whether this binary's generated Cargo manifest also needs a publisher-only library target at `src/main.rs`.
+    pub(super) companion_library_target: bool,
     /// Enabled stdlib feature flags for the generated project, including compiler-required runtime support.
     pub(super) stdlib_features: Vec<String>,
     /// Resolved Rust crate dependencies.
@@ -349,6 +351,7 @@ impl ProjectGenerator {
             package_version: None,
             package_license: None,
             is_binary,
+            companion_library_target: false,
             stdlib_features: GENERATED_PROJECT_RUNTIME_FEATURES
                 .iter()
                 .map(|feature| (*feature).to_string())
@@ -467,6 +470,15 @@ impl ProjectGenerator {
     /// Control whether dev dependencies should be emitted.
     pub fn set_include_dev_dependencies(&mut self, include: bool) {
         self.include_dev_dependencies = include;
+    }
+
+    /// Emit `src/main.rs` as a companion Cargo library target for one explicit compatibility publisher.
+    ///
+    /// Normal generated executables remain binary-only. The companion target exists only while Oven prepares a
+    /// Rust-only interop bootstrap, where Cargo must compile the root without linking the not-yet-sealed native
+    /// artifact.
+    pub(crate) fn enable_companion_library_target(&mut self) {
+        self.companion_library_target = true;
     }
 
     /// Provide a Cargo.lock payload to write alongside Cargo.toml.
