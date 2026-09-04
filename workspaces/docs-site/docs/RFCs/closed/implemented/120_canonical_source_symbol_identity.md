@@ -17,7 +17,7 @@
     - #1174 (recoverable emitted-name projection)
     - #560 / RFC 094 (future `with` context-manager bindings)
 - **Issue:** [#1042](https://github.com/encero-systems/incan/issues/1042)
-- **RFC PR:** —
+- **RFC PR:** [#1293](https://github.com/encero-systems/incan/pull/1293)
 - **Written against:** v0.5
 - **Shipped in:** v0.6
 
