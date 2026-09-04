@@ -111,6 +111,3 @@ fn main() {
     let right = Wrapper { _cursor: Cursor {} };
     let __ = left.merge(right);
 }
-fn main() {
-    main();
-}

@@ -214,6 +214,3 @@ fn main() {
         panic!("AssertionError: left != right");
     };
 }
-fn main() {
-    main();
-}

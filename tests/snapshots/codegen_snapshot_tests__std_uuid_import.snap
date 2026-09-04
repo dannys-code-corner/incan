@@ -104,6 +104,3 @@ fn main() {
         Err(err) => println!("{}", err.message()),
     };
 }
-fn main() {
-    main();
-}

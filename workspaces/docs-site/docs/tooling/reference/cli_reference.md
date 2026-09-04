@@ -288,14 +288,14 @@ Usage:
 incan inspect rust [OPTIONS] <PATH>
 ```
 
-Generates the same Rust project that the current backend would build, then reports the emitted Rust files without invoking Cargo. Use this when you need to inspect backend output, debug generated paths, or hand artifact locations to tooling without treating `--emit-rust` as a structured interface.
+Generates the same Rust project that the current backend would build, then reports the emitted Rust files without invoking Cargo. Use this when you need to locate backend output, debug generated paths, or hand artifact locations to tooling without treating `--emit-rust` as a structured interface. The command reports file paths and sizes rather than Rust source, so reading the generated code means opening those files, where declarations appear under their `incan-v1` identifiers rather than their source names.
 
 Options:
 
 - `--lib`: Inspect the library build surface rooted at `src/lib.incn`; `PATH` may be the project root or a source path inside the project.
 - `--format text|json`: Output a human file list or a versioned JSON report (default: `text`).
 
-JSON output uses `schema_version: 1` and includes the compiler version, mode, source-file breadcrumbs, generated project paths, emitted Rust file paths, crate-root markers, file sizes, and notes. Source declarations with checked docstrings preserve those docs as generated Rust doc comments for public emitted items when the compiler has checked API metadata available. Generated Rust is inspectable current backend output, not a stable Rust ABI contract; tools may use it for debugging and reporting, but public compatibility should be based on Incan source, manifests, checked API metadata, and documented CLI report schemas.
+JSON output uses `schema_version: 1` and includes the compiler version, mode, source-file breadcrumbs, generated project paths, emitted Rust file paths, crate-root markers, file sizes, and notes. Source declarations with checked docstrings preserve those docs as generated Rust doc comments for public emitted items when the compiler has checked API metadata available. Generated Rust is inspectable current backend output, not a stable Rust ABI contract; tools may use it for debugging and reporting, but public compatibility should be based on Incan source, manifests, checked API metadata, and documented CLI report schemas. Under RFC 120 each linker-visible Incan-origin declaration is emitted under a reversible `incan-v1` identifier carrying its canonical identity, so a tool that needs source names decodes that payload rather than reading the identifier literally.
 
 Examples:
 

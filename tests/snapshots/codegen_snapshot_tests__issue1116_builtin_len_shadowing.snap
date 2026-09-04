@@ -27,6 +27,3 @@ fn main() {
     let _ = println!("{}", len(4));
     let _ = println!("{}", ::std::convert::identity(vec![10, 20, 30] .len() as i64));
 }
-fn main() {
-    main();
-}

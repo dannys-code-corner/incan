@@ -118,6 +118,3 @@ fn main() {
         .to_json()
     );
 }
-fn main() {
-    main();
-}

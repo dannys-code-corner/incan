@@ -40,6 +40,3 @@ fn main() {
         "{}", ::std::convert::identity({ SHARED_ITEMS.get() } .len() as i64)
     );
 }
-fn main() {
-    main();
-}

@@ -187,9 +187,6 @@ fn main() {
     let _ = println!("{}", total_money.0);
     let _ = println!("{}", total_positive.0);
 }
-fn main() {
-    main();
-}
 impl crate::__incan_std::derives::collection::Sum<Money> for Money {
     fn sum<I: crate::__incan_std::derives::collection::Iterator<Money>>(
         mut items: I,

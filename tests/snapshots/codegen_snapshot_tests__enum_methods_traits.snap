@@ -69,6 +69,3 @@ fn main() {
     );
     let _signal: Signal = Signal::Start;
 }
-fn main() {
-    main();
-}

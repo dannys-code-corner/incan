@@ -28,6 +28,3 @@ fn main() {
     );
     let _ = println!("{}", selected_column_name());
 }
-fn main() {
-    main();
-}

@@ -84,6 +84,3 @@ fn main() {
         __args) }
     );
 }
-fn main() {
-    main();
-}

@@ -807,6 +807,27 @@ fn strip_rust_facing_projection_shims(code: &str) -> Option<String> {
             .any(|identity| identity.declaration_name == source_name)
     }
 
+    /// Report whether a free function is only a source-facing forwarder onto its own projection.
+    ///
+    /// Emission publishes a projected declaration twice: the implementation under its encoded name, and a thin
+    /// function under the source spelling whose entire body calls that projection. Decoding both for presentation
+    /// turns the pair into two same-named functions, the second calling itself, so a reader of the golden sees Rust
+    /// that could not compile. Only the forwarder is dropped; the implementation keeps the snapshot honest.
+    fn is_projection_forwarder(function: &syn::ItemFn) -> bool {
+        let source_name = function.sig.ident.to_string();
+        if source_name.starts_with("__incan_v") || function.block.stmts.len() != 1 {
+            return false;
+        }
+        function
+            .block
+            .to_token_stream()
+            .to_string()
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter(|token| token.starts_with("__incan_v"))
+            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
+            .any(|identity| identity.declaration_name == source_name)
+    }
+
     fn strip_items(items: &mut Vec<syn::Item>) {
         items.retain_mut(|item| match item {
             syn::Item::Use(item_use) => !is_projection_alias(&item_use.tree),
@@ -817,6 +838,7 @@ fn strip_rust_facing_projection_shims(code: &str) -> Option<String> {
                     .retain(|item| !matches!(item, syn::ImplItem::Fn(method) if is_projection_method(method)));
                 original_len == item_impl.items.len() || !item_impl.items.is_empty()
             }
+            syn::Item::Fn(item_fn) => !is_projection_forwarder(item_fn),
             syn::Item::Mod(item_mod) => {
                 if let Some((_, nested)) = &mut item_mod.content {
                     strip_items(nested);
