@@ -132,7 +132,7 @@ impl Serialize for Timestamp {
 }
 impl Timestamp {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -301,7 +301,7 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for TelemetryValue {
 }
 impl TelemetryValue {
     /// Return a telemetry null value.
-    pub fn __incan_v1_0100000000000000000000000000000000046e6f6e650c0000000000000007ff000000000000095a() -> Self {
+    pub fn none() -> Self {
         let _ = "Return a telemetry null value.";
         return TelemetryValue {
             kind: TelemetryValueKind::NONE.clone(),
@@ -315,7 +315,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry string value.
-    pub fn __incan_v1_010000000000000000000000000000000006737472696e670c00000000000000096b0000000000000adf(
+    pub fn string(
         value: String,
     ) -> Self {
         let _ = "Return a telemetry string value.";
@@ -331,7 +331,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry boolean value.
-    pub fn __incan_v1_010000000000000000000000000000000004626f6f6c0c000000000000000af00000000000000c62(
+    pub fn bool(
         value: bool,
     ) -> Self {
         let _ = "Return a telemetry boolean value.";
@@ -347,7 +347,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry integer value.
-    pub fn __incan_v1_010000000000000000000000000000000003696e740c000000000000000c730000000000000de2(
+    pub fn int(
         value: i64,
     ) -> Self {
         let _ = "Return a telemetry integer value.";
@@ -363,7 +363,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry floating-point value.
-    pub fn __incan_v1_010000000000000000000000000000000005666c6f61740c000000000000000df30000000000000f6f(
+    pub fn float(
         value: f64,
     ) -> Self {
         let _ = "Return a telemetry floating-point value.";
@@ -381,7 +381,7 @@ impl TelemetryValue {
     /// Return a telemetry bytes value from an encoded string.
     ///
     /// The caller owns the encoding convention.
-    pub fn __incan_v1_01000000000000000000000000000000000562797465730c000000000000000f80000000000000114c(
+    pub fn bytes(
         value: String,
     ) -> Self {
         let _ = "\n        Return a telemetry bytes value from an encoded string.\n\n        The caller owns the encoding convention.\n        ";
@@ -397,7 +397,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry array value.
-    pub fn __incan_v1_01000000000000000000000000000000000561727261790c00000000000000115d00000000000012dd(
+    pub fn array(
         values: Vec<TelemetryValue>,
     ) -> Self {
         let _ = "Return a telemetry array value.";
@@ -413,7 +413,7 @@ impl TelemetryValue {
         };
     }
     /// Return a telemetry map value.
-    pub fn __incan_v1_0100000000000000000000000000000000036d61700c0000000000000012ee000000000000146d(
+    pub fn map(
         values: std::collections::HashMap<String, TelemetryValue>,
     ) -> Self {
         let _ = "Return a telemetry map value.";
@@ -432,7 +432,7 @@ impl TelemetryValue {
     ///
     /// String values render as their underlying text. Structured values render through their JSON representation so
     /// callers do not lose shape when displaying nested telemetry data.
-    pub fn __incan_v1_01000000000000000000000000000000000c646973706c61795f746578740c00000000000000146d000000000000161e(
+    pub fn display_text(
         &self,
     ) -> String {
         let _ = "\n        Return a concise text representation for human-oriented output.\n\n        String values render as their underlying text. Structured values render through their JSON representation so\n        callers do not lose shape when displaying nested telemetry data.\n        ";
@@ -448,33 +448,33 @@ impl TelemetryValue {
     /// Return a telemetry null value.
     #[inline]
     pub fn none() -> Self {
-        Self::__incan_v1_0100000000000000000000000000000000046e6f6e650c0000000000000007ff000000000000095a()
+        Self::none()
     }
     /// Return a telemetry string value.
     #[inline]
     pub fn string(value: String) -> Self {
-        Self::__incan_v1_010000000000000000000000000000000006737472696e670c00000000000000096b0000000000000adf(
+        Self::string(
             value,
         )
     }
     /// Return a telemetry boolean value.
     #[inline]
     pub fn bool(value: bool) -> Self {
-        Self::__incan_v1_010000000000000000000000000000000004626f6f6c0c000000000000000af00000000000000c62(
+        Self::bool(
             value,
         )
     }
     /// Return a telemetry integer value.
     #[inline]
     pub fn int(value: i64) -> Self {
-        Self::__incan_v1_010000000000000000000000000000000003696e740c000000000000000c730000000000000de2(
+        Self::int(
             value,
         )
     }
     /// Return a telemetry floating-point value.
     #[inline]
     pub fn float(value: f64) -> Self {
-        Self::__incan_v1_010000000000000000000000000000000005666c6f61740c000000000000000df30000000000000f6f(
+        Self::float(
             value,
         )
     }
@@ -483,21 +483,21 @@ impl TelemetryValue {
     /// The caller owns the encoding convention.
     #[inline]
     pub fn bytes(value: String) -> Self {
-        Self::__incan_v1_01000000000000000000000000000000000562797465730c000000000000000f80000000000000114c(
+        Self::bytes(
             value,
         )
     }
     /// Return a telemetry array value.
     #[inline]
     pub fn array(values: Vec<TelemetryValue>) -> Self {
-        Self::__incan_v1_01000000000000000000000000000000000561727261790c00000000000000115d00000000000012dd(
+        Self::array(
             values,
         )
     }
     /// Return a telemetry map value.
     #[inline]
     pub fn map(values: std::collections::HashMap<String, TelemetryValue>) -> Self {
-        Self::__incan_v1_0100000000000000000000000000000000036d61700c0000000000000012ee000000000000146d(
+        Self::map(
             values,
         )
     }
@@ -507,7 +507,7 @@ impl TelemetryValue {
     /// callers do not lose shape when displaying nested telemetry data.
     #[inline]
     pub fn display_text(&self) -> String {
-        self.__incan_v1_01000000000000000000000000000000000c646973706c61795f746578740c00000000000000146d000000000000161e()
+        self.display_text()
     }
     /// Returns field metadata for this type.
     pub fn __fields__(
@@ -637,7 +637,7 @@ impl Serialize for TelemetryValue {
 }
 impl TelemetryValue {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -659,7 +659,7 @@ impl Attributes {
     ///
     /// Args:
     ///     fields: String-valued field map from ordinary logging call sites.
-    pub fn __incan_v1_01000000000000000000000000000000001266726f6d5f737472696e675f6669656c64730c00000000000000178700000000000018de(
+    pub fn from_string_fields(
         fields: std::collections::HashMap<String, String>,
     ) -> Attributes {
         let _ = "\n        Convert string fields into structured telemetry attributes.\n\n        Args:\n            fields: String-valued field map from ordinary logging call sites.\n        ";
@@ -667,7 +667,7 @@ impl Attributes {
             ((fields).keys().cloned())
                 .map(|key| (
                     key.clone(),
-                    TelemetryValue::__incan_v1_010000000000000000000000000000000006737472696e670c00000000000000096b0000000000000adf(
+                    TelemetryValue::string(
                         incan_stdlib::collections::dict_get(
                                 &fields,
                                 <_ as AsRef<str>>::as_ref(&key),
@@ -686,7 +686,7 @@ impl Attributes {
     pub fn from_string_fields(
         fields: std::collections::HashMap<String, String>,
     ) -> Attributes {
-        Self::__incan_v1_01000000000000000000000000000000001266726f6d5f737472696e675f6669656c64730c00000000000000178700000000000018de(
+        Self::from_string_fields(
             fields,
         )
     }
@@ -723,7 +723,7 @@ impl Serialize for Attributes {
 }
 impl Attributes {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -752,7 +752,7 @@ impl Serialize for TraceId {
 }
 impl TraceId {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -781,7 +781,7 @@ impl Serialize for SpanId {
 }
 impl SpanId {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -810,7 +810,7 @@ impl Serialize for TraceFlags {
 }
 impl TraceFlags {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -906,7 +906,7 @@ impl Serialize for Resource {
 }
 impl Resource {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -1103,7 +1103,7 @@ impl Serialize for InstrumentationScope {
 }
 impl InstrumentationScope {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)
@@ -1242,7 +1242,7 @@ impl Serialize for SpanContext {
 }
 impl SpanContext {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000300000000000000037374640000000000000005736572646500000000000000046a736f6e0000000000000007746f5f6a736f6e0c00000000000000057200000000000005b2(
+    pub fn to_json(
         &self,
     ) -> String {
         <Self as Serialize>::to_json(self)

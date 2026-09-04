@@ -7,7 +7,7 @@ expression: normalized
 // __INCAN_INSERT_MODS__
 
 incan_stdlib::__incan_stdlib_version_check!("<INCAN_STDLIB_VERSION>");
-fn __incan_v1_0000000000000000000000000000000000046d61696e000000000000000000590000000000000134() -> Result<
+fn main() -> Result<
     (),
     String,
 > {
@@ -38,5 +38,5 @@ fn __incan_v1_0000000000000000000000000000000000046d61696e0000000000000000005900
     return Ok::<(), String>(());
 }
 fn main() -> Result<(), String> {
-    __incan_v1_0000000000000000000000000000000000046d61696e000000000000000000590000000000000134()
+    main()
 }

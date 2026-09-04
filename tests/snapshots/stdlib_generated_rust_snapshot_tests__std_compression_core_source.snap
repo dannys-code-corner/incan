@@ -94,7 +94,7 @@ impl Codec {
     /// Return the stable codec order used by default autodetection filters.
     ///
     /// Raw Snappy block compression is intentionally absent because it has no framing signature.
-    pub fn __incan_v1_010000000000000000000000000000000003616c6c0c00000000000000028c00000000000003d8() -> Vec<
+    pub fn all() -> Vec<
         Codec,
     > {
         let _ = "\n        Return the stable codec order used by default autodetection filters.\n\n        Raw Snappy block compression is intentionally absent because it has no framing signature.\n        ";
@@ -108,7 +108,7 @@ impl Codec {
     /// Raw Snappy block compression is intentionally absent because it has no framing signature.
     #[inline]
     pub fn all() -> Vec<Codec> {
-        Self::__incan_v1_010000000000000000000000000000000003616c6c0c00000000000000028c00000000000003d8()
+        Self::all()
     }
 }
 /// Stable compression failure boundary.
@@ -186,7 +186,7 @@ impl incan_stdlib::reflection::HasTypeFieldMetadata for CompressionError {
 }
 impl CompressionError {
     /// Return the human-readable error detail.
-    pub fn __incan_v1_0100000000000000000000000000000000076d6573736167650c00000000000000058c000000000000060e(
+    pub fn message(
         &self,
     ) -> String {
         let _ = "\n        Return the human-readable error detail.\n        ";
@@ -195,7 +195,7 @@ impl CompressionError {
     /// Return a structured source error when one is available.
     ///
     /// Compression currently normalizes backend details into `detail`, so there is no nested source value.
-    pub fn __incan_v1_010000000000000000000000000000000006736f757263650c00000000000000060e000000000000070a(
+    pub fn source(
         &self,
     ) -> Option<String> {
         let _ = "\n        Return a structured source error when one is available.\n\n        Compression currently normalizes backend details into `detail`, so there is no nested source value.\n        ";
@@ -204,14 +204,14 @@ impl CompressionError {
     /// Return the human-readable error detail.
     #[inline]
     pub fn message(&self) -> String {
-        self.__incan_v1_0100000000000000000000000000000000076d6573736167650c00000000000000058c000000000000060e()
+        self.message()
     }
     /// Return a structured source error when one is available.
     ///
     /// Compression currently normalizes backend details into `detail`, so there is no nested source value.
     #[inline]
     pub fn source(&self) -> Option<String> {
-        self.__incan_v1_010000000000000000000000000000000006736f757263650c00000000000000060e000000000000070a()
+        self.source()
     }
     /// Returns field metadata for this type.
     pub fn __fields__(
@@ -269,7 +269,7 @@ impl Error for CompressionError {
     }
 }
 /// Validate a portable integer compression-level request.
-pub fn __incan_v1_0000000000000000000000000000000000115f6c6576656c5f6f725f64656661756c740000000000000000070a00000000000009d1(
+pub fn _level_or_default(
     codec: Codec,
     level: Option<i64>,
     default: i64,
@@ -309,9 +309,9 @@ pub fn __incan_v1_0000000000000000000000000000000000115f6c6576656c5f6f725f646566
         }
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000115f6c6576656c5f6f725f64656661756c740000000000000000070a00000000000009d1 as _level_or_default;
+pub use _level_or_default as _level_or_default;
 /// Reject a level argument for codecs without level support.
-pub fn __incan_v1_00000000000000000000000000000000000d5f72656a6563745f6c6576656c000000000000000009d10000000000000bfb(
+pub fn _reject_level(
     codec: Codec,
     level: Option<i64>,
 ) -> Result<(), CompressionError> {
@@ -340,12 +340,12 @@ pub fn __incan_v1_00000000000000000000000000000000000d5f72656a6563745f6c6576656c
         }
     };
 }
-pub use __incan_v1_00000000000000000000000000000000000d5f72656a6563745f6c6576656c000000000000000009d10000000000000bfb as _reject_level;
+pub use _reject_level as _reject_level;
 /// Build a codec failure from backend error text.
 ///
 /// Backend crates expose different error enums and messages. The first source pass keeps a stable Incan `kind` by
 /// classifying the most common invalid/truncated markers and otherwise preserving the backend text as `backend`.
-pub fn __incan_v1_00000000000000000000000000000000000c5f636f6465635f6572726f7200000000000000000bfb0000000000000f20(
+pub fn _codec_error(
     codec: Codec,
     operation: String,
     detail: String,
@@ -373,9 +373,9 @@ pub fn __incan_v1_00000000000000000000000000000000000c5f636f6465635f6572726f7200
         detail: detail,
     };
 }
-pub use __incan_v1_00000000000000000000000000000000000c5f636f6465635f6572726f7200000000000000000bfb0000000000000f20 as _codec_error;
+pub use _codec_error as _codec_error;
 /// Build an I/O failure.
-pub fn __incan_v1_0000000000000000000000000000000000095f696f5f6572726f7200000000000000000f200000000000000ffe(
+pub fn _io_error(
     codec: Option<Codec>,
     operation: String,
     detail: String,
@@ -388,9 +388,9 @@ pub fn __incan_v1_0000000000000000000000000000000000095f696f5f6572726f7200000000
         detail: detail,
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000095f696f5f6572726f7200000000000000000f200000000000000ffe as _io_error;
+pub use _io_error as _io_error;
 /// Reject a non-positive stream chunk size before touching source or target streams.
-pub fn __incan_v1_0000000000000000000000000000000000145f76616c69646174655f6368756e6b5f73697a6500000000000000000ffe00000000000011f7(
+pub fn _validate_chunk_size(
     codec: Option<Codec>,
     operation: String,
     chunk_size: i64,
@@ -409,12 +409,12 @@ pub fn __incan_v1_0000000000000000000000000000000000145f76616c69646174655f636875
     }
     return Ok::<(), CompressionError>(());
 }
-pub use __incan_v1_0000000000000000000000000000000000145f76616c69646174655f6368756e6b5f73697a6500000000000000000ffe00000000000011f7 as _validate_chunk_size;
+pub use _validate_chunk_size as _validate_chunk_size;
 /// Write one compressed or decompressed chunk to a `BytesIO` or `File` sink.
 ///
 /// Stream helpers keep codec adapters in their codec modules, but use this shared sink boundary so `IoError`
 /// normalization stays identical across modules.
-pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f6279746573000000000000000011f7000000000000151a(
+pub fn _write_sink_bytes(
     codec: Option<Codec>,
     operation: String,
     target: __IncanUnionf13d01fefab04049,
@@ -424,7 +424,7 @@ pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f62
     match target.clone() {
         __IncanUnionf13d01fefab04049::V1(target) => {
             let _ = match target
-                .__incan_v1_01000000000000000002000000000000000b5f5f696e63616e5f7374640000000000000002696f000000000000000b77726974655f62797465730c0000000000000029b90000000000002bdd(
+                .write_bytes(
                     data,
                 )
             {
@@ -436,11 +436,11 @@ pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f62
                         (),
                         CompressionError,
                     >(
-                        __incan_v1_0000000000000000000000000000000000095f696f5f6572726f7200000000000000000f200000000000000ffe(
+                        _io_error(
                             codec.clone(),
                             operation.to_string(),
                             err
-                                .__incan_v1_01000000000000000002000000000000000b5f5f696e63616e5f7374640000000000000002696f00000000000000076d6573736167650c0000000000000003d900000000000004a7(),
+                                .message(),
                         ),
                     );
                 }
@@ -448,7 +448,7 @@ pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f62
         }
         __IncanUnionf13d01fefab04049::V0(target) => {
             let _ = match target
-                .__incan_v1_01000000000000000003000000000000000b5f5f696e63616e5f73746400000000000000026673000000000000000466696c65000000000000000b77726974655f62797465730c000000000000000ded0000000000000fb1(
+                .write_bytes(
                     data,
                 )
             {
@@ -460,11 +460,11 @@ pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f62
                         (),
                         CompressionError,
                     >(
-                        __incan_v1_0000000000000000000000000000000000095f696f5f6572726f7200000000000000000f200000000000000ffe(
+                        _io_error(
                             codec,
                             operation,
                             err
-                                .__incan_v1_01000000000000000002000000000000000b5f5f696e63616e5f7374640000000000000002696f00000000000000076d6573736167650c0000000000000003d900000000000004a7(),
+                                .message(),
                         ),
                     );
                 }
@@ -472,176 +472,176 @@ pub fn __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f62
         }
     }
 }
-pub use __incan_v1_0000000000000000000000000000000000115f77726974655f73696e6b5f6279746573000000000000000011f7000000000000151a as _write_sink_bytes;
+pub use _write_sink_bytes as _write_sink_bytes;
 /// Read one byte as an integer for signature checks.
-pub fn __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+pub fn _byte_at(
     data: Vec<u8>,
     index: i64,
 ) -> i64 {
     let _ = "\n    Read one byte as an integer for signature checks.\n    ";
     return (data[(index) as usize]) as i64;
 }
-pub use __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0 as _byte_at;
+pub use _byte_at as _byte_at;
 /// Return whether `data` starts with the gzip magic bytes.
-pub fn __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f677a6970000000000000000015b00000000000001680(
+pub fn _looks_like_gzip(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` starts with the gzip magic bytes.\n    ";
     return ::std::convert::identity(data.len() as i64) >= 2
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             0,
         ) == 31
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data,
             1,
         ) == 139;
 }
-pub use __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f677a6970000000000000000015b00000000000001680 as _looks_like_gzip;
+pub use _looks_like_gzip as _looks_like_gzip;
 /// Return whether `data` starts with the zstd frame magic bytes.
-pub fn __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f7a73746400000000000000001680000000000000178f(
+pub fn _looks_like_zstd(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` starts with the zstd frame magic bytes.\n    ";
     return ::std::convert::identity(data.len() as i64) >= 4
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             0,
         ) == 40
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             1,
         ) == 181
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             2,
         ) == 47
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data,
             3,
         ) == 253;
 }
-pub use __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f7a73746400000000000000001680000000000000178f as _looks_like_zstd;
+pub use _looks_like_zstd as _looks_like_zstd;
 /// Return whether `data` starts with the bzip2 stream signature.
-pub fn __incan_v1_00000000000000000000000000000000000f5f6c6f6f6b735f6c696b655f627a320000000000000000178f0000000000001880(
+pub fn _looks_like_bz2(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` starts with the bzip2 stream signature.\n    ";
     return ::std::convert::identity(data.len() as i64) >= 3
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             0,
         ) == 66
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             1,
         ) == 90
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data,
             2,
         ) == 104;
 }
-pub use __incan_v1_00000000000000000000000000000000000f5f6c6f6f6b735f6c696b655f627a320000000000000000178f0000000000001880 as _looks_like_bz2;
+pub use _looks_like_bz2 as _looks_like_bz2;
 /// Return whether `data` starts with the XZ container magic bytes.
-pub fn __incan_v1_00000000000000000000000000000000000e5f6c6f6f6b735f6c696b655f787a0000000000000000188000000000000019c6(
+pub fn _looks_like_xz(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` starts with the XZ container magic bytes.\n    ";
     return ::std::convert::identity(data.len() as i64) >= 6
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             0,
         ) == 253
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             1,
         ) == 55
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             2,
         ) == 122
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             3,
         ) == 88
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             4,
         ) == 90
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data,
             5,
         ) == 0;
 }
-pub use __incan_v1_00000000000000000000000000000000000e5f6c6f6f6b735f6c696b655f787a0000000000000000188000000000000019c6 as _looks_like_xz;
+pub use _looks_like_xz as _looks_like_xz;
 /// Return whether `data` starts with the framed Snappy stream identifier.
-pub fn __incan_v1_0000000000000000000000000000000000185f6c6f6f6b735f6c696b655f736e617070795f6672616d65000000000000000019c60000000000001b8d(
+pub fn _looks_like_snappy_frame(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` starts with the framed Snappy stream identifier.\n    ";
     return ::std::convert::identity(data.len() as i64) >= 10
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             0,
         ) == 255
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             1,
         ) == 6
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             2,
         ) == 0
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             3,
         ) == 0
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             4,
         ) == 115
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             5,
         ) == 78
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             6,
         ) == 97
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             7,
         ) == 80
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data.clone(),
             8,
         ) == 112
-        && __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+        && _byte_at(
             data,
             9,
         ) == 89;
 }
-pub use __incan_v1_0000000000000000000000000000000000185f6c6f6f6b735f6c696b655f736e617070795f6672616d65000000000000000019c60000000000001b8d as _looks_like_snappy_frame;
+pub use _looks_like_snappy_frame as _looks_like_snappy_frame;
 /// Return whether `data` has a valid zlib header.
 ///
 /// Zlib's header does not have a fixed magic sequence. The RFC 1950 check below validates the compression method and
 /// header checksum; decompression still owns the final data-validity decision.
-pub fn __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f7a6c696200000000000000001b8d0000000000001d64(
+pub fn _looks_like_zlib(
     data: Vec<u8>,
 ) -> bool {
     let _ = "\n    Return whether `data` has a valid zlib header.\n\n    Zlib's header does not have a fixed magic sequence. The RFC 1950 check below validates the compression method and\n    header checksum; decompression still owns the final data-validity decision.\n    ";
     if ::std::convert::identity(data.len() as i64) < 2 {
         return false;
     }
-    let cmf = __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+    let cmf = _byte_at(
         data.clone(),
         0,
     );
-    let flg = __incan_v1_0000000000000000000000000000000000085f627974655f61740000000000000000151a00000000000015b0(
+    let flg = _byte_at(
         data,
         1,
     );
     return incan_stdlib::num::py_mod_i64(cmf, 16) == 8
         && incan_stdlib::num::py_mod_i64(cmf * 256 + flg, 31) == 0;
 }
-pub use __incan_v1_0000000000000000000000000000000000105f6c6f6f6b735f6c696b655f7a6c696200000000000000001b8d0000000000001d64 as _looks_like_zlib;
+pub use _looks_like_zlib as _looks_like_zlib;

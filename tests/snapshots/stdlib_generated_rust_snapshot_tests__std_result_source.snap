@@ -15,7 +15,7 @@ incan_stdlib::__incan_stdlib_version_check!("<INCAN_STDLIB_VERSION>");
 ///
 /// Returns:
 ///     `Ok(f(value))` when `result` is `Ok(value)`, otherwise the original `Err(E)`.
-pub fn __incan_v1_0000000000000000000000000000000000036d61700000000000000000015f000000000000030c<
+pub fn map<
     T,
     E,
     U,
@@ -30,7 +30,7 @@ pub fn __incan_v1_0000000000000000000000000000000000036d61700000000000000000015f
         }
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000036d61700000000000000000015f000000000000030c as map;
+pub use map as map;
 /// Transform an `Err(E)` payload.
 ///
 /// Args:
@@ -39,7 +39,7 @@ pub use __incan_v1_0000000000000000000000000000000000036d61700000000000000000015
 ///
 /// Returns:
 ///     `Err(f(error))` when `result` is `Err(error)`, otherwise the original `Ok(T)`.
-pub fn __incan_v1_0000000000000000000000000000000000076d61705f6572720000000000000000030c00000000000004c0<
+pub fn map_err<
     T,
     E,
     F,
@@ -54,7 +54,7 @@ pub fn __incan_v1_0000000000000000000000000000000000076d61705f657272000000000000
         }
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000076d61705f6572720000000000000000030c00000000000004c0 as map_err;
+pub use map_err as map_err;
 /// Chain a fallible operation after an `Ok(T)` payload.
 ///
 /// Args:
@@ -63,7 +63,7 @@ pub use __incan_v1_0000000000000000000000000000000000076d61705f65727200000000000
 ///
 /// Returns:
 ///     The `Result[U, E]` returned by `f` when `result` is `Ok(value)`, otherwise the original `Err(E)`.
-pub fn __incan_v1_000000000000000000000000000000000008616e645f7468656e000000000000000004c000000000000006c5<
+pub fn and_then<
     T,
     E,
     U,
@@ -78,7 +78,7 @@ pub fn __incan_v1_000000000000000000000000000000000008616e645f7468656e0000000000
         }
     };
 }
-pub use __incan_v1_000000000000000000000000000000000008616e645f7468656e000000000000000004c000000000000006c5 as and_then;
+pub use and_then as and_then;
 /// Recover from an `Err(E)` payload with a fallible operation.
 ///
 /// Args:
@@ -87,7 +87,7 @@ pub use __incan_v1_000000000000000000000000000000000008616e645f7468656e000000000
 ///
 /// Returns:
 ///     The `Result[T, F]` returned by `f` when `result` is `Err(error)`, otherwise the original `Ok(T)`.
-pub fn __incan_v1_0000000000000000000000000000000000076f725f656c7365000000000000000006c500000000000008d0<
+pub fn or_else<
     T,
     E,
     F,
@@ -102,7 +102,7 @@ pub fn __incan_v1_0000000000000000000000000000000000076f725f656c7365000000000000
         }
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000076f725f656c7365000000000000000006c500000000000008d0 as or_else;
+pub use or_else as or_else;
 /// Observe an `Ok(T)` payload while preserving the original result.
 ///
 /// Args:
@@ -111,7 +111,7 @@ pub use __incan_v1_0000000000000000000000000000000000076f725f656c736500000000000
 ///
 /// Returns:
 ///     The original `Result[T, E]` after calling `f` for the `Ok(T)` branch.
-pub fn __incan_v1_000000000000000000000000000000000007696e7370656374000000000000000008d00000000000000ad0<
+pub fn inspect<
     T,
     E,
 >(result: Result<T, E>, f: fn(&T) -> ()) -> Result<T, E> {
@@ -126,7 +126,7 @@ pub fn __incan_v1_000000000000000000000000000000000007696e7370656374000000000000
         }
     };
 }
-pub use __incan_v1_000000000000000000000000000000000007696e7370656374000000000000000008d00000000000000ad0 as inspect;
+pub use inspect as inspect;
 /// Observe an `Err(E)` payload while preserving the original result.
 ///
 /// Args:
@@ -135,7 +135,7 @@ pub use __incan_v1_000000000000000000000000000000000007696e737065637400000000000
 ///
 /// Returns:
 ///     The original `Result[T, E]` after calling `f` for the `Err(E)` branch.
-pub fn __incan_v1_00000000000000000000000000000000000b696e73706563745f65727200000000000000000ad00000000000000cd5<
+pub fn inspect_err<
     T,
     E,
 >(result: Result<T, E>, f: fn(&E) -> ()) -> Result<T, E> {
@@ -150,4 +150,4 @@ pub fn __incan_v1_00000000000000000000000000000000000b696e73706563745f6572720000
         }
     };
 }
-pub use __incan_v1_00000000000000000000000000000000000b696e73706563745f65727200000000000000000ad00000000000000cd5 as inspect_err;
+pub use inspect_err as inspect_err;

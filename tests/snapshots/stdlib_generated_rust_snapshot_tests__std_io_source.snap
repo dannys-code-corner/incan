@@ -145,7 +145,7 @@ impl IoError {
     ///
     /// Returns:
     ///     The detail text attached to the failed operation.
-    pub fn __incan_v1_0100000000000000000000000000000000076d6573736167650c0000000000000003d900000000000004a7(
+    pub fn message(
         &self,
     ) -> String {
         let _ = "\n        Return the human-readable error detail.\n\n        Returns:\n            The detail text attached to the failed operation.\n        ";
@@ -157,7 +157,7 @@ impl IoError {
     ///     The detail text attached to the failed operation.
     #[inline]
     pub fn message(&self) -> String {
-        self.__incan_v1_0100000000000000000000000000000000076d6573736167650c0000000000000003d900000000000004a7()
+        self.message()
     }
     /// Returns field metadata for this type.
     pub fn __fields__(
@@ -225,7 +225,7 @@ impl Error for IoError {
 }
 impl IoError {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000674726169747300000000000000056572726f720000000000000006736f757263650c00000000000000058100000000000005f8(
+    pub fn source(
         &self,
     ) -> Option<String> {
         <Self as Error>::source(self)
@@ -371,7 +371,7 @@ impl<R: BinaryReader> ReaderChunks<R> {
 }
 impl<R: BinaryReader> ReaderChunks<R> {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000000000000000000085f5f6e6578745f5f0c000000000000000b4d0000000000000e29(
+    pub fn __next__(
         &mut self,
     ) -> Result<Option<Vec<u8>>, IoError> {
         self.__next__()
@@ -538,20 +538,20 @@ impl<R: BinaryReader + Clone> FallibleIterator<Vec<u8>, IoError> for ReaderChunk
 }
 impl<R: BinaryReader + Clone> ReaderChunks<R> {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e00000000000000085f5f697465725f5f0c000000000000002ee40000000000002fbf(
+    pub fn __iter__(
         &self,
     ) -> Self {
         <Self as FallibleIterator<Vec<u8>, IoError>>::__iter__(self)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e00000000000000036d61700c00000000000000305e00000000000032d7<
+    pub fn map<
         U: Clone,
         MapFn: Clone + crate::__incan_std::traits::callable::Callable1<Vec<u8>, U>,
     >(&self, f: MapFn) -> impl FallibleIterator<U, IoError> + use<R, U, MapFn> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::map::<U, MapFn>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e000000000000000666696c7465720c0000000000000032d70000000000003507<
+    pub fn filter<
         Predicate: Clone + crate::__incan_std::traits::callable::Callable1<Vec<u8>, bool>,
     >(
         &self,
@@ -560,34 +560,34 @@ impl<R: BinaryReader + Clone> ReaderChunks<R> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::filter::<Predicate>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e0000000000000008666c61745f6d61700c00000000000000350700000000000037af<
+    pub fn flat_map<
         U: Clone,
         Expand: Clone + crate::__incan_std::traits::callable::Callable1<Vec<u8>, Vec<U>>,
     >(&self, f: Expand) -> impl FallibleIterator<U, IoError> + use<R, U, Expand> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::flat_map::<U, Expand>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e000000000000000474616b650c0000000000000037af0000000000003956(
+    pub fn take(
         &self,
         n: i64,
     ) -> impl FallibleIterator<Vec<u8>, IoError> + use<R> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::take(self, n)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e0000000000000007696e73706563740c0000000000000039560000000000003b4a<
+    pub fn inspect<
         Observer: Clone + crate::__incan_std::traits::callable::Callable1<Vec<u8>, ()>,
     >(&self, f: Observer) -> impl FallibleIterator<Vec<u8>, IoError> + use<R, Observer> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::inspect::<Observer>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e00000000000000076d61705f6572720c000000000000003b4a0000000000003df4<
+    pub fn map_err<
         F: Clone,
         ErrorMap: Clone + crate::__incan_std::traits::callable::Callable1<IoError, F>,
     >(&self, f: ErrorMap) -> impl FallibleIterator<Vec<u8>, F> + use<R, F, ErrorMap> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::map_err::<F, ErrorMap>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e000000000000000b696e73706563745f6572720c000000000000003df4000000000000402c<
+    pub fn inspect_err<
         ErrorObserver: Clone
             + crate::__incan_std::traits::callable::Callable1<IoError, ()>,
     >(
@@ -600,13 +600,13 @@ impl<R: BinaryReader + Clone> ReaderChunks<R> {
         >>::inspect_err::<ErrorObserver>(self, f)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e0000000000000007636f6c6c6563740c00000000000000402c0000000000004254(
+    pub fn collect(
         &mut self,
     ) -> Result<Vec<Vec<u8>>, IoError> {
         <Self as FallibleIterator<Vec<u8>, IoError>>::collect(self)
     }
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000030000000000000003737464000000000000000764657269766573000000000000000a636f6c6c656374696f6e0000000000000004666f6c640c00000000000000425400000000000044fc<
+    pub fn fold<
         U: Clone,
         Folder: Clone + crate::__incan_std::traits::callable::Callable2<U, Vec<u8>, U>,
     >(&mut self, init: U, f: Folder) -> Result<U, IoError> {
@@ -714,7 +714,7 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `BytesIO(b"abc").read(2)?` returns `b"ab"`.
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c00000000000000144b0000000000001792(
+    pub fn read(
         &self,
         size: i64,
     ) -> Result<Vec<u8>, IoError> {
@@ -731,7 +731,7 @@ impl _BytesIO {
                         Vec<u8>,
                         IoError,
                     >(
-                        __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                        _rust_io_error(
                             "read".to_string(),
                             (cursor.position()) as i64,
                             err.to_string(),
@@ -761,7 +761,7 @@ impl _BytesIO {
                     Vec<u8>,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         "read".to_string(),
                         (cursor.position()) as i64,
                         err.to_string(),
@@ -771,13 +771,13 @@ impl _BytesIO {
         };
     }
     /// Read up to `size` bytes through the `BinaryReader` trait surface.
-    pub fn __incan_v1_01000000000000000000000000000000000a726561645f62797465730c0000000000000017920000000000001853(
+    pub fn read_bytes(
         &self,
         size: i64,
     ) -> Result<Vec<u8>, IoError> {
         let _ = "\n        Read up to `size` bytes through the `BinaryReader` trait surface.\n        ";
         return self
-            .__incan_v1_010000000000000000000000000000000004726561640c00000000000000144b0000000000001792(
+            .read(
                 size,
             );
     }
@@ -791,7 +791,7 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `BytesIO(b"ABCD").read_exact(4)?` returns `b"ABCD"`.
-    pub fn __incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+    pub fn read_exact(
         &self,
         size: i64,
     ) -> Result<Vec<u8>, IoError> {
@@ -801,16 +801,16 @@ impl _BytesIO {
                 Vec<u8>,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+                _invalid_input(
                     "read_exact".to_string(),
                     self
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     "read_exact size must be non-negative".to_string(),
                 ),
             );
         }
         let chunk = self
-            .__incan_v1_010000000000000000000000000000000004726561640c00000000000000144b0000000000001792(
+            .read(
                 size,
             )?;
         if ::std::convert::identity(chunk.len() as i64) != size {
@@ -822,7 +822,7 @@ impl _BytesIO {
                 detail: "buffer ended before read_exact size".to_string(),
                 operation: "read_exact".to_string(),
                 position: self
-                    .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                    .tell(),
                 path: None::<_>,
             });
         }
@@ -838,20 +838,20 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `BytesIO(b"name\0rest").read_until(0)?` returns `b"name\0"`.
-    pub fn __incan_v1_01000000000000000000000000000000000a726561645f756e74696c0c000000000000001bc40000000000001e3a(
+    pub fn read_until(
         &self,
         byte: u8,
     ) -> Result<Vec<u8>, IoError> {
         let _ = "\n        Read through `byte` or EOF.\n\n        Args:\n            byte: Delimiter byte to include when found.\n\n        Returns:\n            Bytes up to and including the delimiter, or the remaining bytes at EOF.\n\n        Example:\n            `BytesIO(b\"name\\0rest\").read_until(0)?` returns `b\"name\\0\"`.\n        ";
-        let out = __incan_v1_00000000000000000000000000000000000d5f656d7074795f73747265616d00000000000000004546000000000000460e();
+        let out = _empty_stream();
         while self
-            .__incan_v1_01000000000000000000000000000000000972656d61696e696e670c0000000000000034500000000000003615()
+            .remaining()
             > 0
         {
             let value = self
-                .__incan_v1_0100000000000000000000000000000000085f726561645f75380c0000000000000036150000000000003671()?;
+                ._read_u8()?;
             let _ = out
-                .__incan_v1_0100000000000000000000000000000000095f77726974655f75380c0000000000000036710000000000003732(
+                ._write_u8(
                     value,
                 )?;
             if value == byte {
@@ -860,7 +860,7 @@ impl _BytesIO {
                     IoError,
                 >(
                     out
-                        .__incan_v1_01000000000000000000000000000000000867657476616c75650c0000000000000031fc0000000000003306(),
+                        .getvalue(),
                 );
             }
         }
@@ -869,7 +869,7 @@ impl _BytesIO {
             IoError,
         >(
             out
-                .__incan_v1_01000000000000000000000000000000000867657476616c75650c0000000000000031fc0000000000003306(),
+                .getvalue(),
         );
     }
     ///         Discard bytes through `byte` or EOF.
@@ -883,18 +883,18 @@ impl _BytesIO {
     ///         Example:
     ///             `BytesIO(b"header
     /// body").skip_until(10)?` returns `7`.
-    pub fn __incan_v1_01000000000000000000000000000000000a736b69705f756e74696c0c000000000000001e3a00000000000020a2(
+    pub fn skip_until(
         &self,
         byte: u8,
     ) -> Result<i64, IoError> {
         let _ = "\n        Discard bytes through `byte` or EOF.\n\n        Args:\n            byte: Delimiter byte to include in the skipped count when found.\n\n        Returns:\n            Number of discarded bytes, including the delimiter when present.\n\n        Example:\n            `BytesIO(b\"header\nbody\").skip_until(10)?` returns `7`.\n        ";
         let mut count = 0;
         while self
-            .__incan_v1_01000000000000000000000000000000000972656d61696e696e670c0000000000000034500000000000003615()
+            .remaining()
             > 0
         {
             let value = self
-                .__incan_v1_0100000000000000000000000000000000085f726561645f75380c0000000000000036150000000000003671()?;
+                ._read_u8()?;
             count = count + 1;
             if value == byte {
                 return Ok::<i64, IoError>(count);
@@ -906,7 +906,7 @@ impl _BytesIO {
     ///
     /// Returns:
     ///     Current offset from the start of the buffer.
-    pub fn __incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(
+    pub fn tell(
         &self,
     ) -> i64 {
         let _ = "\n        Return the current byte cursor position.\n\n        Returns:\n            Current offset from the start of the buffer.\n        ";
@@ -924,7 +924,7 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `buf.seek(0, 2)?` moves to the end of the buffer.
-    pub fn __incan_v1_0100000000000000000000000000000000047365656b0c00000000000000219e000000000000274f(
+    pub fn seek(
         &self,
         offset: i64,
         whence: i64,
@@ -944,7 +944,7 @@ impl _BytesIO {
                                 i64,
                                 IoError,
                             >(
-                                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                                _rust_io_error(
                                     "seek".to_string(),
                                     (cursor.position()) as i64,
                                     err.to_string(),
@@ -965,7 +965,7 @@ impl _BytesIO {
                             i64,
                             IoError,
                         >(
-                            __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                            _rust_io_error(
                                 "seek".to_string(),
                                 (cursor.position()) as i64,
                                 err.to_string(),
@@ -984,7 +984,7 @@ impl _BytesIO {
                                 i64,
                                 IoError,
                             >(
-                                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                                _rust_io_error(
                                     "seek".to_string(),
                                     (cursor.position()) as i64,
                                     err.to_string(),
@@ -999,7 +999,7 @@ impl _BytesIO {
             i64,
             IoError,
         >(
-            __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+            _invalid_input(
                 "seek".to_string(),
                 (cursor.position()) as i64,
                 "whence must be 0, 1, or 2".to_string(),
@@ -1010,12 +1010,12 @@ impl _BytesIO {
     ///
     /// Returns:
     ///     `Ok(None)` after rewinding, or `Err(IoError)`.
-    pub fn __incan_v1_010000000000000000000000000000000006726577696e640c00000000000000274f0000000000002849(
+    pub fn rewind(
         &self,
     ) -> Result<(), IoError> {
         let _ = "\n        Move the cursor to the start of the buffer.\n\n        Returns:\n            `Ok(None)` after rewinding, or `Err(IoError)`.\n        ";
         let _ = self
-            .__incan_v1_0100000000000000000000000000000000047365656b0c00000000000000219e000000000000274f(
+            .seek(
                 0,
                 0,
             )?;
@@ -1028,13 +1028,13 @@ impl _BytesIO {
     ///
     /// Returns:
     ///     `Ok(None)` after moving, or `Err(IoError)` when the result would be invalid.
-    pub fn __incan_v1_01000000000000000000000000000000000d7365656b5f72656c61746976650c00000000000000284900000000000029b9(
+    pub fn seek_relative(
         &self,
         offset: i64,
     ) -> Result<(), IoError> {
         let _ = "\n        Move the cursor relative to its current position.\n\n        Args:\n            offset: Relative byte offset.\n\n        Returns:\n            `Ok(None)` after moving, or `Err(IoError)` when the result would be invalid.\n        ";
         let _ = self
-            .__incan_v1_0100000000000000000000000000000000047365656b0c00000000000000219e000000000000274f(
+            .seek(
                 offset,
                 1,
             )?;
@@ -1050,7 +1050,7 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `BytesIO().write(b"ok")?` returns `2`.
-    pub fn __incan_v1_01000000000000000000000000000000000b77726974655f62797465730c0000000000000029b90000000000002bdd(
+    pub fn write_bytes(
         &self,
         data: Vec<u8>,
     ) -> Result<i64, IoError> {
@@ -1065,7 +1065,7 @@ impl _BytesIO {
                     i64,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         "write".to_string(),
                         (cursor.position()) as i64,
                         err.to_string(),
@@ -1084,13 +1084,13 @@ impl _BytesIO {
     ///
     /// Example:
     ///     `BytesIO().write(b"ok")?` returns `2`.
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000002bdd0000000000002d4a(
+    pub fn write(
         &self,
         data: Vec<u8>,
     ) -> Result<i64, IoError> {
         let _ = "\n        Write bytes at the current cursor position.\n\n        Args:\n            data: Bytes to write.\n\n        Returns:\n            Number of bytes written, or `Err(IoError)`.\n\n        Example:\n            `BytesIO().write(b\"ok\")?` returns `2`.\n        ";
         return self
-            .__incan_v1_01000000000000000000000000000000000b77726974655f62797465730c0000000000000029b90000000000002bdd(
+            .write_bytes(
                 data,
             );
     }
@@ -1104,13 +1104,13 @@ impl _BytesIO {
     ///
     /// Example:
     ///     After reading two bytes from `BytesIO(b"abcd")`, `truncate()?` leaves `b"ab"`.
-    pub fn __incan_v1_0100000000000000000000000000000000087472756e636174650c000000000000002d4a00000000000031fc(
+    pub fn truncate(
         &self,
         size: Option<i64>,
     ) -> Result<i64, IoError> {
         let _ = "\n        Resize the buffer.\n\n        Args:\n            size: Target size, or `None` to truncate at the current cursor.\n\n        Returns:\n            The new buffer size, or `Err(IoError)`.\n\n        Example:\n            After reading two bytes from `BytesIO(b\"abcd\")`, `truncate()?` leaves `b\"ab\"`.\n        ";
         let position = self
-            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e();
+            .tell();
         let mut target = position;
         match size {
             Some(value) => {
@@ -1123,7 +1123,7 @@ impl _BytesIO {
                 i64,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+                _invalid_input(
                     "truncate".to_string(),
                     position,
                     "truncate size must be non-negative".to_string(),
@@ -1131,11 +1131,11 @@ impl _BytesIO {
             );
         }
         let mut cursor = self.handle.borrow_mut();
-        let target_usize = __incan_v1_0000000000000000000000000000000000165f7472756e636174655f7461726765745f7573697a65000000000000000076a70000000000007833(
+        let target_usize = _truncate_target_usize(
             target,
             position,
         )?;
-        let target_u64 = __incan_v1_0000000000000000000000000000000000145f7472756e636174655f7461726765745f7536340000000000000000783300000000000079b1(
+        let target_u64 = _truncate_target_u64(
             target,
             position,
         )?;
@@ -1149,7 +1149,7 @@ impl _BytesIO {
     ///
     /// Returns:
     ///     Current buffer bytes without changing the cursor.
-    pub fn __incan_v1_01000000000000000000000000000000000867657476616c75650c0000000000000031fc0000000000003306(
+    pub fn getvalue(
         &self,
     ) -> Vec<u8> {
         let _ = "\n        Return a snapshot of the buffer contents.\n\n        Returns:\n            Current buffer bytes without changing the cursor.\n        ";
@@ -1161,18 +1161,18 @@ impl _BytesIO {
     /// Returns:
     ///     Current buffer bytes without changing the cursor. The current implementation returns a snapshot because
     ///     `BytesIO` uses shared interior mutability for method calls.
-    pub fn __incan_v1_01000000000000000000000000000000000a696e746f5f62797465730c0000000000000033060000000000003450(
+    pub fn into_bytes(
         &self,
     ) -> Vec<u8> {
         let _ = "\n        Return the buffer bytes.\n\n        Returns:\n            Current buffer bytes without changing the cursor. The current implementation returns a snapshot because\n            `BytesIO` uses shared interior mutability for method calls.\n        ";
         return self
-            .__incan_v1_01000000000000000000000000000000000867657476616c75650c0000000000000031fc0000000000003306();
+            .getvalue();
     }
     /// Return the unread byte count from the current cursor to the end.
     ///
     /// Returns:
     ///     Number of bytes remaining in the buffer.
-    pub fn __incan_v1_01000000000000000000000000000000000972656d61696e696e670c0000000000000034500000000000003615(
+    pub fn remaining(
         &self,
     ) -> i64 {
         let _ = "\n        Return the unread byte count from the current cursor to the end.\n\n        Returns:\n            Number of bytes remaining in the buffer.\n        ";
@@ -1184,19 +1184,19 @@ impl _BytesIO {
         }
         return total - pos;
     }
-    pub fn __incan_v1_0100000000000000000000000000000000085f726561645f75380c0000000000000036150000000000003671(
+    pub fn _read_u8(
         &self,
     ) -> Result<u8, IoError> {
-        return __incan_v1_00000000000000000000000000000000000e5f726561645f75385f76616c7565000000000000000048030000000000004915(
+        return _read_u8_value(
             self.clone(),
             "read".to_string(),
         );
     }
-    pub fn __incan_v1_0100000000000000000000000000000000095f77726974655f75380c0000000000000036710000000000003732(
+    pub fn _write_u8(
         &self,
         value: u8,
     ) -> Result<(), IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f77726974655f75385f76616c756500000000000000004a270000000000004b59(
+        return _write_u8_value(
             self.clone(),
             value,
             "write".to_string(),
@@ -1214,14 +1214,14 @@ impl _BytesIO {
     ///     `BytesIO(b"abc").read(2)?` returns `b"ab"`.
     #[inline]
     pub fn read(&self, size: i64) -> Result<Vec<u8>, IoError> {
-        self.__incan_v1_010000000000000000000000000000000004726561640c00000000000000144b0000000000001792(
+        self.read(
             size,
         )
     }
     /// Read up to `size` bytes through the `BinaryReader` trait surface.
     #[inline]
     pub fn read_bytes(&self, size: i64) -> Result<Vec<u8>, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000a726561645f62797465730c0000000000000017920000000000001853(
+        self.read_bytes(
             size,
         )
     }
@@ -1237,7 +1237,7 @@ impl _BytesIO {
     ///     `BytesIO(b"ABCD").read_exact(4)?` returns `b"ABCD"`.
     #[inline]
     pub fn read_exact(&self, size: i64) -> Result<Vec<u8>, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+        self.read_exact(
             size,
         )
     }
@@ -1253,7 +1253,7 @@ impl _BytesIO {
     ///     `BytesIO(b"name\0rest").read_until(0)?` returns `b"name\0"`.
     #[inline]
     pub fn read_until(&self, byte: u8) -> Result<Vec<u8>, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000a726561645f756e74696c0c000000000000001bc40000000000001e3a(
+        self.read_until(
             byte,
         )
     }
@@ -1270,7 +1270,7 @@ impl _BytesIO {
     /// body").skip_until(10)?` returns `7`.
     #[inline]
     pub fn skip_until(&self, byte: u8) -> Result<i64, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000a736b69705f756e74696c0c000000000000001e3a00000000000020a2(
+        self.skip_until(
             byte,
         )
     }
@@ -1280,7 +1280,7 @@ impl _BytesIO {
     ///     Current offset from the start of the buffer.
     #[inline]
     pub fn tell(&self) -> i64 {
-        self.__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e()
+        self.tell()
     }
     /// Move the cursor and return the new position.
     ///
@@ -1295,7 +1295,7 @@ impl _BytesIO {
     ///     `buf.seek(0, 2)?` moves to the end of the buffer.
     #[inline]
     pub fn seek(&self, offset: i64, whence: i64) -> Result<i64, IoError> {
-        self.__incan_v1_0100000000000000000000000000000000047365656b0c00000000000000219e000000000000274f(
+        self.seek(
             offset,
             whence,
         )
@@ -1306,7 +1306,7 @@ impl _BytesIO {
     ///     `Ok(None)` after rewinding, or `Err(IoError)`.
     #[inline]
     pub fn rewind(&self) -> Result<(), IoError> {
-        self.__incan_v1_010000000000000000000000000000000006726577696e640c00000000000000274f0000000000002849()
+        self.rewind()
     }
     /// Move the cursor relative to its current position.
     ///
@@ -1317,7 +1317,7 @@ impl _BytesIO {
     ///     `Ok(None)` after moving, or `Err(IoError)` when the result would be invalid.
     #[inline]
     pub fn seek_relative(&self, offset: i64) -> Result<(), IoError> {
-        self.__incan_v1_01000000000000000000000000000000000d7365656b5f72656c61746976650c00000000000000284900000000000029b9(
+        self.seek_relative(
             offset,
         )
     }
@@ -1333,7 +1333,7 @@ impl _BytesIO {
     ///     `BytesIO().write(b"ok")?` returns `2`.
     #[inline]
     pub fn write_bytes(&self, data: Vec<u8>) -> Result<i64, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000b77726974655f62797465730c0000000000000029b90000000000002bdd(
+        self.write_bytes(
             data,
         )
     }
@@ -1349,7 +1349,7 @@ impl _BytesIO {
     ///     `BytesIO().write(b"ok")?` returns `2`.
     #[inline]
     pub fn write(&self, data: Vec<u8>) -> Result<i64, IoError> {
-        self.__incan_v1_01000000000000000000000000000000000577726974650c000000000000002bdd0000000000002d4a(
+        self.write(
             data,
         )
     }
@@ -1365,7 +1365,7 @@ impl _BytesIO {
     ///     After reading two bytes from `BytesIO(b"abcd")`, `truncate()?` leaves `b"ab"`.
     #[inline]
     pub fn truncate(&self, size: Option<i64>) -> Result<i64, IoError> {
-        self.__incan_v1_0100000000000000000000000000000000087472756e636174650c000000000000002d4a00000000000031fc(
+        self.truncate(
             size,
         )
     }
@@ -1375,7 +1375,7 @@ impl _BytesIO {
     ///     Current buffer bytes without changing the cursor.
     #[inline]
     pub fn getvalue(&self) -> Vec<u8> {
-        self.__incan_v1_01000000000000000000000000000000000867657476616c75650c0000000000000031fc0000000000003306()
+        self.getvalue()
     }
     /// Return the buffer bytes.
     ///
@@ -1384,7 +1384,7 @@ impl _BytesIO {
     ///     `BytesIO` uses shared interior mutability for method calls.
     #[inline]
     pub fn into_bytes(&self) -> Vec<u8> {
-        self.__incan_v1_01000000000000000000000000000000000a696e746f5f62797465730c0000000000000033060000000000003450()
+        self.into_bytes()
     }
     /// Return the unread byte count from the current cursor to the end.
     ///
@@ -1392,15 +1392,15 @@ impl _BytesIO {
     ///     Number of bytes remaining in the buffer.
     #[inline]
     pub fn remaining(&self) -> i64 {
-        self.__incan_v1_01000000000000000000000000000000000972656d61696e696e670c0000000000000034500000000000003615()
+        self.remaining()
     }
     #[inline]
     pub fn _read_u8(&self) -> Result<u8, IoError> {
-        self.__incan_v1_0100000000000000000000000000000000085f726561645f75380c0000000000000036150000000000003671()
+        self._read_u8()
     }
     #[inline]
     pub fn _write_u8(&self, value: u8) -> Result<(), IoError> {
-        self.__incan_v1_0100000000000000000000000000000000095f77726974655f75380c0000000000000036710000000000003732(
+        self._write_u8(
             value,
         )
     }
@@ -1428,7 +1428,7 @@ impl BinaryReader for _BytesIO {
     fn read_bytes(&self, size: i64) -> Result<Vec<u8>, IoError> {
         let _ = "\n        Read up to `size` bytes through the `BinaryReader` trait surface.\n        ";
         return self
-            .__incan_v1_010000000000000000000000000000000004726561640c00000000000000144b0000000000001792(
+            .read(
                 size,
             );
     }
@@ -1445,7 +1445,7 @@ impl BinaryReader for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_0100000000000000000000000000000000066368756e6b730c0000000000000007f800000000000009bb(
+    pub fn chunks(
         &self,
         chunk_size: i64,
     ) -> ReaderChunks<Self> {
@@ -1454,7 +1454,7 @@ impl _BytesIO {
 }
 impl BinaryRead<u8> for _BytesIO {
     fn read(&self, _: Endian) -> Result<u8, IoError> {
-        return __incan_v1_00000000000000000000000000000000000e5f726561645f75385f76616c7565000000000000000048030000000000004915(
+        return _read_u8_value(
             self.clone(),
             "read".to_string(),
         );
@@ -1462,7 +1462,7 @@ impl BinaryRead<u8> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003732000000000000379b(
+    pub fn read(
         &self,
         _endian: Endian,
     ) -> Result<u8, IoError> {
@@ -1471,7 +1471,7 @@ impl _BytesIO {
 }
 impl BinaryRead<i8> for _BytesIO {
     fn read(&self, _: Endian) -> Result<i8, IoError> {
-        return __incan_v1_00000000000000000000000000000000000e5f726561645f69385f76616c7565000000000000000049150000000000004a27(
+        return _read_i8_value(
             self.clone(),
             "read".to_string(),
         );
@@ -1479,7 +1479,7 @@ impl BinaryRead<i8> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c00000000000000379b0000000000003804(
+    pub fn read(
         &self,
         _endian: Endian,
     ) -> Result<i8, IoError> {
@@ -1488,7 +1488,7 @@ impl _BytesIO {
 }
 impl BinaryRead<u16> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<u16, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f7531365f76616c756500000000000000004c8b0000000000004e86(
+        return _read_u16_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1497,7 +1497,7 @@ impl BinaryRead<u16> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c00000000000000392b000000000000399d(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<u16, IoError> {
@@ -1506,7 +1506,7 @@ impl _BytesIO {
 }
 impl BinaryRead<i16> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<i16, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f6931365f76616c756500000000000000004e860000000000005081(
+        return _read_i16_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1515,7 +1515,7 @@ impl BinaryRead<i16> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003a260000000000003a98(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<i16, IoError> {
@@ -1524,7 +1524,7 @@ impl _BytesIO {
 }
 impl BinaryRead<u32> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<u32, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f7533325f76616c7565000000000000000054f300000000000056ee(
+        return _read_u32_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1533,7 +1533,7 @@ impl BinaryRead<u32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003b480000000000003bba(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<u32, IoError> {
@@ -1542,7 +1542,7 @@ impl _BytesIO {
 }
 impl BinaryRead<i32> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<i32, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f6933325f76616c7565000000000000000056ee00000000000058e9(
+        return _read_i32_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1551,7 +1551,7 @@ impl BinaryRead<i32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003c430000000000003cb5(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<i32, IoError> {
@@ -1560,7 +1560,7 @@ impl _BytesIO {
 }
 impl BinaryRead<u64> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<u64, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f7536345f76616c756500000000000000005d5b0000000000005f56(
+        return _read_u64_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1569,7 +1569,7 @@ impl BinaryRead<u64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003d650000000000003dd7(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<u64, IoError> {
@@ -1578,7 +1578,7 @@ impl _BytesIO {
 }
 impl BinaryRead<i64> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<i64, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f6936345f76616c756500000000000000005f560000000000006151(
+        return _read_i64_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1587,7 +1587,7 @@ impl BinaryRead<i64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003e600000000000003ed2(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<i64, IoError> {
@@ -1596,7 +1596,7 @@ impl _BytesIO {
 }
 impl BinaryRead<u128> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<u128, IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f726561645f753132385f76616c7565000000000000000065c300000000000067c3(
+        return _read_u128_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1605,7 +1605,7 @@ impl BinaryRead<u128> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c000000000000003f830000000000003ff7(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<u128, IoError> {
@@ -1614,7 +1614,7 @@ impl _BytesIO {
 }
 impl BinaryRead<i128> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<i128, IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f726561645f693132385f76616c7565000000000000000067c300000000000069c3(
+        return _read_i128_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1623,7 +1623,7 @@ impl BinaryRead<i128> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c00000000000000408200000000000040f6(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<i128, IoError> {
@@ -1632,7 +1632,7 @@ impl _BytesIO {
 }
 impl BinaryRead<f32> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<f32, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f6633325f76616c756500000000000000006e3f000000000000703a(
+        return _read_f32_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1641,7 +1641,7 @@ impl BinaryRead<f32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c0000000000000041a8000000000000421a(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<f32, IoError> {
@@ -1650,7 +1650,7 @@ impl _BytesIO {
 }
 impl BinaryRead<f64> for _BytesIO {
     fn read(&self, endian: Endian) -> Result<f64, IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f726561645f6636345f76616c75650000000000000000703a0000000000007235(
+        return _read_f64_value(
             self.clone(),
             endian,
             "read".to_string(),
@@ -1659,7 +1659,7 @@ impl BinaryRead<f64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_010000000000000000000000000000000004726561640c0000000000000042a30000000000004315(
+    pub fn read(
         &self,
         endian: Endian,
     ) -> Result<f64, IoError> {
@@ -1668,7 +1668,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<u8> for _BytesIO {
     fn write(&self, value: u8, _: Endian) -> Result<(), IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f77726974655f75385f76616c756500000000000000004a270000000000004b59(
+        return _write_u8_value(
             self.clone(),
             value,
             "write".to_string(),
@@ -1677,7 +1677,7 @@ impl BinaryWrite<u8> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c0000000000000038040000000000003884(
+    pub fn write(
         &self,
         value: u8,
         _endian: Endian,
@@ -1687,7 +1687,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<i8> for _BytesIO {
     fn write(&self, value: i8, _: Endian) -> Result<(), IoError> {
-        return __incan_v1_00000000000000000000000000000000000f5f77726974655f69385f76616c756500000000000000004b590000000000004c8b(
+        return _write_i8_value(
             self.clone(),
             value,
             "write".to_string(),
@@ -1696,7 +1696,7 @@ impl BinaryWrite<i8> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003884000000000000392b(
+    pub fn write(
         &self,
         value: i8,
         _endian: Endian,
@@ -1706,7 +1706,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<u16> for _BytesIO {
     fn write(&self, value: u16, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f7531365f76616c75650000000000000000508100000000000052ba(
+        return _write_u16_value(
             self.clone(),
             value,
             endian,
@@ -1716,7 +1716,7 @@ impl BinaryWrite<u16> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c00000000000000399d0000000000003a26(
+    pub fn write(
         &self,
         value: u16,
         endian: Endian,
@@ -1726,7 +1726,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<i16> for _BytesIO {
     fn write(&self, value: i16, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f6931365f76616c7565000000000000000052ba00000000000054f3(
+        return _write_i16_value(
             self.clone(),
             value,
             endian,
@@ -1736,7 +1736,7 @@ impl BinaryWrite<i16> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003a980000000000003b48(
+    pub fn write(
         &self,
         value: i16,
         endian: Endian,
@@ -1746,7 +1746,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<u32> for _BytesIO {
     fn write(&self, value: u32, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f7533325f76616c7565000000000000000058e90000000000005b22(
+        return _write_u32_value(
             self.clone(),
             value,
             endian,
@@ -1756,7 +1756,7 @@ impl BinaryWrite<u32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003bba0000000000003c43(
+    pub fn write(
         &self,
         value: u32,
         endian: Endian,
@@ -1766,7 +1766,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<i32> for _BytesIO {
     fn write(&self, value: i32, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f6933325f76616c756500000000000000005b220000000000005d5b(
+        return _write_i32_value(
             self.clone(),
             value,
             endian,
@@ -1776,7 +1776,7 @@ impl BinaryWrite<i32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003cb50000000000003d65(
+    pub fn write(
         &self,
         value: i32,
         endian: Endian,
@@ -1786,7 +1786,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<u64> for _BytesIO {
     fn write(&self, value: u64, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f7536345f76616c756500000000000000006151000000000000638a(
+        return _write_u64_value(
             self.clone(),
             value,
             endian,
@@ -1796,7 +1796,7 @@ impl BinaryWrite<u64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003dd70000000000003e60(
+    pub fn write(
         &self,
         value: u64,
         endian: Endian,
@@ -1806,7 +1806,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<i64> for _BytesIO {
     fn write(&self, value: i64, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f6936345f76616c75650000000000000000638a00000000000065c3(
+        return _write_i64_value(
             self.clone(),
             value,
             endian,
@@ -1816,7 +1816,7 @@ impl BinaryWrite<i64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003ed20000000000003f83(
+    pub fn write(
         &self,
         value: i64,
         endian: Endian,
@@ -1826,7 +1826,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<u128> for _BytesIO {
     fn write(&self, value: u128, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000115f77726974655f753132385f76616c7565000000000000000069c30000000000006c01(
+        return _write_u128_value(
             self.clone(),
             value,
             endian,
@@ -1836,7 +1836,7 @@ impl BinaryWrite<u128> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000003ff70000000000004082(
+    pub fn write(
         &self,
         value: u128,
         endian: Endian,
@@ -1846,7 +1846,7 @@ impl _BytesIO {
 }
 impl BinaryWrite<i128> for _BytesIO {
     fn write(&self, value: i128, endian: Endian) -> Result<(), IoError> {
-        return __incan_v1_0000000000000000000000000000000000115f77726974655f693132385f76616c756500000000000000006c010000000000006e3f(
+        return _write_i128_value(
             self.clone(),
             value,
             endian,
@@ -1856,7 +1856,7 @@ impl BinaryWrite<i128> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c0000000000000040f600000000000041a8(
+    pub fn write(
         &self,
         value: i128,
         endian: Endian,
@@ -1867,7 +1867,7 @@ impl _BytesIO {
 impl BinaryWrite<f32> for _BytesIO {
     fn write(&self, value: f32, endian: Endian) -> Result<(), IoError> {
         let _ = incan_stdlib::num::require_finite_f32(value);
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f6633325f76616c756500000000000000007235000000000000746e(
+        return _write_f32_value(
             self.clone(),
             incan_stdlib::num::require_finite_f32(value),
             endian,
@@ -1877,7 +1877,7 @@ impl BinaryWrite<f32> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c00000000000000421a00000000000042a3(
+    pub fn write(
         &self,
         value: f32,
         endian: Endian,
@@ -1888,7 +1888,7 @@ impl _BytesIO {
 impl BinaryWrite<f64> for _BytesIO {
     fn write(&self, value: f64, endian: Endian) -> Result<(), IoError> {
         let _ = incan_stdlib::num::require_finite_f64(value);
-        return __incan_v1_0000000000000000000000000000000000105f77726974655f6636345f76616c75650000000000000000746e00000000000076a7(
+        return _write_f64_value(
             self.clone(),
             incan_stdlib::num::require_finite_f64(value),
             endian,
@@ -1898,7 +1898,7 @@ impl BinaryWrite<f64> for _BytesIO {
 }
 impl _BytesIO {
     #[inline(never)]
-    pub fn __incan_v1_01000000000000000000000000000000000577726974650c000000000000004315000000000000439b(
+    pub fn write(
         &self,
         value: f64,
         endian: Endian,
@@ -1917,7 +1917,7 @@ impl _BytesIO {
 /// Example:
 ///     `BytesIO(b"abc").read(1)?` returns `b"a"`.
 #[allow(non_snake_case)]
-pub fn __incan_v1_0000000000000000000000000000000000074279746573494f0000000000000000439b0000000000004546(
+pub fn BytesIO(
     initial: Vec<u8>,
 ) -> _BytesIO {
     let _ = "\n    Construct a writable, seekable in-memory byte stream.\n\n    Args:\n        initial: Initial buffer contents. The cursor starts at `0`.\n\n    Returns:\n        A `BytesIO` stream over `initial`.\n\n    Example:\n        `BytesIO(b\"abc\").read(1)?` returns `b\"a\"`.\n    ";
@@ -1925,38 +1925,38 @@ pub fn __incan_v1_0000000000000000000000000000000000074279746573494f000000000000
         handle: Rc::new(RefCell::new(Cursor::new(initial))),
     };
 }
-pub use __incan_v1_0000000000000000000000000000000000074279746573494f0000000000000000439b0000000000004546 as BytesIO;
-fn __incan_v1_00000000000000000000000000000000000d5f656d7074795f73747265616d00000000000000004546000000000000460e() -> _BytesIO {
+pub use BytesIO as BytesIO;
+fn _empty_stream() -> _BytesIO {
     let _ = "\n    Construct an internal empty stream without using the public PascalCase factory.\n    ";
     return _BytesIO {
         handle: Rc::new(RefCell::new(Cursor::new(b"".to_vec()))),
     };
 }
-fn __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+fn _zeros(
     size: i64,
 ) -> Vec<u8> {
     let _ = "\n    Build a zero-filled byte vector for numeric writes.\n    ";
     let zero: u8 = 0;
     return incan_stdlib::collections::list_repeat(zero, (size) as i64);
 }
-fn __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+fn _finish_numeric_write(
     stream: _BytesIO,
     cursor: Cursor<Vec<u8>>,
 ) -> Result<(), IoError> {
     let _ = "\n    Write a numeric helper's temporary cursor contents to the target stream.\n    ";
     let _ = stream
-        .__incan_v1_01000000000000000000000000000000000b77726974655f62797465730c0000000000000029b90000000000002bdd(
+        .write_bytes(
             cursor.into_inner(),
         )?;
     return Ok::<(), IoError>(());
 }
-fn __incan_v1_00000000000000000000000000000000000e5f726561645f75385f76616c7565000000000000000048030000000000004915(
+fn _read_u8_value(
     stream: _BytesIO,
     operation: String,
 ) -> Result<u8, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 1,
             )?,
     );
@@ -1969,23 +1969,23 @@ fn __incan_v1_00000000000000000000000000000000000e5f726561645f75385f76616c756500
                 u8,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000e5f726561645f69385f76616c7565000000000000000049150000000000004a27(
+fn _read_i8_value(
     stream: _BytesIO,
     operation: String,
 ) -> Result<i8, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 1,
             )?,
     );
@@ -1998,29 +1998,29 @@ fn __incan_v1_00000000000000000000000000000000000e5f726561645f69385f76616c756500
                 i8,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f77726974655f75385f76616c756500000000000000004a270000000000004b59(
+fn _write_u8_value(
     stream: _BytesIO,
     value: u8,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             1,
         ),
     );
     let _ = match cursor.write_u8(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2030,29 +2030,29 @@ fn __incan_v1_00000000000000000000000000000000000f5f77726974655f75385f76616c7565
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f77726974655f69385f76616c756500000000000000004b590000000000004c8b(
+fn _write_i8_value(
     stream: _BytesIO,
     value: i8,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             1,
         ),
     );
     let _ = match cursor.write_i8(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2062,24 +2062,24 @@ fn __incan_v1_00000000000000000000000000000000000f5f77726974655f69385f76616c7565
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f7531365f76616c756500000000000000004c8b0000000000004e86(
+fn _read_u16_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<u16, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 2,
             )?,
     );
@@ -2093,10 +2093,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7531365f76616c7565
                     u16,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2112,24 +2112,24 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7531365f76616c7565
                 u16,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f6931365f76616c756500000000000000004e860000000000005081(
+fn _read_i16_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<i16, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 2,
             )?,
     );
@@ -2143,10 +2143,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6931365f76616c7565
                     i16,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2162,31 +2162,31 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6931365f76616c7565
                 i16,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f7531365f76616c75650000000000000000508100000000000052ba(
+fn _write_u16_value(
     stream: _BytesIO,
     value: u16,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             2,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_u16::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2196,10 +2196,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7531365f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2208,7 +2208,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7531365f76616c75
     }
     let _ = match cursor.write_u16::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2218,31 +2218,31 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7531365f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f6931365f76616c7565000000000000000052ba00000000000054f3(
+fn _write_i16_value(
     stream: _BytesIO,
     value: i16,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             2,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_i16::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2252,10 +2252,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6931365f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2264,7 +2264,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6931365f76616c75
     }
     let _ = match cursor.write_i16::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2274,24 +2274,24 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6931365f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f7533325f76616c7565000000000000000054f300000000000056ee(
+fn _read_u32_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<u32, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 4,
             )?,
     );
@@ -2305,10 +2305,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7533325f76616c7565
                     u32,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2324,24 +2324,24 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7533325f76616c7565
                 u32,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f6933325f76616c7565000000000000000056ee00000000000058e9(
+fn _read_i32_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<i32, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 4,
             )?,
     );
@@ -2355,10 +2355,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6933325f76616c7565
                     i32,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2374,31 +2374,31 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6933325f76616c7565
                 i32,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f7533325f76616c7565000000000000000058e90000000000005b22(
+fn _write_u32_value(
     stream: _BytesIO,
     value: u32,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             4,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_u32::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2408,10 +2408,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7533325f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2420,7 +2420,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7533325f76616c75
     }
     let _ = match cursor.write_u32::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2430,31 +2430,31 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7533325f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f6933325f76616c756500000000000000005b220000000000005d5b(
+fn _write_i32_value(
     stream: _BytesIO,
     value: i32,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             4,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_i32::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2464,10 +2464,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6933325f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2476,7 +2476,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6933325f76616c75
     }
     let _ = match cursor.write_i32::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2486,24 +2486,24 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6933325f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f7536345f76616c756500000000000000005d5b0000000000005f56(
+fn _read_u64_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<u64, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 8,
             )?,
     );
@@ -2517,10 +2517,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7536345f76616c7565
                     u64,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2536,24 +2536,24 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f7536345f76616c7565
                 u64,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f6936345f76616c756500000000000000005f560000000000006151(
+fn _read_i64_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<i64, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 8,
             )?,
     );
@@ -2567,10 +2567,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6936345f76616c7565
                     i64,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2586,31 +2586,31 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6936345f76616c7565
                 i64,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f7536345f76616c756500000000000000006151000000000000638a(
+fn _write_u64_value(
     stream: _BytesIO,
     value: u64,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             8,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_u64::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2620,10 +2620,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7536345f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2632,7 +2632,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7536345f76616c75
     }
     let _ = match cursor.write_u64::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2642,31 +2642,31 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f7536345f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f6936345f76616c75650000000000000000638a00000000000065c3(
+fn _write_i64_value(
     stream: _BytesIO,
     value: i64,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             8,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_i64::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2676,10 +2676,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6936345f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2688,7 +2688,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6936345f76616c75
     }
     let _ = match cursor.write_i64::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2698,24 +2698,24 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6936345f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f726561645f753132385f76616c7565000000000000000065c300000000000067c3(
+fn _read_u128_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<u128, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 16,
             )?,
     );
@@ -2729,10 +2729,10 @@ fn __incan_v1_0000000000000000000000000000000000105f726561645f753132385f76616c75
                     u128,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2748,24 +2748,24 @@ fn __incan_v1_0000000000000000000000000000000000105f726561645f753132385f76616c75
                 u128,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f726561645f693132385f76616c7565000000000000000067c300000000000069c3(
+fn _read_i128_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<i128, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 16,
             )?,
     );
@@ -2779,10 +2779,10 @@ fn __incan_v1_0000000000000000000000000000000000105f726561645f693132385f76616c75
                     i128,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2798,31 +2798,31 @@ fn __incan_v1_0000000000000000000000000000000000105f726561645f693132385f76616c75
                 i128,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000115f77726974655f753132385f76616c7565000000000000000069c30000000000006c01(
+fn _write_u128_value(
     stream: _BytesIO,
     value: u128,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             16,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_u128::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2832,10 +2832,10 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f753132385f76616c
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2844,7 +2844,7 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f753132385f76616c
     }
     let _ = match cursor.write_u128::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2854,31 +2854,31 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f753132385f76616c
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000115f77726974655f693132385f76616c756500000000000000006c010000000000006e3f(
+fn _write_i128_value(
     stream: _BytesIO,
     value: i128,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             16,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_i128::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -2888,10 +2888,10 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f693132385f76616c
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2900,7 +2900,7 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f693132385f76616c
     }
     let _ = match cursor.write_i128::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -2910,24 +2910,24 @@ fn __incan_v1_0000000000000000000000000000000000115f77726974655f693132385f76616c
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f6633325f76616c756500000000000000006e3f000000000000703a(
+fn _read_f32_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<f32, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 4,
             )?,
     );
@@ -2941,10 +2941,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6633325f76616c7565
                     f32,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -2960,24 +2960,24 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6633325f76616c7565
                 f32,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000f5f726561645f6636345f76616c75650000000000000000703a0000000000007235(
+fn _read_f64_value(
     stream: _BytesIO,
     endian: Endian,
     operation: String,
 ) -> Result<f64, IoError> {
     let mut cursor = Cursor::new(
         stream
-            .__incan_v1_01000000000000000000000000000000000a726561645f65786163740c0000000000000018530000000000001bc4(
+            .read_exact(
                 8,
             )?,
     );
@@ -2991,10 +2991,10 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6636345f76616c7565
                     f64,
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -3010,31 +3010,31 @@ fn __incan_v1_00000000000000000000000000000000000f5f726561645f6636345f76616c7565
                 f64,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f6633325f76616c756500000000000000007235000000000000746e(
+fn _write_f32_value(
     stream: _BytesIO,
     value: f32,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             4,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_f32::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -3044,10 +3044,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6633325f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -3056,7 +3056,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6633325f76616c75
     }
     let _ = match cursor.write_f32::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -3066,31 +3066,31 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6633325f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000105f77726974655f6636345f76616c75650000000000000000746e00000000000076a7(
+fn _write_f64_value(
     stream: _BytesIO,
     value: f64,
     endian: Endian,
     operation: String,
 ) -> Result<(), IoError> {
     let mut cursor = Cursor::new(
-        __incan_v1_0000000000000000000000000000000000065f7a65726f730000000000000000460e00000000000046ac(
+        _zeros(
             8,
         ),
     );
     if endian == Endian::Little {
         let _ = match cursor.write_f64::<LittleEndian>(value) {
             Ok(_) => {
-                return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+                return _finish_numeric_write(
                     stream.clone(),
                     cursor.clone(),
                 );
@@ -3100,10 +3100,10 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6636345f76616c75
                     (),
                     IoError,
                 >(
-                    __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                    _rust_io_error(
                         operation.to_string(),
                         stream
-                            .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                            .tell(),
                         err.to_string(),
                     ),
                 );
@@ -3112,7 +3112,7 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6636345f76616c75
     }
     let _ = match cursor.write_f64::<BigEndian>(value) {
         Ok(_) => {
-            return __incan_v1_0000000000000000000000000000000000155f66696e6973685f6e756d657269635f7772697465000000000000000046ac0000000000004803(
+            return _finish_numeric_write(
                 stream,
                 cursor.clone(),
             );
@@ -3122,17 +3122,17 @@ fn __incan_v1_0000000000000000000000000000000000105f77726974655f6636345f76616c75
                 (),
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+                _rust_io_error(
                     operation,
                     stream
-                        .__incan_v1_01000000000000000000000000000000000474656c6c0c0000000000000020a2000000000000219e(),
+                        .tell(),
                     err.to_string(),
                 ),
             );
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000165f7472756e636174655f7461726765745f7573697a65000000000000000076a70000000000007833(
+fn _truncate_target_usize(
     target: i64,
     position: i64,
 ) -> Result<usize, IoError> {
@@ -3147,7 +3147,7 @@ fn __incan_v1_0000000000000000000000000000000000165f7472756e636174655f7461726765
                 usize,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+                _invalid_input(
                     "truncate".to_string(),
                     position,
                     "truncate size does not fit host usize".to_string(),
@@ -3156,7 +3156,7 @@ fn __incan_v1_0000000000000000000000000000000000165f7472756e636174655f7461726765
         }
     };
 }
-fn __incan_v1_0000000000000000000000000000000000145f7472756e636174655f7461726765745f7536340000000000000000783300000000000079b1(
+fn _truncate_target_u64(
     target: i64,
     position: i64,
 ) -> Result<u64, IoError> {
@@ -3171,7 +3171,7 @@ fn __incan_v1_0000000000000000000000000000000000145f7472756e636174655f7461726765
                 u64,
                 IoError,
             >(
-                __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+                _invalid_input(
                     "truncate".to_string(),
                     position,
                     "truncate size does not fit u64".to_string(),
@@ -3180,7 +3180,7 @@ fn __incan_v1_0000000000000000000000000000000000145f7472756e636174655f7461726765
         }
     };
 }
-fn __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e707574000000000000000079b10000000000007a97(
+fn _invalid_input(
     operation: String,
     position: i64,
     detail: String,
@@ -3194,7 +3194,7 @@ fn __incan_v1_00000000000000000000000000000000000e5f696e76616c69645f696e70757400
         path: None::<_>,
     };
 }
-fn __incan_v1_00000000000000000000000000000000000e5f727573745f696f5f6572726f7200000000000000007a970000000000007cc6(
+fn _rust_io_error(
     operation: String,
     position: i64,
     detail: String,

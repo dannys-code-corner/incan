@@ -3,6 +3,8 @@
 use incan::backend::IrCodegen;
 use incan::frontend::{lexer, parser};
 
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
 /// Fallible entrypoints retain the same runtime panic hook and Zen ordering as unit-returning entrypoints.
 #[test]
 fn fallible_main_preserves_entrypoint_setup_before_the_body() -> Result<(), Box<dyn std::error::Error>> {
@@ -40,6 +42,9 @@ fn fallible_main_preserves_entrypoint_setup_before_the_body() -> Result<(), Box<
             ),
             "incan_stdlib::__incan_stdlib_version_check!(\"<INCAN_STDLIB_VERSION>\");",
         );
+    // Decode RFC 120 projections so the golden shows the entrypoint the source declared rather than an encoded
+    // identifier whose payload embeds a declaration span and churns whenever a line above it moves.
+    let normalized = canonical_projection::decoded_source_spellings(&normalized);
     insta::assert_snapshot!("fallible_main_runtime_diagnostic", normalized);
     Ok(())
 }

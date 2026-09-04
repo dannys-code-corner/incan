@@ -67,7 +67,7 @@ impl incan_stdlib::reflection::HasFieldValueReflection for Search {
     }
 }
 #[incan_web_macros::route("/snapshot/{id}", method = "GET")]
-async fn __incan_v1_000000000000000000000000000000000008736e617073686f74000000000000000000740000000000000100(
+async fn snapshot(
     _: Path<i64>,
     query: Query<Search>,
 ) -> Json<Search> {
