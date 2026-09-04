@@ -85,7 +85,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
         }
         if let Some(identity) = &entry.canonical {
             validate_canonical_identity(identity, &format!("export `{}`", entry.public_name), false)?;
-            validate_export_identity_binding(raw, entry, identity)?;
+            validate_export_identity_binding(raw, &graph.exports, entry, identity)?;
             if graph.schema_version == LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION {
                 if entry.public_path.len() == 2 {
                     validate_root_identity_graph_backing(raw, entry, identity)?;
@@ -330,6 +330,7 @@ fn validate_current_identity_graph_coverage(raw: &RawLibraryManifest) -> Result<
 /// Bind one graph entry's canonical identity to the exact source/projection path the entry publishes.
 fn validate_export_identity_binding(
     raw: &RawLibraryManifest,
+    siblings: &[super::ExportIdentity],
     entry: &super::ExportIdentity,
     identity: &CanonicalIdentityExport,
 ) -> Result<(), LibraryManifestError> {
@@ -443,7 +444,7 @@ fn validate_export_identity_binding(
             &entry.source_path
         }
     };
-    if authoritative_path.is_empty() || !canonical_identity_matches_path(raw, identity, authoritative_path) {
+    if authoritative_path.is_empty() || !canonical_identity_matches_path(siblings, identity, authoritative_path) {
         return Err(LibraryManifestError::Invalid(format!(
             "identity graph entry `{}` canonical identity disagrees with its authoritative source/projection path",
             entry.public_name
@@ -614,16 +615,24 @@ fn api_declaration_backs_identity_entry(
 ) -> bool {
     match declaration {
         ApiDeclaration::Alias(alias) if alias.name == declaration_name && alias.is_public => {
+            // The two records name the same target at different qualifications, and for a chain at different hops:
+            // a same-module alias records `["helper"]` where the graph entry records `["provider", "helper"]`, and a
+            // facade records the hop it was written on where the entry carries the entrypoint's. Compare what they
+            // can honestly agree on -- the declaration each names -- and let the identity carry the rest.
             let target_matches = match &entry.projection {
                 ExportIdentityProjection::Alias { target_path }
-                | ExportIdentityProjection::Reexport { target_path } => target_path == &alias.target_path,
+                | ExportIdentityProjection::Reexport { target_path } => target_path.last() == alias.target_path.last(),
                 ExportIdentityProjection::Direct | ExportIdentityProjection::Partial { .. } => false,
             };
             if !target_matches || !matches!(entry.kind, ExportIdentityKind::Alias | ExportIdentityKind::Function) {
                 return false;
             }
+            // `source_path` is the target's resolved declaration path; `target_path` is how the alias spelled it.
+            // Resolution only prepends the owning module, so the spelling must be a suffix of the resolution rather
+            // than equal to it -- an unqualified `helper` resolves to `["provider", "helper"]` and still names the
+            // same declaration.
             if let Some(projected) = &alias.projected_function
-                && projected.source_path != alias.target_path
+                && !projected.source_path.ends_with(&alias.target_path)
             {
                 return false;
             }
@@ -776,15 +785,31 @@ fn api_declaration_export_kind(declaration: &ApiDeclaration) -> Option<ExportIde
 ///
 /// Every one of those is a correct program, and asserting prefix equality rejected all of them. That is the same
 /// spelling-is-not-identity mistake the identity model exists to remove, so this compares only what a path can
-/// honestly prove: that it names the declaration the identity names. Structural agreement between the identity graph
-/// and the raw exports is enforced separately by the per-projection checks in `validate_export_identity_binding` and
-/// by the API-declaration backing checks, and consumers resolve by identity rather than by these strings.
+/// honestly prove: that it names the declaration the identity names, or that it names another export of this package
+/// that carries the very same identity. The second case is a projection over a projection -- re-exporting an alias
+/// publishes the alias's path, whose last segment is the local name the alias chose, not the declaration it renames.
+/// Structural agreement between the identity graph and the raw exports is enforced separately by the per-projection
+/// checks in `validate_export_identity_binding` and by the API-declaration backing checks, and consumers resolve by
+/// identity rather than by these strings.
 fn canonical_identity_matches_path(
-    _raw: &RawLibraryManifest,
+    siblings: &[super::ExportIdentity],
     identity: &CanonicalIdentityExport,
     path: &[String],
 ) -> bool {
-    path.last() == Some(&identity.declaration_name)
+    if path.last() == Some(&identity.declaration_name) {
+        return true;
+    }
+    // The path may name a projection hop rather than the declaration. A re-export of an alias publishes the alias's
+    // path -- `["provider", "run"]` -- while the identity behind it is the declaration the alias renames, `helper`.
+    // That is the intended model: a local name for a declaration does not become a second declaration. Accept the
+    // path when this package publishes it as an export carrying this same identity; that hop's own graph entry
+    // proves its binding, so the chain stays validated one hop at a time instead of demanding that the last hop
+    // spell a name it deliberately replaced.
+    siblings.iter().any(|sibling| {
+        sibling.public_path.len() > 1
+            && &sibling.public_path[1..] == path
+            && sibling.canonical.as_ref() == Some(identity)
+    })
 }
 
 /// Validate all canonical field identities exported for one nominal declaration.

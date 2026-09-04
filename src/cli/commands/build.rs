@@ -2987,7 +2987,15 @@ fn rename_checked_export(export: &CheckedNamedExport, exported_name: &str) -> Ch
     match &mut renamed.kind {
         CheckedExportKind::Function(function_export) => function_export.name = exported_name.to_string(),
         CheckedExportKind::Partial(partial_export) => partial_export.name = exported_name.to_string(),
-        CheckedExportKind::Alias(alias_export) => alias_export.name = exported_name.to_string(),
+        CheckedExportKind::Alias(alias_export) => {
+            alias_export.name = exported_name.to_string();
+            // Rename the callable the alias projects along with the alias itself. The projection describes the
+            // binding a consumer resolves under this public name, so a renaming re-export must carry the new name
+            // here too; only `emitted_name` stays put, because the declaration behind the rename is unchanged.
+            if let Some(projected_function) = alias_export.projected_function.as_mut() {
+                projected_function.name = exported_name.to_string();
+            }
+        }
         CheckedExportKind::TypeAlias(type_alias_export) => type_alias_export.name = exported_name.to_string(),
         CheckedExportKind::Model(model_export) => model_export.name = exported_name.to_string(),
         CheckedExportKind::Class(class_export) => class_export.name = exported_name.to_string(),
@@ -17577,6 +17585,73 @@ impl ChildId {
             ),
             "the package-root export must retain the checked entrypoint re-export projection"
         );
+        Ok(())
+    }
+
+    /// A renamed re-export of a callable alias must republish the callable under the new public name.
+    ///
+    /// The manifest's callable projection describes the binding a consumer resolves at this public name, so leaving
+    /// the inner hop's name on it makes the manifest advertise `run` for an export named `public_target`.
+    #[test]
+    fn resolve_library_reexports_renames_the_callable_an_alias_projects() -> Result<(), Box<dyn std::error::Error>> {
+        let source = "pub from provider import run as public_target\n";
+        let tokens = lexer::lex(source).map_err(|errs| format!("lex errors: {errs:?}"))?;
+        let ast = parser::parse_with_module_path(&tokens, Some("project/src/lib.incn"))
+            .map_err(|errs| format!("parse errors: {errs:?}"))?;
+        let lib_module = ParsedModule {
+            name: "main".to_string(),
+            path_segments: vec!["main".to_string()],
+            file_path: PathBuf::from("project/src/lib.incn"),
+            source: source.to_string(),
+            ast,
+        };
+
+        let callable = crate::frontend::library_exports::CheckedFunctionExport {
+            name: "run".to_string(),
+            emitted_name: None,
+            type_params: Vec::new(),
+            params: Vec::new(),
+            param_defaults: Vec::new(),
+            return_type: ResolvedType::Int,
+            is_async: false,
+        };
+        let run_export = CheckedNamedExport {
+            name: "run".to_string(),
+            identity: CheckedExportIdentity::alias(
+                vec!["provider".to_string(), "run".to_string()],
+                vec!["provider".to_string(), "helper".to_string()],
+            ),
+            kind: CheckedExportKind::Alias(crate::frontend::library_exports::CheckedAliasExport {
+                name: "run".to_string(),
+                target_path: vec!["provider".to_string(), "helper".to_string()],
+                projected_function: Some(callable),
+            }),
+        };
+        let mut module_exports: HashMap<String, HashMap<String, Vec<CheckedNamedExport>>> = HashMap::new();
+        module_exports.insert(
+            "provider".to_string(),
+            HashMap::from([("run".to_string(), vec![run_export])]),
+        );
+
+        let resolved = LibraryReexportResolver::new(&module_exports)
+            .resolve(&lib_module)
+            .map_err(|errs| format!("{errs:?}"))?;
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].name, "public_target");
+        match &resolved[0].kind {
+            CheckedExportKind::Alias(alias) => {
+                assert_eq!(alias.name, "public_target");
+                let projected = alias
+                    .projected_function
+                    .as_ref()
+                    .ok_or("the renamed re-export must keep the callable the alias projects")?;
+                assert_eq!(
+                    projected.name, "public_target",
+                    "the projected callable must carry the name the re-export published it under"
+                );
+            }
+            other => panic!("expected an alias export, got {other:?}"),
+        }
         Ok(())
     }
 

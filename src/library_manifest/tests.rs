@@ -3996,3 +3996,158 @@ fn crate_qualified_reexport_passes_identity_graph_validation() -> Result<(), Box
         .map_err(|error| format!("a `crate`-qualified re-export must pass identity-graph validation, got: {error}"))?;
     Ok(())
 }
+
+/// A same-module alias re-exported under a new name must survive identity validation end to end.
+///
+/// This is the shape `pub run = alias helper` in `provider` plus `pub from provider import run as public_target` in
+/// the entrypoint. It exercises three places where a spelling used to stand in for a resolved identity: the checked
+/// alias records its target as the source wrote it (`["helper"]`) while the graph entry records the resolved
+/// declaration (`["provider", "helper"]`); the alias's materialized callable projection carries the resolved path
+/// where the alias carries the spelling; and the re-export's authoritative path ends at the alias's own public name
+/// rather than at the declaration the identity names.
+#[test]
+fn same_module_alias_reexported_under_a_new_name_passes_identity_validation() -> Result<(), Box<dyn std::error::Error>>
+{
+    let anchor = |id: &str, start: usize, end: usize| SourceAnchor {
+        id: id.to_string(),
+        span: SourceSpan { start, end },
+    };
+    let mut modules = vec![
+        CheckedApiMetadata {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            module_path: vec!["provider".to_string()],
+            declarations: vec![
+                ApiDeclaration::Function(ApiFunction {
+                    name: "helper".to_string(),
+                    anchor: anchor("provider.helper", 59, 116),
+                    docstring: None,
+                    docstring_sections: None,
+                    decorators: Vec::new(),
+                    type_params: Vec::new(),
+                    params: Vec::new(),
+                    return_type: TypeRef::Named {
+                        name: "int".to_string(),
+                    },
+                    is_async: false,
+                }),
+                ApiDeclaration::Alias(ApiAlias {
+                    name: "run".to_string(),
+                    anchor: anchor("provider.run", 130, 150),
+                    // Spelled the way the source wrote it, not the way it resolves.
+                    target_path: vec!["helper".to_string()],
+                    is_public: true,
+                    projected_function: None,
+                }),
+            ],
+        },
+        CheckedApiMetadata {
+            schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+            module_path: vec!["main".to_string()],
+            declarations: vec![ApiDeclaration::Alias(ApiAlias {
+                name: "public_target".to_string(),
+                anchor: anchor("main.public_target", 0, 45),
+                // The entrypoint spells the hop it re-exports; the projection below resolves past it.
+                target_path: vec!["provider".to_string(), "run".to_string()],
+                is_public: true,
+                projected_function: Some(crate::frontend::api_metadata::ApiProjectedFunction {
+                    source_path: vec!["provider".to_string(), "helper".to_string()],
+                    callable: crate::frontend::api_metadata::ApiCallableMetadata {
+                        name: "public_target".to_string(),
+                        anchor: anchor("main.public_target", 0, 45),
+                        type_params: Vec::new(),
+                        receiver: None,
+                        params: Vec::new(),
+                        return_type: TypeRef::Named {
+                            name: "int".to_string(),
+                        },
+                        is_async: false,
+                    },
+                    decorators: Vec::new(),
+                }),
+            })],
+        },
+    ];
+    materialize_api_alias_projections(&mut modules);
+    let mut api = CheckedApiMetadataPackage {
+        schema_version: CHECKED_API_METADATA_SCHEMA_VERSION,
+        package: None,
+        modules,
+        public_namespaces: Vec::new(),
+    };
+    materialize_checked_api_public_namespaces(&mut api)?;
+
+    let identity = published_declaration_identity(
+        "aliasrepro",
+        &["provider"],
+        "helper",
+        incan_semantics_core::SemanticSourceTargetKind::Function,
+        59,
+        116,
+    );
+    let canonical = CanonicalIdentityExport::from_canonical("aliasrepro", &identity);
+
+    let mut manifest = LibraryManifest::from_checked_exports("aliasrepro", "0.1.0", &[]);
+    manifest.exports.aliases.push(AliasExport {
+        name: "public_target".to_string(),
+        target_path: vec!["provider".to_string(), "helper".to_string()],
+        projected_function: Some(FunctionExport {
+            // The renamed re-export republishes the callable under its new public name.
+            name: "public_target".to_string(),
+            emitted_name: None,
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: TypeRef::Named {
+                name: "int".to_string(),
+            },
+            is_async: false,
+        }),
+    });
+    let graph = &mut manifest.contract_metadata.identity_graph;
+    graph.exports.push(ExportIdentity {
+        public_name: "helper".to_string(),
+        public_path: vec!["aliasrepro".to_string(), "provider".to_string(), "helper".to_string()],
+        source_path: vec!["provider".to_string(), "helper".to_string()],
+        kind: ExportIdentityKind::Function,
+        projection: ExportIdentityProjection::Direct,
+        canonical: canonical.clone(),
+    });
+    graph.exports.push(ExportIdentity {
+        public_name: "run".to_string(),
+        public_path: vec!["aliasrepro".to_string(), "provider".to_string(), "run".to_string()],
+        source_path: vec!["provider".to_string(), "run".to_string()],
+        kind: ExportIdentityKind::Alias,
+        projection: ExportIdentityProjection::Alias {
+            target_path: vec!["provider".to_string(), "helper".to_string()],
+        },
+        canonical: canonical.clone(),
+    });
+    graph.exports.push(ExportIdentity {
+        public_name: "public_target".to_string(),
+        public_path: vec!["aliasrepro".to_string(), "public_target".to_string()],
+        source_path: vec!["provider".to_string(), "run".to_string()],
+        kind: ExportIdentityKind::Alias,
+        projection: ExportIdentityProjection::Reexport {
+            target_path: vec!["provider".to_string(), "run".to_string()],
+        },
+        canonical: canonical.clone(),
+    });
+    manifest.contract_metadata.api = Some(api);
+
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("alias-reexport.incnlib");
+    manifest.write_to_path(&path).map_err(|error| {
+        format!("a renamed re-export of a same-module alias must pass identity-graph validation, got: {error}")
+    })?;
+
+    let loaded = LibraryManifest::read_from_path(&path)?;
+    let published = loaded
+        .contract_metadata
+        .identity_graph
+        .canonical_for_public_path(&["aliasrepro".to_string(), "public_target".to_string()])
+        .ok_or("the renamed re-export must publish a canonical identity")?;
+    assert_eq!(
+        published.declaration_name, "helper",
+        "renaming a declaration twice must still resolve to the declaration, not to either local name"
+    );
+    Ok(())
+}
