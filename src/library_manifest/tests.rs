@@ -3821,6 +3821,134 @@ fn reexported_model_passes_identity_graph_validation() -> Result<(), Box<dyn std
     Ok(())
 }
 
+/// Every declaration kind a `pub from` can republish must pass identity-graph validation under `Reexport`.
+///
+/// A re-export is a projection over an already-declared symbol, so its kind is the target's real kind rather than a
+/// kind of its own. Building a library whose root re-exports one declaration of each form produces `Reexport`
+/// entries for class, const, enum, function, model, newtype, trait, and type-alias kinds. The validator previously
+/// admitted only `Alias` and `Function` there, so six of those eight were rejected and `incan build --lib` failed for
+/// any library with a facade -- including the shipped `examples/advanced/library_package`.
+///
+/// The suite missed it because every earlier re-export fixture re-exported an alias or a function, which is exactly
+/// the whitelist's blind spot. This asserts the whole set instead of one representative.
+#[test]
+fn every_reexportable_kind_passes_identity_graph_validation() -> Result<(), Box<dyn std::error::Error>> {
+    use incan_semantics_core::SemanticSourceTargetKind;
+
+    let named = |name: &str| TypeRef::Named { name: name.to_string() };
+    let cases: Vec<(ExportIdentityKind, SemanticSourceTargetKind)> = vec![
+        (ExportIdentityKind::Function, SemanticSourceTargetKind::Function),
+        (ExportIdentityKind::Model, SemanticSourceTargetKind::Model),
+        (ExportIdentityKind::Class, SemanticSourceTargetKind::Class),
+        (ExportIdentityKind::Trait, SemanticSourceTargetKind::Trait),
+        (ExportIdentityKind::Enum, SemanticSourceTargetKind::Enum),
+        (ExportIdentityKind::Newtype, SemanticSourceTargetKind::Newtype),
+        (ExportIdentityKind::TypeAlias, SemanticSourceTargetKind::TypeAlias),
+        (ExportIdentityKind::Const, SemanticSourceTargetKind::Const),
+        (ExportIdentityKind::Static, SemanticSourceTargetKind::Static),
+    ];
+
+    for (export_kind, semantic_kind) in cases {
+        let name = format!("Exported{export_kind:?}");
+        let mut manifest = LibraryManifest::from_checked_exports("facade_lib", "0.1.0", &[]);
+        match export_kind {
+            ExportIdentityKind::Function => manifest.exports.functions.push(FunctionExport {
+                name: name.clone(),
+                emitted_name: None,
+                type_params: Vec::new(),
+                params: Vec::new(),
+                return_type: named("int"),
+                is_async: false,
+            }),
+            ExportIdentityKind::Model => manifest.exports.models.push(ModelExport {
+                name: name.clone(),
+                type_params: Vec::new(),
+                traits: Vec::new(),
+                trait_adoptions: Vec::new(),
+                derives: Vec::new(),
+                fields: Vec::new(),
+                properties: Vec::new(),
+                methods: Vec::new(),
+            }),
+            ExportIdentityKind::Class => manifest.exports.classes.push(ClassExport {
+                name: name.clone(),
+                type_params: Vec::new(),
+                extends: None,
+                traits: Vec::new(),
+                trait_adoptions: Vec::new(),
+                derives: Vec::new(),
+                fields: Vec::new(),
+                properties: Vec::new(),
+                methods: Vec::new(),
+            }),
+            ExportIdentityKind::Trait => manifest.exports.traits.push(TraitExport {
+                name: name.clone(),
+                source_name: None,
+                type_params: Vec::new(),
+                supertraits: Vec::new(),
+                requires: Vec::new(),
+                methods: Vec::new(),
+            }),
+            ExportIdentityKind::Enum => manifest.exports.enums.push(EnumExport {
+                name: name.clone(),
+                type_params: Vec::new(),
+                traits: Vec::new(),
+                trait_adoptions: Vec::new(),
+                value_type: None,
+                ordinal_type_identity: None,
+                variants: Vec::new(),
+                variant_aliases: Vec::new(),
+                methods: Vec::new(),
+                derives: Vec::new(),
+            }),
+            ExportIdentityKind::Newtype => manifest.exports.newtypes.push(NewtypeExport {
+                name: name.clone(),
+                type_params: Vec::new(),
+                traits: Vec::new(),
+                trait_adoptions: Vec::new(),
+                derives: Vec::new(),
+                is_rusttype: false,
+                underlying: named("str"),
+                methods: Vec::new(),
+                checked_constructor: None,
+                constraints: Vec::new(),
+                implicit_coercion_enabled: false,
+            }),
+            ExportIdentityKind::TypeAlias => manifest.exports.type_aliases.push(TypeAliasExport {
+                name: name.clone(),
+                type_params: Vec::new(),
+                target: named("int"),
+            }),
+            ExportIdentityKind::Const => manifest.exports.consts.push(ConstExport {
+                name: name.clone(),
+                ty: named("int"),
+            }),
+            ExportIdentityKind::Static => manifest.exports.statics.push(StaticExport {
+                name: name.clone(),
+                ty: named("int"),
+            }),
+            other => return Err(format!("unhandled export kind in fixture: {other:?}").into()),
+        }
+
+        let identity = published_declaration_identity("facade_lib", &["inner"], &name, semantic_kind, 10, 20);
+        let target_path = vec!["inner".to_string(), name.clone()];
+        manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+            public_name: name.clone(),
+            public_path: vec!["facade_lib".to_string(), name.clone()],
+            source_path: target_path.clone(),
+            kind: export_kind,
+            projection: ExportIdentityProjection::Reexport { target_path },
+            canonical: CanonicalIdentityExport::from_canonical("facade_lib", &identity),
+        });
+
+        let tmp = tempfile::tempdir()?;
+        manifest
+            .write_to_path(&tmp.path().join("facade.incnlib"))
+            .map_err(|error| format!("a re-exported {export_kind:?} must validate, got: {error}"))?;
+    }
+    Ok(())
+}
+
 /// `pub from crate.pricing import LineItem` must validate against the identity behind the `crate` qualifier.
 ///
 /// The frontend records an export's path exactly as the source spelled it, so an absolute import arrives with a
