@@ -66,7 +66,7 @@ incan test
 incan build --release
 ```
 
-The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the exact Rust release this toolchain was built against into an Incan-owned `rustup` home, including the `wasm32-wasip1` target used by packages with vocab companions. Your own default toolchain is never reconfigured, and Incan does not depend on it: the prebuilt libraries a release ships load only under the compiler that produced them, so Incan carries its own rather than hoping yours matches. On a machine with no Rust at all, `rustup` is installed without a default toolchain and the installer prints how to select one if you want Rust for your own use. The pipx and npm packages delegate to that same installer and verified toolchain archive contract, so they inherit this behavior. Homebrew installs the prebuilt Incan commands through the generated formula without running the installer, so it is the one path where you select the matching Rust release yourself; the formula's caveats name the exact version. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](workspaces/docs-site/docs/tooling/how-to/install_and_run.md) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
+The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the exact Rust release this toolchain was built against into an Incan-owned `rustup` home, including the `wasm32-wasip1` target used by packages with vocab companions. Your own default toolchain is never reconfigured, and Incan does not depend on it: the prebuilt libraries a release ships load only under the compiler that produced them, so Incan carries its own rather than hoping yours matches. On a machine with no Rust at all, `rustup` is installed without a default toolchain and the installer prints how to select one if you want Rust for your own use. The pipx and npm packages delegate to that same installer and verified toolchain archive contract, so they inherit this behavior. Homebrew installs the prebuilt Incan commands through the generated formula without running the installer, so it is the one path where you select the matching Rust release yourself; the formula's caveats name the exact version. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](https://incan.io/latest/tooling/how-to/install_and_run/) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
 
 If you are contributing to the compiler itself, clone this repository and use `make install` instead of the toolchain installer.
 
@@ -82,7 +82,7 @@ The current toolchain includes these public surfaces for installation, first con
 - **Codegraph export** through `incan inspect codegraph --format jsonl`, with compiler-backed files, modules, declarations, imports, exports, references, calls, diagnostics, spans, provenance, and degraded-state records.
 - **Boundary parity hardening** across local, imported, re-exported, package, test-batch, generated-Rust, and vocab/tooling paths.
 
-Read the [CLI reference](workspaces/docs-site/docs/tooling/reference/cli_reference.md) for detailed command contracts, or the [0.5 release notes](workspaces/docs-site/docs/release_notes/0_5.md) for release-specific change history.
+Read the [CLI reference](https://incan.io/latest/tooling/reference/cli_reference/) for detailed command contracts, or the [0.5 release notes](https://incan.io/latest/release_notes/0_5/) for release-specific change history.
 
 These examples show the inspection commands most useful when evaluating a project:
 
@@ -119,9 +119,9 @@ As AI tools generate more code, those constraints matter more. Incan gives devel
 
 ## Choose your path
 
-- [Coming from Python](workspaces/docs-site/docs/start_here/coming_from_python.md): start with the pipx or direct installer path, then compare Python app patterns to typed Incan models, `Result`/`Option`, traits, tests, and Rust-backed deployment.
-- [Coming from Rust](workspaces/docs-site/docs/start_here/coming_from_rust.md): start with the Cargo or direct installer path, then inspect how Incan keeps Rust-shaped errors, interop, generated Rust output, diagnostics, and native builds visible.
-- [Coming from TypeScript or JavaScript](workspaces/docs-site/docs/start_here/coming_from_typescript_javascript.md): start with the npm or direct installer path, then compare typed app workflows, editor tooling, package scripts, diagnostics, and native artifact inspection.
+- [Coming from Python](https://incan.io/latest/start_here/coming_from_python/): start with the pipx or direct installer path, then compare Python app patterns to typed Incan models, `Result`/`Option`, traits, tests, and Rust-backed deployment.
+- [Coming from Rust](https://incan.io/latest/start_here/coming_from_rust/): start with the Cargo or direct installer path, then inspect how Incan keeps Rust-shaped errors, interop, generated Rust output, diagnostics, and native builds visible.
+- [Coming from TypeScript or JavaScript](https://incan.io/latest/start_here/coming_from_typescript_javascript/): start with the npm or direct installer path, then compare typed app workflows, editor tooling, package scripts, diagnostics, and native artifact inspection.
 
 ## Status
 
@@ -129,7 +129,7 @@ As AI tools generate more code, those constraints matter more. Incan gives devel
 > Incan is in active development. The language, compiler, and APIs may still change, although we will try to keep it stable as much as possible.  
 > Feedback and contributions are of course welcome!
 
-Docs policy: [Stability policy](workspaces/docs-site/docs/stability.md)
+Docs policy: [Stability policy](https://incan.io/latest/stability/)
 
 ## A small example
 
@@ -167,14 +167,12 @@ class UserService with Loggable:
 
 ## Documentation
 
-The docs site lives in `workspaces/docs-site/`.
+The docs site is published at [incan.io](https://incan.io); its source lives in `workspaces/docs-site/`.
 
-Start here:
-
-- Start here: `workspaces/docs-site/docs/start_here/index.md`
-- Language: `workspaces/docs-site/docs/language/index.md`
-- Tooling: `workspaces/docs-site/docs/tooling/index.md`
-- Release notes: `workspaces/docs-site/docs/release_notes/index.md`
+- [Start here](https://incan.io/latest/start_here/)
+- [Language](https://incan.io/latest/language/)
+- [Tooling](https://incan.io/latest/tooling/)
+- [Release notes](https://incan.io/latest/release_notes/)
 
 Build/serve locally:
 
@@ -220,7 +218,7 @@ A ratio below 1.00× means Incan is faster than the hand-written Rust implementa
 
 Contributions are welcome—docs, compiler, tooling, stdlib, and RFC work.
 
-- Contributor docs: `workspaces/docs-site/docs/contributing/index.md`
+- [Contributor docs](https://incan.io/latest/contributing/)
 - Repo guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
