@@ -421,6 +421,11 @@ impl<'a> IrEmitter<'a> {
                     }
                 }
             }
+            IrExprKind::EmbeddedFragment { holes, .. } => {
+                for hole in holes {
+                    Self::rewrite_borrowed_param_types_in_expr(hole, borrowed);
+                }
+            }
             IrExprKind::Unit
             | IrExprKind::None
             | IrExprKind::Bool(_)
@@ -1858,6 +1863,11 @@ impl<'a> IrEmitter<'a> {
                     if let super::super::super::expr::FormatPart::Expr { expr, .. } = part {
                         Self::collect_expr_used_names(expr, param_names, shadowed_names, used_names);
                     }
+                }
+            }
+            IrExprKind::EmbeddedFragment { holes, .. } => {
+                for hole in holes {
+                    Self::collect_expr_used_names(hole, param_names, shadowed_names, used_names);
                 }
             }
             IrExprKind::Unit

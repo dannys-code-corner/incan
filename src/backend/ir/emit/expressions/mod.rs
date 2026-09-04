@@ -1073,6 +1073,13 @@ impl<'a> IrEmitter<'a> {
                 }
                 _ => Ok(quote! { None }),
             },
+            IrExprKind::EmbeddedFragment { submode, .. } => Err(EmitError::Unsupported(format!(
+                "cannot emit Rust code for a descriptor-gated embedded fragment ({submode:?} submode): no owning \
+                 DSL lowering hook is registered for it yet. Its expression holes already typecheck and lower \
+                 normally (RFC 081, #1023) -- only Rust codegen for the DSL-owned structural content is not wired \
+                 up, and doing so is downstream tooling's responsibility, not core Incan evaluation (see RFC 081 \
+                 §Semantics)."
+            ))),
             IrExprKind::Bool(b) => Ok(if *b {
                 quote! { true }
             } else {

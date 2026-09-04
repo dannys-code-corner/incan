@@ -274,18 +274,31 @@ impl<'a> Parser<'a> {
                 }
             }
 
-            self.vocab_block_stack.push(keyword_name.clone());
-            self.vocab_body_kind_stack.push(spec_clause_body_kind);
-            self.vocab_expression_item_modifier_stack
-                .push(spec_expression_item_modifiers);
-            let body = self.block();
-            self.vocab_block_stack.pop();
-            self.vocab_body_kind_stack.pop();
-            self.vocab_expression_item_modifier_stack.pop();
-            let body = body?;
-            self.expect(&TokenKind::Dedent, "Expected dedent after vocab block body")?;
-            let body_item_trailing_commas = vec![false; body.len()];
-            (body, body_item_trailing_commas)
+            // ---- RFC 081 (#1023): descriptor-gated embedded-fragment body ----
+            //
+            // If an activated descriptor claims this declaration's body as a lexical submode, the body is not an
+            // ordinary Incan statement list at all — parse it with the re-entrant submode tokenizer instead of
+            // `self.block()`. `try_embedded_fragment_body` leaves `self.pos` positioned exactly on the matching
+            // `Dedent`, so the ordinary `self.expect(&TokenKind::Dedent, ...)` below still applies unchanged in
+            // both branches.
+            if let Some(body) = self.try_embedded_fragment_body(&keyword_name)? {
+                self.expect(&TokenKind::Dedent, "Expected dedent after vocab block body")?;
+                let body_item_trailing_commas = vec![false; body.len()];
+                (body, body_item_trailing_commas)
+            } else {
+                self.vocab_block_stack.push(keyword_name.clone());
+                self.vocab_body_kind_stack.push(spec_clause_body_kind);
+                self.vocab_expression_item_modifier_stack
+                    .push(spec_expression_item_modifiers);
+                let body = self.block();
+                self.vocab_block_stack.pop();
+                self.vocab_body_kind_stack.pop();
+                self.vocab_expression_item_modifier_stack.pop();
+                let body = body?;
+                self.expect(&TokenKind::Dedent, "Expected dedent after vocab block body")?;
+                let body_item_trailing_commas = vec![false; body.len()];
+                (body, body_item_trailing_commas)
+            }
         };
 
         Ok(Some(VocabBlockStmt {

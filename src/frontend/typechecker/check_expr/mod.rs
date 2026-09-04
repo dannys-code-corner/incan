@@ -322,6 +322,7 @@ impl TypeChecker {
                 ));
                 ResolvedType::Unknown
             }
+            Expr::Embedded(fragment) => self.check_embedded_fragment_expr(fragment),
         };
 
         // Record for downstream stages (lowering/codegen).
@@ -646,6 +647,67 @@ impl TypeChecker {
             (SurfaceExprTypeCheck::AwaitCheck, SurfaceExprPayload::PrefixUnary(inner)) => self.check_await(inner, span),
             (SurfaceExprTypeCheck::RaceForCheck, SurfaceExprPayload::RaceFor(race)) => self.check_race_for(race, span),
             _ => ResolvedType::Unknown,
+        }
+    }
+
+    /// Typecheck a descriptor-gated embedded-fragment expression (RFC 081, `#1023`).
+    ///
+    /// Unlike [`TypeChecker::check_surface_expr`], this node is never eliminated by the pre-typecheck vocab
+    /// desugar pass (`src/frontend/vocab_desugar_pass/rewrite.rs`) — it must reach `check_expr` as itself, because
+    /// its [`EmbeddedNode::Hole`] sub-expressions are genuine Incan expressions that need real types, exactly as
+    /// if they appeared in ordinary expression position. The surrounding structural content (tags, selectors,
+    /// declarations, regex/type shapes, ...) is DSL-owned syntax with no ordinary Incan type of its own — its
+    /// runtime meaning is supplied by the owning DSL's desugarer or lowering hook (RFC 081 §Semantics), which is
+    /// downstream of `#1023`. The fragment as a whole therefore resolves to `ResolvedType::Unknown`, deliberately
+    /// reusing the existing "no further ordinary-Incan meaning to check here" sentinel rather than introducing a
+    /// new `ResolvedType` variant that every exhaustive match over `ResolvedType` across the compiler would need
+    /// to handle for a type with no ordinary-Incan operations anyway.
+    fn check_embedded_fragment_expr(&mut self, fragment: &EmbeddedFragmentExpr) -> ResolvedType {
+        for node in &fragment.nodes {
+            self.check_embedded_fragment_node_holes(node);
+        }
+        ResolvedType::Unknown
+    }
+
+    /// Recursively typecheck every expression hole nested inside one embedded-fragment node.
+    ///
+    /// Structural node kinds with no possible nested hole (`Text`, `EntityRef`, `Comment`, `Value`, `Regex`,
+    /// `TypeShape`) are no-ops here; `Hole` is the one leaf that reaches ordinary `check_expr`, and container
+    /// kinds (`Element`, `StyleRule`, `Declaration`) recurse into their children/attrs/selectors/declarations.
+    fn check_embedded_fragment_node_holes(&mut self, node: &Spanned<EmbeddedNode>) {
+        match &node.node {
+            EmbeddedNode::Text(_)
+            | EmbeddedNode::EntityRef(_)
+            | EmbeddedNode::Comment(_)
+            | EmbeddedNode::Value(_)
+            | EmbeddedNode::Regex { .. }
+            | EmbeddedNode::TypeShape(_) => {}
+            EmbeddedNode::Hole(expr) => {
+                self.check_expr(expr);
+            }
+            EmbeddedNode::Element(element) => {
+                for attr in &element.attrs {
+                    if let Some(value) = &attr.value {
+                        self.check_embedded_fragment_node_holes(value);
+                    }
+                }
+                for child in &element.children {
+                    self.check_embedded_fragment_node_holes(child);
+                }
+            }
+            EmbeddedNode::StyleRule(rule) => {
+                for selector in &rule.selectors {
+                    self.check_embedded_fragment_node_holes(selector);
+                }
+                for declaration in &rule.declarations {
+                    self.check_embedded_fragment_node_holes(declaration);
+                }
+            }
+            EmbeddedNode::Declaration(declaration) => {
+                for value in &declaration.value {
+                    self.check_embedded_fragment_node_holes(value);
+                }
+            }
         }
     }
 }

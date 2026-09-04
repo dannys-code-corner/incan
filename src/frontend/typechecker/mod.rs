@@ -3526,6 +3526,55 @@ impl TypeChecker {
                     self.collect_static_dependencies_from_statement(&stmt.node, deps, visiting_functions);
                 }
             }
+            Expr::Embedded(fragment) => {
+                for node in &fragment.nodes {
+                    self.collect_static_dependencies_from_embedded_node(&node.node, deps, visiting_functions);
+                }
+            }
+        }
+    }
+
+    /// Recursively collect the names of local static dependencies from the expression holes nested in one
+    /// embedded-fragment node (RFC 081, `#1023`).
+    fn collect_static_dependencies_from_embedded_node(
+        &self,
+        node: &EmbeddedNode,
+        deps: &mut HashSet<String>,
+        visiting_functions: &mut HashSet<String>,
+    ) {
+        match node {
+            EmbeddedNode::Text(_)
+            | EmbeddedNode::EntityRef(_)
+            | EmbeddedNode::Comment(_)
+            | EmbeddedNode::Value(_)
+            | EmbeddedNode::Regex { .. }
+            | EmbeddedNode::TypeShape(_) => {}
+            EmbeddedNode::Hole(expr) => {
+                self.collect_static_dependencies_from_expr(&expr.node, deps, visiting_functions);
+            }
+            EmbeddedNode::Element(element) => {
+                for attr in &element.attrs {
+                    if let Some(value) = &attr.value {
+                        self.collect_static_dependencies_from_embedded_node(&value.node, deps, visiting_functions);
+                    }
+                }
+                for child in &element.children {
+                    self.collect_static_dependencies_from_embedded_node(&child.node, deps, visiting_functions);
+                }
+            }
+            EmbeddedNode::StyleRule(rule) => {
+                for selector in &rule.selectors {
+                    self.collect_static_dependencies_from_embedded_node(&selector.node, deps, visiting_functions);
+                }
+                for declaration in &rule.declarations {
+                    self.collect_static_dependencies_from_embedded_node(&declaration.node, deps, visiting_functions);
+                }
+            }
+            EmbeddedNode::Declaration(declaration) => {
+                for value in &declaration.value {
+                    self.collect_static_dependencies_from_embedded_node(&value.node, deps, visiting_functions);
+                }
+            }
         }
     }
 
@@ -3842,6 +3891,79 @@ impl TypeChecker {
                 }
                 for stmt in &block.body {
                     self.collect_static_initializer_static_writes_from_stmt(stmt, current_static, visiting_functions);
+                }
+            }
+            Expr::Embedded(fragment) => {
+                for node in &fragment.nodes {
+                    self.collect_static_initializer_static_writes_from_embedded_node(
+                        &node.node,
+                        current_static,
+                        visiting_functions,
+                    );
+                }
+            }
+        }
+    }
+
+    /// Recurse through the expression holes nested in one embedded-fragment node while checking
+    /// initializer-reachable static writes (RFC 081, `#1023`).
+    fn collect_static_initializer_static_writes_from_embedded_node(
+        &mut self,
+        node: &EmbeddedNode,
+        current_static: &str,
+        visiting_functions: &mut HashSet<String>,
+    ) {
+        match node {
+            EmbeddedNode::Text(_)
+            | EmbeddedNode::EntityRef(_)
+            | EmbeddedNode::Comment(_)
+            | EmbeddedNode::Value(_)
+            | EmbeddedNode::Regex { .. }
+            | EmbeddedNode::TypeShape(_) => {}
+            EmbeddedNode::Hole(expr) => {
+                self.collect_static_initializer_static_writes_from_expr(expr, current_static, visiting_functions);
+            }
+            EmbeddedNode::Element(element) => {
+                for attr in &element.attrs {
+                    if let Some(value) = &attr.value {
+                        self.collect_static_initializer_static_writes_from_embedded_node(
+                            &value.node,
+                            current_static,
+                            visiting_functions,
+                        );
+                    }
+                }
+                for child in &element.children {
+                    self.collect_static_initializer_static_writes_from_embedded_node(
+                        &child.node,
+                        current_static,
+                        visiting_functions,
+                    );
+                }
+            }
+            EmbeddedNode::StyleRule(rule) => {
+                for selector in &rule.selectors {
+                    self.collect_static_initializer_static_writes_from_embedded_node(
+                        &selector.node,
+                        current_static,
+                        visiting_functions,
+                    );
+                }
+                for declaration in &rule.declarations {
+                    self.collect_static_initializer_static_writes_from_embedded_node(
+                        &declaration.node,
+                        current_static,
+                        visiting_functions,
+                    );
+                }
+            }
+            EmbeddedNode::Declaration(declaration) => {
+                for value in &declaration.value {
+                    self.collect_static_initializer_static_writes_from_embedded_node(
+                        &value.node,
+                        current_static,
+                        visiting_functions,
+                    );
                 }
             }
         }

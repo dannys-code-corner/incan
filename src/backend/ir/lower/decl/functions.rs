@@ -237,6 +237,11 @@ fn collect_generic_callable_name_type_params_from_expr(expr: &super::super::supe
         IrExprKind::CacheGenericDecoratedFunction { value, .. } => {
             collect_generic_callable_name_type_params_from_expr(value, out);
         }
+        IrExprKind::EmbeddedFragment { holes, .. } => {
+            for hole in holes {
+                collect_generic_callable_name_type_params_from_expr(hole, out);
+            }
+        }
         IrExprKind::Var { .. }
         | IrExprKind::StaticRead { .. }
         | IrExprKind::StaticBinding { .. }

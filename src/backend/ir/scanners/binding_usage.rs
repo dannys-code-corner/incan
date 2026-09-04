@@ -208,6 +208,9 @@ pub(crate) fn expr_uses_binding_name(expr: &IrExpr, binding_name: &str) -> bool 
         }),
         IrExprKind::RegisterCallableName { callable, .. } => expr_uses_binding_name(callable, binding_name),
         IrExprKind::CacheGenericDecoratedFunction { value, .. } => expr_uses_binding_name(value, binding_name),
+        IrExprKind::EmbeddedFragment { holes, .. } => {
+            holes.iter().any(|hole| expr_uses_binding_name(hole, binding_name))
+        }
         IrExprKind::Unit
         | IrExprKind::None
         | IrExprKind::Bool(_)

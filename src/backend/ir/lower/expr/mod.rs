@@ -2142,6 +2142,26 @@ impl AstLowering {
                 });
             }
 
+            // ---- Descriptor-gated embedded fragment (RFC 081, #1023) ----
+            //
+            // Unlike `Surface`/`VocabBlock` above, this node is *expected* to reach lowering as itself — its
+            // expression holes must lower like any other Incan expression. See `IrExprKind::EmbeddedFragment`'s
+            // rustdoc for why the DSL-owned structural content does not get a mirrored IR tree here.
+            ast::Expr::Embedded(fragment) => {
+                let mut holes = Vec::new();
+                for node in &fragment.nodes {
+                    self.collect_lowered_embedded_holes(node, &mut holes)?;
+                }
+                (
+                    IrExprKind::EmbeddedFragment {
+                        submode: fragment.submode,
+                        source_text: fragment.source_text.clone(),
+                        holes,
+                    },
+                    IrType::Unknown,
+                )
+            }
+
             // ---- Try (?) ----
             ast::Expr::Try(e) => {
                 let inner = self.lower_expr_spanned(e)?;
@@ -2615,6 +2635,57 @@ impl AstLowering {
             }
         };
         Ok(TypedExpr::new(kind, ty))
+    }
+
+    /// Recursively lower every expression hole nested inside one embedded-fragment node, appending each lowered
+    /// hole to `holes` in source order.
+    ///
+    /// Mirrors `TypeChecker::check_embedded_fragment_node_holes`'s traversal shape: structural node kinds with no
+    /// possible nested hole are no-ops, `Hole` lowers via ordinary `lower_expr_spanned`, and container kinds
+    /// (`Element`, `StyleRule`, `Declaration`) recurse into their children/attrs/selectors/declarations.
+    fn collect_lowered_embedded_holes(
+        &mut self,
+        node: &Spanned<ast::EmbeddedNode>,
+        holes: &mut Vec<TypedExpr>,
+    ) -> Result<(), LoweringError> {
+        match &node.node {
+            ast::EmbeddedNode::Text(_)
+            | ast::EmbeddedNode::EntityRef(_)
+            | ast::EmbeddedNode::Comment(_)
+            | ast::EmbeddedNode::Value(_)
+            | ast::EmbeddedNode::Regex { .. }
+            | ast::EmbeddedNode::TypeShape(_) => Ok(()),
+            ast::EmbeddedNode::Hole(expr) => {
+                holes.push(self.lower_expr_spanned(expr)?);
+                Ok(())
+            }
+            ast::EmbeddedNode::Element(element) => {
+                for attr in &element.attrs {
+                    if let Some(value) = &attr.value {
+                        self.collect_lowered_embedded_holes(value, holes)?;
+                    }
+                }
+                for child in &element.children {
+                    self.collect_lowered_embedded_holes(child, holes)?;
+                }
+                Ok(())
+            }
+            ast::EmbeddedNode::StyleRule(rule) => {
+                for selector in &rule.selectors {
+                    self.collect_lowered_embedded_holes(selector, holes)?;
+                }
+                for declaration in &rule.declarations {
+                    self.collect_lowered_embedded_holes(declaration, holes)?;
+                }
+                Ok(())
+            }
+            ast::EmbeddedNode::Declaration(declaration) => {
+                for value in &declaration.value {
+                    self.collect_lowered_embedded_holes(value, holes)?;
+                }
+                Ok(())
+            }
+        }
     }
 }
 

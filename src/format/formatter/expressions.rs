@@ -331,6 +331,12 @@ impl Formatter {
                 _ => self.writer.write("<surface_expr>"),
             },
             Expr::VocabBlock(block) => self.format_expression_vocab_block_braced(block),
+            // Descriptor-gated embedded fragment (RFC 081, `#1023`): structural, understood-grammar formatting
+            // (and any layout-sensitive verbatim decision that depends on the owning descriptor's format hint) is
+            // `#1022`'s territory. Writing the fragment's preserved verbatim source text here is a safe, honest
+            // fallback in the meantime -- unlike the `<surface_expr>` placeholder above, this reproduces real
+            // source rather than a string that would visibly corrupt formatted output.
+            Expr::Embedded(fragment) => self.writer.write(&fragment.source_text),
             Expr::Try(inner) => {
                 self.format_expr(&inner.node);
                 self.writer.write("?");

@@ -719,6 +719,7 @@ impl<'a> IrEmitter<'a> {
             }),
             IrExprKind::RegisterCallableName { callable, .. } => Self::expr_contains_try(callable),
             IrExprKind::CacheGenericDecoratedFunction { value, .. } => Self::expr_contains_try(value),
+            IrExprKind::EmbeddedFragment { holes, .. } => holes.iter().any(Self::expr_contains_try),
             IrExprKind::Unit
             | IrExprKind::None
             | IrExprKind::Bool(_)

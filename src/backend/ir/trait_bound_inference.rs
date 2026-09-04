@@ -1765,6 +1765,17 @@ fn collect_backend_clone_bounds_in_expr(
                 clone_params,
             );
         }
+        IrExprKind::EmbeddedFragment { holes, .. } => {
+            for hole in holes {
+                collect_backend_clone_bounds_in_expr(
+                    hole,
+                    type_param_names,
+                    self_clone_params,
+                    clone_context,
+                    clone_params,
+                );
+            }
+        }
         IrExprKind::Var { .. }
         | IrExprKind::StaticRead { .. }
         | IrExprKind::StaticBinding { .. }
@@ -2584,6 +2595,13 @@ fn scan_expr_for_bounds(
             }
             if let Some(e) = end {
                 scan_expr_for_bounds(e, type_params, params, bounds_map);
+            }
+        }
+
+        // ---- Embedded fragment (RFC 081, #1023): scan its lowered expression holes ----
+        IrExprKind::EmbeddedFragment { holes, .. } => {
+            for hole in holes {
+                scan_expr_for_bounds(hole, type_params, params, bounds_map);
             }
         }
 

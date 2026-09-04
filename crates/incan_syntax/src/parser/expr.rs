@@ -1372,6 +1372,47 @@ impl<'a> Parser<'a> {
         Ok(first)
     }
 
+    /// Return the embedded-fragment descriptor (RFC 081) claiming the declaration-body position of `declaration`.
+    ///
+    /// This generalizes [`Parser::active_scoped_symbol_descriptor`]'s same-depth ambiguity pattern to embedded
+    /// fragments: every activated descriptor whose `eligible_in` names `declaration`'s `DeclarationBody` position
+    /// is at the *same* depth here (the check point is entering `declaration`'s body directly, not a nested
+    /// name-resolution lookup), so two or more matches are unconditionally ambiguous rather than resolved by an
+    /// innermost-wins tiebreak. `Ok(None)` means no descriptor claims this position, so the caller should fall
+    /// back to ordinary RFC 040/045 statement-list parsing for the block body.
+    pub(super) fn active_embedded_fragment_descriptor_for_declaration_body(
+        &self,
+        declaration: &str,
+        span: Span,
+    ) -> Result<Option<&incan_vocab::EmbeddedFragmentDescriptor>, CompileError> {
+        let matches: Vec<&ActiveEmbeddedFragmentDescriptor> = self
+            .active_embedded_fragment_descriptors
+            .iter()
+            .filter(|active| {
+                active.descriptor.eligible_in.iter().any(|eligibility| {
+                    eligibility.position == incan_vocab::ScopedSurfacePosition::DeclarationBody
+                        && eligibility.declaration == declaration
+                })
+            })
+            .collect();
+
+        match matches.as_slice() {
+            [] => Ok(None),
+            [single] => Ok(Some(&single.descriptor)),
+            [first, second, ..] => Err(CompileError::syntax(
+                format!(
+                    "Ambiguous embedded-fragment descriptors `{}` and `{}` both claim the `{declaration}` block body",
+                    first.descriptor.key, second.descriptor.key
+                ),
+                span,
+            )
+            .with_hint(
+                "Only one descriptor may claim a lexical submode for the same eligible position; remove or narrow \
+                 one of the conflicting imports",
+            )),
+        }
+    }
+
     /// Build a descriptor-owned diagnostic for a scoped symbol used inside its active DSL but outside an eligible
     /// position.
     fn scoped_symbol_misuse_error(&self, symbol: &str, span: Span) -> Result<Option<CompileError>, CompileError> {
@@ -1951,6 +1992,54 @@ impl<'a> Parser<'a> {
                 }
             },
             Expr::VocabBlock(_) => {}
+            Expr::Embedded(fragment) => {
+                for node in &mut fragment.nodes {
+                    self.shift_embedded_node_spans(node, offset);
+                }
+            }
+        }
+    }
+
+    /// Recursively shift the spans of one embedded-fragment node (and everything nested inside it) by `offset`.
+    ///
+    /// This mirrors [`Parser::shift_expr_spans`] for the one case an embedded fragment can appear inside a
+    /// re-entrant sub-parse whose spans still need rebasing into outer-source coordinates (an expression hole
+    /// re-entering `self.expression()` from within an f-string interpolation). The submode tokenizer normally
+    /// tracks absolute source offsets directly (see `parser/embedded`), so this path is defensive rather than the
+    /// common case.
+    fn shift_embedded_node_spans(&self, node: &mut Spanned<EmbeddedNode>, offset: usize) {
+        node.span = Span::new(node.span.start + offset, node.span.end + offset);
+        match &mut node.node {
+            EmbeddedNode::Text(_)
+            | EmbeddedNode::EntityRef(_)
+            | EmbeddedNode::Comment(_)
+            | EmbeddedNode::Value(_)
+            | EmbeddedNode::Regex { .. }
+            | EmbeddedNode::TypeShape(_) => {}
+            EmbeddedNode::Hole(expr) => self.shift_spanned_expr(expr, offset),
+            EmbeddedNode::Element(element) => {
+                for attr in &mut element.attrs {
+                    if let Some(value) = &mut attr.value {
+                        self.shift_embedded_node_spans(value, offset);
+                    }
+                }
+                for child in &mut element.children {
+                    self.shift_embedded_node_spans(child, offset);
+                }
+            }
+            EmbeddedNode::StyleRule(rule) => {
+                for selector in &mut rule.selectors {
+                    self.shift_embedded_node_spans(selector, offset);
+                }
+                for declaration in &mut rule.declarations {
+                    self.shift_embedded_node_spans(declaration, offset);
+                }
+            }
+            EmbeddedNode::Declaration(declaration) => {
+                for value in &mut declaration.value {
+                    self.shift_embedded_node_spans(value, offset);
+                }
+            }
         }
     }
 
