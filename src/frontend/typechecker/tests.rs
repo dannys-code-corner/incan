@@ -6198,10 +6198,12 @@ def f() -> None:
                         RustVariantInfo {
                             name: "Unit".to_string(),
                             fields: vec![],
+                            field_carriers: Vec::new(),
                         },
                         RustVariantInfo {
                             name: "Tuple".to_string(),
                             fields: vec![RustTypeShape::Int],
+                            field_carriers: Vec::new(),
                         },
                     ],
                 }),
@@ -6279,6 +6281,92 @@ def f() -> None:
             "expected imported Rust unit variants and zero-field constructors to typecheck: {errs:?}"
         ))
     })?;
+    Ok(())
+}
+
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn test_imported_rust_boxed_variant_payload_records_box_payload_coercion() -> Result<(), Box<dyn std::error::Error>> {
+    // prost stores a recursive `oneof` payload as `Box<T>`; Incan records the payload as `T` and remembers the
+    // carrier, so the source passes `T` and lowering must wrap it. The coercion recorded on the argument is that
+    // contract (#1229 follow-up).
+    let source = r#"
+from rust::demo import Kind, accept_kind
+
+def f() -> None:
+  accept_kind(Kind.Tuple(1))
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    checker
+        .rust_inspect_cache
+        .insert_test_item(
+            &manifest_dir,
+            RustItemMetadata {
+                canonical_path: "demo::Kind".to_string(),
+                definition_path: Some("demo::Kind".to_string()),
+                visibility: RustVisibility::Public,
+                kind: RustItemKind::Type(RustTypeInfo {
+                    type_params: Vec::new(),
+                    type_param_defaults: Vec::new(),
+                    mutable_reference_type_params: Vec::new(),
+                    expanded_derive_traits: Vec::new(),
+                    has_const_params: false,
+                    alias_target: None,
+                    metadata_completeness: Default::default(),
+                    methods: vec![],
+                    implemented_traits: Vec::new(),
+                    fields: vec![],
+                    variants: vec![RustVariantInfo {
+                        name: "Tuple".to_string(),
+                        fields: vec![RustTypeShape::Int],
+                        field_carriers: vec![incan_core::interop::RustPayloadCarrier::Boxed],
+                    }],
+                }),
+            },
+        )
+        .map_err(|e| std::io::Error::other(format!("seed rust-inspect kind: {e}")))?;
+    checker
+        .rust_inspect_cache
+        .insert_test_item(
+            &manifest_dir,
+            RustItemMetadata {
+                canonical_path: "demo::accept_kind".to_string(),
+                definition_path: Some("demo::accept_kind".to_string()),
+                visibility: RustVisibility::Public,
+                kind: RustItemKind::Function(RustFunctionSig {
+                    type_params: Vec::new(),
+                    params: vec![RustParam {
+                        name: Some("value".to_string()),
+                        type_display: "demo::Kind".to_string(),
+                    }],
+                    return_type: "()".to_string(),
+                    is_async: false,
+                    is_unsafe: false,
+                }),
+            },
+        )
+        .map_err(|e| std::io::Error::other(format!("seed rust-inspect accept_kind: {e}")))?;
+    checker
+        .check_program(&ast)
+        .map_err(|errs| std::io::Error::other(format!("expected the semantic payload to typecheck: {errs:?}")))?;
+    let payload_start = source.find("Kind.Tuple(1)").ok_or("constructor missing from source")? + "Kind.Tuple(".len();
+    let coercion = checker
+        .type_info
+        .rust
+        .arg_coercions
+        .get(&(payload_start, payload_start + 1))
+        .ok_or("expected a coercion recorded on the boxed payload argument")?;
+    assert_eq!(
+        coercion.kind,
+        crate::frontend::typechecker::type_info::RustArgCoercionKind::BoxPayload,
+        "boxed variant payload must record the carrier lowering restores"
+    );
+    assert_eq!(coercion.target_type, ResolvedType::Int);
     Ok(())
 }
 
@@ -7408,6 +7496,7 @@ def inspect(rel: Rel) -> None:
                             path: "demo::ReadRel".to_string(),
                             args: vec![],
                         }],
+                        field_carriers: Vec::new(),
                     }],
                 }),
             },
@@ -7469,6 +7558,7 @@ def inspect(rel: Rel) -> None:
                             path: "demo::NamedTable".to_string(),
                             args: vec![],
                         }],
+                        field_carriers: Vec::new(),
                     }],
                 }),
             },
@@ -24454,5 +24544,152 @@ fn isinstance_retains_a_nominal_targets_canonical_declaration_identity() -> Resu
         Some("Alias"),
         "the target fact must retain the reference span, not the declaration span"
     );
+    Ok(())
+}
+
+/// A dependency that re-exports the `alloc` crate lets generated code spell `::carrier::alloc::boxed::Box<T>`.
+///
+/// That path is absolute. Joining it onto the owning module recorded a field type no consumer could name
+/// (`demo::proto::nested::carrier::alloc::boxed::Box`), which is the `Box` mismatch of incan#1229 and the reason
+/// rust-inspect prewarm had to stay disabled. This harness runs the source-level extractor, so it proves the property
+/// that matters — an absolute path is never joined onto the owning module — but not the HIR-only steps (following
+/// `carrier::alloc` to the `alloc` crate, stripping the `Box` carrier from a variant payload). Those are exercised by
+/// baking a real project against the semantic extractor.
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_inspect_records_absolute_reexport_paths_in_the_ancestral_namespace() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    for dir in ["src", "demo/src", "carrier/src"] {
+        fs::create_dir_all(root.join(dir))?;
+    }
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"ra_reexport_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ndemo = { path = \"demo\" }\n",
+    )?;
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn touch() { let _ = demo::proto::Inner; }\n",
+    )?;
+    fs::write(
+        root.join("demo/Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ncarrier = { path = \"../carrier\" }\n",
+    )?;
+    fs::write(
+        root.join("demo/src/lib.rs"),
+        "extern crate alloc;\npub mod proto {\n    pub struct Inner;\n    pub mod nested {\n        pub enum Wrap {\n            Boxed(::carrier::alloc::boxed::Box<super::Inner>),\n            Direct(::alloc::boxed::Box<super::Inner>),\n            Text(::std::string::String),\n        }\n    }\n}\n",
+    )?;
+    fs::write(
+        root.join("carrier/Cargo.toml"),
+        "[package]\nname = \"carrier\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(root.join("carrier/src/lib.rs"), "pub extern crate alloc;\n")?;
+    prewarm_metadata(root, &["demo::proto::nested::Wrap"])?;
+    let inspector = Inspector::new(InspectorConfig::new(root.to_path_buf()));
+    let result = inspector.get("demo::proto::nested::Wrap")?;
+    let incan_core::interop::RustItemKind::Type(info) = &result.metadata.kind else {
+        return Err("expected enum type metadata for demo::proto::nested::Wrap".into());
+    };
+    let rendered = |name: &str| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        Ok(info
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .ok_or_else(|| format!("missing {name} variant"))?
+            .fields
+            .iter()
+            .map(incan_core::interop::render_rust_type_shape)
+            .collect())
+    };
+    let (boxed, direct, text) = (rendered("Boxed")?, rendered("Direct")?, rendered("Text")?);
+    eprintln!("PROBE Boxed={boxed:?} Direct={direct:?} Text={text:?}");
+    for (name, fields) in [("Boxed", &boxed), ("Direct", &direct), ("Text", &text)] {
+        assert!(
+            fields.iter().all(|field| !field.contains("nested::")),
+            "{name}: an absolute path must never be joined onto the owning module, got {fields:?}"
+        );
+    }
+    // Both boxed spellings are the one `alloc::boxed::Box` item: the payload is recorded as its semantic type and
+    // the carrier beside it, whether the source reached `Box` directly or through another crate's re-export.
+    let carriers = |name: &str| -> Result<Vec<incan_core::interop::RustPayloadCarrier>, Box<dyn std::error::Error>> {
+        Ok(info
+            .variants
+            .iter()
+            .find(|variant| variant.name == name)
+            .ok_or_else(|| format!("missing {name} variant"))?
+            .field_carriers
+            .clone())
+    };
+    assert_eq!(
+        direct,
+        vec!["demo::proto::Inner".to_string()],
+        "a direct absolute std path records the semantic payload in the ancestral namespace"
+    );
+    assert_eq!(
+        boxed,
+        vec!["demo::proto::Inner".to_string()],
+        "a re-exported absolute path is the same carrier"
+    );
+    assert_eq!(
+        carriers("Direct")?,
+        vec![incan_core::interop::RustPayloadCarrier::Boxed]
+    );
+    assert_eq!(carriers("Boxed")?, vec![incan_core::interop::RustPayloadCarrier::Boxed]);
+    assert_eq!(text, vec!["String".to_string()]);
+    assert_eq!(carriers("Text")?, vec![incan_core::interop::RustPayloadCarrier::Direct]);
+    Ok(())
+}
+
+/// `Some(Box.new(v))` against a Rust field typed `Option<Box<T>>` must type-check.
+///
+/// Metadata records the field in the ancestral namespace (`core::option::Option<alloc::boxed::Box<T>>`), the source
+/// imports `std::boxed::Box`, and `Box::new` returns `Self`. Reconciling that `Self` with `Box<T>` needs the expected
+/// inner type to reach the call inside `Some(...)`, and the owner match to happen in the ancestral namespace.
+#[cfg(feature = "rust_inspect")]
+#[test]
+fn rust_struct_field_option_box_accepts_boxed_some_argument() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+from rust::demo import Holder, Item
+from rust::std::boxed import Box
+def f() -> None:
+  _ = Holder(inner=Some(Box.new(Item.new())))
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path();
+    fs::create_dir_all(root.join("src"))?;
+    fs::create_dir_all(root.join("demo/src"))?;
+    fs::write(
+        root.join("Cargo.toml"),
+        "[package]\nname = \"ra_option_box_probe\"\nversion = \"0.1.0\"\nedition = \"2021\"\n[dependencies]\ndemo = { path = \"demo\" }\n",
+    )?;
+    fs::write(
+        root.join("src/lib.rs"),
+        "pub fn touch() { let _ = demo::Item::new(); }\n",
+    )?;
+    fs::write(
+        root.join("demo/Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    )?;
+    fs::write(
+        root.join("demo/src/lib.rs"),
+        "extern crate alloc;\npub struct Item;\nimpl Item {\n    pub fn new() -> Self {\n        Item\n    }\n}\npub struct Holder {\n    pub inner: ::core::option::Option<::alloc::boxed::Box<Item>>,\n}\n",
+    )?;
+    let mut checker = TypeChecker::new();
+    checker.set_rust_inspect_manifest_dir(root.to_path_buf());
+    prewarm_metadata(
+        root,
+        &[
+            "demo::Holder",
+            "demo::Item",
+            "demo::Item::new",
+            "std::boxed::Box",
+            "std::boxed::Box::new",
+        ],
+    )?;
+    if let Err(errs) = checker.check_program(&ast) {
+        panic!("expected Some(Box.new(..)) to satisfy Option<Box<T>>, got {errs:?}");
+    }
     Ok(())
 }

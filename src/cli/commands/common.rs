@@ -3867,9 +3867,9 @@ pub(crate) fn prewarm_rust_inspect_workspace(
     force_direct_prewarm: bool,
 ) -> CliResult<()> {
     if oven_direct_rust_inspection_marked(manifest_dir) {
-        // The direct loader consumes the compiler-authored source graph without Cargo. It also has no valid
-        // build-script OUT_DIR discovery route, so ignore the legacy eager-OUT_DIR knob rather than letting a normal
-        // Oven command regain a Cargo subprocess through an inspection side path.
+        // The direct loader consumes the compiler-authored source graph without Cargo. Its only build-script
+        // OUT_DIR sources are the sealed plan directories the installer recorded, so ignore the legacy eager-OUT_DIR
+        // knob rather than letting a normal Oven command regain a Cargo subprocess through an inspection side path.
         if !query_paths.is_empty() && (force_direct_prewarm || rust_inspect_prewarm_enabled()) {
             let inspector = Inspector::new(InspectorConfig::new(manifest_dir.to_path_buf()));
             inspector

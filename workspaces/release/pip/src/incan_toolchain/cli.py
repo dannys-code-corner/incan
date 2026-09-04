@@ -32,23 +32,16 @@ def _bin_dir() -> Path:
     return Path(os.environ.get("INCAN_PIP_BIN_DIR", _package_root() / ".incan" / "bin"))
 
 
-def _package_version() -> str:
+def _release_version() -> str:
     init_text = (Path(__file__).resolve().parent / "__init__.py").read_text(encoding="utf-8")
-    match = re.search(r'__version__\s*=\s*"([^"]+)"', init_text)
+    match = re.search(r'__release_version__\s*=\s*"([^"]+)"', init_text)
     if not match:
-        raise RuntimeError("could not read incan package version")
+        raise RuntimeError("could not read incan package release version")
     return match.group(1)
 
 
 def _release_tag() -> str:
-    version = _package_version()
-    match = re.fullmatch(r"(?P<base>\d+\.\d+\.\d+)(?P<kind>a|b|rc)(?P<number>\d+)", version)
-    if match:
-        return f"v{match.group('base')}-{match.group('kind')}{match.group('number')}"
-    match = re.fullmatch(r"(?P<base>\d+\.\d+\.\d+)\.dev(?P<number>\d+)", version)
-    if match:
-        return f"v{match.group('base')}-dev.{match.group('number')}"
-    return f"v{version}"
+    return f"v{_release_version()}"
 
 
 def _package_manifest_url() -> str:

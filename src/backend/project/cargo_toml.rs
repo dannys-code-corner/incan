@@ -313,10 +313,13 @@ impl ProjectGenerator {
         let (bin, lib) = if self.is_binary {
             (
                 vec![BinTarget {
-                    name: target_name,
+                    name: target_name.clone(),
                     path: "src/main.rs".into(),
                 }],
-                None,
+                self.companion_library_target.then(|| LibTarget {
+                    name: target_name.clone(),
+                    path: "src/main.rs".into(),
+                }),
             )
         } else {
             (
@@ -487,6 +490,7 @@ mod tests {
         let toml = generator.generate_cargo_toml()?;
         assert!(toml.contains("name = \"hello\""));
         assert!(toml.contains("[[bin]]"));
+        assert!(!toml.contains("[lib]"));
         let manifest = parsed_manifest(&toml)?;
         let support_path = manifest
             .get("dependencies")
@@ -500,6 +504,20 @@ mod tests {
             PathBuf::from(support_path).is_absolute(),
             "ordinary generated projects should keep stable absolute toolchain paths"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn binary_cargo_toml_emits_a_companion_library_only_when_the_publisher_requests_it()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut generator = ProjectGenerator::new("/tmp/test_interop_bootstrap", "interop_bootstrap", true);
+        generator.enable_companion_library_target();
+
+        let toml = generator.generate_cargo_toml()?;
+
+        assert!(toml.contains("[[bin]]"));
+        assert!(toml.contains("[lib]"));
+        assert_eq!(toml.matches("path = \"src/main.rs\"").count(), 2);
         Ok(())
     }
 

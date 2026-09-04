@@ -13,7 +13,9 @@ use crate::frontend::typechecker::helpers::{
     collection_name, collection_type_id, generator_ty, is_frozen_bytes, is_frozen_str, is_intlike_for_index, list_ty,
     option_ty, render_resolved_type_as_rust_arg, runtime_string_method_identity_and_return, string_method_return,
 };
-use crate::frontend::typechecker::type_info::{CBindingEnumAccess, RustMethodTraitImportUse, RustTraitImportInfo};
+use crate::frontend::typechecker::type_info::{
+    CBindingEnumAccess, RustArgCoercionInfo, RustArgCoercionKind, RustMethodTraitImportUse, RustTraitImportInfo,
+};
 use crate::frontend::typechecker::{IdentKind, MemberBindingSurface, canonical_public_library_type_name};
 use incan_core::interop::{
     RustCollectionFamily, RustFieldInfo, RustFunctionSig, RustItemKind, RustItemMetadata, RustVisibility,
@@ -2003,10 +2005,17 @@ impl TypeChecker {
 
     /// Whether a contextual type is one specialization of `rust_path`.
     fn contextual_type_matches_rust_owner(expected: &ResolvedType, rust_path: &str) -> bool {
+        // Metadata records the ancestral spelling of an owner (`alloc::boxed::Box`); the source imported the `std`
+        // one. Every re-export of one item is an alias of it, so the owner match must happen in the ancestral
+        // namespace or a `Self`-returning call like `Box.new(x)` never reconciles with its expected `Box<T>`.
+        let owner = incan_core::interop::ancestral_rust_path(rust_path);
         match expected {
-            ResolvedType::RustPath(path) => path.split('<').next().is_some_and(|base| base == rust_path),
+            ResolvedType::RustPath(path) => path
+                .split('<')
+                .next()
+                .is_some_and(|base| incan_core::interop::ancestral_rust_path(base) == owner),
             ResolvedType::Generic(name, _) | ResolvedType::Named(name) => {
-                name.strip_prefix("rust::").unwrap_or(name) == rust_path
+                incan_core::interop::ancestral_rust_path(name) == owner
             }
             _ => false,
         }
@@ -2025,13 +2034,16 @@ impl TypeChecker {
                 Some(expected.clone())
             }
             ResolvedType::RustPath(path)
-                if path.split('<').next().is_some_and(|base| base == rust_path)
-                    && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
+                if path.split('<').next().is_some_and(|base| {
+                    incan_core::interop::ancestral_rust_path(base)
+                        == incan_core::interop::ancestral_rust_path(rust_path)
+                }) && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
             {
                 Some(expected.clone())
             }
             ResolvedType::Generic(name, _) | ResolvedType::Named(name)
-                if name.strip_prefix("rust::").unwrap_or(name) == rust_path
+                if incan_core::interop::ancestral_rust_path(name)
+                    == incan_core::interop::ancestral_rust_path(rust_path)
                     && Self::contextual_type_matches_rust_owner(expected, rust_path) =>
             {
                 Some(expected.clone())
@@ -2072,13 +2084,19 @@ impl TypeChecker {
     /// Resolve type arguments from one contextual Rust receiver specialization.
     fn rust_owner_type_args(&self, receiver: &ResolvedType, rust_path: &str) -> Option<Vec<ResolvedType>> {
         match receiver {
-            ResolvedType::Generic(name, args) if name.strip_prefix("rust::").unwrap_or(name) == rust_path => {
+            // The receiver may name the owner through any re-export (`alloc::boxed::Box`, a prelude `Box`) while
+            // the import spelled `std::boxed::Box`; every spelling of one item must yield its type arguments.
+            ResolvedType::Generic(name, args)
+                if incan_core::interop::ancestral_rust_path(name)
+                    == incan_core::interop::ancestral_rust_path(rust_path) =>
+            {
                 Some(args.clone())
             }
             ResolvedType::RustPath(display) => {
                 let normalized = display.strip_prefix("rust::").unwrap_or(display);
                 let (base, args) = Self::rust_generic_base_and_args(normalized)?;
-                if base != rust_path {
+                if incan_core::interop::ancestral_rust_path(base) != incan_core::interop::ancestral_rust_path(rust_path)
+                {
                     return None;
                 }
                 Some(
@@ -2360,10 +2378,29 @@ impl TypeChecker {
                             .push(errors::rust_receiver_const_generics_not_supported(rust_path, span));
                         return Some(ResolvedType::Unknown);
                     }
-                    if let Some(contextual_args) = self.rust_owner_type_args(receiver, rust_path)
-                        && contextual_args.len() == type_info.type_params.len()
-                    {
-                        resolved_type_args = contextual_args;
+                    if let Some(mut contextual_args) = self.rust_owner_type_args(receiver, rust_path) {
+                        // A generic owner may carry defaulted trailing parameters the display never spells —
+                        // `Box<T, A = Global>` reads as `Box<T>`. Those are not arguments the context has to
+                        // supply: fill them from the recorded defaults so one inferred `T` still specializes the
+                        // owner instead of being discarded for not matching the declared arity.
+                        let declared = type_info.type_params.len();
+                        if contextual_args.len() < declared {
+                            let trailing_defaults = (contextual_args.len()..declared)
+                                .map(|index| {
+                                    type_info
+                                        .type_param_defaults
+                                        .get(index)
+                                        .and_then(|default| default.as_deref())
+                                        .map(|default| self.resolved_type_from_rust_display(default))
+                                })
+                                .collect::<Option<Vec<_>>>();
+                            if let Some(defaults) = trailing_defaults {
+                                contextual_args.extend(defaults);
+                            }
+                        }
+                        if contextual_args.len() == declared {
+                            resolved_type_args = contextual_args;
+                        }
                     }
                 }
                 let effective_sig = if specializes_receiver && !resolved_type_args.is_empty() {
@@ -2380,7 +2417,7 @@ impl TypeChecker {
                 };
                 if Self::rust_signature_has_receiver(&sig)
                     && sig.params[1..].iter().any(|param| {
-                        let normalized = param.type_display.replace(' ', "");
+                        let normalized = Self::compact_rust_display(&param.type_display);
                         Self::rust_display_type_var_name(normalized.as_str()).is_some()
                     })
                 {
@@ -2403,7 +2440,14 @@ impl TypeChecker {
                     };
                     self.record_rust_call_site_params(span, params, callable_display.as_str());
                 }
-                Some(Self::substitute_rust_self_type(ret, rust_path))
+                // A `Self` result must become the receiver this call was reconciled against, not the bare owner
+                // path: `Box.new(v)` checked against `Box<T>` is a `Box<T>`, and the bare `std::boxed::Box` that
+                // the path-only substitution produced could never unify with the specialized expectation that
+                // drove the reconciliation in the first place.
+                Some(match contextual_receiver.as_ref() {
+                    Some(receiver) => Self::substitute_rust_self_type_with_resolved(ret, receiver),
+                    None => Self::substitute_rust_self_type(ret, rust_path),
+                })
             }
             RustItemKind::Unsupported { description } => {
                 self.errors.push(errors::rust_item_shape_not_supported(
@@ -4127,6 +4171,40 @@ impl TypeChecker {
         }
     }
 
+    /// Record the storage carrier lowering must restore for each boxed payload of a Rust enum variant constructor.
+    ///
+    /// The checked parameter is the semantic payload type, so the argument has already matched `T`. Only metadata
+    /// knows that the Rust field stores `Box<T>`; recording a `BoxPayload` coercion on the argument keeps the emitter
+    /// target-driven instead of guessing from the source expression. Variant payloads are positional, so keyword or
+    /// unpacked arguments record nothing and leave the ordinary binding diagnostics to speak.
+    fn record_rust_variant_payload_carriers(
+        &mut self,
+        rust_path: &str,
+        variant: &str,
+        args: &[CallArg],
+        params: &[CallableParam],
+    ) {
+        let Some(carriers) = self.rust_variant_payload_carriers(rust_path, variant) else {
+            return;
+        };
+        for (index, (arg, param)) in args.iter().zip(params).enumerate() {
+            if carriers.get(index).copied().unwrap_or_default() != incan_core::interop::RustPayloadCarrier::Boxed {
+                continue;
+            }
+            let CallArg::Positional(arg_expr) = arg else {
+                continue;
+            };
+            self.type_info.rust.arg_coercions.insert(
+                (arg_expr.span.start, arg_expr.span.end),
+                RustArgCoercionInfo {
+                    rust_target_type: param.ty.to_string(),
+                    target_type: param.ty.clone(),
+                    kind: RustArgCoercionKind::BoxPayload,
+                },
+            );
+        }
+    }
+
     /// Type-check a method call (`base.method(args...)`) and return the method's return type.
     pub(in crate::frontend::typechecker::check_expr) fn check_method_call(
         &mut self,
@@ -4619,6 +4697,7 @@ impl TypeChecker {
                     span,
                 );
                 self.type_info.record_call_site_callable_params_exact(span, &params);
+                self.record_rust_variant_payload_carriers(&path, method, args, &params);
                 return ResolvedType::RustPath(path);
             }
             if let Some(ret) = Self::known_rust_path_method_return(path.as_str(), method) {

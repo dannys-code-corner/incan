@@ -211,6 +211,51 @@ fn cargo_registry_src_roots() -> Vec<PathBuf> {
     roots
 }
 
+/// Return the version requirement the root manifest declares for `normalized_crate_name`, if it declares the crate.
+///
+/// Looks through every dependency table, including target-specific ones, matching the declaration key or its
+/// `package` rename. A requirement spelled as a bare string or as a `version` field both count; a path or workspace
+/// declaration without a version yields `None`.
+fn root_manifest_version_requirement(root: &Path, normalized_crate_name: &str) -> Option<semver::VersionReq> {
+    let manifest = toml::from_str::<toml::Value>(fs::read_to_string(root.join("Cargo.toml")).ok()?.as_str()).ok()?;
+    let mut tables = Vec::new();
+    for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+        if let Some(table) = manifest.get(section).and_then(toml::Value::as_table) {
+            tables.push(table);
+        }
+    }
+    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
+        for target in targets.values() {
+            for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+                if let Some(table) = target.get(section).and_then(toml::Value::as_table) {
+                    tables.push(table);
+                }
+            }
+        }
+    }
+    tables
+        .into_iter()
+        .flat_map(|table| table.iter())
+        .find_map(|(key, declaration)| {
+            let package_name = declaration
+                .as_table()
+                .and_then(|table| table.get("package"))
+                .and_then(toml::Value::as_str)
+                .unwrap_or(key.as_str());
+            if normalize_crate_name(key) != normalized_crate_name
+                && normalize_crate_name(package_name) != normalized_crate_name
+            {
+                return None;
+            }
+            let requirement = match declaration {
+                toml::Value::String(requirement) => requirement.as_str(),
+                toml::Value::Table(table) => table.get("version")?.as_str()?,
+                _ => return None,
+            };
+            semver::VersionReq::parse(requirement).ok()
+        })
+}
+
 /// Resolve a registry package source directory from a `Cargo.lock` entry.
 ///
 /// Generated rust-inspect lock workspaces may know the exact locked package version without having a fully populated
@@ -224,18 +269,30 @@ pub(crate) fn dependency_manifest_dir_from_lock_with_search_roots(
     let lock_path = root.join("Cargo.lock");
     let lock: CargoLock = toml::from_str(fs::read_to_string(lock_path).ok()?.as_str()).ok()?;
     let normalized = normalize_crate_name(crate_name);
+    // A lock can hold several versions of one package: the root's own `substrait` beside the one a DataFusion
+    // adapter pins. rustc links the root against exactly the version its manifest requirement selects, so when the
+    // root declares the crate, only lock entries satisfying that requirement are candidates. Entries stay in lock
+    // order otherwise, which keeps today's choice for a crate the root reaches only transitively.
+    let requirement = root_manifest_version_requirement(root, &normalized);
+    let mut candidates = lock
+        .package
+        .into_iter()
+        .filter(|pkg| normalize_crate_name(pkg.name.as_str()) == normalized)
+        .filter(|pkg| {
+            pkg.source
+                .as_deref()
+                .is_some_and(|source| source.starts_with("registry+"))
+        })
+        .collect::<Vec<_>>();
+    if let Some(requirement) = requirement
+        && candidates.len() > 1
+    {
+        candidates.retain(|pkg| {
+            semver::Version::parse(pkg.version.as_str()).is_ok_and(|version| requirement.matches(&version))
+        });
+    }
 
-    for pkg in lock.package {
-        if normalize_crate_name(pkg.name.as_str()) != normalized {
-            continue;
-        }
-        if !pkg
-            .source
-            .as_deref()
-            .is_some_and(|source| source.starts_with("registry+"))
-        {
-            continue;
-        }
+    for pkg in candidates {
         let dir_name = format!("{}-{}", pkg.name, pkg.version);
         for root in registry_src_roots {
             if let Some(candidate) = exact_registry_package_dir(root, pkg.name.as_str(), pkg.version.as_str()) {

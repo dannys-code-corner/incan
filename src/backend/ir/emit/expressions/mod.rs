@@ -620,20 +620,28 @@ impl<'a> IrEmitter<'a> {
         }
 
         match &expr.kind {
-            IrExprKind::InteropCoerce { expr: inner, .. }
+            // A target-typed use site already shapes an aggregate literal or a call result (union payloads, seeded
+            // literals, owned-string materialization), so the recorded boundary coercion is normally redundant here.
+            // A boxed variant payload is the exception: the carrier is a Rust storage fact the site cannot
+            // reproduce, so it is reapplied around whatever the site emitted.
+            IrExprKind::InteropCoerce { expr: inner, kind, .. }
                 if Self::use_site_target_ty(site).is_some()
                     && matches!(
                         inner.kind,
-                        IrExprKind::List(_) | IrExprKind::Dict(_) | IrExprKind::Set(_) | IrExprKind::Tuple(_)
+                        IrExprKind::List(_)
+                            | IrExprKind::Dict(_)
+                            | IrExprKind::Set(_)
+                            | IrExprKind::Tuple(_)
+                            | IrExprKind::Call { .. }
+                            | IrExprKind::MethodCall { .. }
                     ) =>
             {
-                return self.emit_expr_for_use_with_union_qualifier(inner, site, target_union_qualifier);
-            }
-            IrExprKind::InteropCoerce { expr: inner, .. }
-                if Self::use_site_target_ty(site).is_some()
-                    && matches!(inner.kind, IrExprKind::Call { .. } | IrExprKind::MethodCall { .. }) =>
-            {
-                return self.emit_expr_for_use_with_union_qualifier(inner, site, target_union_qualifier);
+                let inner_tokens = self.emit_expr_for_use_with_union_qualifier(inner, site, target_union_qualifier)?;
+                return Ok(if matches!(kind, IrInteropCoercionKind::BoxPayload) {
+                    quote! { ::std::boxed::Box::new(#inner_tokens) }
+                } else {
+                    inner_tokens
+                });
             }
             IrExprKind::List(items) => {
                 let site_item_ty = match resolved_target_ty.as_ref() {
@@ -1538,6 +1546,7 @@ impl<'a> IrEmitter<'a> {
                         Ok(emitted)
                     }
                     IrInteropCoercionKind::RustTypeUnwrap => Ok(quote! { #inner_tokens }),
+                    IrInteropCoercionKind::BoxPayload => Ok(quote! { ::std::boxed::Box::new(#inner_tokens) }),
                     IrInteropCoercionKind::RustBorrow { mutable }
                     | IrInteropCoercionKind::TraitObjectBorrow { mutable } => Ok(if *mutable {
                         quote! { &mut #inner_tokens }
@@ -1650,6 +1659,34 @@ mod tests {
         let rendered = emitted.to_string();
 
         assert_eq!(rendered, "Read :: by_ref (& mut input)");
+        Ok(())
+    }
+
+    #[test]
+    fn boxed_variant_payload_coercion_wraps_the_argument_in_box_new() -> Result<(), String> {
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let payload = TypedExpr::new(
+            IrExprKind::Var {
+                name: "list".to_string(),
+                access: VarAccess::Read,
+                ref_kind: VarRefKind::Value,
+            },
+            IrType::Struct("substrait::proto::r#type::List".to_string()),
+        );
+        let emitted = emitter
+            .emit_expr(&TypedExpr::new(
+                IrExprKind::InteropCoerce {
+                    expr: Box::new(payload.clone()),
+                    from_ty: payload.ty.clone(),
+                    to_ty: payload.ty.clone(),
+                    kind: IrInteropCoercionKind::BoxPayload,
+                },
+                payload.ty.clone(),
+            ))
+            .map_err(|err| format!("expected successful expression emission, got {err:?}"))?;
+
+        assert_eq!(emitted.to_string(), ":: std :: boxed :: Box :: new (list)");
         Ok(())
     }
 

@@ -1207,9 +1207,10 @@ pub enum OvenInteropCommand {
         /// Exact locked target triple to bake
         #[arg(long, value_name = "TRIPLE")]
         target: String,
-        /// Existing pre-interop Oven receipt used to select the sealed base Loaf plan
+        /// Existing pre-interop Oven receipt used to select the sealed base Loaf plan; omit to prepare the exact debug
+        /// base
         #[arg(long = "base-receipt", value_name = "PATH")]
-        base_receipt: PathBuf,
+        base_receipt: Option<PathBuf>,
         /// Explicit selected C compiler for a declared C shim or toolchain requirement
         #[arg(long = "c-compiler", value_name = "PATH")]
         c_compiler: Option<PathBuf>,

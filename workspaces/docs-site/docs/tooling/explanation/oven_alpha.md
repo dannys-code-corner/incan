@@ -204,7 +204,7 @@ This Oven receipt selects how already-generated Rust is compiled. A separate, ea
 <div role="row"><strong role="rowheader">Active-lease bytes</strong><span role="cell">Allocation protected by running consumers.</span></div>
 </div>
 <p>The current Alpha handoff uses project-extension schema 9, packaged-library schema 6, completed-output schema 12, and project-inspection-authority schema 1. Completed outputs preserve source-current inspection authority for each target and profile; a changed semantic input misses instead of borrowing authority from another receipt lineage.</p>
-<p>The developer store defaults to <code>$INCAN_HOME/oven/store/v2</code> (or <code>~/.incan/oven/store/v2</code>). Its everyday policy allows 8 GiB of aggregate physical allocation, with 6 GiB physical and 3 GiB logical per compatibility domain. The compiler-suite policy raises those limits to 16 GiB aggregate physical, 6 GiB domain physical, and 4 GiB domain logical. Oven may reclaim least-recently-used inactive entries, never an active lease, and never silently expands an operator-supplied limit.</p>
+<p>The developer store defaults to <code>$INCAN_HOME/oven/store/v2</code> (or <code>~/.incan/oven/store/v2</code>). Its everyday policy allows 9 GiB of aggregate physical allocation, with 6 GiB physical and 6 GiB logical per compatibility domain. The compiler-suite policy raises those limits to 16 GiB aggregate physical, 6 GiB domain physical, and 4 GiB domain logical. Oven may reclaim least-recently-used inactive entries, never an active lease, and never silently expands an operator-supplied limit.</p>
 <a href="../../contributing/how-to/oven_alpha_benchmark.md">Run the reproducible benchmark sequence →</a>
 </details>
 </section>
