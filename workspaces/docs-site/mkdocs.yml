@@ -324,7 +324,6 @@ nav:
           - Generated Rust quality: contributing/explanation/generated_rust_quality.md
           - Layering rules: contributing/explanation/layering.md
           - Oven and toolchain ownership map: contributing/explanation/oven_toolchain_ownership_map.md
-          - Oven plan/build-unit/artifact/receipt API decision: contributing/explanation/oven_plan_build_unit_api_decision.md
           - "Post-mortem: v0.5.1": contributing/explanation/postmortem_v051.md
           - Incapunk docs theme: contributing/explanation/incapunk_docs_theme.md
           - Readable, maintainable Rust: contributing/explanation/readable-maintainable-rust.md
