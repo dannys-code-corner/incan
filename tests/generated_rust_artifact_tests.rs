@@ -6,6 +6,9 @@ use incan::library_manifest::LibraryManifest;
 
 mod support;
 
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
+
 const FIXTURE_ROOT: &str = "tests/fixtures/generated_rust_artifacts";
 
 fn incan_binary() -> PathBuf {
@@ -100,20 +103,32 @@ fn assert_no_cargo_lock(root: &Path) {
     );
 }
 
+/// Assert that a generated artifact still contains the source-shaped declarations its fixture pins.
+///
+/// The fixtures describe declarations as the Incan source spells them, so the artifact is compared after RFC 120
+/// projections are decoded. Pinning the physical projections instead would make these fixtures churn on any unrelated
+/// source-line move, because a canonical identity encodes its declaration span; `emitted_symbol_projection_tests`
+/// owns the exact-projection assertions this gate deliberately leaves alone.
+///
+/// A fragment may match either the decoded artifact or its re-formatted form. Both are faithful views of the same
+/// artifact: decoding preserves comments such as the generated header, while re-formatting restores the one-line
+/// signatures that the longer encoded spellings had forced `prettyplease` to wrap.
 fn assert_contains_fragments(path: &Path, fixture: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let actual = fs::read_to_string(path)?;
+    let decoded = canonical_projection::decoded_source_spellings(&fs::read_to_string(path)?);
+    let reformatted = canonical_projection::reformatted_after_decode(&decoded);
     let fragments = read_fixture(fixture)?;
     for fragment in fragments.split("\n---\n") {
         let fragment = fragment.trim_matches('\n');
         if fragment.trim().is_empty() {
             continue;
         }
+        let present = decoded.contains(fragment) || reformatted.as_deref().is_some_and(|code| code.contains(fragment));
         assert!(
-            actual.contains(fragment),
-            "expected `{}` to contain fragment:\n{}\n\nactual:\n{}",
+            present,
+            "expected `{}` to contain fragment:\n{}\n\nactual (RFC 120 projections decoded to source spellings):\n{}",
             path.display(),
             fragment,
-            actual
+            decoded
         );
     }
     Ok(())
