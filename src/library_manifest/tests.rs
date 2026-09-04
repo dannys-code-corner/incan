@@ -3814,3 +3814,51 @@ fn reexported_model_passes_identity_graph_validation() -> Result<(), Box<dyn std
         .map_err(|error| format!("a re-exported model must pass identity-graph validation, got: {error}"))?;
     Ok(())
 }
+
+/// `pub from crate.pricing import LineItem` must validate against the identity behind the `crate` qualifier.
+///
+/// The frontend records an export's path exactly as the source spelled it, so an absolute import arrives with a
+/// leading `crate`. A canonical identity stores the resolved module path without one. Comparing the two spellings
+/// verbatim rejected every export re-exported through an absolute import and took `incan build --lib` down for real
+/// libraries, even though both spellings named the same declaration.
+#[test]
+fn crate_qualified_reexport_passes_identity_graph_validation() -> Result<(), Box<dyn std::error::Error>> {
+    let mut manifest = LibraryManifest::from_checked_exports("pricing_core", "0.1.0", &[]);
+    manifest.exports.models.push(ModelExport {
+        name: "LineItem".to_string(),
+        type_params: Vec::new(),
+        traits: Vec::new(),
+        trait_adoptions: Vec::new(),
+        derives: Vec::new(),
+        fields: Vec::new(),
+        properties: Vec::new(),
+        methods: Vec::new(),
+    });
+
+    let identity = published_declaration_identity(
+        "pricing_core",
+        &["pricing"],
+        "LineItem",
+        incan_semantics_core::SemanticSourceTargetKind::Model,
+        10,
+        20,
+    );
+    let crate_qualified = vec!["crate".to_string(), "pricing".to_string(), "LineItem".to_string()];
+    manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+        public_name: "LineItem".to_string(),
+        public_path: vec!["pricing_core".to_string(), "LineItem".to_string()],
+        source_path: crate_qualified.clone(),
+        kind: ExportIdentityKind::Model,
+        projection: ExportIdentityProjection::Reexport {
+            target_path: crate_qualified,
+        },
+        canonical: CanonicalIdentityExport::from_canonical("pricing_core", &identity),
+    });
+
+    let tmp = tempfile::tempdir()?;
+    let path = tmp.path().join("crate-qualified-reexport.incnlib");
+    manifest
+        .write_to_path(&path)
+        .map_err(|error| format!("a `crate`-qualified re-export must pass identity-graph validation, got: {error}"))?;
+    Ok(())
+}

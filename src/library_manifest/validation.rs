@@ -771,7 +771,24 @@ fn canonical_identity_matches_path(
         }
         CanonicalIdentityOriginExport::Builtin => vec![identity.declaration_name.clone()],
     };
-    local_path == path
+    local_path == source_path_identity_segments(path)
+}
+
+/// Drop source-level qualifiers from an encoded source path so it can be compared against a canonical identity.
+///
+/// The frontend records an export's path as the source spelled it, so `pub from crate.feature import Item` arrives
+/// here as `["crate", "feature", "Item"]`. The leading `crate` states that the import is absolute from the package
+/// root; it is a qualifier on the spelling, not a module in the path. A canonical identity stores the resolved module
+/// path with no qualifier, so comparing the two spellings verbatim reported every export re-exported through an
+/// absolute import as an identity disagreement even though both named the same declaration.
+///
+/// Only `crate` is removed. `pub` and `rust` lead the encodings this function builds for imported-package and Rust
+/// origins, and a relative `super` needs the importing module to resolve, which a path-only comparison cannot do.
+fn source_path_identity_segments(path: &[String]) -> &[String] {
+    match path.split_first() {
+        Some((first, rest)) if first == "crate" => rest,
+        _ => path,
+    }
 }
 
 /// Validate all canonical field identities exported for one nominal declaration.
