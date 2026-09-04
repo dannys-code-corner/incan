@@ -15,7 +15,9 @@ validation:
 
 theme:
   name: material
+  custom_dir: overrides
   logo: /shared/incapunk/wordmark_small_001.png
+  favicon: /shared/incapunk/favicon.ico
   highlightjs: false
   pygments_style: default
   pygments_style_dark: native

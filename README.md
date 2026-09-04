@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="workspaces/docs-site/docs/shared/incapunk/incan_mark_440.png" alt="Incan" width="220">
+</p>
+
 # Incan Programming Language
 
 Incan is a statically typed language for writing clear, high-level application code that compiles to native Rust. It aims to feel lightweight and expressive while keeping the things that matter in large codebases explicit: types, errors, and mutability.
@@ -183,6 +187,11 @@ A ratio below 1.00× means Incan is faster than the hand-written Rust implementa
 - **Python:** CPython 3.14
 - **Methodology:** [hyperfine](https://github.com/sharkdp/hyperfine) with warmup runs
 - **Reproduce:** `make benchmarks` (add `SKIP_PYTHON=true` for Incan vs Rust only)
+
+## Community
+
+- LinkedIn group: [Incan Programming Language Community](https://www.linkedin.com/groups/42515004/)
+- GitHub Discussions: [Ask questions and share what you're building](https://github.com/encero-systems/incan/discussions)
 
 ## Contributing
 
