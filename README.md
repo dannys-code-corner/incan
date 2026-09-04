@@ -1,4 +1,31 @@
-# Incan Programming Language
+<p align="center">
+  <img src="workspaces/docs-site/docs/shared/incapunk/incan_mark_440.png" alt="" width="170">
+</p>
+
+<p align="center">
+  <img src="workspaces/docs-site/docs/shared/incapunk/wordmark_small_001.png" alt="Incan" width="220">
+</p>
+
+<p align="center">
+  <b>Python-like readability. Rust-native performance.</b>
+</p>
+
+<p align="center">
+  <a href="https://incan.io">Website</a> ·
+  <a href="https://incan.io/latest/start_here/">Docs</a> ·
+  <a href="https://incan.io/latest/tooling/how-to/install_and_run/">Install</a> ·
+  <a href="https://incan.io/latest/language/tutorials/book/">The Book</a> ·
+  <a href="https://github.com/encero-systems/incan/discussions">Discussions</a> ·
+  <a href="https://www.linkedin.com/groups/42515004/">LinkedIn</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/encero-systems/incan/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/encero-systems/incan/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0d1117"></a>
+  <a href="https://github.com/encero-systems/incan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/encero-systems/incan?style=flat-square&color=ffc15a&labelColor=0d1117"></a>
+  <a href="https://incan.io"><img alt="Documentation" src="https://img.shields.io/badge/docs-incan.io-48f0ef?style=flat-square&labelColor=0d1117"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/encero-systems/incan?style=flat-square&color=48f0ef&labelColor=0d1117"></a>
+  <a href="#status"><img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-ff5c69?style=flat-square&labelColor=0d1117"></a>
+</p>
 
 Incan is a statically typed language for writing clear, high-level application code that compiles to native Rust. It aims to feel lightweight and expressive while keeping the things that matter in large codebases explicit: types, errors, and mutability.
 
@@ -26,7 +53,7 @@ pipx install incan
 Rust users can also build and install the release source through Cargo:
 
 ```bash
-cargo install --git https://github.com/encero-systems/incan.git --tag v0.4.0 --locked --features lsp --bin incan --bin incan-lsp
+cargo install --git https://github.com/encero-systems/incan.git --tag v0.5.1 --locked --features lsp --bin incan --bin incan-lsp
 ```
 
 Create a starter project, run it, test it, and produce a release build:
@@ -39,7 +66,7 @@ incan test
 incan build --release
 ```
 
-The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the exact Rust release this toolchain was built against into an Incan-owned `rustup` home, including the `wasm32-wasip1` target used by packages with vocab companions. Your own default toolchain is never reconfigured, and Incan does not depend on it: the prebuilt libraries a release ships load only under the compiler that produced them, so Incan carries its own rather than hoping yours matches. On a machine with no Rust at all, `rustup` is installed without a default toolchain and the installer prints how to select one if you want Rust for your own use. The pipx and npm packages delegate to that same installer and verified toolchain archive contract, so they inherit this behavior. Homebrew installs the prebuilt Incan commands through the generated formula without running the installer, so it is the one path where you select the matching Rust release yourself; the formula's caveats name the exact version. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](workspaces/docs-site/docs/tooling/how-to/install_and_run.md) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
+The direct installer links `incan` and `incan-lsp` into `~/.local/bin` by default and provisions the exact Rust release this toolchain was built against into an Incan-owned `rustup` home, including the `wasm32-wasip1` target used by packages with vocab companions. Your own default toolchain is never reconfigured, and Incan does not depend on it: the prebuilt libraries a release ships load only under the compiler that produced them, so Incan carries its own rather than hoping yours matches. On a machine with no Rust at all, `rustup` is installed without a default toolchain and the installer prints how to select one if you want Rust for your own use. The pipx and npm packages delegate to that same installer and verified toolchain archive contract, so they inherit this behavior. Homebrew installs the prebuilt Incan commands through the generated formula without running the installer, so it is the one path where you select the matching Rust release yourself; the formula's caveats name the exact version. Cargo installation compiles from source and is mainly for Rust users who prefer that workflow. See [Install and run Incan](https://incan.io/latest/tooling/how-to/install_and_run/) for supported hosts, dry-run installation, manifest pinning, Cargo installation, and source-build fallback instructions.
 
 If you are contributing to the compiler itself, clone this repository and use `make install` instead of the toolchain installer.
 
@@ -55,7 +82,7 @@ The current toolchain includes these public surfaces for installation, first con
 - **Codegraph export** through `incan inspect codegraph --format jsonl`, with compiler-backed files, modules, declarations, imports, exports, references, calls, diagnostics, spans, provenance, and degraded-state records.
 - **Boundary parity hardening** across local, imported, re-exported, package, test-batch, generated-Rust, and vocab/tooling paths.
 
-Read the [CLI reference](workspaces/docs-site/docs/tooling/reference/cli_reference.md) for detailed command contracts, or the [0.4 release notes](workspaces/docs-site/docs/release_notes/0_4.md) for release-specific change history.
+Read the [CLI reference](https://incan.io/latest/tooling/reference/cli_reference/) for detailed command contracts, or the [0.5 release notes](https://incan.io/latest/release_notes/0_5/) for release-specific change history.
 
 These examples show the inspection commands most useful when evaluating a project:
 
@@ -92,9 +119,9 @@ As AI tools generate more code, those constraints matter more. Incan gives devel
 
 ## Choose your path
 
-- [Coming from Python](workspaces/docs-site/docs/start_here/coming_from_python.md): start with the pipx or direct installer path, then compare Python app patterns to typed Incan models, `Result`/`Option`, traits, tests, and Rust-backed deployment.
-- [Coming from Rust](workspaces/docs-site/docs/start_here/coming_from_rust.md): start with the Cargo or direct installer path, then inspect how Incan keeps Rust-shaped errors, interop, generated Rust output, diagnostics, and native builds visible.
-- [Coming from TypeScript or JavaScript](workspaces/docs-site/docs/start_here/coming_from_typescript_javascript.md): start with the npm or direct installer path, then compare typed app workflows, editor tooling, package scripts, diagnostics, and native artifact inspection.
+- [Coming from Python](https://incan.io/latest/start_here/coming_from_python/): start with the pipx or direct installer path, then compare Python app patterns to typed Incan models, `Result`/`Option`, traits, tests, and Rust-backed deployment.
+- [Coming from Rust](https://incan.io/latest/start_here/coming_from_rust/): start with the Cargo or direct installer path, then inspect how Incan keeps Rust-shaped errors, interop, generated Rust output, diagnostics, and native builds visible.
+- [Coming from TypeScript or JavaScript](https://incan.io/latest/start_here/coming_from_typescript_javascript/): start with the npm or direct installer path, then compare typed app workflows, editor tooling, package scripts, diagnostics, and native artifact inspection.
 
 ## Status
 
@@ -102,7 +129,7 @@ As AI tools generate more code, those constraints matter more. Incan gives devel
 > Incan is in active development. The language, compiler, and APIs may still change, although we will try to keep it stable as much as possible.  
 > Feedback and contributions are of course welcome!
 
-Docs policy: [Stability policy](workspaces/docs-site/docs/stability.md)
+Docs policy: [Stability policy](https://incan.io/latest/stability/)
 
 ## A small example
 
@@ -140,14 +167,12 @@ class UserService with Loggable:
 
 ## Documentation
 
-The docs site lives in `workspaces/docs-site/`.
+The docs site is published at [incan.io](https://incan.io); its source lives in `workspaces/docs-site/`.
 
-Start here:
-
-- Start here: `workspaces/docs-site/docs/start_here/index.md`
-- Language: `workspaces/docs-site/docs/language/index.md`
-- Tooling: `workspaces/docs-site/docs/tooling/index.md`
-- Release notes: `workspaces/docs-site/docs/release_notes/0_4.md`
+- [Start here](https://incan.io/latest/start_here/)
+- [Language](https://incan.io/latest/language/)
+- [Tooling](https://incan.io/latest/tooling/)
+- [Release notes](https://incan.io/latest/release_notes/)
 
 Build/serve locally:
 
@@ -184,11 +209,16 @@ A ratio below 1.00× means Incan is faster than the hand-written Rust implementa
 - **Methodology:** [hyperfine](https://github.com/sharkdp/hyperfine) with warmup runs
 - **Reproduce:** `make benchmarks` (add `SKIP_PYTHON=true` for Incan vs Rust only)
 
+## Community
+
+- LinkedIn group: [Incan Programming Language Community](https://www.linkedin.com/groups/42515004/)
+- GitHub Discussions: [Ask questions and share what you're building](https://github.com/encero-systems/incan/discussions)
+
 ## Contributing
 
 Contributions are welcome—docs, compiler, tooling, stdlib, and RFC work.
 
-- Contributor docs: `workspaces/docs-site/docs/contributing/index.md`
+- [Contributor docs](https://incan.io/latest/contributing/)
 - Repo guidelines: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## License
