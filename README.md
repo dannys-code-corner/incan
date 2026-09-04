@@ -53,7 +53,7 @@ pipx install incan
 Rust users can also build and install the release source through Cargo:
 
 ```bash
-cargo install --git https://github.com/encero-systems/incan.git --tag v0.4.0 --locked --features lsp --bin incan --bin incan-lsp
+cargo install --git https://github.com/encero-systems/incan.git --tag v0.5.1 --locked --features lsp --bin incan --bin incan-lsp
 ```
 
 Create a starter project, run it, test it, and produce a release build:
@@ -82,7 +82,7 @@ The current toolchain includes these public surfaces for installation, first con
 - **Codegraph export** through `incan inspect codegraph --format jsonl`, with compiler-backed files, modules, declarations, imports, exports, references, calls, diagnostics, spans, provenance, and degraded-state records.
 - **Boundary parity hardening** across local, imported, re-exported, package, test-batch, generated-Rust, and vocab/tooling paths.
 
-Read the [CLI reference](workspaces/docs-site/docs/tooling/reference/cli_reference.md) for detailed command contracts, or the [0.4 release notes](workspaces/docs-site/docs/release_notes/0_4.md) for release-specific change history.
+Read the [CLI reference](workspaces/docs-site/docs/tooling/reference/cli_reference.md) for detailed command contracts, or the [0.5 release notes](workspaces/docs-site/docs/release_notes/0_5.md) for release-specific change history.
 
 These examples show the inspection commands most useful when evaluating a project:
 
@@ -174,7 +174,7 @@ Start here:
 - Start here: `workspaces/docs-site/docs/start_here/index.md`
 - Language: `workspaces/docs-site/docs/language/index.md`
 - Tooling: `workspaces/docs-site/docs/tooling/index.md`
-- Release notes: `workspaces/docs-site/docs/release_notes/0_4.md`
+- Release notes: `workspaces/docs-site/docs/release_notes/index.md`
 
 Build/serve locally:
 
