@@ -1,8 +1,31 @@
 <p align="center">
-  <img src="workspaces/docs-site/docs/shared/incapunk/incan_mark_440.png" alt="Incan" width="220">
+  <img src="workspaces/docs-site/docs/shared/incapunk/incan_mark_440.png" alt="" width="170">
 </p>
 
-# Incan Programming Language
+<p align="center">
+  <img src="workspaces/docs-site/docs/shared/incapunk/wordmark_small_001.png" alt="Incan" width="220">
+</p>
+
+<p align="center">
+  <b>Python-like readability. Rust-native performance.</b>
+</p>
+
+<p align="center">
+  <a href="https://incan.io">Website</a> ·
+  <a href="https://incan.io/latest/start_here/">Docs</a> ·
+  <a href="https://incan.io/latest/tooling/how-to/install_and_run/">Install</a> ·
+  <a href="https://incan.io/latest/language/tutorials/book/">The Book</a> ·
+  <a href="https://github.com/encero-systems/incan/discussions">Discussions</a> ·
+  <a href="https://www.linkedin.com/groups/42515004/">LinkedIn</a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/encero-systems/incan/actions/workflows/ci.yml"><img alt="CI status" src="https://img.shields.io/github/actions/workflow/status/encero-systems/incan/ci.yml?branch=main&style=flat-square&label=CI&labelColor=0d1117"></a>
+  <a href="https://github.com/encero-systems/incan/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/encero-systems/incan?style=flat-square&color=ffc15a&labelColor=0d1117"></a>
+  <a href="https://incan.io"><img alt="Documentation" src="https://img.shields.io/badge/docs-incan.io-48f0ef?style=flat-square&labelColor=0d1117"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/encero-systems/incan?style=flat-square&color=48f0ef&labelColor=0d1117"></a>
+  <a href="#status"><img alt="Project status: beta" src="https://img.shields.io/badge/status-beta-ff5c69?style=flat-square&labelColor=0d1117"></a>
+</p>
 
 Incan is a statically typed language for writing clear, high-level application code that compiles to native Rust. It aims to feel lightweight and expressive while keeping the things that matter in large codebases explicit: types, errors, and mutability.
 
