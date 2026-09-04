@@ -325,7 +325,7 @@ jobs:
     needs:
       - changes
       - linux-tool-handoff
-    if: ${{ needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.heavy == 'true' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && (needs.changes.outputs.heavy == 'true' || needs.changes.outputs.reference == 'true') }}
     outputs:
       oven_suite_cache_key: ${{ steps.oven-suite-cache-key.outputs.key }}
     steps:
@@ -797,12 +797,13 @@ jobs:
   generated-reference:
     name: Generated Reference Up-to-date
     runs-on: ubuntu-latest
-    # Depends only on the job whose artifact it downloads. It previously also waited on the Oven replay, prewarm and
-    # platform jobs, which it never consumed; keeping those would have made this stale-artifact guard skip itself
-    # whenever the expensive suite is gated off, which is exactly when generated output is most likely to drift.
+    # Depends on the two jobs whose artifacts it downloads: `test-linux-tools` from the handoff, and
+    # `test-linux-sdk-provider-store` from the prewarm, which it seeds from whenever its provider cache misses. It no
+    # longer waits on the Oven replay or the platform matrix, which it never consumed.
     needs:
       - changes
       - linux-tool-handoff
+      - linux-oven-prewarm
     if: ${{ needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.reference == 'true' }}
     steps:
       - uses: actions/checkout@v5
