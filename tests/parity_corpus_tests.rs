@@ -1552,7 +1552,7 @@ fn observe_provider_path(
             .map_err(|error| format!("provider fixture lowering failure: {error}"))?;
 
     let host = Rc::new(CorpusLedgerHost::new(operation, behavior));
-    let authority = StaticAuthority::new(mode, grant_capability.then_some(required_capability).into_iter());
+    let authority = StaticAuthority::new(mode, grant_capability.then_some(required_capability));
     let providers = ProviderRuntime::new(Rc::new(authority), host.clone());
     let executed = execute_free_function_with_providers(
         &module,
