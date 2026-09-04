@@ -1365,9 +1365,6 @@ def settle(account: str, amount: int) -> int:
   return charge(account, amount)
 "#;
 
-/// The grant spelling the selected capability renders to, and therefore the one a governed run must hold.
-const PROVIDER_GRANT: &str = "app.ledger_charge";
-
 /// What the fixture ledger does when an authorized charge reaches it.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum LedgerBehavior {
@@ -1489,7 +1486,7 @@ struct ProviderPathObservation {
 fn observe_provider_path(
     behavior: LedgerBehavior,
     mode: AuthorityMode,
-    grants: &[&str],
+    grant_capability: bool,
 ) -> Result<ProviderPathObservation, String> {
     let tokens = lexer::lex(PROVIDER_CASE_SRC).map_err(|errors| format!("provider fixture lex failure: {errors:?}"))?;
     let program = parser::parse(&tokens).map_err(|errors| format!("provider fixture parse failure: {errors:?}"))?;
@@ -1514,10 +1511,11 @@ fn observe_provider_path(
             runtime_requirements: declared.runtime_requirements.clone(),
         })
         .collect();
-    let operation = descriptors
+    let descriptor = descriptors
         .first()
-        .map(|descriptor| descriptor.operation.clone())
         .ok_or("the provider fixture declares no checked provider operation")?;
+    let operation = descriptor.operation.clone();
+    let required_capability = descriptor.required_capability.clone();
     let namespace_claims: BTreeSet<Vec<String>> = descriptors
         .iter()
         .filter_map(|descriptor| descriptor.operation.module_path().map(ToOwned::to_owned))
@@ -1554,7 +1552,7 @@ fn observe_provider_path(
             .map_err(|error| format!("provider fixture lowering failure: {error}"))?;
 
     let host = Rc::new(CorpusLedgerHost::new(operation, behavior));
-    let authority = StaticAuthority::new(mode, grants.iter().map(|grant| (*grant).to_string()));
+    let authority = StaticAuthority::new(mode, grant_capability.then_some(required_capability).into_iter());
     let providers = ProviderRuntime::new(Rc::new(authority), host.clone());
     let executed = execute_free_function_with_providers(
         &module,
@@ -1630,7 +1628,7 @@ fn provider_outcome(
 /// An allowed invocation runs the provider and binds a backend receipt to the operation receipt it describes.
 fn case_provider_allowed_invocation() -> ComparisonOutcome {
     provider_outcome(
-        observe_provider_path(LedgerBehavior::Settle, AuthorityMode::Governed, &[PROVIDER_GRANT]),
+        observe_provider_path(LedgerBehavior::Settle, AuthorityMode::Governed, true),
         |observed| {
             if observed.value != Some(ReplacementValue::Int(255)) {
                 return Some(format!(
@@ -1658,7 +1656,7 @@ fn case_provider_allowed_invocation() -> ComparisonOutcome {
 /// A governed denial emits a denied receipt, reports a source-owned diagnostic, and never reaches the provider.
 fn case_provider_governed_denial() -> ComparisonOutcome {
     provider_outcome(
-        observe_provider_path(LedgerBehavior::Settle, AuthorityMode::Governed, &[]),
+        observe_provider_path(LedgerBehavior::Settle, AuthorityMode::Governed, false),
         |observed| {
             if !observed.invocations.is_empty() {
                 return Some(format!(
@@ -1692,7 +1690,7 @@ fn case_provider_governed_denial() -> ComparisonOutcome {
 /// A provider failure keeps its allowing authority decision and reports its own diagnostic, not a denial's.
 fn case_provider_operation_failure() -> ComparisonOutcome {
     provider_outcome(
-        observe_provider_path(LedgerBehavior::Decline, AuthorityMode::Governed, &[PROVIDER_GRANT]),
+        observe_provider_path(LedgerBehavior::Decline, AuthorityMode::Governed, true),
         |observed| {
             if observed.error_code != Some("INCAN-R1156-PROVIDER") {
                 return Some(format!(
@@ -1720,11 +1718,7 @@ fn case_provider_operation_failure() -> ComparisonOutcome {
 /// A withheld attribute classifies the receipt as redacted without changing what the operation returned.
 fn case_provider_redaction_classification() -> ComparisonOutcome {
     provider_outcome(
-        observe_provider_path(
-            LedgerBehavior::SettleWithSecretAccount,
-            AuthorityMode::Governed,
-            &[PROVIDER_GRANT],
-        ),
+        observe_provider_path(LedgerBehavior::SettleWithSecretAccount, AuthorityMode::Governed, true),
         |observed| {
             if observed.receipt_status != Some(ReceiptStatus::Redacted) {
                 return Some(format!(
@@ -1762,7 +1756,7 @@ fn case_provider_redaction_classification() -> ComparisonOutcome {
 /// An invocation that failed still releases what it acquired, exactly once and after the failure.
 fn case_provider_lifecycle_cleanup() -> ComparisonOutcome {
     provider_outcome(
-        observe_provider_path(LedgerBehavior::Decline, AuthorityMode::Governed, &[PROVIDER_GRANT]),
+        observe_provider_path(LedgerBehavior::Decline, AuthorityMode::Governed, true),
         |observed| {
             if observed.lifecycle != vec!["invoked", "failed", "released"] {
                 return Some(format!(

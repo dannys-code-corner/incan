@@ -177,7 +177,7 @@ pub enum SemanticFactValue {
     SourceTarget(SemanticSourceTarget),
     CanonicalIdentity(CanonicalSymbolId),
     RegistryEntry(SemanticRegistryEntry),
-    AuthorityDecision(AuthorityDecision),
+    AuthorityDecision(Box<AuthorityDecision>),
     Flag(bool),
 }
 
@@ -209,7 +209,7 @@ impl SemanticFactValue {
 
     /// Build one RFC 104 authority-decision fact value.
     pub fn authority_decision(value: AuthorityDecision) -> Self {
-        Self::AuthorityDecision(value)
+        Self::AuthorityDecision(Box::new(value))
     }
 
     /// Render a deterministic maintainer-facing fact payload snapshot.
@@ -511,12 +511,19 @@ impl SemanticSourceTargetKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AuthorityMode {
-    /// Operations run normally and receipts may be disabled.
+    /// Operations run normally with authority reporting disabled.
     Permissive,
     /// Operations run normally and receipts are emitted.
     Observe,
     /// Operations require granted capabilities and receipts are emitted.
     Governed,
+}
+
+impl Default for AuthorityMode {
+    /// Observe authority-bearing operations unless a project-owned policy selects another mode.
+    fn default() -> Self {
+        Self::Observe
+    }
 }
 
 impl AuthorityMode {
@@ -576,14 +583,17 @@ pub enum AuthorityOutcome {
 ///
 /// RFC 104 makes the ceiling a distinct grant source from the per-invocation request, and requires the effective grant
 /// to be their **intersection, never their union**: an invocation can only ever receive less than its ceiling allows,
-/// regardless of what it asks for. Recording whether a ceiling applied is therefore part of the decision, because
-/// `Allowed` under a ceiling and `Allowed` with no ceiling are different facts about the run.
+/// regardless of what it asks for. The durable fact retains both the resulting grant set and the exact ceiling, because
+/// `Allowed` under a ceiling and `Allowed` with no constraint are different facts about the run.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AuthorityGrantContext {
     /// Scope dimensions the operation requested, as `(dimension, value)` in the capability's declaration order.
     pub requested_scope: Vec<(String, String)>,
-    /// Whether a host ceiling bounded this invocation.
-    pub ceiling_applied: bool,
+    /// The invocation's effective canonical capability grants after project policy and any host ceiling were
+    /// intersected.
+    pub effective_grants: Vec<CanonicalSymbolId>,
+    /// The host-supplied capability ceiling that constrained this invocation, when one applied.
+    pub ceiling: Option<Vec<CanonicalSymbolId>>,
 }
 
 /// Enough provenance to raise a source-owned governed denial diagnostic.
@@ -675,17 +685,47 @@ impl std::fmt::Display for AuthorityDecision {
             AuthorityOutcome::Allowed => "allowed".to_string(),
             AuthorityOutcome::Denied(reason) => format!("denied:{}", reason.as_str()),
         };
-        let ceiling = if self.grant.ceiling_applied { " ceiling" } else { "" };
+        let grants = render_authority_grants(&self.grant.effective_grants);
+        let ceiling = self
+            .grant
+            .ceiling
+            .as_ref()
+            .map_or_else(|| "none".to_string(), |values| render_authority_grants(values));
         write!(
             f,
-            "{} {} {}{} <- {}",
+            "{} {} {} grants=[{}] ceiling=[{}] <- {}",
             self.capability.declaration_name,
             self.mode.as_str(),
             outcome,
+            grants,
             ceiling,
             self.provenance.operation.declaration_name
         )
     }
+}
+
+/// Render canonical grant identities for an inspectable maintainer-facing fact snapshot.
+fn render_authority_grants(grants: &[CanonicalSymbolId]) -> String {
+    grants.iter().map(render_authority_grant).collect::<Vec<_>>().join(",")
+}
+
+/// Render every identity component that distinguishes one canonical capability grant from another.
+fn render_authority_grant(grant: &CanonicalSymbolId) -> String {
+    let origin = match &grant.origin {
+        SymbolOrigin::Module(path) => format!("module:{}", path.join(".")),
+        SymbolOrigin::Package { library, module_path } => {
+            format!("package:{library}:{}", module_path.join("."))
+        }
+        SymbolOrigin::RustCrate(path) => format!("rust:{}", path.join(".")),
+        SymbolOrigin::Builtin => "builtin".to_string(),
+    };
+    format!(
+        "{origin}:{}:{}@{}..{}",
+        grant.kind.as_str(),
+        grant.declaration_name,
+        grant.declaration_span.start,
+        grant.declaration_span.end
+    )
 }
 
 /// Render a module path into the identity string used by HIR, Body IR, and declaration identities.
@@ -990,6 +1030,18 @@ mod tests {
         (capability, provenance)
     }
 
+    /// Build a distinct canonical capability for ceiling and identity-separation tests.
+    fn fs_read_capability() -> super::CanonicalSymbolId {
+        use super::{CanonicalSymbolId, SemanticSourceTargetKind};
+
+        CanonicalSymbolId::module_declaration(
+            vec!["host".to_string(), "fs".to_string()],
+            "read",
+            SemanticSourceTargetKind::Capability,
+            crate::HirSourceSpan::new(30, 40),
+        )
+    }
+
     /// An allowed decision must be actionable without a consumer re-reading source or emitted Rust.
     #[test]
     fn an_allowed_authority_decision_carries_its_mode_and_grant_context() {
@@ -997,11 +1049,12 @@ mod tests {
 
         let (capability, provenance) = authority_fixture();
         let decision = AuthorityDecision::allowed(
-            capability,
+            capability.clone(),
             AuthorityMode::Governed,
             AuthorityGrantContext {
                 requested_scope: vec![("host".to_string(), "api.example.com".to_string())],
-                ceiling_applied: true,
+                effective_grants: vec![capability.clone()],
+                ceiling: Some(vec![capability.clone()]),
             },
             provenance,
         );
@@ -1009,10 +1062,8 @@ mod tests {
         assert!(decision.is_allowed());
         assert_eq!(decision.denial_reason(), None);
         assert_eq!(decision.mode, AuthorityMode::Governed);
-        assert!(
-            decision.grant.ceiling_applied,
-            "a ceiling bounds the effective grant by intersection, so whether one applied is part of the decision",
-        );
+        assert_eq!(decision.grant.effective_grants, vec![capability.clone()]);
+        assert_eq!(decision.grant.ceiling, Some(vec![capability]));
         assert_eq!(decision.provenance.suggested_grant, "host.http.request");
     }
 
@@ -1022,13 +1073,15 @@ mod tests {
         use super::{AuthorityDecision, AuthorityDenialReason, AuthorityGrantContext, AuthorityMode};
 
         let (capability, provenance) = authority_fixture();
+        let ceiling = fs_read_capability();
         let decision = AuthorityDecision::denied(
             capability,
             AuthorityMode::Governed,
             AuthorityDenialReason::OutsideCeiling,
             AuthorityGrantContext {
                 requested_scope: Vec::new(),
-                ceiling_applied: true,
+                effective_grants: Vec::new(),
+                ceiling: Some(vec![ceiling]),
             },
             provenance,
         );
@@ -1067,7 +1120,8 @@ mod tests {
             AuthorityDenialReason::NotGranted,
             AuthorityGrantContext {
                 requested_scope: Vec::new(),
-                ceiling_applied: false,
+                effective_grants: Vec::new(),
+                ceiling: None,
             },
             provenance,
         );
