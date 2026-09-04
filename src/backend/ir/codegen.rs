@@ -4175,6 +4175,83 @@ pub def forward(value: Thing) -> None:
 
     #[cfg(feature = "rust_inspect")]
     #[test]
+    fn test_codegen_boxes_variant_payloads_whatever_argument_shape() -> Result<(), Box<dyn std::error::Error>> {
+        use crate::frontend::typechecker::TypeChecker;
+        use incan_core::interop::{
+            RustItemKind, RustItemMetadata, RustPayloadCarrier, RustTypeInfo, RustTypeShape, RustVariantInfo,
+            RustVisibility,
+        };
+
+        // A Rust enum variant that stores `Box<i64>`; Incan records the payload as `i64` plus its carrier, so every
+        // argument shape — a literal, a call result, a method result — must reach the constructor inside `Box::new`.
+        let source = r#"
+from rust::demo import Kind
+
+def identity(value: int) -> int:
+  return value
+
+pub def build(values: List[int]) -> List[Kind]:
+  return [Kind.Tuple(1), Kind.Tuple(identity(2)), Kind.Tuple(values[0]), Kind.Tuple(len(values))]
+"#;
+        let tokens = must_ok(lexer::lex(source));
+        let ast = must_ok(parser::parse(&tokens));
+
+        let tmp = seeded_rust_inspect_workspace()?;
+        let manifest_dir = tmp.path().to_path_buf();
+        let mut tc = TypeChecker::new();
+        tc.set_rust_inspect_manifest_dir(manifest_dir.clone());
+        tc.rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: "demo::Kind".to_string(),
+                    definition_path: Some("demo::Kind".to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: vec![],
+                        implemented_traits: Vec::new(),
+                        fields: vec![],
+                        variants: vec![RustVariantInfo {
+                            name: "Tuple".to_string(),
+                            fields: vec![RustTypeShape::Int],
+                            field_carriers: vec![RustPayloadCarrier::Boxed],
+                        }],
+                    }),
+                },
+            )
+            .map_err(|e| std::io::Error::other(format!("seed rust-inspect kind: {e}")))?;
+        tc.check_program(&ast)
+            .map_err(|errs| std::io::Error::other(format!("typecheck failed: {errs:?}")))?;
+
+        let mut lowering = AstLowering::new_with_type_info(tc.type_info().clone());
+        let ir_program = lowering
+            .lower_program(&ast)
+            .map_err(|err| std::io::Error::other(format!("lowering failed: {err:?}")))?;
+        let mut codegen = IrCodegen::new();
+        codegen.collect_external_rust_functions(&ast);
+        let mut emitter = IrEmitter::new(&ir_program.function_registry);
+        emitter.set_external_rust_functions(codegen.external_rust_functions.clone());
+        let code = emitter
+            .emit_program(&ir_program)
+            .map_err(|err| std::io::Error::other(format!("emit failed: {err:?}")))?;
+
+        let boxed = code.matches("Box::new(").count();
+        assert_eq!(
+            boxed, 4,
+            "every variant payload must be boxed regardless of argument shape; got:\n{code}"
+        );
+        Ok(())
+    }
+
+    #[cfg(feature = "rust_inspect")]
+    #[test]
     fn test_codegen_borrows_as_fd_generic_args_from_metadata() -> Result<(), Box<dyn std::error::Error>> {
         use crate::frontend::typechecker::TypeChecker;
         use incan_core::interop::{RustFunctionSig, RustItemKind, RustItemMetadata, RustParam, RustVisibility};

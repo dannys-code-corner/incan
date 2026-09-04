@@ -97,9 +97,14 @@ pub const DEFAULT_OVEN_MAX_PHYSICAL_BYTES: u64 = 9 * 1024 * 1024 * 1024;
 /// still choose a stricter explicit limit.
 pub const DEFAULT_OVEN_MAX_DOMAIN_PHYSICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Default logical artifact-byte cap for one compatibility domain.
-/// The same two IncQL/DataFusion profiles retain 2.11 GiB of logical artifacts. Three GiB preserves a bounded
-/// reusable closure without denying the ordinary debug/release pair.
-pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 3 * 1024 * 1024 * 1024;
+///
+/// One explicit bake of a project whose closure is not loadable as independently compiled parts retains two
+/// extensions of a compiler Loaf: the library's delta and the test-dependency envelope's, each carrying the unified
+/// closure, its re-rooted copies of shared units, and the extension's own runtime. Measured for IncQL/DataFusion on
+/// Linux, each is 1.5 GiB, so a single debug-profile bake retains 3.0 GiB before its outputs and authority. Six GiB,
+/// the same as the physical allowance, admits that bake with the release profile or a second project beside it;
+/// callers may still choose a stricter explicit limit.
+pub const DEFAULT_OVEN_MAX_DOMAIN_LOGICAL_BYTES: u64 = 6 * 1024 * 1024 * 1024;
 /// Aggregate physical allowance for the complete compiler-suite Loaf and repository-test closure.
 pub const DEFAULT_OVEN_COMPILER_SUITE_MAX_PHYSICAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
 /// Physical allowance for the compiler-suite compatibility domain.

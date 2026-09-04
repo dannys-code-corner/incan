@@ -6,9 +6,10 @@ use incan_core::interop::{
     RustAssociatedTypeBinding, RustAssociatedTypeRequirement, RustExpandedDeriveTrait, RustFieldInfo, RustFunctionSig,
     RustImplementedTrait, RustItemKind, RustItemMetadata, RustMacroInfo, RustMethodSig, RustModuleChild,
     RustModuleChildKind, RustModuleInfo, RustMutableReferenceCandidate, RustMutableReferenceTypeParam, RustParam,
-    RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustTypeShapePathFallback, RustVariantInfo,
-    RustVisibility, parse_rust_type_shape_text, render_rust_type_shape, rust_source_borrowed_type_param_bound_display,
-    rust_source_callable_bound_for_type_param, rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
+    RustPayloadCarrier, RustTraitAssoc, RustTraitInfo, RustTypeInfo, RustTypeShape, RustTypeShapePathFallback,
+    RustVariantInfo, RustVisibility, is_box_carrier_path, parse_rust_type_shape_text, render_rust_type_shape,
+    rust_source_borrowed_type_param_bound_display, rust_source_callable_bound_for_type_param,
+    rust_source_type_param_has_as_fd_bound, split_top_level_rust_args,
 };
 use ra_ap_hir::{
     Adt, AssocItem, Const as HirConst, Crate, DisplayTarget, Enum, FieldSource, Function, GenericDef, GenericParam,
@@ -74,8 +75,17 @@ fn field_module(field: &ra_ap_hir::Field, db: &RootDatabase) -> Module {
     }
 }
 
+/// Resolve a written path relative to the module that declares it: `self::` and `super::` markers walk the module
+/// tree, and a bare path joins onto the declaring module. An absolute `::` path is not owner-relative and returns
+/// unchanged rather than being joined onto the module; `resolve_source_path` handles that form.
 fn resolve_relative_source_path(text: &str, crate_name: &str, module: Module, db: &RootDatabase) -> Option<String> {
-    let mut text = text.trim().trim_start_matches("::");
+    let text = text.trim();
+    if let Some(absolute) = text.strip_prefix("::") {
+        // Absolute paths are not this function's business; see `resolve_source_path`. Fail closed rather than
+        // join a global path onto the owning module.
+        return (!absolute.is_empty()).then(|| absolute.to_string());
+    }
+    let mut text = text;
     if text.is_empty() {
         return None;
     }
@@ -285,17 +295,28 @@ fn source_static_type_identity_display(static_: HirStatic, db: &RootDatabase) ->
     source_module_type_identity_display(static_.module(db), text.as_str(), db)
 }
 
+/// Resolve a path as written in Rust source to the canonical spelling inspection records for it.
+///
+/// Whitespace is dropped, a leading `::` selects the absolute form, and every other spelling is resolved relative to
+/// the declaring module through `resolve_relative_source_path`. The result is the ancestral path a consumer compares
+/// against, so a re-export such as `::prost::alloc::boxed::Box` names the same item wherever it is written.
 fn resolve_source_path(text: &str, crate_name: &str, module: Module, db: &RootDatabase) -> Option<String> {
     let text = text.trim().replace(' ', "");
     if text.is_empty() {
         return None;
     }
 
-    if text.starts_with("::")
-        || text.starts_with("crate::")
-        || text.starts_with("self::")
-        || text.starts_with("super::")
-    {
+    // A leading `::` is the *absolute* path form — the opposite of the `self::`/`super::` markers below — so it
+    // must never reach the owner-relative joiner. prost-generated code spells every standard type this way
+    // (`::prost::alloc::boxed::Box<T>`), and joining that onto the owning module recorded
+    // `substrait::proto::fetch_rel::prost::alloc::boxed::Box` as a field type: a path no consumer can ever
+    // name, so the type never unified with the caller's `Box`. Resolve it semantically instead; HIR follows the
+    // re-export to the crate that defines the item, which is the ancestral namespace every alias must record.
+    let (absolute, text) = match text.strip_prefix("::") {
+        Some(rest) => (true, rest.to_string()),
+        None => (false, text),
+    };
+    if !absolute && (text.starts_with("crate::") || text.starts_with("self::") || text.starts_with("super::")) {
         return resolve_relative_source_path(text.as_str(), crate_name, module, db);
     }
 
@@ -310,6 +331,11 @@ fn resolve_source_path(text: &str, crate_name: &str, module: Module, db: &RootDa
         && let Some(path) = canonical_module_def_path(item.into_module_def(), db)
     {
         return Some(path);
+    }
+    if absolute {
+        // An absolute path that HIR cannot resolve is still absolute. Returning it as written keeps the identity
+        // stable across the lookup aliases in `cache.rs`; the one thing it must not become is owner-relative.
+        return Some(text);
     }
 
     if !text.contains("::") {
@@ -446,14 +472,14 @@ fn source_field_constructor_label(field: &ra_ap_hir::Field, db: &RootDatabase) -
     }
 }
 
-fn normalize_variant_payload_shape(shape: RustTypeShape) -> RustTypeShape {
+/// Record a variant payload as its semantic type, remembering a stripped `Box<T>` carrier so lowering can restore it.
+fn normalize_variant_payload_shape(shape: RustTypeShape) -> (RustTypeShape, RustPayloadCarrier) {
     match shape {
-        RustTypeShape::RustPath { path, args }
-            if matches!(path.as_str(), "Box" | "std::boxed::Box" | "alloc::boxed::Box") =>
-        {
-            args.into_iter().next().unwrap_or(RustTypeShape::Unknown)
-        }
-        other => other,
+        RustTypeShape::RustPath { path, args } if is_box_carrier_path(path.as_str()) => (
+            args.into_iter().next().unwrap_or(RustTypeShape::Unknown),
+            RustPayloadCarrier::Boxed,
+        ),
+        other => (other, RustPayloadCarrier::Direct),
     }
 }
 
@@ -1491,6 +1517,10 @@ fn collect_public_fields(ty: Type<'_>, db: &RootDatabase, dt: DisplayTarget, cra
     fields
 }
 
+/// Record every variant of an enum with the semantic shape of each payload field and the carrier it is stored in.
+///
+/// A payload written as `Box<T>` through any re-export of `alloc::boxed::Box` is recorded as `T` with a `Boxed`
+/// carrier, so consumers see the semantic type while lowering can restore the storage the constructor needs.
 fn collect_enum_variant_payloads(
     enum_: Enum,
     ty: Type<'_>,
@@ -1501,9 +1531,13 @@ fn collect_enum_variant_payloads(
     let type_args: Vec<Type<'_>> = ty.type_arguments().collect();
     let mut variants = Vec::new();
     for variant in enum_.variants(db) {
+        let (fields, field_carriers) = collect_variant_payloads(variant, &type_args, db, dt, crate_name)
+            .into_iter()
+            .unzip();
         variants.push(RustVariantInfo {
             name: variant.name(db).as_str().to_owned(),
-            fields: collect_variant_payload_shapes(variant, &type_args, db, dt, crate_name),
+            fields,
+            field_carriers,
         });
     }
     variants.sort_by(|a, b| a.name.cmp(&b.name));
@@ -1511,13 +1545,15 @@ fn collect_enum_variant_payloads(
 }
 
 /// Collect one enum variant's exported payload fields using source-preserved type identities where available.
-fn collect_variant_payload_shapes(
+///
+/// Each entry pairs the semantic payload shape with the storage carrier the Rust field actually uses.
+fn collect_variant_payloads(
     variant: Variant,
     type_args: &[Type<'_>],
     db: &RootDatabase,
     dt: DisplayTarget,
     crate_name: &str,
-) -> Vec<RustTypeShape> {
+) -> Vec<(RustTypeShape, RustPayloadCarrier)> {
     variant
         .fields(db)
         .iter()

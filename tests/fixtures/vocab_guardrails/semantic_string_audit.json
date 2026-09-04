@@ -15,20 +15,20 @@
     {
       "path": "crates/incan_core/src/interop/metadata.rs",
       "category": "registry-backed Rust collection and compiler-owned function metadata policy, plus shared Rust type-shape parsing including canonical owned String displays with allocator arguments",
-      "expected_count": 26,
-      "expected_fingerprint": "0x313c8a3ca86c1175"
+      "expected_count": 27,
+      "expected_fingerprint": "0x5b667e9989aff4dc"
     },
     {
       "path": "crates/rust_inspect/src/cache.rs",
       "category": "rust-inspect cache migration and generated Rust syntax metadata compatibility",
-      "expected_count": 27,
-      "expected_fingerprint": "0x8fe006273640352e"
+      "expected_count": 30,
+      "expected_fingerprint": "0xbeb929fcd9522080"
     },
     {
       "path": "crates/rust_inspect/src/cache_tests.rs",
       "category": "rust-inspect generated metadata regression assertions",
-      "expected_count": 20,
-      "expected_fingerprint": "0x7e81de1942d4d62e"
+      "expected_count": 23,
+      "expected_fingerprint": "0x9e431a3a1e74ae9a"
     },
     {
       "path": "crates/rust_inspect/src/cache_timing.rs",
@@ -39,8 +39,8 @@
     {
       "path": "crates/rust_inspect/src/extractor.rs",
       "category": "rust-inspect display-shape normalization",
-      "expected_count": 12,
-      "expected_fingerprint": "0xabb7f3a0bf9be9dc"
+      "expected_count": 11,
+      "expected_fingerprint": "0xba1b1488249dc03e"
     },
     {
       "path": "crates/rust_inspect/src/lib.rs",
@@ -339,8 +339,8 @@
     {
       "path": "src/frontend/typechecker/mod.rs",
       "category": "Rust display type parsing, provider ABI lookup, shared nominal String canonicalization, source type-name validation, stdlib derive compatibility, and dependency registry owner paths",
-      "expected_count": 40,
-      "expected_fingerprint": "0x4627108dc604cb6e"
+      "expected_count": 41,
+      "expected_fingerprint": "0xee39ad49bb04c5da"
     },
     {
       "path": "src/frontend/typechecker/stdlib_loader.rs",
