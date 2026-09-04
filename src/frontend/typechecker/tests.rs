@@ -6137,6 +6137,104 @@ def f() -> None:
 
 #[cfg(feature = "rust_inspect")]
 #[test]
+fn test_imported_rust_field_assignment_resolves_through_rust_metadata() -> Result<(), Box<dyn std::error::Error>> {
+    // `mut plan = empty_plan()` followed by `plan.relations = [...]` is how a test mutates a prost struct. The value
+    // is typed by its Rust path, so the assignment must resolve the field through the same metadata a read uses,
+    // reject a field the struct does not have, and hold the value to the field's type.
+    let source = r#"
+from rust::demo import Holder, Item
+def f(holder: Holder, item: Item) -> None:
+  mut current = holder
+  current.items = [item]
+
+def g(holder: Holder, item: Item) -> None:
+  mut current = holder
+  current.missing = [item]
+
+def h(holder: Holder) -> None:
+  mut current = holder
+  current.items = 1
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| std::io::Error::other(format!("lex failed: {errs:?}")))?;
+    let ast = parser::parse(&tokens).map_err(|errs| std::io::Error::other(format!("parse failed: {errs:?}")))?;
+    let mut checker = TypeChecker::new();
+    let tmp = seeded_rust_inspect_workspace()?;
+    let manifest_dir = tmp.path().to_path_buf();
+    checker.set_rust_inspect_manifest_dir(manifest_dir.clone());
+    for (path, fields) in [
+        (
+            "demo::Holder",
+            vec![RustFieldInfo {
+                name: "items".to_string(),
+                type_display: "Vec<demo::Item>".to_string(),
+                type_shape: RustTypeShape::RustPath {
+                    path: "Vec".to_string(),
+                    args: vec![RustTypeShape::RustPath {
+                        path: "demo::Item".to_string(),
+                        args: vec![],
+                    }],
+                },
+            }],
+        ),
+        ("demo::Item", vec![]),
+    ] {
+        checker
+            .rust_inspect_cache
+            .insert_test_item(
+                &manifest_dir,
+                RustItemMetadata {
+                    canonical_path: path.to_string(),
+                    definition_path: Some(path.to_string()),
+                    visibility: RustVisibility::Public,
+                    kind: RustItemKind::Type(RustTypeInfo {
+                        type_params: Vec::new(),
+                        type_param_defaults: Vec::new(),
+                        mutable_reference_type_params: Vec::new(),
+                        expanded_derive_traits: Vec::new(),
+                        has_const_params: false,
+                        alias_target: None,
+                        metadata_completeness: Default::default(),
+                        methods: vec![],
+                        implemented_traits: Vec::new(),
+                        fields,
+                        variants: vec![],
+                    }),
+                },
+            )
+            .map_err(|e| std::io::Error::other(format!("seed rust-inspect {path}: {e}")))?;
+    }
+    let messages = checker
+        .check_program(&ast)
+        .err()
+        .unwrap_or_default()
+        .iter()
+        .map(|error| error.message.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        !messages.iter().any(|message| message.contains("has no field 'items'")),
+        "assigning an existing Rust field must typecheck: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("has no field 'missing'")),
+        "assigning a field the Rust struct lacks must be rejected: {messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|message| message.contains("Cannot assign 'int' to field 'items' of type 'List[rust::demo::Item]'")),
+        "assigning an int to a Vec field must be rejected with the field's type: {messages:?}"
+    );
+    assert_eq!(
+        messages.len(),
+        2,
+        "only the two invalid assignments may be reported: {messages:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn test_imported_rust_vec_field_indexes_with_element_type() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 from rust::demo import Holder, accept_item
