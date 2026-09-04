@@ -6727,6 +6727,21 @@ impl TypeChecker {
     /// A symbol kind, name, module key, and span are insufficient proof: absent canonical data must stay absent rather
     /// than being reconstructed into a plausible but invented declaration.
     pub(crate) fn dependency_member_identity(&self, module: &ImportPath, item_name: &str) -> Option<CanonicalSymbolId> {
+        // Resolve through the consumer's own module graph first. `dependency_source_import_candidates` already
+        // orders a granted SDK provider ahead of ordinary candidates for a `std.*` path, so provider precedence is
+        // preserved without keying on the spelling here.
+        let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
+        if let Some(identity) = self.dependency_member_identity_from(current_module_path, module, item_name, 0) {
+            return Some(identity);
+        }
+
+        // Fall back to the provider registry keyed by the spelled path. A compiled provider is reachable by the path
+        // its manifest publishes even when the consumer's source graph contains no module of that name, which is the
+        // case this originally existed to serve.
+        //
+        // It must stay a fallback. Running it first let the spelling pre-empt resolution: `from helpers import
+        // render` inside `pkg.app` selects the sibling `pkg.helpers`, but a root `helpers` declaring the same member
+        // answered instead -- a module the import did not select.
         if module.parent_levels == 0 {
             let provider_key = canonicalize_source_module_segments(&module.segments).join(".");
             if self
@@ -6741,8 +6756,7 @@ impl TypeChecker {
                     .cloned();
             }
         }
-        let current_module_path = self.current_module_path.as_deref().unwrap_or_default();
-        self.dependency_member_identity_from(current_module_path, module, item_name, 0)
+        None
     }
 
     /// Resolve one imported member to its declaring identity, using `from_module_path` as the resolution base.
