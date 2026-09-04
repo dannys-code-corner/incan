@@ -29,6 +29,7 @@ jobs:
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
       heavy: ${{ steps.scope.outputs.heavy }}
+      reference: ${{ steps.scope.outputs.reference }}
     steps:
       - uses: actions/checkout@v5
         with:
@@ -105,6 +106,25 @@ jobs:
           esac
 
           echo "heavy=$heavy" >> "$GITHUB_OUTPUT"
+
+          # `Linux compiler and reference handoff` is a cold workspace build plus an SDK prewarm, and it typechecks the
+          # committed documentation examples. Once the expensive suite is gated off, its only remaining consumer is
+          # `Generated Reference Up-to-date`. Paying half an hour on every development pull request to re-derive a
+          # reference that can only change when the language registries, the generators, the committed reference pages
+          # or the verified examples change is the wrong trade -- so run the pair when one of those actually moved.
+          reference="$heavy"
+          if [ "$reference" != "true" ] && [ "$EVENT_NAME" = "pull_request" ]; then
+            while IFS= read -r -d '' file; do
+              case "$file" in
+                crates/incan_core/*) reference=true; break ;;
+                workspaces/docs-site/docs/language/reference/language.md) reference=true; break ;;
+                workspaces/docs-site/docs/language/reference/feature_inventory.md) reference=true; break ;;
+                workspaces/docs-site/docs/_snippets/language/examples/*) reference=true; break ;;
+              esac
+            done < <(git diff --name-only -z "$base_ref" HEAD)
+          fi
+
+          echo "reference=$reference" >> "$GITHUB_OUTPUT"
 
   fmt:
     name: Format Check
@@ -255,7 +275,7 @@ jobs:
     name: Linux compiler and reference handoff
     runs-on: ubuntu-latest
     needs: changes
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.reference == 'true' }}
     # No explicit budget, like oven-platform-smoke: the completion-gated cache must be able to save after a cold
     # workspace build. The runner-level 6-hour ceiling still bounds it.
     steps:
@@ -783,7 +803,7 @@ jobs:
     needs:
       - changes
       - linux-tool-handoff
-    if: ${{ needs.changes.outputs.docs_only != 'true' }}
+    if: ${{ needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.reference == 'true' }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@master
