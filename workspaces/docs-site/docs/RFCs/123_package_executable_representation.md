@@ -17,24 +17,24 @@
 
 ## Summary
 
-A published Incan package describes what it exports but not how any of it runs. Its manifest carries signatures, checked public metadata, and canonical identities, which is exactly enough for a consumer to typecheck a call into the package and nothing more. The only executable form it ships is a compiled Rust library, which is machine code for one particular backend rather than a representation any other route can interpret. This RFC proposes that a package additionally publish a versioned executable representation of its public surface, keyed by the same canonical identities its manifest already exports, produced by the compilation that declares them.
+A package is a unit of distribution, not a unit of semantics. What a package exports should mean the same thing, and behave the same way, whether a consumer reached it through an import or wrote it themselves. This RFC establishes what a package publishes so that its public surface is executable by any route that can execute equivalent local code: a versioned executable representation, keyed by the canonical identities the package's manifest already exports, produced by the compilation that declares them.
 
 ## Core model
 
-1. **A package's public surface has one identity space.** Canonical identity is minted by the compilation that declares a symbol, and a consumer resolves against those identities rather than against spellings.
-2. **Execution is a projection of that surface, not a second description of it.** Whatever a consumer executes for an imported declaration must be reachable from the identity it already resolved, not from a name, a path, or a re-derivation.
-3. **A representation is produced once, by the declaring compilation.** Any route that reconstructs a package's executable form from the package's source produces a second identity space, which by construction cannot be compared to the first.
-4. **Representations are versioned and refusable.** A consumer that cannot interpret a package's representation must say so, in terms of the package and version it could not use, before it produces a result.
+1. **A package's public surface has one identity space.** Canonical identity is minted by the compilation that declares a symbol, and every consumer resolves against those identities rather than against spellings.
+2. **Execution is a projection of that surface, not a second description of it.** What a consumer executes for an imported declaration is reachable from the identity it already resolved — never from a name, a path, or a re-derivation.
+3. **A representation is produced once, by the declaring compilation.** One declaration has one executable meaning, established where it is written.
+4. **Representations are versioned and refusable.** A consumer that cannot interpret a package's representation says so in terms of the package and version it could not use, before it produces a result.
 
 ## Motivation
 
-Incan is acquiring execution routes that are not "compile everything to Rust and link it". The replacement backend already executes a program's own modules directly, including calls that leave the module they are written in. It cannot follow the same call into a dependency, and the obstacle is not the call — it is that nothing in the dependency's published form can be executed by anything except the Rust toolchain.
+Incan's execution model is becoming plural. Compiling a program to Rust and linking it is one route; interpreting a program's checked representation directly is another, and more will follow as the compiler learns to answer questions about a program without building it. Each route is a different way of asking what a program means, and they should agree.
 
-This shows up as an asymmetry a user can see. Splitting a project into two modules keeps it executable. Extracting one of those modules into a package makes the same code unreachable on that route, with no change to the code itself. The boundary that stops execution is a packaging decision, not a semantic one, which is the wrong place for such a boundary to sit.
+A package boundary should not decide which of them can answer. Moving a declaration into a package changes how it is distributed, versioned, and depended upon; it does not change what the declaration means. A model in which extracting a module into a package silently removes execution routes makes packaging a semantic act, and pushes authors toward keeping code in one project for reasons that have nothing to do with design.
 
-It also blocks the evidence #989 asks for. Proving that a public contract is preserved across a boundary requires executing across that boundary; a test that can only execute inside one compilation cannot distinguish a preserved contract from a coincidence.
+The same principle carries the evidence the public boundary needs. Establishing that a contract survives a boundary requires exercising it across that boundary, and a route that cannot cross one cannot supply that evidence. A package that publishes what it exports, and how it runs, can be checked as a consumer actually experiences it.
 
-The tempting shortcut is worse than the problem. A consumer can often see a path dependency's source, and could re-derive an executable form from it. Doing so runs a second analysis, and a second analysis mints its own identities: the same declaration acquires a module-scoped identity in the consumer while the manifest continues to carry the package-scoped one. Those identities cannot be compared, so every check built on identity silently weakens to a comparison of spellings. Removing exactly that failure mode is what RFC 120 exists for, and reintroducing it to make execution work would trade a visible limitation for an invisible one.
+Identity is what makes this coherent rather than duplicative. A package already names its public surface by canonical identity, and a consumer already resolves imports against those identities. An executable representation keyed by the same identities is the same surface seen from a second angle — not a parallel description that can drift from the first.
 
 ## Goals
 
@@ -58,7 +58,7 @@ Building a library produces its manifest and its compiled artifact as it does to
 
 Consuming a package is unchanged. An import resolves against the package's public contract exactly as before, and a call into it typechecks the same way. What changes is that a route which does not link Rust can now execute that call, because the package shipped something it can execute.
 
-When it cannot, the failure is specific. A consumer that finds no representation, or one it cannot interpret, reports the package and version it could not use and what it needed, rather than reporting that a call is unsupported. The distinction matters to whoever has to act: the first is a packaging or version problem, the second would suggest a language limitation that does not exist.
+When a route cannot execute a call, the reason is specific. A consumer that finds no representation, or one it cannot interpret, reports the package and version it could not use and what it required of it. That is a packaging or version fact, and a reader can act on it — republish the dependency, or take a route that does not need the representation. Reporting the same condition as an unsupported construct would send them to the language instead.
 
 A package that ships no representation stays usable. Routes that link Rust behave as they always have; only the routes that need a representation refuse, and only for the calls that actually cross into that package.
 
@@ -94,7 +94,7 @@ The compiled Rust artifact is unaffected. It remains the product the Rust-linkin
 
 ## Alternatives considered
 
-**Re-derive the representation in the consumer.** Rejected. A second analysis mints a second identity space, so a re-derived declaration cannot be compared to the manifest's. Every identity-based check would degrade to spelling comparison, which is the failure RFC 120 removed.
+**Re-derive the representation in the consumer.** Rejected. A declaration's executable meaning would then be established twice, in two compilations, and the two results would carry identities from different spaces. Identity-based reasoning about the public surface — which is the basis of RFC 120 — holds only while one declaration has one identity, so a consumer-side derivation would return the language to comparing spellings.
 
 **Extend the manifest to carry executable content.** Rejected. The manifest is the public contract and is read for typechecking, inspection, and compatibility. Loading executable content for every consumer that only wants a signature makes the common path pay for the rare one, and couples two things that need to version independently.
 
