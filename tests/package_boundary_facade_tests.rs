@@ -184,8 +184,8 @@ fn a_consumer_resolves_facade_published_declarations_across_a_dependency() -> Te
     assert_success(&run_output, "consumer run across the package boundary");
     let stdout = String::from_utf8_lossy(&run_output.stdout);
     assert!(
-        stdout.contains("boundary") && stdout.contains('2'),
-        "the consumer must execute the facade's model and function across the boundary, got:\n{stdout}"
+        stdout.contains("boundary") && stdout.contains('2') && stdout.contains("fast"),
+        "the consumer must execute the facade's model, function and enum across the boundary, got:\n{stdout}"
     );
     Ok(())
 }
