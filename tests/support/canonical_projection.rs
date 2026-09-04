@@ -4,9 +4,9 @@
 // meaning by decoding those names. Artifact-facing tests still need to inspect the projection, so that deliberately
 // reverse-facing work lives outside `src/` at the same boundary as other generated-artifact assertions.
 
-// Each including test target uses the subset of these helpers its own assertions need, so an unused helper here is
-// the expected shape of a shared support module rather than dead code to delete.
-#![allow(dead_code)]
+// Each including target uses the subset of these helpers its own assertions need, so the decode helpers below carry
+// their own `allow(dead_code)`. That has to be per item rather than a module-wide inner attribute, because
+// `src/backend/ir/codegen.rs` pulls this file in through `include!`, which does not permit inner attributes.
 
 use std::collections::HashSet;
 
@@ -15,6 +15,7 @@ use incan_semantics_core::{
 };
 
 /// Recover every projected identity for one source declaration from generated Rust.
+#[allow(dead_code)]
 pub(crate) fn projected_identities(
     code: &str,
     source_name: &str,
@@ -28,6 +29,7 @@ pub(crate) fn projected_identities(
 }
 
 /// Recover the one projected identity expected for a source declaration.
+#[allow(dead_code)]
 pub(crate) fn projected_identity(code: &str, source_name: &str, kind: SemanticSourceTargetKind) -> CanonicalSymbolId {
     let identities = projected_identities(code, source_name, kind.clone());
     assert_eq!(
@@ -42,6 +44,7 @@ pub(crate) fn projected_identity(code: &str, source_name: &str, kind: SemanticSo
 }
 
 /// Recover the exact generated Rust projection for one source declaration.
+#[allow(dead_code)]
 pub(crate) fn projected_name(code: &str, source_name: &str, kind: SemanticSourceTargetKind) -> String {
     encode_incan_symbol_identity(&projected_identity(code, source_name, kind))
 }
@@ -55,6 +58,7 @@ pub(crate) fn projected_name(code: &str, source_name: &str, kind: SemanticSource
 /// This decodes without reformatting, so comments and the generated header survive. An encoded projection is far
 /// longer than the source name it stands for, so `prettyplease` has already wrapped signatures that the source writes
 /// on one line; a caller asserting against a one-line source spelling wants [`reformatted_after_decode`] as well.
+#[allow(dead_code)]
 pub(crate) fn decoded_source_spellings(code: &str) -> String {
     let mut decoded = String::with_capacity(code.len());
     let mut token = String::new();
@@ -87,6 +91,7 @@ pub(crate) fn decoded_source_spellings(code: &str) -> String {
 /// encoded spelling. Re-formatting restores the one-line signatures a source-shaped assertion expects. Comments do
 /// not survive `prettyplease`, so this is a second view of the artifact rather than a replacement for
 /// [`decoded_source_spellings`], and callers check both. Input that does not parse as a whole file yields `None`.
+#[allow(dead_code)]
 pub(crate) fn reformatted_after_decode(decoded: &str) -> Option<String> {
     syn::parse_file(decoded)
         .ok()
