@@ -2,6 +2,10 @@
 
 use incan::backend::IrCodegen;
 use incan::frontend::{lexer, parser};
+use incan_semantics_core::SemanticSourceTargetKind;
+
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -16,17 +20,19 @@ fn generate_rust(source: &str) -> Result<String, std::io::Error> {
         .map_err(|error| std::io::Error::other(format!("fixture did not codegen: {error:?}")))
 }
 
-/// Return whitespace-free generated Rust for stable ownership assertions.
-fn compact_rust(source: &str) -> Result<String, std::io::Error> {
-    Ok(generate_rust(source)?
+/// Return generated Rust plus a whitespace-free copy for stable ownership assertions.
+fn generated_and_compact_rust(source: &str) -> Result<(String, String), std::io::Error> {
+    let generated = generate_rust(source)?;
+    let compact = generated
         .chars()
         .filter(|character| !character.is_whitespace())
-        .collect())
+        .collect();
+    Ok((generated, compact))
 }
 
 #[test]
 fn generic_value_moves_in_every_terminal_match_arm_without_clone_bound() -> TestResult {
-    let rust = compact_rust(
+    let (generated, rust) = generated_and_compact_rust(
         r#"
 pub def select[T](value: T, choose_first: bool) -> T:
     match choose_first:
@@ -34,9 +40,10 @@ pub def select[T](value: T, choose_first: bool) -> T:
         false => return value
 "#,
     )?;
+    let select = canonical_projection::projected_name(&generated, "select", SemanticSourceTargetKind::Function);
 
     assert!(
-        rust.contains("pubfnselect<T>(value:T,choose_first:bool)->T"),
+        rust.contains(&format!("pubfn{select}<T,>(value:T,choose_first:bool)->T")),
         "terminal match arms must not narrow the generic signature with Clone:\n{rust}"
     );
     assert_eq!(
@@ -53,7 +60,7 @@ pub def select[T](value: T, choose_first: bool) -> T:
 
 #[test]
 fn generic_value_clones_in_match_arms_when_used_after_match() -> TestResult {
-    let rust = compact_rust(
+    let (generated, rust) = generated_and_compact_rust(
         r#"
 pub def preserve[T](value: T, choose_first: bool) -> T:
     match choose_first:
@@ -64,9 +71,10 @@ pub def preserve[T](value: T, choose_first: bool) -> T:
     return value
 "#,
     )?;
+    let preserve = canonical_projection::projected_name(&generated, "preserve", SemanticSourceTargetKind::Function);
 
     assert!(
-        rust.contains("pubfnpreserve<T:Clone>(value:T,choose_first:bool)->T"),
+        rust.contains(&format!("pubfn{preserve}<T:Clone,>(value:T,choose_first:bool)->T")),
         "a value used after the match must retain the required Clone bound:\n{rust}"
     );
     assert_eq!(
@@ -83,7 +91,7 @@ pub def preserve[T](value: T, choose_first: bool) -> T:
 
 #[test]
 fn guarded_match_arms_retain_conservative_clone_planning() -> TestResult {
-    let rust = compact_rust(
+    let (generated, rust) = generated_and_compact_rust(
         r#"
 pub def guarded[T](value: T, choose_first: bool, admit_first: bool) -> T:
     match choose_first:
@@ -91,9 +99,12 @@ pub def guarded[T](value: T, choose_first: bool, admit_first: bool) -> T:
         case _: return value
 "#,
     )?;
+    let guarded = canonical_projection::projected_name(&generated, "guarded", SemanticSourceTargetKind::Function);
 
     assert!(
-        rust.contains("pubfnguarded<T:Clone>(value:T,choose_first:bool,admit_first:bool)->T"),
+        rust.contains(&format!(
+            "pubfn{guarded}<T:Clone,>(value:T,choose_first:bool,admit_first:bool)->T"
+        )),
         "a guarded arm may fail before a later arm executes, so ownership planning must remain conservative:\n{rust}"
     );
     assert!(

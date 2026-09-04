@@ -10,8 +10,9 @@ use incan::frontend::body_ir::build_body_ir_module_v0;
 use incan::frontend::diagnostics::CompileError;
 use incan::frontend::typechecker::TypeChecker;
 use incan::frontend::{lexer, parser};
-use incan_core::lang::builtins::BuiltinFnId;
+use incan_core::lang::builtins::{self, BuiltinFnId};
 use incan_semantics_core::body_ir::{BodyIrModule, CallableTarget, Callee, StatementKind};
+use incan_semantics_core::{HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin};
 
 /// Lower self-contained source through the checked Body IR consumed by direct execution.
 fn lower_typed_body_ir(source: &str) -> Result<BodyIrModule, Box<dyn std::error::Error>> {
@@ -286,6 +287,56 @@ def source_owned_spelling() -> int:
     )
 }
 
+/// The full call-span builtin fact and callee-span canonical fact agree for checker-recognized iterator builtins.
+#[test]
+fn replacement_retains_enumerate_and_zip_canonical_builtin_identities() -> Result<(), Box<dyn std::error::Error>> {
+    let source = r#"
+def retained_iterator_builtins(values: list[int], labels: list[str]) -> None:
+  enumerated = enumerate(values)
+  paired = zip(values, labels)
+"#;
+    let module = lower_typed_body_ir(source)?;
+    let body = module
+        .bodies
+        .iter()
+        .find(|body| body.name == "retained_iterator_builtins")
+        .ok_or("fixture must lower the selected body")?;
+
+    for expected in [BuiltinFnId::Enumerate, BuiltinFnId::Zip] {
+        let target = body
+            .block
+            .stmts
+            .iter()
+            .find_map(|statement| match &statement.kind {
+                StatementKind::Call {
+                    callee: Callee::Function(CallableTarget::Named(target)),
+                    ..
+                } if target.builtin == Some(expected) => Some(target),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                format!(
+                    "fixture must retain the `{}` builtin target",
+                    builtins::as_str(expected)
+                )
+            })?;
+        let canonical = target.canonical.as_ref().ok_or_else(|| {
+            format!(
+                "`{}` must retain its canonical builtin identity",
+                builtins::as_str(expected)
+            )
+        })?;
+        assert_eq!(canonical.namespace, SymbolNamespace::OrdinaryLexical);
+        assert_eq!(canonical.origin, SymbolOrigin::Builtin);
+        assert_eq!(canonical.declaration_name, builtins::as_str(expected));
+        assert_eq!(canonical.kind, SemanticSourceTargetKind::Builtin);
+        assert_eq!(canonical.scope_discriminant, None);
+        assert_eq!(canonical.declaration_span, HirSourceSpan::new(0, 0));
+        assert!(target.direct_call_id.is_none());
+    }
+    Ok(())
+}
+
 /// A missing retained builtin identity cannot borrow the selected global enumerate execution rule.
 #[test]
 fn replacement_refuses_enumerate_without_its_checked_builtin_identity() -> Result<(), Box<dyn std::error::Error>> {
@@ -317,6 +368,16 @@ def missing_enumerate_identity() -> int:
         .ok_or("fixture must lower enumerate as a named Body-IR target")?;
     assert_eq!(target.builtin, Some(BuiltinFnId::Enumerate));
     assert!(target.direct_call_id.is_none());
+    let canonical = target
+        .canonical
+        .as_ref()
+        .ok_or("checked enumerate call must retain its canonical builtin identity")?;
+    assert_eq!(canonical.namespace, SymbolNamespace::OrdinaryLexical);
+    assert_eq!(canonical.origin, SymbolOrigin::Builtin);
+    assert_eq!(canonical.declaration_name, "enumerate");
+    assert_eq!(canonical.kind, SemanticSourceTargetKind::Builtin);
+    assert_eq!(canonical.scope_discriminant, None);
+    assert_eq!(canonical.declaration_span, HirSourceSpan::new(0, 0));
     target.builtin = None;
 
     assert_direct_refusal_at_call(&module, "missing_enumerate_identity", source, "enumerate(values)")
@@ -379,10 +440,9 @@ def enumerate_nonlist() -> int:
     assert_direct_refusal_at_call(&module, "enumerate_nonlist", source, "enumerate(\"x\")")
 }
 
-/// The explicit builtin namespace remains a retained Body-IR indirect-call refusal, not a direct fallback spelling.
+/// The explicit builtin namespace carries the same checked builtin identity as the ambient spelling.
 #[test]
-fn replacement_refuses_explicit_builtin_namespace_enumerate_at_the_original_call_span()
--> Result<(), Box<dyn std::error::Error>> {
+fn replacement_executes_explicit_builtin_namespace_enumerate() -> Result<(), Box<dyn std::error::Error>> {
     let source = r#"
 def explicit_namespace_enumerate() -> int:
   mut total = 0
@@ -390,13 +450,7 @@ def explicit_namespace_enumerate() -> int:
     total += pair.0
   return total
 "#;
-    let module = lower_typed_body_ir(source)?;
-    assert_direct_refusal_at_call(
-        &module,
-        "explicit_namespace_enumerate",
-        source,
-        "std.builtins.enumerate([1])",
-    )
+    assert_direct_execution(source, "explicit_namespace_enumerate", ReplacementValue::Int(0), b"")
 }
 
 /// Normal main execution preserves program output, receipt identity, and explicit refusal fallback.

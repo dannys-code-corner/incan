@@ -7,7 +7,10 @@ expression: normalized
 // __INCAN_INSERT_MODS__
 
 incan_stdlib::__incan_stdlib_version_check!("<INCAN_STDLIB_VERSION>");
-fn main() -> Result<(), String> {
+fn main() -> Result<
+    (),
+    String,
+> {
     std::panic::set_hook(
         std::boxed::Box::new(|panic_info| {
             if let Some(message) = panic_info.payload().downcast_ref::<&str>() {
@@ -33,4 +36,7 @@ fn main() -> Result<(), String> {
         }
     };
     return Ok::<(), String>(());
+}
+fn main() -> Result<(), String> {
+    main()
 }

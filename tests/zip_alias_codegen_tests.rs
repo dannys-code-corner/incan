@@ -7,6 +7,10 @@ use incan::backend::ir::{
 };
 use incan::backend::{IrCodegen, ir::IrType};
 use incan::frontend::{lexer, parser};
+use incan_semantics_core::SemanticSourceTargetKind;
+
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
@@ -84,8 +88,13 @@ fn generate_rust(source: &str) -> Result<String, std::io::Error> {
 }
 
 /// Return one public generated-Rust function header without its body.
-fn public_function_header<'a>(compact_rust: &'a str, name: &str) -> Result<&'a str, std::io::Error> {
-    let declaration = format!("pubfn{name}");
+fn public_function_header<'a>(
+    compact_rust: &'a str,
+    generated_rust: &str,
+    name: &str,
+) -> Result<&'a str, std::io::Error> {
+    let projection = canonical_projection::projected_name(generated_rust, name, SemanticSourceTargetKind::Function);
+    let declaration = format!("pubfn{projection}");
     let start = compact_rust
         .find(&declaration)
         .ok_or_else(|| std::io::Error::other(format!("generated Rust did not retain public function `{name}`")))?;
@@ -103,6 +112,7 @@ fn assert_zip_alias_preserves_both_bindings(label: &str, source: &str) -> TestRe
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
+    let projection = canonical_projection::projected_name(&rust, label, SemanticSourceTargetKind::Function);
 
     assert!(
         compact.contains("letalias=pairs.clone();"),
@@ -112,10 +122,10 @@ fn assert_zip_alias_preserves_both_bindings(label: &str, source: &str) -> TestRe
         !compact.contains("letalias=pairs;"),
         "{label} must not move the source-accepted Zip value into its alias before the later loop:\n{rust}"
     );
-    let public_function = format!("pubfn{label}");
+    let public_function = format!("pubfn{projection}");
     assert!(
-        compact.contains(&public_function),
-        "{label} must be retained by codegen so this fixture pins the alias assignment:\n{rust}"
+        compact.contains(&public_function) && compact.contains(&format!("as{label};")),
+        "{label} must retain its canonical implementation and Rust-facing alias:\n{rust}"
     );
     Ok(())
 }
@@ -135,9 +145,11 @@ fn generic_alias_assignment_infers_clone_bound_for_later_source_use() -> TestRes
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
+    let projection =
+        canonical_projection::projected_name(&rust, "preserve_generic_alias", SemanticSourceTargetKind::Function);
 
     assert!(
-        compact.contains("pubfnpreserve_generic_alias<T:Clone>"),
+        compact.contains(&format!("pubfn{projection}<T:Clone,>")),
         "a generic source alias that preserves its original binding must infer T: Clone:\n{rust}"
     );
     assert!(
@@ -155,9 +167,11 @@ fn generic_list_index_assignment_infers_clone_bound_for_later_source_use() -> Te
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
+    let projection =
+        canonical_projection::projected_name(&rust, "replace_first_then_preserve", SemanticSourceTargetKind::Function);
 
     assert!(
-        compact.contains("pubfnreplace_first_then_preserve<T:Clone>"),
+        compact.contains(&format!("pubfn{projection}<T:Clone,>")),
         "a generic list-index assignment that preserves its source binding must infer T: Clone:\n{rust}"
     );
     assert!(
@@ -175,7 +189,7 @@ fn generic_alias_assignment_does_not_bind_an_unrelated_type_parameter() -> TestR
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let header = public_function_header(&compact, "preserve_generic_alias_without_unrelated_bound")?;
+    let header = public_function_header(&compact, &rust, "preserve_generic_alias_without_unrelated_bound")?;
 
     assert!(
         header.contains("T:Clone"),
@@ -200,7 +214,7 @@ fn callable_alias_clone_does_not_bind_callable_type_parameters() -> TestResult {
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let header = public_function_header(&compact, "preserve_callable_alias")?;
+    let header = public_function_header(&compact, &rust, "preserve_callable_alias")?;
 
     assert!(
         !header.contains("Clone"),
@@ -221,7 +235,7 @@ fn concrete_string_alias_clone_does_not_bind_enclosing_generic_parameter() -> Te
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let header = public_function_header(&compact, "preserve_text_alias")?;
+    let header = public_function_header(&compact, &rust, "preserve_text_alias")?;
 
     assert!(
         !header.contains("Clone"),
@@ -242,7 +256,7 @@ fn callable_list_alias_clone_does_not_bind_callable_type_parameters() -> TestRes
         .chars()
         .filter(|character| !character.is_whitespace())
         .collect::<String>();
-    let header = public_function_header(&compact, "preserve_callable_list_alias")?;
+    let header = public_function_header(&compact, &rust, "preserve_callable_list_alias")?;
 
     assert!(
         !header.contains("Clone"),

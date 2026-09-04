@@ -2,6 +2,10 @@
 
 use incan::backend::IrCodegen;
 use incan::frontend::{lexer, parser};
+use incan_semantics_core::SemanticSourceTargetKind;
+
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
 
 /// An omitted separator still needs a concrete Rust type for the generic runtime parameter.
 #[test]
@@ -12,9 +16,10 @@ fn omitted_split_separator_has_a_concrete_emitted_type() -> Result<(), Box<dyn s
     let mut codegen = IrCodegen::new();
     codegen.set_externally_reachable_items(std::collections::HashSet::from([String::from("split_default")]));
     let rust = codegen.try_generate(&program)?;
+    let projection = canonical_projection::projected_name(&rust, "split_default", SemanticSourceTargetKind::Function);
     assert!(
-        rust.contains("fn split_default"),
-        "the regression must retain its named entrypoint:\n{rust}"
+        rust.contains(&format!("fn {projection}")) && rust.contains(&format!("use {projection} as split_default;")),
+        "the regression must retain one canonical implementation and its Rust-facing entrypoint alias:\n{rust}"
     );
     assert!(
         rust.contains("None::<&str>"),

@@ -24,6 +24,7 @@ use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_
 use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ResolvedType};
 use crate::frontend::typechecker::{
     FixedUnpackPlan, IdentKind, ResolvedOperatorKind, RustArgCoercionKind, ValidatedNewtypeCoercionMode,
+    ValidatedNewtypeCoercionStep,
 };
 use crate::library_manifest::{
     FunctionExport, LibraryManifest, MethodExport, ParamDefaultCallArgExport, ParamDefaultCallSignatureExport,
@@ -39,6 +40,7 @@ use incan_core::lang::surface::constructors::{self, ConstructorId};
 use incan_core::lang::surface::types as surface_types;
 use incan_core::lang::testing::{self, TestingAssertHelperId};
 use incan_core::lang::types::collections::{self, CollectionTypeId};
+use incan_semantics_core::{SemanticSourceTargetKind, SymbolOrigin};
 
 const TYPE_CONSTRUCTOR_HOOK: &str = "__incan_new";
 const API_CRATE_ROOT_SEGMENT: &str = "crate";
@@ -366,6 +368,57 @@ impl AstLowering {
 
     /// Resolve the canonical imported callee path for identifier and module-qualified calls.
     fn imported_callee_path_for_expr(&self, expr: &ast::Spanned<ast::Expr>) -> Option<Vec<String>> {
+        let is_import_reference = match &expr.node {
+            ast::Expr::Ident(name) => self.import_aliases.contains_key(name),
+            ast::Expr::Field(object, _) => self.imported_field_base_path(&object.node).is_some(),
+            _ => false,
+        };
+        if is_import_reference
+            && let Some(identity) = self
+                .type_info
+                .as_ref()
+                .and_then(|info| info.resolved_identity(expr.span))
+            && matches!(
+                identity.kind,
+                SemanticSourceTargetKind::Function | SemanticSourceTargetKind::Partial
+            )
+        {
+            let mut path = match &identity.origin {
+                SymbolOrigin::Module(module_path) => module_path.clone(),
+                SymbolOrigin::Package { library, module_path } => {
+                    // The package identity proves which declaration this call selects, but the checked import path
+                    // owns the consumer's actual dependency binding. Those names may deliberately differ (for
+                    // example dependency `widgets` backed by package `widgets_core`), so linking must retain the
+                    // source-resolved binding while the function name itself receives the canonical projection.
+                    let checked_path = match &expr.node {
+                        ast::Expr::Ident(name) => self
+                            .type_info
+                            .as_ref()
+                            .and_then(|info| info.import_binding_path(name))
+                            .map(<[String]>::to_vec)
+                            .or_else(|| self.import_aliases.get(name).cloned()),
+                        ast::Expr::Field(object, field) => {
+                            self.imported_field_base_path(&object.node).map(|mut path| {
+                                path.push(field.clone());
+                                path
+                            })
+                        }
+                        _ => None,
+                    };
+                    if let Some(path) = checked_path {
+                        return Some(path);
+                    }
+                    let mut path = vec!["pub".to_string(), library.clone()];
+                    path.extend(module_path.iter().cloned());
+                    path
+                }
+                SymbolOrigin::RustCrate(_) | SymbolOrigin::Builtin => Vec::new(),
+            };
+            if !path.is_empty() {
+                path.push(identity.declaration_name.clone());
+                return Some(path);
+            }
+        }
         if let Some(target) = self.type_info.as_ref().and_then(|info| info.source_target(expr.span))
             && target.module_path.first().map(String::as_str) == Some("pub")
         {
@@ -386,6 +439,49 @@ impl AstLowering {
         }
     }
 
+    /// Restore the public `std.*` spelling for semantic lookup inside an SDK provider source build.
+    ///
+    /// Provider modules are emitted at physical paths such as `fs.path`, but their checked language imports and
+    /// stdlib metadata remain owned by `std.fs.path`. The physical path must continue into Rust linking; only
+    /// signature/default/helper lookup crosses this explicit bootstrap bridge.
+    fn semantic_imported_callee_path(&self, physical_path: &[String]) -> Vec<String> {
+        if self.sdk_provider_build
+            && physical_path.first().map(String::as_str) == Some("pub")
+            && physical_path.get(1).is_some_and(|library| {
+                self.registry_package_identity
+                    .as_ref()
+                    .is_some_and(|current| current == library)
+            })
+        {
+            let mut canonical_path = vec![stdlib::STDLIB_ROOT.to_string()];
+            canonical_path.extend(physical_path.iter().skip(2).cloned());
+            return canonical_path;
+        }
+        if self.sdk_provider_build
+            && physical_path.first().map(String::as_str) != Some(stdlib::STDLIB_ROOT)
+            && physical_path.first().map(String::as_str) != Some("pub")
+            && !physical_path.is_empty()
+        {
+            let mut canonical_module = vec![stdlib::STDLIB_ROOT.to_string()];
+            canonical_module.extend(
+                physical_path
+                    .iter()
+                    .take(physical_path.len().saturating_sub(1))
+                    .cloned(),
+            );
+            if self
+                .provider_plan
+                .as_deref()
+                .is_some_and(|plan| plan.bootstrap_owns_sdk_module(&canonical_module))
+            {
+                let mut canonical_path = vec![stdlib::STDLIB_ROOT.to_string()];
+                canonical_path.extend(physical_path.iter().cloned());
+                return canonical_path;
+            }
+        }
+        physical_path.to_vec()
+    }
+
     /// Resolve the imported module path that roots a field-chain callee such as `widgets.make_widget`.
     fn imported_field_base_path(&self, expr: &ast::Expr) -> Option<Vec<String>> {
         match expr {
@@ -399,11 +495,13 @@ impl AstLowering {
         }
     }
 
-    /// Resolve `module.function(...)` syntax when the receiver is an imported stdlib or public dependency module.
+    /// Resolve `module.function(...)` syntax when the receiver is an imported module and the checker proved that the
+    /// call selects a function declaration rather than an object method.
     pub(in crate::backend::ir::lower) fn imported_module_function_callee_path(
         &self,
         receiver: &ast::Expr,
         method_name: &str,
+        call_span: ast::Span,
     ) -> Option<Vec<String>> {
         let mut path = self.imported_field_base_path(receiver)?;
         match path.first().map(String::as_str) {
@@ -414,7 +512,24 @@ impl AstLowering {
                 public_path.push(method_name.to_string());
                 self.pub_function_export_for_path(library, &public_path)?;
             }
-            _ => return None,
+            _ => {
+                let identity = self
+                    .type_info
+                    .as_ref()?
+                    .resolved_identity(call_span)
+                    .filter(|identity| {
+                        matches!(
+                            identity.kind,
+                            SemanticSourceTargetKind::Function | SemanticSourceTargetKind::Partial
+                        ) && matches!(identity.origin, SymbolOrigin::Module(_))
+                    })?;
+                let SymbolOrigin::Module(module_path) = &identity.origin else {
+                    return None;
+                };
+                path = module_path.clone();
+                path.push(identity.declaration_name.clone());
+                return Some(path);
+            }
         }
         path.push(method_name.to_string());
         Some(path)
@@ -838,6 +953,14 @@ impl AstLowering {
             .provider_plan
             .as_deref()?
             .active_sdk_provider_for_module(module_path)?;
+        if self.sdk_provider_build
+            && self
+                .registry_package_identity
+                .as_ref()
+                .is_some_and(|current| current == &provider.identity.name)
+        {
+            return None;
+        }
         Some(Self::sdk_provider_rust_dependency_key(provider))
     }
 
@@ -1008,6 +1131,60 @@ impl AstLowering {
         let method = Self::api_method_export_for_pub_type(manifest, type_name, method_name)?;
         let signature = self.callable_signature_from_compiled_provider_method_export(&provider_crate, &method);
         Some(self.compiled_provider_external_signature(&provider_crate, signature))
+    }
+
+    /// Resolve a source-stub member selection to the exact symbol exported by its compiled SDK provider.
+    ///
+    /// The frontend may retain the canonical identity of the `std.*` source declaration used for typechecking. Once
+    /// that module is supplied by a compiled provider, however, Rust linking must use the provider package's identity.
+    /// The checked provider manifest is the authority for that projection.
+    pub(in crate::backend::ir::lower) fn compiled_provider_method_reference_name(
+        &self,
+        call_span: ast::Span,
+        receiver_ty: &IrType,
+        method_name: &str,
+    ) -> Option<String> {
+        let source_identity = self.type_info.as_ref()?.resolved_identity(call_span)?;
+        let SymbolOrigin::Module(module_path) = &source_identity.origin else {
+            return None;
+        };
+        let mut provider_module_path = module_path.clone();
+        match provider_module_path.first_mut() {
+            Some(root) if root == stdlib::STDLIB_ROOT => {}
+            Some(root) if root == stdlib::INCAN_STD_NAMESPACE => {
+                *root = stdlib::STDLIB_ROOT.to_string();
+            }
+            _ => return None,
+        }
+        let type_name = Self::nominal_receiver_type_name(receiver_ty)?;
+        let provider_plan = self.provider_plan.as_deref()?;
+        if provider_plan.bootstrap_owns_sdk_module(&provider_module_path) {
+            return None;
+        }
+        let source_module = provider_module_path.get(1..)?;
+        let matches = provider_plan
+            .active_sdk_records()
+            .filter_map(|provider| provider.manifest.as_deref())
+            .filter_map(|manifest| manifest.contract_metadata.api.as_ref())
+            .flat_map(|api| api.modules.iter())
+            .filter(|module| {
+                let candidate = module
+                    .module_path
+                    .strip_prefix(&[stdlib::STDLIB_ROOT.to_string()])
+                    .unwrap_or(module.module_path.as_slice());
+                candidate == source_module
+            })
+            .flat_map(|module| module.declarations.iter())
+            .filter_map(|declaration| Self::api_method_export_for_declaration(declaration, type_name, method_name))
+            .collect::<Vec<_>>();
+        let [method] = matches.as_slice() else {
+            return None;
+        };
+        method
+            .canonical
+            .as_ref()
+            .and_then(|canonical| canonical.hydrate())
+            .map(|identity| incan_semantics_core::encode_incan_symbol_identity(&identity))
     }
 
     /// Resolve an imported public dependency model/class method signature from the provider manifest.
@@ -1502,8 +1679,10 @@ impl AstLowering {
                 .get(&step.newtype_name)
                 .cloned()
                 .unwrap_or_else(|| IrType::Struct(step.newtype_name.clone()));
-            expr = if let Some(ctor) = step.ctor {
-                Self::checked_newtype_match_expr(&step.newtype_name, &ctor, expr, struct_ty)
+            expr = if let Some(source_ctor) = step.ctor.as_deref() {
+                let emitted_ctor =
+                    Self::validated_newtype_ctor_emitted_name(&step).unwrap_or_else(|| source_ctor.to_string());
+                Self::checked_newtype_match_expr(&step.newtype_name, source_ctor, &emitted_ctor, expr, struct_ty)
             } else if !step.constraints.is_empty() {
                 Self::generated_constrained_newtype_expr(&step.newtype_name, &step.constraints, expr, struct_ty)
             } else {
@@ -1520,8 +1699,29 @@ impl AstLowering {
         Ok(expr)
     }
 
+    /// Return the physical Rust method selected for a checked newtype hook without inferring provenance from its
+    /// conventional source spelling.
+    fn validated_newtype_ctor_emitted_name(step: &ValidatedNewtypeCoercionStep) -> Option<String> {
+        let source_name = step.ctor.as_deref()?;
+        step.ctor_identity
+            .as_ref()
+            .filter(|identity| {
+                identity.kind == SemanticSourceTargetKind::Method
+                    && identity.declaration_name == source_name
+                    && matches!(identity.origin, SymbolOrigin::Module(_) | SymbolOrigin::Package { .. })
+            })
+            .map(incan_semantics_core::encode_incan_symbol_identity)
+            .or_else(|| Some(source_name.to_string()))
+    }
+
     /// Build the fail-fast `Result` match used by checked newtype construction and implicit coercion.
-    fn checked_newtype_match_expr(name: &str, ctor: &str, lowered_value: TypedExpr, struct_ty: IrType) -> TypedExpr {
+    fn checked_newtype_match_expr(
+        name: &str,
+        source_ctor: &str,
+        emitted_ctor: &str,
+        lowered_value: TypedExpr,
+        struct_ty: IrType,
+    ) -> TypedExpr {
         let receiver = TypedExpr::new(
             IrExprKind::Var {
                 name: name.to_string(),
@@ -1533,7 +1733,7 @@ impl AstLowering {
         let from_underlying_call = TypedExpr::new(
             IrExprKind::MethodCall {
                 receiver: Box::new(receiver),
-                method: ctor.to_string(),
+                method: emitted_ctor.to_string(),
                 dispatch: None,
                 type_args: Vec::new(),
                 args: vec![IrCallArg {
@@ -1597,7 +1797,7 @@ impl AstLowering {
                             name: None,
                             kind: IrCallArgKind::Positional,
                             expr: TypedExpr::new(
-                                IrExprKind::Literal(IrLiteral::StaticStr(ctor.to_string())),
+                                IrExprKind::Literal(IrLiteral::StaticStr(source_ctor.to_string())),
                                 IrType::StaticStr,
                             ),
                         },
@@ -2360,7 +2560,7 @@ impl AstLowering {
             };
             match arg {
                 ast::CallArg::Named(field_name, _) => {
-                    let canonical = self.resolve_field_alias(name, field_name);
+                    let canonical = self.resolve_field_alias(name, &field_name.node);
                     let Some(coercion) = self.aggregate_field_coercion(value.span) else {
                         fields.push((canonical, raw_var(VarAccess::Move)));
                         continue;
@@ -2371,6 +2571,7 @@ impl AstLowering {
                     let mut final_newtype_name = None;
                     let mut final_ctor_name = None;
                     for (step_idx, step) in coercion.steps.iter().enumerate() {
+                        let emitted_ctor = Self::validated_newtype_ctor_emitted_name(step);
                         let step_ty = self
                             .struct_names
                             .get(&step.newtype_name)
@@ -2382,14 +2583,14 @@ impl AstLowering {
                                 previous_name,
                                 current_ok_ty.clone(),
                                 &step.newtype_name,
-                                step.ctor.as_deref(),
+                                emitted_ctor.as_deref(),
                                 &step.constraints,
                                 step_ty.clone(),
                             )
                         } else {
                             Self::validated_newtype_step_result_expr(
                                 &step.newtype_name,
-                                step.ctor.as_deref(),
+                                emitted_ctor.as_deref(),
                                 &step.constraints,
                                 raw_var(VarAccess::Copy),
                                 step_ty,
@@ -2886,6 +3087,9 @@ impl AstLowering {
                 return self.lower_constructor_call(&canonical_name, type_args, args, call_span);
             }
             if stdlib::is_graph_constructor_type(&constructor_name) && args.is_empty() {
+                let hook_name = self
+                    .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK, true)
+                    .unwrap_or_else(|| TYPE_CONSTRUCTOR_HOOK.to_string());
                 let lowered_type_args = self.lower_call_site_type_args(call_span, type_args);
                 let receiver_ty = if lowered_type_args.is_empty() {
                     IrType::Struct(constructor_name.clone())
@@ -2902,7 +3106,7 @@ impl AstLowering {
                             },
                             receiver_ty.clone(),
                         )),
-                        method: "__incan_new".to_string(),
+                        method: hook_name,
                         dispatch: None,
                         type_args: Vec::new(),
                         args: Vec::new(),
@@ -2977,24 +3181,34 @@ impl AstLowering {
             .as_ref()
             .and_then(|info| info.selected_function_emitted_name(call_span))
             .map(str::to_string);
-        let mut imported_callee_path = self.imported_callee_path_for_expr(f);
-        if let (Some(path), Some(emitted_name)) = (&mut imported_callee_path, &selected_emitted_name)
-            && let Some(last) = path.last_mut()
-        {
-            *last = emitted_name.clone();
-        }
+        let selected_reference_name = self
+            .emitted_function_reference_name(f.span)
+            .or_else(|| selected_emitted_name.clone());
+        // Keep the checked source path available for semantic lookups. RFC 120's emitted projection is a physical
+        // Rust name, not a replacement for the declaration path that owns defaults, parameter types, provider
+        // identity, and compiler-known helper behavior.
+        let imported_callee_path = self.imported_callee_path_for_expr(f);
+        let imported_source_callee_path = imported_callee_path
+            .as_deref()
+            .map(|path| self.semantic_imported_callee_path(path));
+        // Keep this path source-shaped. The emitter resolves its exact physical symbol from compiler-owned package
+        // metadata; replacing the declaration segment here with a source-stub projection would make that lookup miss
+        // the compiled provider identity.
         let mut func = self.lower_expr_spanned(f)?;
         if let (ast::Expr::Ident(_), Some(emitted_name), IrExprKind::Var { name, .. }) =
-            (&f.node, selected_emitted_name.as_deref(), &mut func.kind)
+            (&f.node, selected_reference_name.as_deref(), &mut func.kind)
         {
             *name = emitted_name.to_string();
-            func.ty = self.lookup_var(emitted_name);
         }
         if let Some(resolved_operator) = self
             .type_info
             .as_ref()
             .and_then(|info| info.resolved_operator_call(call_span).cloned())
             && resolved_operator.kind == ResolvedOperatorKind::Len
+            && self
+                .type_info
+                .as_ref()
+                .is_some_and(|info| info.resolved_builtin_call(call_span) == Some(BuiltinFnId::Len))
         {
             let Some(first_arg) = args.first() else {
                 return Ok((
@@ -3006,11 +3220,18 @@ impl AstLowering {
                 ));
             };
             let receiver = self.lower_expr_spanned(Self::call_arg_expr(first_arg))?;
+            let dispatch = self
+                .type_info
+                .as_ref()
+                .and_then(|info| info.resolved_method_call(call_span).cloned())
+                .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &receiver));
+            let (method, dispatch) =
+                self.project_resolved_method_target(call_span, &resolved_operator.method, &receiver, dispatch);
             return Ok((
                 IrExprKind::MethodCall {
                     receiver: Box::new(receiver),
-                    method: resolved_operator.method,
-                    dispatch: None,
+                    method,
+                    dispatch,
                     type_args: Vec::new(),
                     args: Vec::new(),
                     callable_signature: self.callable_signature_for_call_span(call_span),
@@ -3021,7 +3242,7 @@ impl AstLowering {
         }
         if let ast::Expr::Ident(name) = &f.node
             && let Some(builtin) = BuiltinFn::from_name(name)
-            && imported_callee_path.is_none()
+            && imported_source_callee_path.is_none()
             && self
                 .type_info
                 .as_ref()
@@ -3044,7 +3265,7 @@ impl AstLowering {
         let mut args_ir = self.lower_call_args(args)?;
         self.materialize_external_partial_presets(f, source_args, &mut args_ir);
         if args_ir.is_empty()
-            && imported_callee_path
+            && imported_source_callee_path
                 .as_ref()
                 .is_some_and(|path| path.as_slice() == ["std", "logging", "get_logger"])
         {
@@ -3063,7 +3284,7 @@ impl AstLowering {
             let arg_span = Self::call_arg_expr(arg_ast).span;
             arg_ir.expr = self.wrap_with_rust_arg_coercion(arg_ir.expr.clone(), arg_span)?;
         }
-        if imported_callee_path
+        if imported_source_callee_path
             .as_ref()
             .is_some_and(|path| testing::is_assert_helper_std_path(path, TestingAssertHelperId::AssertRaises))
             && args_ir
@@ -3093,7 +3314,7 @@ impl AstLowering {
             .as_ref()
             .and_then(|info| info.resolved_operator_call(call_span).cloned())
             && resolved_operator.kind == ResolvedOperatorKind::Call
-            && imported_callee_path.is_none()
+            && imported_source_callee_path.is_none()
         {
             let ret_ty = self
                 .type_info
@@ -3101,11 +3322,18 @@ impl AstLowering {
                 .and_then(|info| info.expr_type(call_span))
                 .map(|ty| self.lower_resolved_type(ty))
                 .unwrap_or(IrType::Unknown);
+            let dispatch = self
+                .type_info
+                .as_ref()
+                .and_then(|info| info.resolved_method_call(call_span).cloned())
+                .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &func));
+            let (method, dispatch) =
+                self.project_resolved_method_target(call_span, &resolved_operator.method, &func, dispatch);
             return Ok((
                 IrExprKind::MethodCall {
                     receiver: Box::new(func),
-                    method: resolved_operator.method,
-                    dispatch: None,
+                    method,
+                    dispatch,
                     type_args: Vec::new(),
                     args: args_ir,
                     callable_signature: self.callable_signature_for_call_span(call_span),
@@ -3114,7 +3342,7 @@ impl AstLowering {
                 ret_ty,
             ));
         }
-        if imported_callee_path.is_none()
+        if imported_source_callee_path.is_none()
             && let ast::Expr::Ident(name) = &f.node
             && let Some(signature) = self.lookup_nominal_callable(name)
         {
@@ -3141,7 +3369,7 @@ impl AstLowering {
             ast::Expr::Partial(_) => self.partial_expr_signature_for_span(f.span),
             _ => None,
         };
-        let callable_signature = imported_callee_path
+        let callable_signature = imported_source_callee_path
             .as_deref()
             .map(|path| {
                 Ok(self
@@ -3154,14 +3382,14 @@ impl AstLowering {
             .or(local_callable_signature)
             .or_else(|| self.callable_signature_for_callee_span(f.span));
         let callable_signature = self.refine_function_typed_local_call(&mut func, &args_ir, callable_signature);
-        let imported_pub_library = imported_callee_path.as_deref().and_then(|path| {
+        let imported_pub_library = imported_source_callee_path.as_deref().and_then(|path| {
             if path.first().is_some_and(|segment| segment == "pub") {
                 path.get(1)
             } else {
                 None
             }
         });
-        let imported_sdk_provider_crate = imported_callee_path.as_deref().and_then(|path| {
+        let imported_sdk_provider_crate = imported_source_callee_path.as_deref().and_then(|path| {
             (path.first().map(String::as_str) == Some(stdlib::STDLIB_ROOT) && path.len() >= 2)
                 .then(|| self.sdk_provider_crate_for_module(&path[..path.len() - 1]))
                 .flatten()
@@ -3247,7 +3475,7 @@ impl AstLowering {
         let mut by_name = merged
             .into_iter()
             .filter_map(|arg| match arg {
-                ast::CallArg::Named(name, value) => Some((name, value)),
+                ast::CallArg::Named(name, value) => Some((name.node.clone(), (name, value))),
                 _ => None,
             })
             .collect::<HashMap<_, _>>();
@@ -3256,14 +3484,14 @@ impl AstLowering {
             let Some(name) = param.name.as_deref() else {
                 continue;
             };
-            if let Some(value) = by_name.remove(name) {
-                ordered.push(ast::CallArg::Named(name.to_string(), value));
+            if let Some((label, value)) = by_name.remove(name) {
+                ordered.push(ast::CallArg::Named(label, value));
             }
         }
         ordered.extend(
             by_name
                 .into_iter()
-                .map(|(name, value)| ast::CallArg::Named(name, value)),
+                .map(|(_, (name, value))| ast::CallArg::Named(name, value)),
         );
         Some(ordered)
     }
@@ -3292,7 +3520,7 @@ impl AstLowering {
         for preset in projection.presets {
             if source_args
                 .iter()
-                .any(|arg| matches!(arg, ast::CallArg::Named(name, _) if name == &preset.name))
+                .any(|arg| matches!(arg, ast::CallArg::Named(name, _) if name.node == preset.name))
             {
                 continue;
             }
@@ -3402,10 +3630,10 @@ impl AstLowering {
                     ast::CallArg::Positional(expr) => {
                         message = Some(self.lower_expr_spanned(expr)?);
                     }
-                    ast::CallArg::Named(field, expr) if field == "message" => {
+                    ast::CallArg::Named(field, expr) if field.node == "message" => {
                         message = Some(self.lower_expr_spanned(expr)?);
                     }
-                    ast::CallArg::Named(field, expr) if field == "code" => {
+                    ast::CallArg::Named(field, expr) if field.node == "code" => {
                         code = Some(self.lower_expr_spanned(expr)?);
                     }
                     ast::CallArg::Named(_, expr)
@@ -3464,11 +3692,14 @@ impl AstLowering {
         }
 
         // Apply the canonical checked-construction hook before ordinary tuple construction.
-        if let Some(ctor) = self
-            .newtype_construction
-            .get(name)
-            .and_then(|plan| plan.checked_constructor.clone())
-            && args.len() == 1
+        if let Some((ctor, source_ctor)) = self.newtype_construction.get(name).and_then(|plan| {
+            let ctor = plan.checked_constructor.clone()?;
+            let source_ctor = plan
+                .checked_constructor_source_name
+                .clone()
+                .unwrap_or_else(|| ctor.clone());
+            Some((ctor, source_ctor))
+        }) && args.len() == 1
             && matches!(args[0], ast::CallArg::Positional(_))
             && self.current_impl_type.as_deref() != Some(name)
         {
@@ -3478,7 +3709,7 @@ impl AstLowering {
             let lowered_value = self.lower_expr_spanned(value)?;
             // Keep the failure path local to generated code: the Err branch still panics, but we no longer emit an
             // `.expect()` extraction in the generated Rust.
-            let checked = Self::checked_newtype_match_expr(name, &ctor, lowered_value, struct_ty.clone());
+            let checked = Self::checked_newtype_match_expr(name, &source_ctor, &ctor, lowered_value, struct_ty.clone());
             return Ok((checked.kind, struct_ty));
         }
         if let Some(constraints) = self
@@ -3508,7 +3739,7 @@ impl AstLowering {
                 ast::CallArg::Named(field_name, value) => {
                     let lowered_value = self.lower_expr_spanned(value)?;
                     // RFC 021: map alias → canonical field name
-                    let canonical = self.resolve_field_alias(&struct_name, field_name);
+                    let canonical = self.resolve_field_alias(&struct_name, &field_name.node);
                     Ok((canonical, lowered_value))
                 }
                 ast::CallArg::Positional(value) => {
@@ -3578,6 +3809,9 @@ impl AstLowering {
             IrType::NamedGeneric(name.to_string(), lowered_type_args)
         };
         let ret_ty = self.lower_type(&hook.return_type.node);
+        let hook_name = self
+            .emitted_method_reference_name(call_span, TYPE_CONSTRUCTOR_HOOK, true)
+            .unwrap_or_else(|| TYPE_CONSTRUCTOR_HOOK.to_string());
         Ok(Some((
             IrExprKind::MethodCall {
                 receiver: Box::new(TypedExpr::new(
@@ -3588,7 +3822,7 @@ impl AstLowering {
                     },
                     receiver_ty,
                 )),
-                method: TYPE_CONSTRUCTOR_HOOK.to_string(),
+                method: hook_name,
                 dispatch: None,
                 type_args: Vec::new(),
                 args: args_ir,
@@ -3609,7 +3843,7 @@ impl AstLowering {
         };
         !args.is_empty()
             && args.iter().all(|arg| match arg {
-                ast::CallArg::Named(field, _) => fields.contains_key(field),
+                ast::CallArg::Named(field, _) => fields.contains_key(&field.node),
                 _ => false,
             })
     }
@@ -3630,7 +3864,7 @@ impl AstLowering {
                     expr: self.lower_expr_spanned(e)?,
                 }),
                 ast::CallArg::Named(name, e) => lowered.push(IrCallArg {
-                    name: Some(name.clone()),
+                    name: Some(name.node.clone()),
                     kind: IrCallArgKind::Named,
                     expr: self.lower_expr_spanned(e)?,
                 }),
@@ -3766,8 +4000,8 @@ mod tests {
     };
     use crate::library_manifest::{
         AliasExport, CompiledProviderMetadata, ExportIdentity, ExportIdentityKind, ExportIdentityProjection,
-        FunctionExport, LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION, LibraryExports, LibraryIdentityGraph, LibraryManifest,
-        ParamDefaultExport, ParamExport, ParamKindExport, ProviderModuleClaim, TypeRef,
+        FunctionExport, LEGACY_LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION, LibraryExports, LibraryIdentityGraph,
+        LibraryManifest, ParamDefaultExport, ParamExport, ParamKindExport, ProviderModuleClaim, TypeRef,
     };
     use crate::provider::ProviderPlan;
     use incan_core::interop::CoercionPolicy;
@@ -3807,6 +4041,61 @@ mod tests {
     }
 
     #[test]
+    fn sdk_provider_physical_call_path_restores_std_identity_for_semantic_lookup() {
+        let mut lowering = AstLowering::new();
+        lowering.set_sdk_provider_build(true);
+        lowering.set_registry_package_identity(Some("incan_stdlib_system".to_string()));
+        lowering.set_provider_plan(Some(Arc::new(
+            ProviderPlan::default().with_bootstrap_sdk_namespace_roots(["fs".to_string()]),
+        )));
+
+        assert_eq!(
+            lowering.semantic_imported_callee_path(&["fs".to_string(), "path".to_string(), "_io_error".to_string(),]),
+            [
+                "std".to_string(),
+                "fs".to_string(),
+                "path".to_string(),
+                "_io_error".to_string(),
+            ]
+        );
+        assert_eq!(
+            lowering.semantic_imported_callee_path(&[
+                "pub".to_string(),
+                "incan_stdlib_system".to_string(),
+                "fs".to_string(),
+                "path".to_string(),
+                "_io_error".to_string(),
+            ]),
+            [
+                "std".to_string(),
+                "fs".to_string(),
+                "path".to_string(),
+                "_io_error".to_string(),
+            ]
+        );
+        assert_eq!(
+            lowering.semantic_imported_callee_path(&[
+                "pub".to_string(),
+                "incan_stdlib_core".to_string(),
+                "traits".to_string(),
+                "convert".to_string(),
+                "try_from".to_string(),
+            ]),
+            [
+                "pub".to_string(),
+                "incan_stdlib_core".to_string(),
+                "traits".to_string(),
+                "convert".to_string(),
+                "try_from".to_string(),
+            ]
+        );
+        assert_eq!(
+            lowering.semantic_imported_callee_path(&["helpers".to_string(), "convert".to_string()]),
+            ["helpers".to_string(), "convert".to_string()]
+        );
+    }
+
+    #[test]
     fn qualified_partial_expands_presets_without_a_callable_snapshot_issue948() -> Result<(), String> {
         let span = Span::new(1, 24);
         let preset = Spanned::new(Expr::Literal(Literal::String("preset".to_string())), Span::new(25, 33));
@@ -3841,7 +4130,7 @@ mod tests {
         let [CallArg::Named(name, value)] = args.as_slice() else {
             return Err(format!("expected one named preset, got {args:?}"));
         };
-        assert_eq!(name, "size");
+        assert_eq!(name.node, "size");
         assert!(matches!(value.node, Expr::Literal(Literal::String(ref value)) if value == "preset"));
 
         let mut lowered = lowering
@@ -4001,7 +4290,7 @@ mod tests {
             public_namespaces: Vec::new(),
         });
         manifest.contract_metadata.identity_graph = LibraryIdentityGraph {
-            schema_version: LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION,
+            schema_version: LEGACY_LIBRARY_IDENTITY_GRAPH_SCHEMA_VERSION,
             exports: vec![ExportIdentity {
                 public_name: "safe_cast".to_string(),
                 public_path: vec!["mylib".to_string(), "safe_cast".to_string()],
@@ -4010,6 +4299,7 @@ mod tests {
                 projection: ExportIdentityProjection::Alias {
                     target_path: vec!["helpers".to_string(), "cast".to_string()],
                 },
+                canonical: None,
             }],
         };
 
@@ -4089,7 +4379,11 @@ mod tests {
         );
 
         assert_eq!(
-            lowering.imported_module_function_callee_path(&Expr::Ident("hyperquant".to_string()), "default_index"),
+            lowering.imported_module_function_callee_path(
+                &Expr::Ident("hyperquant".to_string()),
+                "default_index",
+                Span::default(),
+            ),
             Some(vec![
                 "pub".to_string(),
                 "modulelib".to_string(),
@@ -4185,7 +4479,11 @@ mod tests {
             vec!["std".to_string(), "artifact_only".to_string()],
         );
         assert_eq!(
-            lowering.imported_module_function_callee_path(&Expr::Ident("artifact".to_string()), "consume"),
+            lowering.imported_module_function_callee_path(
+                &Expr::Ident("artifact".to_string()),
+                "consume",
+                Span::default(),
+            ),
             Some(vec![
                 "std".to_string(),
                 "artifact_only".to_string(),
@@ -4321,7 +4619,7 @@ mod tests {
             Box::new(Spanned::new(Expr::Ident("FunctionOption".to_string()), callee_span)),
             Vec::new(),
             vec![CallArg::Named(
-                "name".to_string(),
+                Spanned::new("name".to_string(), arg_span),
                 Spanned::new(Expr::Ident("OPTION_NAME".to_string()), arg_span),
             )],
         );

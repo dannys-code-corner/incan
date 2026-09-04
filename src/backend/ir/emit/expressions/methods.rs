@@ -25,7 +25,7 @@ use incan_core::interop::{
     MetadataFreeReceiverClass, RustCollectionFamily,
 };
 use incan_core::lang::surface::result_methods::{self, ResultMethodId};
-use incan_core::lang::{magic_methods, trait_bounds::rust as tb};
+use incan_core::lang::{magic_methods, stdlib, trait_bounds::rust as tb};
 
 mod collection_methods;
 mod fast_paths;
@@ -210,9 +210,9 @@ impl<'a> IrEmitter<'a> {
             ResultMethodId::Map | ResultMethodId::MapErr | ResultMethodId::AndThen | ResultMethodId::OrElse => {
                 if self.result_value_combinator_can_use_stdlib_helper(callback) {
                     let callback_tokens = self.emit_expr(callback)?;
-                    let helper_path = Self::result_stdlib_helper_path();
+                    let helper_path = self.result_stdlib_helper(method)?;
                     return Ok(quote! {
-                        #helper_path::#method_ident(#receiver_tokens, #callback_tokens)
+                        #helper_path(#receiver_tokens, #callback_tokens)
                     });
                 }
                 if matches!(callback.kind, IrExprKind::Closure { .. }) {
@@ -234,9 +234,9 @@ impl<'a> IrEmitter<'a> {
                 };
                 if self.result_observer_can_use_stdlib_helper(callback) {
                     let callback_tokens = self.emit_result_observer_stdlib_callback_arg(callback, &observed_ty)?;
-                    let helper_path = Self::result_stdlib_helper_path();
+                    let helper_path = self.result_stdlib_helper(method)?;
                     return Ok(quote! {
-                        #helper_path::#method_ident(#receiver_tokens, #callback_tokens)
+                        #helper_path(#receiver_tokens, #callback_tokens)
                     });
                 }
                 let body = self.emit_result_observer_callback_call(callback, &observed_ty)?;
@@ -255,11 +255,19 @@ impl<'a> IrEmitter<'a> {
         Ok(call)
     }
 
-    /// Return the Result helper module for the current generated crate.
-    ///
-    /// Consumers link the compiled stdlib artifact; artifact builds use the crate-local compatibility facade.
-    fn result_stdlib_helper_path() -> TokenStream {
-        quote! { crate::__incan_std::result }
+    /// Return the exact compiler-projected Result helper for the current generated crate.
+    fn result_stdlib_helper(&self, method: ResultMethodId) -> Result<TokenStream, EmitError> {
+        let path = vec![
+            stdlib::STDLIB_ROOT.to_string(),
+            "result".to_string(),
+            result_methods::as_str(method).to_string(),
+        ];
+        self.emit_canonical_callee_path(&path, false)?.ok_or_else(|| {
+            EmitError::Unsupported(format!(
+                "cannot resolve canonical std.result.{} helper path",
+                result_methods::as_str(method)
+            ))
+        })
     }
 
     /// Return whether a value-transforming Result combinator can dogfood the pure Incan std.result helper.
@@ -1032,7 +1040,10 @@ impl<'a> IrEmitter<'a> {
                 _ => None,
             };
             let has_incan_method_signature = matches!(arg_policy, MethodCallArgPolicy::SourceOwned)
-                || matches!(dispatch, Some(IrMethodDispatch::Trait(_)))
+                || matches!(
+                    dispatch,
+                    Some(IrMethodDispatch::Trait(_) | IrMethodDispatch::SourceProjection(_))
+                )
                 || self
                     .method_signature_for_receiver(&rewritten_receiver.ty, method)
                     .is_some();
@@ -1267,7 +1278,10 @@ impl<'a> IrEmitter<'a> {
             _ => None,
         };
         let has_incan_method_signature = matches!(arg_policy, MethodCallArgPolicy::SourceOwned)
-            || matches!(dispatch, Some(IrMethodDispatch::Trait(_)))
+            || matches!(
+                dispatch,
+                Some(IrMethodDispatch::Trait(_) | IrMethodDispatch::SourceProjection(_))
+            )
             || self.method_signature_for_receiver(&receiver.ty, method).is_some();
         let preserve_lookup_arg_shape = matches!(arg_policy, MethodCallArgPolicy::PreserveShape)
             || rust_collection_family_for_ir_type(&receiver.ty)
@@ -1294,9 +1308,22 @@ impl<'a> IrEmitter<'a> {
                 base_use_site: use_site,
                 result_target_ty,
                 infer_unresolved_generic_args: type_args.is_empty(),
-                preserve_incan_int_count: matches!(dispatch, Some(IrMethodDispatch::Trait(trait_dispatch)) if !trait_dispatch_requires_ufcs(&trait_dispatch.trait_path)),
+                preserve_incan_int_count: matches!(dispatch, Some(IrMethodDispatch::SourceProjection(_)))
+                    || matches!(
+                            dispatch,
+                            Some(IrMethodDispatch::Trait(trait_dispatch))
+                                if !trait_dispatch_requires_ufcs(&trait_dispatch.trait_path)
+                    ),
             },
         )?;
+        // A struct literal cannot appear bare as a method-call receiver in every Rust expression context. In
+        // particular, `match Struct { .. }.method()` is parsed as match arms rather than a call on the temporary.
+        // Parenthesize that receiver shape before attaching the projected method.
+        let r = if matches!(receiver.kind, IrExprKind::Struct { .. }) {
+            quote! { (#r) }
+        } else {
+            quote! { #r }
+        };
         Ok(quote! { #r.#m #method_turbofish (#(#arg_tokens),*) })
     }
 

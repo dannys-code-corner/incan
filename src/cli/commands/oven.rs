@@ -99,7 +99,7 @@ pub const OVEN_COMPILER_TEST_JOBS_ENV: &str = "INCAN_OVEN_COMPILER_TEST_JOBS";
 /// A root that exceeds this limit is a suite failure with its partial libtest transcript retained; it must not hold
 /// the complete worker pool indefinitely on one host-specific child process.
 ///
-/// Constrained hosted MSRV runners can require more than fifteen minutes for the two largest integration roots even
+/// Constrained hosted runners can require more than fifteen minutes for the two largest integration roots even
 /// though prepared reference-machine replay remains inside the five-minute suite budget. The unsharded release
 /// evidence workflow (`oven_evidence.yml`) runs every root in one job rather than the four-way split the ordinary
 /// CI workflow uses, so its two largest roots (`cli_integration`, `integration_tests`) have repeatedly needed more

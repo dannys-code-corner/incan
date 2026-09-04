@@ -44,7 +44,9 @@ use crate::frontend::body_ir::{
     is_direct_replacement_value_enum,
 };
 use crate::frontend::contract_metadata::{ContractMetadataPackage, read_project_model_bundles};
-use crate::frontend::library_exports::{CheckedExportKind, CheckedNamedExport, collect_checked_public_exports};
+use crate::frontend::library_exports::{
+    CheckedExportKind, CheckedNamedExport, LibraryExportBindingRegistry, collect_checked_public_exports,
+};
 use crate::frontend::library_manifest_index::{
     LibraryArtifactKind, LibraryArtifactMetadata, LibraryManifestIndex, LibraryManifestIndexEntry,
     dependency_project_root, load_provider_dependency_artifact,
@@ -132,9 +134,9 @@ use super::common::{
     cargo_command_flags, collect_incan_source_files, collect_modules_detailed_with_session,
     collect_project_requirements, collect_rust_dependency_uses, discover_effective_project_manifest,
     effective_project_manifest_for_exact_root, enforce_project_toolchain_constraint,
-    extend_requirements_with_provider_plan, format_dependency_error, imported_module_deps_for_with_index,
-    merge_project_requirement_dependencies, module_key_index, render_module_warnings, resolve_project_root,
-    resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
+    extend_requirements_with_provider_plan, format_dependency_error, imported_module_deps_for_with_provider_plan,
+    merge_project_requirement_dependencies, module_key_index, register_module_path_segments, render_module_warnings,
+    resolve_project_root, resolve_source_root, semantic_sdk_path_dependencies, validate_output_dir,
 };
 #[cfg(feature = "rust_inspect")]
 use super::common::{
@@ -2999,6 +3001,31 @@ fn rename_checked_export(export: &CheckedNamedExport, exported_name: &str) -> Ch
     renamed
 }
 
+/// Project a checked provider export through the entrypoint binding that actually re-exports it.
+///
+/// The provider export retains the concrete declaration shape (model, trait, function, and so on), while the
+/// entrypoint's checked export owns the re-export path and target identity. Combining those two checked products
+/// avoids relabeling a renamed declaration as a direct export whose public name no longer matches its canonical
+/// declaration.
+fn project_checked_reexport(
+    export: &CheckedNamedExport,
+    exported_name: &str,
+    entrypoint_exports: Option<&HashMap<String, Vec<CheckedNamedExport>>>,
+) -> CheckedNamedExport {
+    let mut projected = rename_checked_export(export, exported_name);
+    let Some(candidates) = entrypoint_exports.and_then(|exports| exports.get(exported_name)) else {
+        return projected;
+    };
+    let checked_projection = candidates
+        .iter()
+        .find(|candidate| candidate.identity.canonical == export.identity.canonical)
+        .or_else(|| (candidates.len() == 1).then(|| &candidates[0]));
+    if let Some(checked_projection) = checked_projection {
+        projected.identity = checked_projection.identity.clone();
+    }
+    projected
+}
+
 /// Group checked exports by public source name while preserving same-name function overload entries.
 fn checked_exports_by_name(exports: Vec<CheckedNamedExport>) -> HashMap<String, Vec<CheckedNamedExport>> {
     let mut grouped: HashMap<String, Vec<CheckedNamedExport>> = HashMap::new();
@@ -3085,13 +3112,14 @@ impl<'a> LibraryReexportResolver<'a> {
     ) -> Result<Vec<CheckedNamedExport>, Vec<crate::frontend::diagnostics::CompileError>> {
         let mut errors = Vec::new();
         let mut resolved = Vec::new();
-        let mut exported_names: HashSet<String> = HashSet::new();
+        let mut exported_names = LibraryExportBindingRegistry::default();
         let known_modules: Vec<String> = self.module_exports.keys().cloned().collect();
+        let entrypoint_exports = self.module_exports.get(&module_key(&lib_module.path_segments));
 
         if let Some(exports_by_name) = self.module_exports.get(&module_key(&lib_module.path_segments)) {
             for (export_name, export_span) in Self::direct_public_exports(lib_module) {
-                if !exported_names.insert(export_name.clone()) {
-                    errors.push(diagnostics::errors::duplicate_library_export(&export_name, export_span));
+                if let Err(error) = exported_names.register(&export_name, export_span) {
+                    errors.push(error);
                     continue;
                 }
                 if let Some(exports) = exports_by_name.get(&export_name) {
@@ -3129,8 +3157,8 @@ impl<'a> LibraryReexportResolver<'a> {
 
                 for item in items {
                     let exported_name = item.alias.as_ref().unwrap_or(&item.name).clone();
-                    if !exported_names.insert(exported_name.clone()) {
-                        errors.push(diagnostics::errors::duplicate_library_export(&exported_name, decl.span));
+                    if let Err(error) = exported_names.register(&exported_name, decl.span) {
+                        errors.push(error);
                         continue;
                     }
 
@@ -3166,8 +3194,8 @@ impl<'a> LibraryReexportResolver<'a> {
 
             for item in items {
                 let exported_name = item.alias.as_ref().unwrap_or(&item.name).clone();
-                if !exported_names.insert(exported_name.clone()) {
-                    errors.push(diagnostics::errors::duplicate_library_export(&exported_name, decl.span));
+                if let Err(error) = exported_names.register(&exported_name, decl.span) {
+                    errors.push(error);
                     continue;
                 }
 
@@ -3185,7 +3213,7 @@ impl<'a> LibraryReexportResolver<'a> {
                 resolved.extend(
                     exports
                         .iter()
-                        .map(|export| rename_checked_export(export, &exported_name)),
+                        .map(|export| project_checked_reexport(export, &exported_name, entrypoint_exports)),
                 );
             }
         }
@@ -10020,16 +10048,23 @@ fn prepare_library_project(
     let typecheck_start = Instant::now();
     let mut all_errors = String::new();
     let mut checked_exports_by_module: HashMap<String, HashMap<String, Vec<CheckedNamedExport>>> = HashMap::new();
+    let mut checked_exports_by_source_module: Vec<(Vec<String>, Vec<CheckedNamedExport>)> = Vec::new();
     let mut api_metadata_modules = Vec::new();
     let module_idx_by_key = module_key_index(&modules);
     let mut stdlib_cache = StdlibAstCache::new();
     let mut checked_type_info_by_path = BTreeMap::new();
 
     for (idx, module) in modules.iter().enumerate() {
-        let deps_for_module = imported_module_deps_for_with_index(&modules, idx, &module_idx_by_key);
+        let deps_for_module =
+            imported_module_deps_for_with_provider_plan(&modules, idx, &module_idx_by_key, &provider_plan);
         let mut checker = typechecker::TypeChecker::new();
         checker.stdlib_cache = stdlib_cache.clone();
+        checker.set_current_package_identity(crate::frontend::module::declaration_package_identity(
+            Some(&project_name),
+            Some(&module.path_segments),
+        ));
         checker.set_current_module_path(Some(module.path_segments.clone()));
+        register_module_path_segments(&mut checker, &modules);
         checker.set_declared_crate_names(declared.clone());
         checker.set_provider_plan(Arc::clone(&provider_plan));
         #[cfg(feature = "rust_inspect")]
@@ -10056,6 +10091,7 @@ fn prepare_library_project(
                     &checker,
                     module.path_segments.clone(),
                 ));
+                checked_exports_by_source_module.push((module.path_segments.clone(), module_exports.clone()));
                 checked_exports_by_module.insert(
                     module_key(&module.path_segments),
                     checked_exports_by_name(module_exports),
@@ -10177,6 +10213,11 @@ fn prepare_library_project(
     };
     materialize_checked_api_public_namespaces(&mut checked_api)
         .map_err(|error| CliError::failure(format!("failed to publish checked module namespaces: {error}")))?;
+    library_manifest
+        .contract_metadata
+        .identity_graph
+        .extend_checked_api_exports(&project_name, &checked_api, &checked_exports_by_source_module)
+        .map_err(|error| CliError::failure(format!("failed to publish checked module identities: {error}")))?;
     library_manifest.contract_metadata.api = Some(checked_api);
     library_manifest.contract_metadata.provider = compiled_provider_metadata(CompiledProviderMetadataInputs {
         manifest: &manifest,
@@ -10218,6 +10259,7 @@ fn prepare_library_project(
     let mut codegen = IrCodegen::new();
     codegen.set_preserve_dependency_public_items(true);
     codegen.set_registry_package_identity(Some(project_name.clone()));
+    codegen.set_canonical_emission_package_identity(Some(project_name.clone()));
     codegen.set_root_source_module_name(
         lib_module
             .file_path
@@ -17502,6 +17544,22 @@ impl ChildId {
             "widgets".to_string(),
             HashMap::from([(widget_export.name.clone(), vec![widget_export])]),
         );
+        let public_widget_projection = CheckedNamedExport {
+            name: "PublicWidget".to_string(),
+            identity: CheckedExportIdentity::reexport(
+                vec!["widgets".to_string(), "Widget".to_string()],
+                vec!["widgets".to_string(), "Widget".to_string()],
+            ),
+            kind: CheckedExportKind::Alias(crate::frontend::library_exports::CheckedAliasExport {
+                name: "PublicWidget".to_string(),
+                target_path: vec!["widgets".to_string(), "Widget".to_string()],
+                projected_function: None,
+            }),
+        };
+        module_exports.insert(
+            "main".to_string(),
+            HashMap::from([("PublicWidget".to_string(), vec![public_widget_projection])]),
+        );
 
         let resolved = LibraryReexportResolver::new(&module_exports)
             .resolve(&lib_module)
@@ -17512,6 +17570,13 @@ impl ChildId {
             CheckedExportKind::TypeAlias(alias) => assert_eq!(alias.name, "PublicWidget"),
             _ => panic!("expected type alias export"),
         }
+        assert!(
+            matches!(
+                resolved[0].identity.projection,
+                crate::frontend::library_exports::CheckedExportProjection::Reexport { .. }
+            ),
+            "the package-root export must retain the checked entrypoint re-export projection"
+        );
         Ok(())
     }
 

@@ -10,3 +10,4 @@ incan_stdlib::__incan_stdlib_version_check!("<INCAN_STDLIB_VERSION>");
 pub fn empty_dict() -> std::collections::HashMap<String, i64> {
     return std::collections::HashMap::new();
 }
+pub use empty_dict as empty_dict;

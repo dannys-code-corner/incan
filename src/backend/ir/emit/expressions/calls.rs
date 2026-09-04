@@ -720,7 +720,10 @@ impl<'a> IrEmitter<'a> {
         {
             self.emit_expr(func)?
         } else if let Some(path) = canonical_path {
-            self.emit_canonical_callee_path(path)?.unwrap_or(self.emit_expr(func)?)
+            let materialize_internal_path =
+                *self.qualify_internal_canonical_paths.borrow() || Self::callee_is_imported_module_path(func);
+            self.emit_canonical_callee_path(path, materialize_internal_path)?
+                .unwrap_or(self.emit_expr(func)?)
         } else {
             self.emit_expr(func)?
         };
@@ -1032,9 +1035,7 @@ impl<'a> IrEmitter<'a> {
     fn callee_is_imported_module_path(func: &TypedExpr) -> bool {
         match &func.kind {
             IrExprKind::Field { object, .. } => Self::callee_is_imported_module_path(object),
-            IrExprKind::Var { ref_kind, .. } => {
-                matches!(ref_kind, VarRefKind::ExternalName | VarRefKind::ExternalRustName)
-            }
+            IrExprKind::Var { ref_kind, .. } => matches!(ref_kind, VarRefKind::ExternalName),
             _ => false,
         }
     }
@@ -1238,7 +1239,11 @@ impl<'a> IrEmitter<'a> {
     /// Canonical stdlib calls route through the generated `crate::__incan_std` module. Canonical calls to internal
     /// source modules route through an explicit `crate::...` path so imported helper calls remain valid when default
     /// argument expressions are expanded outside the defining module.
-    fn emit_canonical_callee_path(&self, canonical_path: &[String]) -> Result<Option<TokenStream>, EmitError> {
+    pub(in super::super) fn emit_canonical_callee_path(
+        &self,
+        canonical_path: &[String],
+        materialize_internal_path: bool,
+    ) -> Result<Option<TokenStream>, EmitError> {
         if canonical_path.len() < 2 {
             return Ok(None);
         }
@@ -1294,8 +1299,17 @@ impl<'a> IrEmitter<'a> {
             }
             segments
         } else if module_path.first().map(String::as_str) == Some("pub") {
-            let mut segments = Vec::new();
-            for seg in module_path.iter().skip(1) {
+            let is_current_package = module_path.get(1).is_some_and(|library| {
+                self.current_package_identity
+                    .as_ref()
+                    .is_some_and(|current| current == library)
+            });
+            let mut segments = if is_current_package {
+                vec![quote! { crate }]
+            } else {
+                Vec::new()
+            };
+            for seg in module_path.iter().skip(if is_current_package { 2 } else { 1 }) {
                 let ident = Self::rust_ident(seg);
                 segments.push(quote! { #ident });
             }
@@ -1303,7 +1317,7 @@ impl<'a> IrEmitter<'a> {
                 return Ok(None);
             }
             segments
-        } else if *self.qualify_internal_canonical_paths.borrow() && self.is_internal_module_path(&module_path) {
+        } else if materialize_internal_path && self.is_internal_module_path(&module_path) {
             let mut segments = vec![quote! { crate }];
             for seg in &module_path {
                 let ident = Self::rust_ident(seg);
@@ -1314,7 +1328,15 @@ impl<'a> IrEmitter<'a> {
             return Ok(None);
         };
 
-        let fn_ident = Self::rust_ident(function_name);
+        let emitted_name = self
+            .canonical_stdlib_function_identity(canonical_path)
+            .or_else(|| {
+                self.canonical_function_registry()
+                    .canonical_identity_for_path(canonical_path)
+            })
+            .map(incan_semantics_core::encode_incan_symbol_identity)
+            .unwrap_or_else(|| function_name.clone());
+        let fn_ident = Self::rust_ident(&emitted_name);
         segments.push(quote! { #fn_ident });
 
         let mut iter = segments.into_iter();
@@ -1477,6 +1499,10 @@ mod tests {
     use crate::backend::ir::types::{IR_UNION_TYPE_NAME, IrType, Mutability};
     use crate::backend::ir::{FunctionRegistry, IrEmitter, TypedExpr};
     use incan_core::lang::types::numerics::NumericTypeId;
+    use incan_semantics_core::{
+        CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
+        encode_incan_symbol_identity,
+    };
 
     fn render(tokens: TokenStream) -> String {
         tokens.to_string().replace(' ', "")
@@ -1516,6 +1542,54 @@ mod tests {
     }
 
     #[test]
+    fn canonical_self_package_call_uses_crate_path_without_losing_package_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = vec![
+            "pub".to_string(),
+            "incan_stdlib_system".to_string(),
+            "fs".to_string(),
+            "path".to_string(),
+            "helper".to_string(),
+        ];
+        let identity = CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_system".to_string(),
+                module_path: vec!["fs".to_string(), "path".to_string()],
+            },
+            declaration_name: "helper".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(10, 20),
+        };
+        let projected = encode_incan_symbol_identity(&identity);
+        let registry = FunctionRegistry::new();
+        let mut canonical_registry = FunctionRegistry::new();
+        canonical_registry.register_canonical_path_projection(
+            &path,
+            "helper".to_string(),
+            identity,
+            Vec::new(),
+            IrType::Unit,
+        );
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.set_current_package_identity(Some("incan_stdlib_system".to_string()));
+        emitter.set_canonical_function_registry(canonical_registry);
+        let func = local_arg(
+            "helper",
+            IrType::Function {
+                params: Vec::new(),
+                ret: Box::new(IrType::Unit),
+            },
+        );
+
+        let tokens = emitter.emit_call_expr(&func, &[], &[], None, Some(&path))?;
+
+        assert_eq!(render(tokens), format!("crate::fs::path::{projected}()"));
+        Ok(())
+    }
+
+    #[test]
     /// Confirm compiled-class bridges retain private constructor inputs while preserving exact provider identity.
     fn alternate_type_name_call_uses_exact_private_library_constructor_bridge_issue883()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1526,6 +1600,7 @@ mod tests {
         let sealed_fields = vec![
             FieldExport {
                 name: "secret".to_string(),
+                canonical: None,
                 ty: TypeRef::Named {
                     name: "int".to_string(),
                 },
@@ -1538,6 +1613,7 @@ mod tests {
             },
             FieldExport {
                 name: "label".to_string(),
+                canonical: None,
                 ty: TypeRef::Named {
                     name: "str".to_string(),
                 },
@@ -1551,6 +1627,7 @@ mod tests {
         ];
         let decoy_fields = vec![FieldExport {
             name: "unrelated".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "bool".to_string(),
             },
@@ -1609,6 +1686,7 @@ mod tests {
 
         let fields = vec![FieldExport {
             name: "size".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "int".to_string(),
             },
@@ -1634,6 +1712,7 @@ mod tests {
         );
         let defaulted_class_fields = vec![FieldExport {
             name: "size".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "int".to_string(),
             },

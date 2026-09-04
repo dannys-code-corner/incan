@@ -13,15 +13,13 @@ use incan_semantics_core::body_ir::BodyIrModule;
 fn lower(source: &str) -> Result<BodyIrModule, Box<dyn std::error::Error>> {
     let tokens = lexer::lex(source).map_err(|errors| io::Error::other(format!("{errors:?}")))?;
     let program = parser::parse(&tokens).map_err(|errors| io::Error::other(format!("{errors:?}")))?;
+    let module_path = ["program_streams".to_string()];
     let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(module_path.to_vec()));
     checker
         .check_program(&program)
         .map_err(|errors| io::Error::other(format!("{errors:?}")))?;
-    Ok(build_body_ir_module_v0(
-        &program,
-        &["program_streams".to_string()],
-        checker.type_info(),
-    ))
+    Ok(build_body_ir_module_v0(&program, &module_path, checker.type_info()))
 }
 
 /// Fail a chosen stream operation after retaining bytes the writer actually accepted.

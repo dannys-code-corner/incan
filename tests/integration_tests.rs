@@ -8,6 +8,19 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 mod support;
 
+#[path = "support/canonical_projection.rs"]
+mod canonical_projection;
+
+/// Read generated Rust with RFC 120 projections decoded back to the spellings the source used.
+///
+/// Every linker-visible Incan-origin declaration reaches generated Rust as an encoded projection, so an assertion
+/// written against a source spelling can only be evaluated after decoding. Decoding preserves the generated header
+/// comment; the caller compares against this text rather than the raw file.
+fn read_generated_rust(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let decoded = canonical_projection::decoded_source_spellings(&fs::read_to_string(path)?);
+    Ok(canonical_projection::reformatted_after_decode(&decoded).unwrap_or(decoded))
+}
+
 use incan::frontend::module::{ExportedTypeLikeDoc, ExportedTypeLikeKind, exported_type_like_docs};
 use incan::frontend::{lexer, parser, typechecker};
 
@@ -337,7 +350,7 @@ def main() -> None:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let generated = read_generated_rust(&out_dir.join("src/main.rs"))?;
     assert!(
         generated.contains("fn replace_items(_: ProviderHandle<(&mut i64, &mut i64)>)"),
         "normal CLI codegen must preserve explicit mutable Rust references through an alias, got:\n{generated}"
@@ -430,7 +443,7 @@ def main() -> None:
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let generated = fs::read_to_string(out_dir.join("src/main.rs"))?;
+    let generated = read_generated_rust(&out_dir.join("src/main.rs"))?;
     let projected = "ProviderHandle<(&mut i64, &mut i64)>";
     assert!(
         generated.match_indices(projected).count() >= 3,
@@ -3504,6 +3517,7 @@ mod codegen_tests {
     };
     use incan::backend::IrCodegen;
     use incan::frontend::{lexer, parser, typechecker};
+    use incan_semantics_core::{SemanticSourceTargetKind, decode_incan_symbol_identity, encode_incan_symbol_identity};
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
@@ -3713,7 +3727,7 @@ def main() -> None:
     }
 
     #[test]
-    fn test_method_alias_codegen_rewrites_to_target_method() {
+    fn test_method_alias_codegen_rewrites_to_target_method() -> Result<(), Box<dyn std::error::Error>> {
         let source = r#"
 model Stats:
   value: int
@@ -3726,23 +3740,27 @@ def main() -> None:
   let stats = Stats(value=10)
   println(stats.mean())
 "#;
-        let Ok(tokens) = lexer::lex(source) else {
-            panic!("lex failed");
-        };
-        let Ok(ast) = parser::parse(&tokens) else {
-            panic!("parse failed");
-        };
-        let Ok(rust_code) = IrCodegen::new().try_generate(&ast) else {
-            panic!("codegen failed");
-        };
+        let tokens = lexer::lex(source).map_err(|errors| std::io::Error::other(format!("lex failed: {errors:?}")))?;
+        let ast =
+            parser::parse(&tokens).map_err(|errors| std::io::Error::other(format!("parse failed: {errors:?}")))?;
+        let rust_code = IrCodegen::new()
+            .try_generate(&ast)
+            .map_err(|error| std::io::Error::other(format!("codegen failed: {error:?}")))?;
+        let avg_identity = rust_code
+            .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+            .filter_map(|token| decode_incan_symbol_identity(token).ok().flatten())
+            .find(|identity| identity.kind == SemanticSourceTargetKind::Method && identity.declaration_name == "avg")
+            .ok_or_else(|| std::io::Error::other("generated Rust did not carry the target method identity"))?;
+        let projection = encode_incan_symbol_identity(&avg_identity);
         assert!(
-            rust_code.contains(".avg("),
-            "expected method alias call to lower to target method, got:\n{rust_code}"
+            rust_code.contains(&format!(".{projection}(")),
+            "expected method alias call to lower to the target declaration's canonical projection, got:\n{rust_code}"
         );
         assert!(
             !rust_code.contains(".mean("),
             "method alias must not emit an independent wrapper call, got:\n{rust_code}"
         );
+        Ok(())
     }
 
     #[test]
@@ -4451,7 +4469,8 @@ def main() -> None:
             .spawn()?;
 
         // A cold CI runner must compile the generated holder project before it can create the readiness file. Keep
-        // this deadline comfortably above observed cold MSRV compilation time while retaining a finite failure bound.
+        // this deadline comfortably above observed cold pinned-toolchain compilation time while retaining a finite
+        // failure bound.
         let holder_ready_started = std::time::Instant::now();
         let holder_ready_timeout = Duration::from_secs(120);
         let mut holder_ready = false;

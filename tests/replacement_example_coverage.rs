@@ -28,8 +28,10 @@ use incan::frontend::{lexer, parser};
 ///
 /// The prior 61 count treated two modules containing explicit `Unsupported` placeholders as represented. They are
 /// intentionally excluded: a placeholder is the compiler's proof that the source was *not* represented for a
-/// consumer, not a successful lowering result.
-const REPRESENTED_BASELINE: usize = 59;
+/// consumer, not a successful lowering result. RFC 120's checked-identity integration then exposed ten more examples
+/// whose resolved callable or type-member references never had a Body-IR value/place representation; the old 59
+/// baseline counted those silent omissions as represented. They remain source-representation work under #1101.
+const REPRESENTED_BASELINE: usize = 49;
 
 /// Number of committed example sources included in this fixed corpus.
 ///

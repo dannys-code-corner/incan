@@ -42,7 +42,62 @@ use incan_core::lang::types::collections::{self as collection_types, CollectionT
 use incan_core::lang::{stdlib, trait_bounds};
 use incan_semantics_core::SurfaceExprLoweringAction;
 
+/// Whether a call receiver has a statically nameable source-owned method projection.
+///
+/// Bare generic and trait-object receivers must keep trait dispatch because no inherent owner is statically nameable.
+/// Nominal generics can use their owner's projection, while Rust-native traits keep their stable Rust ABI slot even
+/// when the source declaration has a recoverable Incan identity beside it.
+fn can_use_source_method_projection(receiver: &TypedExpr, dispatch: Option<&IrMethodDispatch>) -> bool {
+    let mut receiver_ty = &receiver.ty;
+    while let IrType::Ref(inner) | IrType::RefMut(inner) = receiver_ty {
+        receiver_ty = inner.as_ref();
+    }
+    let dispatch_uses_rust_native_trait_slot = matches!(
+        dispatch,
+        Some(IrMethodDispatch::Trait(trait_dispatch))
+            if trait_bounds::incan_to_rust(&trait_dispatch.trait_source_name).is_some()
+    );
+
+    !dispatch_uses_rust_native_trait_slot
+        && (matches!(
+            receiver_ty,
+            IrType::Struct(_) | IrType::Enum(_) | IrType::NamedGeneric(_, _) | IrType::SelfType
+        ) || (!matches!(receiver_ty, IrType::Generic(_) | IrType::Trait(_) | IrType::Unknown)
+            && matches!(
+                &receiver.kind,
+                IrExprKind::Var {
+                    ref_kind: VarRefKind::TypeName,
+                    ..
+                }
+            )))
+}
+
 impl AstLowering {
+    /// Select the physical method target while retaining any checked trait evidence needed after lowering.
+    pub(super) fn project_resolved_method_target(
+        &self,
+        call_span: ast::Span,
+        source_method: &str,
+        receiver: &TypedExpr,
+        dispatch: Option<IrMethodDispatch>,
+    ) -> (String, Option<IrMethodDispatch>) {
+        if !can_use_source_method_projection(receiver, dispatch.as_ref()) {
+            return (source_method.to_string(), dispatch);
+        }
+        let rebase_source_stdlib = !matches!(dispatch, Some(IrMethodDispatch::Trait(_)));
+        let Some(projection) = self
+            .compiled_provider_method_reference_name(call_span, &receiver.ty, source_method)
+            .or_else(|| self.emitted_method_reference_name(call_span, source_method, rebase_source_stdlib))
+        else {
+            return (source_method.to_string(), dispatch);
+        };
+        let dispatch = match dispatch {
+            Some(IrMethodDispatch::Trait(trait_dispatch)) => Some(IrMethodDispatch::SourceProjection(trait_dispatch)),
+            other => other,
+        };
+        (projection, dispatch)
+    }
+
     /// Convert a contained checked-C value contract into its private generated-Rust carrier.
     fn checked_c_value_ir_type(binding: &str, ty: &IrCheckedCType) -> IrType {
         match ty {
@@ -756,7 +811,7 @@ impl AstLowering {
             let binding_ty = Self::race_binding_type_for_awaitable(&awaitable);
 
             self.push_scope();
-            self.define_local_binding(race.binding.clone(), binding_ty, false);
+            self.define_local_binding(race.binding.node.clone(), binding_ty, false);
             let body_result = self.lower_race_arm_body(&arm.body);
             self.pop_scope();
 
@@ -768,7 +823,7 @@ impl AstLowering {
 
         Ok(TypedExpr::new(
             IrExprKind::Race {
-                binding: race.binding.clone(),
+                binding: race.binding.node.clone(),
                 arms,
             },
             result_ty,
@@ -896,7 +951,7 @@ impl AstLowering {
                     }
                     positional_index += 1;
                 }
-                ast::CallArg::Named(name, expr) => match name.as_str() {
+                ast::CallArg::Named(name, expr) => match name.node.as_str() {
                     "value" if value.is_none() => value = Some(expr),
                     "count" if count.is_none() => count = Some(expr),
                     _ => {}
@@ -955,11 +1010,18 @@ impl AstLowering {
             .and_then(|info| info.resolved_operator_call(expr.span).cloned())
             && resolved_operator.kind == ResolvedOperatorKind::Truthiness
         {
+            let dispatch = self
+                .type_info
+                .as_ref()
+                .and_then(|info| info.resolved_method_call(expr.span).cloned())
+                .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &receiver));
+            let (method, dispatch) =
+                self.project_resolved_method_target(expr.span, &resolved_operator.method, &receiver, dispatch);
             return Ok(TypedExpr::new(
                 IrExprKind::MethodCall {
                     receiver: Box::new(receiver),
-                    method: resolved_operator.method,
-                    dispatch: None,
+                    method,
+                    dispatch,
                     type_args: Vec::new(),
                     args: Vec::new(),
                     callable_signature: self.callable_signature_for_call_span(expr.span),
@@ -1082,7 +1144,10 @@ impl AstLowering {
         if let Some(kind) = self.ident_kind_for_lowering(expr) {
             match (&expr.node, &mut lowered.kind) {
                 (ast::Expr::Ident(name), _) if matches!(kind, IdentKind::Static) => {
-                    lowered.kind = IrExprKind::StaticRead { name: name.clone() };
+                    lowered.kind = IrExprKind::StaticRead {
+                        name: name.clone(),
+                        reference_kind: super::super::expr::IrStaticReferenceKind::Source,
+                    };
                 }
                 (ast::Expr::Ident(name), IrExprKind::Var { ref_kind, .. }) => {
                     *ref_kind = match kind {
@@ -1237,6 +1302,9 @@ impl AstLowering {
             ast::Expr::Ident(name) => {
                 let lowered_name = self.symbol_aliases.get(name).cloned().unwrap_or_else(|| name.clone());
                 let ty = self.lookup_var(&lowered_name);
+                let emitted_reference_name = self
+                    .emitted_function_reference_name(expr_span)
+                    .unwrap_or_else(|| lowered_name.clone());
                 if self
                     .type_info
                     .as_ref()
@@ -1296,7 +1364,7 @@ impl AstLowering {
                 };
                 (
                     IrExprKind::Var {
-                        name: lowered_name.clone(),
+                        name: emitted_reference_name,
                         access,
                         ref_kind: if self.is_static_binding(&lowered_name) {
                             VarRefKind::StaticBinding
@@ -1361,6 +1429,13 @@ impl AstLowering {
                 {
                     let receiver = self.lower_expr_spanned(l)?;
                     let arg_expr = self.lower_expr_spanned(r)?;
+                    let dispatch = self
+                        .type_info
+                        .as_ref()
+                        .and_then(|info| info.resolved_method_call(expr_span).cloned())
+                        .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &receiver));
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(expr_span, &resolved_operator.method, &receiver, dispatch);
                     let provider_crate = AstLowering::nominal_receiver_type_name(&receiver.ty)
                         .and_then(|type_name| self.sdk_provider_crate_for_type(type_name));
                     let result_ty = self
@@ -1383,8 +1458,8 @@ impl AstLowering {
                     (
                         IrExprKind::MethodCall {
                             receiver: Box::new(receiver),
-                            method: resolved_operator.method,
-                            dispatch: None,
+                            method,
+                            dispatch,
                             type_args: Vec::new(),
                             args: vec![IrCallArg {
                                 name: None,
@@ -1404,10 +1479,17 @@ impl AstLowering {
                 {
                     let item = self.lower_expr_spanned(l)?;
                     let receiver = self.lower_expr_spanned(r)?;
+                    let dispatch = self
+                        .type_info
+                        .as_ref()
+                        .and_then(|info| info.resolved_method_call(expr_span).cloned())
+                        .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &receiver));
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(expr_span, &resolved_operator.method, &receiver, dispatch);
                     let contains_call = IrExprKind::MethodCall {
                         receiver: Box::new(receiver),
-                        method: resolved_operator.method,
-                        dispatch: None,
+                        method,
+                        dispatch,
                         type_args: Vec::new(),
                         args: vec![IrCallArg {
                             name: None,
@@ -1528,11 +1610,18 @@ impl AstLowering {
                         .and_then(|info| info.expr_type(expr_span))
                         .map(|ty| self.lower_resolved_type(ty))
                         .unwrap_or(IrType::Unknown);
+                    let dispatch = self
+                        .type_info
+                        .as_ref()
+                        .and_then(|info| info.resolved_method_call(expr_span).cloned())
+                        .map(|resolved| self.lower_resolved_method_dispatch(resolved.dispatch, &operand));
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(expr_span, &resolved_operator.method, &operand, dispatch);
                     (
                         IrExprKind::MethodCall {
                             receiver: Box::new(operand),
-                            method: resolved_operator.method,
-                            dispatch: None,
+                            method,
+                            dispatch,
                             type_args: Vec::new(),
                             args: Vec::new(),
                             callable_signature: self.callable_signature_for_call_span(expr_span),
@@ -1587,7 +1676,11 @@ impl AstLowering {
                         target.module_path.first().map(String::as_str) == Some("pub")
                             && matches!(target.kind.as_str(), "model" | "class" | "newtype" | "rusttype")
                     });
-                if self.imported_module_function_callee_path(&o.node, m).is_some() || is_public_module_constructor {
+                if self
+                    .imported_module_function_callee_path(&o.node, m, expr_span)
+                    .is_some()
+                    || is_public_module_constructor
+                {
                     let callee = ast::Spanned::new(ast::Expr::Field(o.clone(), m.clone()), expr_span);
                     return self
                         .lower_call_expr(&callee, type_args, args, expr_span)
@@ -1798,11 +1891,15 @@ impl AstLowering {
                         .as_deref()
                         .map(|provider_crate| self.pub_external_type(provider_crate, expr_ty.clone()))
                         .unwrap_or(expr_ty);
-                    // Unknown method - keep as string-based call
+                    // Concrete Incan receivers use the compiler-proved recoverable projection even when semantic
+                    // resolution found the method through a trait. Bare generic and trait-object receivers keep the
+                    // Rust ABI slot because no inherent owner is statically nameable there.
+                    let (emitted_method_name, dispatch) =
+                        self.project_resolved_method_target(expr_span, &method_name, &receiver, dispatch);
                     (
                         IrExprKind::MethodCall {
                             receiver: Box::new(receiver),
-                            method: method_name,
+                            method: emitted_method_name,
                             dispatch,
                             type_args: lowered_type_args,
                             args: args_ir,
@@ -1835,10 +1932,12 @@ impl AstLowering {
                         .and_then(|info| info.expr_type(expr_span))
                         .map(|ty| self.lower_resolved_type(ty))
                         .unwrap_or(IrType::Unknown);
+                    let (method, dispatch) =
+                        self.project_resolved_method_target(expr_span, &resolved_operator.method, &obj, dispatch);
                     (
                         IrExprKind::MethodCall {
                             receiver: Box::new(obj),
-                            method: resolved_operator.method,
+                            method,
                             dispatch,
                             type_args: Vec::new(),
                             args: vec![IrCallArg {
@@ -1925,10 +2024,19 @@ impl AstLowering {
                         .and_then(|info| info.expr_type(expr_span))
                         .map(|ty| self.lower_resolved_type(ty))
                         .unwrap_or(IrType::Unknown);
+                    let property_name = if matches!(
+                        &obj.ty,
+                        IrType::Struct(_) | IrType::Enum(_) | IrType::NamedGeneric(_, _) | IrType::SelfType
+                    ) {
+                        self.project_resolved_method_target(expr_span, &access.property, &obj, None)
+                            .0
+                    } else {
+                        access.property.clone()
+                    };
                     (
                         IrExprKind::MethodCall {
                             receiver: Box::new(obj),
-                            method: access.property.clone(),
+                            method: property_name,
                             type_args: Vec::new(),
                             args: Vec::new(),
                             dispatch: None,
@@ -2227,7 +2335,7 @@ impl AstLowering {
                 let fields: Vec<(String, TypedExpr)> = args
                     .iter()
                     .map(|arg| match arg {
-                        ast::CallArg::Named(n, e) => Ok((n.clone(), self.lower_expr_spanned(e)?)),
+                        ast::CallArg::Named(n, e) => Ok((n.node.clone(), self.lower_expr_spanned(e)?)),
                         ast::CallArg::Positional(e)
                         | ast::CallArg::PositionalUnpack(e)
                         | ast::CallArg::KeywordUnpack(e) => Ok((String::new(), self.lower_expr_spanned(e)?)),
@@ -2513,6 +2621,60 @@ fn numeric_resize_policy(method: &str) -> Option<NumericResizePolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn trait_dispatch(source_name: &str) -> IrMethodDispatch {
+        IrMethodDispatch::Trait(Box::new(IrTraitDispatch {
+            trait_source_name: source_name.to_string(),
+            trait_module_path: None,
+            implementation_type_params: Vec::new(),
+            trait_path: source_name.to_string(),
+            type_args: Vec::new(),
+            receiver_is_mutable: false,
+        }))
+    }
+
+    #[test]
+    fn generic_receiver_keeps_trait_abi_dispatch() {
+        let receiver = TypedExpr::new(IrExprKind::Unit, IrType::Generic("R".to_string()));
+
+        assert!(!can_use_source_method_projection(
+            &receiver,
+            Some(&trait_dispatch("FallibleIterator"))
+        ));
+    }
+
+    #[test]
+    fn nominal_generic_receiver_can_use_source_projection() {
+        let receiver = TypedExpr::new(
+            IrExprKind::Unit,
+            IrType::NamedGeneric("ReaderChunks".to_string(), vec![IrType::Generic("R".to_string())]),
+        );
+
+        assert!(can_use_source_method_projection(
+            &receiver,
+            Some(&trait_dispatch("FallibleIterator"))
+        ));
+    }
+
+    #[test]
+    fn rust_native_trait_keeps_abi_dispatch_for_concrete_receiver() {
+        let receiver = TypedExpr::new(IrExprKind::Unit, IrType::Struct("OrderedDict".to_string()));
+
+        assert!(!can_use_source_method_projection(
+            &receiver,
+            Some(&trait_dispatch(builtin_traits::as_str(TraitId::Clone)))
+        ));
+    }
+
+    #[test]
+    fn concrete_source_trait_can_use_recoverable_projection() {
+        let receiver = TypedExpr::new(IrExprKind::Unit, IrType::Struct("Item".to_string()));
+
+        assert!(can_use_source_method_projection(
+            &receiver,
+            Some(&trait_dispatch("Labelled"))
+        ));
+    }
 
     /// A trait inherited through a compiled package must be addressed through that linked package's canonical stdlib
     /// re-export, not through a transitive provider crate that the consumer does not link directly.
