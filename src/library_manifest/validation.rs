@@ -115,6 +115,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
             &model.properties,
             &model.methods,
             require_members,
+            false,
         )?;
     }
     for class in &raw.exports.classes {
@@ -126,6 +127,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
             &class.properties,
             &class.methods,
             require_members,
+            class.extends.is_some(),
         )?;
     }
     for trait_export in &raw.exports.traits {
@@ -136,6 +138,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
             &trait_export.methods,
             require_members,
             None,
+            false,
         )?;
     }
     for newtype in &raw.exports.newtypes {
@@ -146,6 +149,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
             &newtype.methods,
             require_members,
             None,
+            false,
         )?;
     }
     for enum_export in &raw.exports.enums {
@@ -159,6 +163,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
                 "variant",
                 owner_identity,
                 require_members,
+                false,
             )?;
             record_member_identity(
                 &format!("enum `{}`", enum_export.name),
@@ -173,6 +178,7 @@ fn validate_identity_graph(raw: &RawLibraryManifest) -> Result<(), LibraryManife
             &enum_export.methods,
             require_members,
             Some(&mut seen_members),
+            false,
         )?;
     }
     Ok(())
@@ -446,19 +452,30 @@ fn validate_export_identity_binding(
 
     if entry.public_path.len() == 2 {
         match (&entry.kind, &entry.projection) {
-            (ExportIdentityKind::Alias, ExportIdentityProjection::Alias { target_path })
-            | (ExportIdentityKind::Alias, ExportIdentityProjection::Reexport { target_path }) => {
-                let raw_alias = raw
-                    .exports
-                    .aliases
-                    .iter()
-                    .find(|alias| alias.name == entry.public_name && alias.target_path == *target_path);
+            (ExportIdentityKind::Alias, ExportIdentityProjection::Alias { .. })
+            | (ExportIdentityKind::Alias, ExportIdentityProjection::Reexport { .. }) => {
+                // Match the raw export by the public name alone. The two sides record the path of *different hops*
+                // of the same re-export: renaming an export through a facade rewrites its name but leaves the raw
+                // alias pointing at the inner hop it was written on, while the graph entry carries the entrypoint's.
+                // For `items -> pricing -> lib` the raw alias says `["items", "LineItem"]` and the graph entry says
+                // `["pricing", "LineItem"]`. Both are true statements about different hops, so requiring them to be
+                // equal rejected every re-export chain longer than one hop. The public name is unique at the package
+                // root -- the duplicate check above enforces that -- and the identity behind the entry is what
+                // actually binds the two, which `validate_alias_callable_metadata` checks next.
+                let raw_alias = raw.exports.aliases.iter().find(|alias| alias.name == entry.public_name);
                 let Some(raw_alias) = raw_alias else {
+                    return Err(LibraryManifestError::Invalid(format!(
+                        "identity graph alias `{}` has no matching raw alias export",
+                        entry.public_name
+                    )));
+                };
+                // The prefixes may differ, but both sides must still name the declaration the identity names.
+                if raw_alias.target_path.last() != Some(&identity.declaration_name) {
                     return Err(LibraryManifestError::Invalid(format!(
                         "identity graph alias `{}` projection disagrees with its raw export",
                         entry.public_name
                     )));
-                };
+                }
                 validate_alias_callable_metadata(
                     &format!("identity graph alias `{}`", entry.public_name),
                     &entry.public_name,
@@ -743,52 +760,31 @@ fn api_declaration_export_kind(declaration: &ApiDeclaration) -> Option<ExportIde
     }
 }
 
-/// Compare a stable compiled identity with one of the explicit source-path encodings emitted by the frontend.
+/// Check that a source-path encoding names the same declaration as the canonical identity behind it.
+///
+/// The frontend records an export's path as *the source spelled it at the reference site*. A canonical identity
+/// records *the declaration site*. Those are deliberately different things, and the module prefix in front of the
+/// declaration name is exactly where they diverge:
+///
+/// - an absolute import spells `["crate", "feature", "Item"]` where the identity resolves to module `["feature"]`;
+/// - a relative import spells `["super", "items", "LineItem"]`, and resolving it needs the importing module, which a
+///   manifest-only comparison does not have;
+/// - a bare sibling import inside a nested module spells `["c", "X"]` where the identity resolves to `["a", "c"]`;
+/// - a re-export chain spells the hop it was written on, `["pricing", "LineItem"]`, while the identity stays anchored
+///   at the original declaration in `["items"]`;
+/// - a facade re-export from another package spells the facade rather than the upstream's declaring module.
+///
+/// Every one of those is a correct program, and asserting prefix equality rejected all of them. That is the same
+/// spelling-is-not-identity mistake the identity model exists to remove, so this compares only what a path can
+/// honestly prove: that it names the declaration the identity names. Structural agreement between the identity graph
+/// and the raw exports is enforced separately by the per-projection checks in `validate_export_identity_binding` and
+/// by the API-declaration backing checks, and consumers resolve by identity rather than by these strings.
 fn canonical_identity_matches_path(
-    raw: &RawLibraryManifest,
+    _raw: &RawLibraryManifest,
     identity: &CanonicalIdentityExport,
     path: &[String],
 ) -> bool {
-    let local_path = match &identity.origin {
-        CanonicalIdentityOriginExport::Package { library, module_path } if library == &raw.name => {
-            let mut path = module_path.clone();
-            path.push(identity.declaration_name.clone());
-            path
-        }
-        CanonicalIdentityOriginExport::Package { library, module_path } => {
-            let mut path = vec!["pub".to_string(), library.clone()];
-            path.extend(module_path.iter().cloned());
-            path.push(identity.declaration_name.clone());
-            path
-        }
-        CanonicalIdentityOriginExport::RustCrate { path } => {
-            let mut source = vec!["rust".to_string()];
-            source.extend(path.iter().cloned());
-            if source.last() != Some(&identity.declaration_name) {
-                source.push(identity.declaration_name.clone());
-            }
-            source
-        }
-        CanonicalIdentityOriginExport::Builtin => vec![identity.declaration_name.clone()],
-    };
-    local_path == source_path_identity_segments(path)
-}
-
-/// Drop source-level qualifiers from an encoded source path so it can be compared against a canonical identity.
-///
-/// The frontend records an export's path as the source spelled it, so `pub from crate.feature import Item` arrives
-/// here as `["crate", "feature", "Item"]`. The leading `crate` states that the import is absolute from the package
-/// root; it is a qualifier on the spelling, not a module in the path. A canonical identity stores the resolved module
-/// path with no qualifier, so comparing the two spellings verbatim reported every export re-exported through an
-/// absolute import as an identity disagreement even though both named the same declaration.
-///
-/// Only `crate` is removed. `pub` and `rust` lead the encodings this function builds for imported-package and Rust
-/// origins, and a relative `super` needs the importing module to resolve, which a path-only comparison cannot do.
-fn source_path_identity_segments(path: &[String]) -> &[String] {
-    match path.split_first() {
-        Some((first, rest)) if first == "crate" => rest,
-        _ => path,
-    }
+    path.last() == Some(&identity.declaration_name)
 }
 
 /// Validate all canonical field identities exported for one nominal declaration.
@@ -799,6 +795,7 @@ fn validate_nominal_member_identities(
     properties: &[super::PropertyExport],
     methods: &[super::MethodExport],
     required: bool,
+    owner_inherits_members: bool,
 ) -> Result<(), LibraryManifestError> {
     let mut seen = BTreeSet::new();
     for field in fields {
@@ -809,6 +806,7 @@ fn validate_nominal_member_identities(
             "field",
             owner_identity,
             required,
+            owner_inherits_members,
         )?;
         record_member_identity(owner, &field.name, field.canonical.as_ref(), &mut seen)?;
     }
@@ -820,10 +818,18 @@ fn validate_nominal_member_identities(
             "property",
             owner_identity,
             required,
+            owner_inherits_members,
         )?;
         record_member_identity(owner, &property.name, property.canonical.as_ref(), &mut seen)?;
     }
-    validate_method_identities(owner, owner_identity, methods, required, Some(&mut seen))
+    validate_method_identities(
+        owner,
+        owner_identity,
+        methods,
+        required,
+        Some(&mut seen),
+        owner_inherits_members,
+    )
 }
 
 /// Validate all canonical method identities exported for one nominal declaration.
@@ -833,6 +839,7 @@ fn validate_method_identities(
     methods: &[super::MethodExport],
     required: bool,
     mut shared_seen: Option<&mut BTreeSet<(String, CanonicalIdentityExport)>>,
+    owner_inherits_members: bool,
 ) -> Result<(), LibraryManifestError> {
     let mut seen = BTreeSet::new();
     for method in methods {
@@ -844,6 +851,7 @@ fn validate_method_identities(
             "method",
             owner_identity,
             required,
+            owner_inherits_members,
         )?;
         if let Some(identity) = &method.canonical
             && !seen.insert((method.name.clone(), identity))
@@ -868,6 +876,7 @@ fn validate_member_identity(
     expected_kind: &str,
     owner_identity: Option<&CanonicalIdentityExport>,
     required: bool,
+    owner_inherits_members: bool,
 ) -> Result<(), LibraryManifestError> {
     let Some(identity) = identity else {
         return if required {
@@ -901,19 +910,33 @@ fn validate_member_identity(
             "{owner} has no canonical owner export"
         )));
     };
+    // A member this owner declares is anchored inside it: same origin, span nested within the declaration.
+    let anchored_in_owner = identity.origin == owner_identity.origin
+        && identity.declaration_span.start >= owner_identity.declaration_span.start
+        && identity.declaration_span.end <= owner_identity.declaration_span.end;
+    if anchored_in_owner {
+        return Ok(());
+    }
+
+    // An inherited member is anchored at the ancestor that declared it, so it sits outside this owner and may live in
+    // another module entirely. That is the identity model working as intended: a member keeps the identity minted at
+    // its declaration site instead of acquiring a fresh one per subclass, and the declaring class proves that identity
+    // through its own export. Requiring containment unconditionally rejected every public class that inherits, because
+    // class collection clones the parent's fields, properties, and methods together with the parent's identities.
+    //
+    // Only a declared inheritance admits a foreign anchor. An owner that inherits nothing must still contain every
+    // member it publishes, which keeps this check meaningful for models, traits, newtypes, and standalone classes.
+    if owner_inherits_members {
+        return Ok(());
+    }
     if identity.origin != owner_identity.origin {
         return Err(LibraryManifestError::Invalid(format!(
             "{owner} publishes a canonical origin different from its owner declaration"
         )));
     }
-    if identity.declaration_span.start < owner_identity.declaration_span.start
-        || identity.declaration_span.end > owner_identity.declaration_span.end
-    {
-        return Err(LibraryManifestError::Invalid(format!(
-            "{owner} publishes a canonical declaration span outside its owner declaration"
-        )));
-    }
-    Ok(())
+    Err(LibraryManifestError::Invalid(format!(
+        "{owner} publishes a canonical declaration span outside its owner declaration"
+    )))
 }
 
 /// Record one member identity and reject duplicate canonical members on the same owner.

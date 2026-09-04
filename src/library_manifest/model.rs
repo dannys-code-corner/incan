@@ -553,20 +553,26 @@ impl LibraryIdentityGraph {
         Ok(())
     }
 
-    /// Canonicalize exported identities into deterministic order without duplicate projections.
+    /// Order exported identities deterministically and collapse entries publishing one declaration at one path.
+    ///
+    /// Two entries are the same export when they agree on where they are published and on which declaration they
+    /// name. Being spelled differently does not make them distinct: a declaration reachable by more than one route --
+    /// directly and through a facade, or republished into a parent namespace from two sibling modules -- yields one
+    /// record per route, each carrying the path of the route it came from, and every one of them carries the same
+    /// canonical identity. Keying deduplication on those spellings kept each route as its own entry, and the graph
+    /// then failed its own duplicate-export check on a program that was perfectly valid.
+    ///
+    /// `source_path` still participates in the ordering so the surviving entry is chosen deterministically rather
+    /// than by input order.
     fn sort_and_deduplicate(&mut self) {
         self.exports.sort_by(|left, right| {
             left.public_path
                 .cmp(&right.public_path)
-                .then(left.source_path.cmp(&right.source_path))
                 .then(left.canonical.cmp(&right.canonical))
+                .then(left.source_path.cmp(&right.source_path))
         });
-        self.exports.dedup_by(|left, right| {
-            left.public_path == right.public_path
-                && left.source_path == right.source_path
-                && left.projection == right.projection
-                && left.canonical == right.canonical
-        });
+        self.exports
+            .dedup_by(|left, right| left.public_path == right.public_path && left.canonical == right.canonical);
     }
 
     /// Return whether the graph has no public export identities to serialize.

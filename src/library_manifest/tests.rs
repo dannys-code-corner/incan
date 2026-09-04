@@ -1778,15 +1778,21 @@ fn manifest_writer_rejects_malformed_and_duplicate_canonical_identities() -> Res
             if message.contains("canonical kind `const` instead of `function`")
     ));
 
+    // A source path that names a different *declaration* is still rejected. The module prefix in front of it is
+    // deliberately not checked: a facade re-export, a sibling import inside a nested module, a `super`-relative
+    // import, and each hop of a re-export chain all record a prefix that differs from the resolved identity's module
+    // while naming the same declaration. Requiring prefix equality rejected all of those valid programs, so the
+    // module a path is spelled against can no longer be validated here -- only the declaration it names.
     let mut wrong_source = LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
     wrong_source.contract_metadata.identity_graph.exports[0].source_path =
-        vec!["other".to_string(), "parse".to_string()];
+        vec!["codec".to_string(), "not_parse".to_string()];
     let wrong_source_error = wrong_source.write_to_path(&tmp.path().join("wrong-source.incnlib"));
-    assert!(matches!(
-        wrong_source_error,
-        Err(LibraryManifestError::Invalid(message))
-            if message.contains("canonical identity disagrees with its authoritative source/projection path")
-    ));
+    assert!(
+        matches!(&wrong_source_error, Err(LibraryManifestError::Invalid(message)) if
+            message.contains("does not name its canonical declaration")
+                || message.contains("canonical identity disagrees with its authoritative source/projection path")),
+        "a source path naming a different declaration must be rejected, got: {wrong_source_error:?}"
+    );
 
     let mut builtin_direct =
         LibraryManifest::from_checked_exports("codec_lib", "0.1.0", std::slice::from_ref(&checked));
