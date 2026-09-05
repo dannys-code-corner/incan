@@ -136,8 +136,8 @@ fn dependency_spec_to_toml(spec: &DependencySpec, output_dir: &Path) -> (String,
             // dependency from the original logical spelling rather than the canonical one. In that case an absolute
             // canonical path keeps every edge in the graph on one physical root. SDK-provider artifacts are built in
             // a staging directory and atomically published elsewhere, so they must retain relocatable paths.
-            let from = output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf());
-            let to = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+            let from = cargo_visible_path(output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf()));
+            let to = cargo_visible_path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
             let rendered = if from != output_dir && !is_sdk_provider_build() {
                 to
             } else {
@@ -168,6 +168,28 @@ fn dependency_spec_to_toml(spec: &DependencySpec, output_dir: &Path) -> (String,
     (dependency_key, toml::Value::Table(table))
 }
 
+/// Render a canonical path in the form Cargo can parse.
+///
+/// `fs::canonicalize` returns Windows paths carrying the `\\?\` extended-length prefix. Cargo rejects that in a
+/// `path` dependency: once separators are normalized it reads as `//?/C:\...`, which is not a path URL it
+/// understands, and the manifest fails to parse with a message about the dependency rather than about the prefix.
+///
+/// Only ordinary drive paths are unwrapped. A verbatim UNC path keeps its prefix, because there the prefix is
+/// load-bearing rather than decoration. Off Windows this is the identity.
+fn cargo_visible_path(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let rendered = path.to_string_lossy();
+        if let Some(remainder) = rendered.strip_prefix(r"\\?\") {
+            let bytes = remainder.as_bytes();
+            if bytes.len() >= 2 && bytes[1] == b':' {
+                return PathBuf::from(remainder.to_string());
+            }
+        }
+    }
+    path
+}
+
 /// Build a [`toml::Value::Table`] for a toolchain-owned path dependency.
 ///
 /// Support crates are shipped beside generated projects in installed SDKs. Rendering their paths relative to the
@@ -176,8 +198,8 @@ fn dependency_spec_to_toml(spec: &DependencySpec, output_dir: &Path) -> (String,
 fn path_dependency(path: &Path, features: &[String], output_dir: &Path, relocatable: bool) -> toml::Value {
     let mut table = toml::Table::new();
     let rendered_path = if relocatable {
-        let from = output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf());
-        let to = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let from = cargo_visible_path(output_dir.canonicalize().unwrap_or_else(|_| output_dir.to_path_buf()));
+        let to = cargo_visible_path(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
         relative_path(&from, &to).to_string_lossy().replace('\\', "/")
     } else {
         path.display().to_string()
