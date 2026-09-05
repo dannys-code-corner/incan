@@ -120,14 +120,26 @@ impl AstLowering {
     /// Trait dispatch is deliberately excluded rather than caught here. A local type adopting a package's trait
     /// carries that trait's package identity while its wrapper is emitted locally, so the trait cases are decided by
     /// `can_use_source_method_projection` on the trait's own terms.
+    ///
+    /// A package origin names *which library declares the method*, not that the method is foreign to this build. When
+    /// that library is the one this compilation is producing, the wrapper is emitted right here, and suppressing the
+    /// projection would decline to name a slot that does exist. Only another library's inherent method has no wrapper
+    /// this compilation can name.
     fn method_belongs_to_an_imported_type(&self, call_span: ast::Span, dispatch: Option<&IrMethodDispatch>) -> bool {
         if dispatch.is_some() {
             return false;
         }
-        self.type_info
+        let Some(identity) = self
+            .type_info
             .as_ref()
             .and_then(|info| info.resolved_identity(call_span))
-            .is_some_and(|identity| matches!(identity.origin, incan_semantics_core::SymbolOrigin::Package { .. }))
+        else {
+            return false;
+        };
+        let incan_semantics_core::SymbolOrigin::Package { library, .. } = &identity.origin else {
+            return false;
+        };
+        self.produced_library_identity() != Some(library.as_str())
     }
 
     /// Convert a contained checked-C value contract into its private generated-Rust carrier.
@@ -2736,6 +2748,83 @@ mod tests {
             type_args: Vec::new(),
             receiver_is_mutable: false,
         }))
+    }
+
+    /// Build a lowering whose checked facts resolve one method call to a declaration owned by `library`.
+    fn lowering_resolving_a_package_method(
+        library: &str,
+        produced_library: Option<&str>,
+        call_span: ast::Span,
+    ) -> AstLowering {
+        let mut type_info = crate::frontend::typechecker::TypeCheckInfo::default();
+        type_info.record_resolved_identity(
+            call_span,
+            incan_semantics_core::CanonicalSymbolId {
+                namespace: incan_semantics_core::SymbolNamespace::Member,
+                origin: incan_semantics_core::SymbolOrigin::Package {
+                    library: library.to_string(),
+                    module_path: vec!["registry".to_string()],
+                },
+                declaration_name: "entry".to_string(),
+                kind: incan_semantics_core::SemanticSourceTargetKind::Method,
+                scope_discriminant: None,
+                declaration_span: incan_semantics_core::HirSourceSpan::new(0, 0),
+            },
+        );
+        let mut lowering = AstLowering::new_with_type_info(type_info);
+        lowering.set_registry_package_identity(produced_library.map(str::to_string));
+        lowering
+    }
+
+    /// A package's own inherent method keeps its projection while that package is the one being compiled.
+    ///
+    /// Regression for #1174: the suppression rule matched any `SymbolOrigin::Package`, so once a package's modules
+    /// called into each other, the package's own declarations looked foreign to its own build. Building
+    /// `incan_stdlib_core` then emitted a raw `entry` where the checked registry lowering required the projected
+    /// name, and every `Registry.entry` in the component failed to lower.
+    #[test]
+    fn a_package_projects_its_own_inherent_method_while_building_itself() {
+        let call_span = ast::Span { start: 10, end: 20 };
+        let lowering = lowering_resolving_a_package_method("incan_stdlib_core", Some("incan_stdlib_core"), call_span);
+
+        assert!(
+            !lowering.method_belongs_to_an_imported_type(call_span, None),
+            "a package's own declaration is emitted by this build, so its wrapper can be named"
+        );
+    }
+
+    /// Another package's inherent method still has no wrapper this compilation can name.
+    ///
+    /// The other half of #1174, pinned so narrowing the rule does not restore the original defect: a consumer calling
+    /// a method on a dependency's type must reach the dependency's own slot, because no wrapper is emitted here --
+    /// and for a newtype over a `rust::` type none exists anywhere, since Rust forbids a foreign inherent `impl`.
+    #[test]
+    fn another_packages_inherent_method_is_still_not_projected() {
+        let call_span = ast::Span { start: 10, end: 20 };
+        let consumer = lowering_resolving_a_package_method("incan_stdlib_core", Some("my_app"), call_span);
+        assert!(
+            consumer.method_belongs_to_an_imported_type(call_span, None),
+            "a dependency's inherent method has no wrapper in the consumer's compilation"
+        );
+
+        // No project owns an ad-hoc single-file build, and every package identity is then genuinely foreign.
+        let unowned = lowering_resolving_a_package_method("incan_stdlib_core", None, call_span);
+        assert!(
+            unowned.method_belongs_to_an_imported_type(call_span, None),
+            "without a produced library every package identity stays foreign"
+        );
+    }
+
+    /// Trait dispatch stays with `can_use_source_method_projection`, whichever package owns the declaration.
+    #[test]
+    fn trait_dispatch_is_not_decided_by_the_declaring_package() {
+        let call_span = ast::Span { start: 10, end: 20 };
+        let lowering = lowering_resolving_a_package_method("incan_stdlib_core", Some("my_app"), call_span);
+
+        assert!(
+            !lowering.method_belongs_to_an_imported_type(call_span, Some(&trait_dispatch("FallibleIterator"))),
+            "a dispatched call is decided on the trait's own terms, not the declaring package's"
+        );
     }
 
     #[test]
