@@ -11,7 +11,7 @@
 //! stages consume portable identities and sealed Loafs rather than project-local build paths.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, OpenOptions};
 use std::io::{self, ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
@@ -1468,7 +1468,7 @@ pub(crate) fn write_receipt_staged(payload: &[u8], staged_path: &Path, path: &Pa
     staged.write_all(b"\n")?;
     staged.sync_all()?;
     fs::rename(staged_path, path)?;
-    File::open(parent)?.sync_all()
+    crate::durable_publication::sync_directory(parent)
 }
 
 /// Canonical receipt fields used only for content-addressed identity serialization.

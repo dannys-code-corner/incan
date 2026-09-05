@@ -3241,11 +3241,12 @@ fn write_synced_file(path: &Path, bytes: &[u8], trailing_newline: bool) -> Resul
     })
 }
 
-/// Synchronize a directory entry after atomic store publication where the host supports directory handles.
+/// Synchronize a directory entry after atomic store publication so the published entry survives a crash.
+///
+/// Acquiring a synchronizable directory handle is host-specific and lives in [`crate::durable_publication`]; this
+/// wrapper only maps the failure into the store's error type.
 pub(crate) fn sync_directory(path: PathBuf) -> Result<(), OvenStoreError> {
-    File::open(&path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|source| OvenStoreError::Io { path, source })
+    crate::durable_publication::sync_directory(&path).map_err(|source| OvenStoreError::Io { path, source })
 }
 
 /// Synchronize nested materialized directories from leaves to root before their entry becomes visible.

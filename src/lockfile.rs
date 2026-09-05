@@ -739,7 +739,7 @@ fn publish_lockfile(path: &Path, content: &[u8], _publication_lock: &Publication
         staged_file.write_all(content)?;
         staged_file.sync_all()?;
         fs::rename(&staged_path, path)?;
-        File::open(parent)?.sync_all()?;
+        crate::durable_publication::sync_directory(parent)?;
         Ok(())
     })();
     drop(staged_file);
