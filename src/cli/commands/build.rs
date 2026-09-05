@@ -8776,7 +8776,7 @@ fn select_current_debug_project_outputs(
         }
     }
 
-    let mut outputs = Vec::with_capacity(expected.len());
+    let mut groups = Vec::with_capacity(expected.len());
     for (expected, mut candidates) in expected.into_iter().zip(grouped) {
         if candidates.is_empty() {
             return Ok(None);
@@ -8819,18 +8819,62 @@ fn select_current_debug_project_outputs(
             }
         }
         exact.sort_by(|left, right| left.identity.cmp(&right.identity));
-        let selected = if let Some(selected) = exact.into_iter().next() {
-            selected
-        } else if let Some(error) = rejected.into_iter().next() {
-            return Err(error);
-        } else {
-            return Err(CliError::failure(
-                "exact debug project-output lineage disappeared during in-memory selection",
-            ));
-        };
-        outputs.push((expected.target, selected));
+        if exact.is_empty() {
+            return Err(rejected.into_iter().next().unwrap_or_else(|| {
+                CliError::failure("exact debug project-output lineage disappeared during in-memory selection")
+            }));
+        }
+        groups.push((expected.target, exact));
     }
-    Ok(Some(outputs))
+    select_coherent_project_outputs(groups).map(Some)
+}
+
+/// Choose one source-current output per target so that every target names the same project inspection authority.
+///
+/// A bake that re-seals the project inspection authority for unchanged sources (for example after the store came
+/// back from a cache and the generated build-script outputs were discovered again) leaves two exact generations of
+/// every output behind. Each generation is coherent on its own, but the identity-smallest output per target can
+/// belong to different generations, and `incan test` then refuses the mixed set as a disagreement. Prefer an
+/// authority that every target's exact outputs share; when there is none, keep the identity-smallest output per
+/// target so the caller reports the disagreement exactly as before.
+fn select_coherent_project_outputs(
+    groups: Vec<(OvenBakeProjectTarget, Vec<OvenStoredProjectOutput>)>,
+) -> CliResult<Vec<(OvenBakeProjectTarget, OvenStoredProjectOutput)>> {
+    let shared_authority = groups.first().and_then(|(_, outputs)| {
+        outputs
+            .iter()
+            .filter_map(|output| output.payload.inspection_authority.as_ref())
+            .find(|authority| {
+                groups.iter().all(|(_, candidates)| {
+                    candidates
+                        .iter()
+                        .any(|candidate| candidate.payload.inspection_authority.as_ref() == Some(*authority))
+                })
+            })
+            .cloned()
+    });
+    groups
+        .into_iter()
+        .map(|(target, outputs)| {
+            // Each group is sorted by identity and nonempty; the shared authority, when there is one, names the
+            // generation to take from every group.
+            let position = shared_authority
+                .as_ref()
+                .and_then(|authority| {
+                    outputs
+                        .iter()
+                        .position(|output| output.payload.inspection_authority.as_ref() == Some(authority))
+                })
+                .unwrap_or(0);
+            outputs
+                .into_iter()
+                .nth(position)
+                .map(|selected| (target, selected))
+                .ok_or_else(|| {
+                    CliError::failure("exact debug project-output lineage disappeared during in-memory selection")
+                })
+        })
+        .collect()
 }
 
 /// Load immutable Rust-inspection lineage from all source-current baked debug outputs.
@@ -15985,7 +16029,39 @@ headers = ["interop/include/bridge.h"]
         ),
         Box<dyn std::error::Error>,
     > {
-        let entrypoint = project_root.join("src/main.incn");
+        fixture_project_output_publication_for(
+            project_root,
+            profile,
+            label,
+            OvenBakeProjectTarget::Executable,
+            OvenProjectInspectionAuthorityRef {
+                identity: "sha256:fixture-project-authority".to_string(),
+                receipt_identity: "sha256:fixture-authority-receipt".to_string(),
+                build_unit_identity: "sha256:fixture-authority-build-unit".to_string(),
+            },
+        )
+    }
+
+    /// Publish-ready receipt, payload, and files for one bake target of the fixture project.
+    ///
+    /// The receipt derives from the generated source and the label, so two calls with the same label and target
+    /// share one receipt lineage; only the payload differs when `inspection_authority` does, which is exactly what a
+    /// bake that re-seals the project authority for unchanged sources leaves in the store.
+    fn fixture_project_output_publication_for(
+        project_root: &Path,
+        profile: &str,
+        label: &str,
+        target: OvenBakeProjectTarget,
+        inspection_authority: OvenProjectInspectionAuthorityRef,
+    ) -> Result<
+        (
+            crate::oven::OvenReceipt,
+            OvenProjectOutputPayload,
+            Vec<OvenProjectOutputBakeFile>,
+        ),
+        Box<dyn std::error::Error>,
+    > {
+        let entrypoint = project_root.join(target.source_relative_path());
         let generated_source = project_root.join(format!("target/fixture/generated-{label}.rs"));
         let native_output = project_root.join(format!("target/fixture/native-{label}"));
         fs::create_dir_all(generated_source.parent().ok_or("generated source has no parent")?)?;
@@ -16027,18 +16103,14 @@ headers = ["interop/include/bridge.h"]
         let payload = project_output_payload_for_bake(OvenProjectOutputBakeRequest {
             project_root,
             entrypoint: &entrypoint,
-            target: OvenBakeProjectTarget::Executable,
+            target,
             receipt: &receipt,
             plan_identity: format!("fixture-plan-{label}"),
             profile,
             source_authority_digest: &digest_baked_project_source_authority(project_root)?,
             lock_dependencies_fingerprint: baked_project_lock_dependencies_fingerprint(project_root)?,
             files: files.clone(),
-            inspection_authority: OvenProjectInspectionAuthorityRef {
-                identity: "sha256:fixture-project-authority".to_string(),
-                receipt_identity: "sha256:fixture-authority-receipt".to_string(),
-                build_unit_identity: "sha256:fixture-authority-build-unit".to_string(),
-            },
+            inspection_authority,
             required_project_loafs: Vec::new(),
             package_loaf_store_relative_path: None,
             backend_receipt,
@@ -16320,6 +16392,109 @@ headers = ["interop/include/bridge.h"]
             return Err("a same-receipt cohort with no source-current output did not fail closed".into());
         };
         assert!(error.message.contains("disagrees with its source-current lineage"));
+        Ok(())
+    }
+
+    #[test]
+    fn current_debug_output_scan_prefers_the_authority_every_target_shares() -> Result<(), Box<dyn std::error::Error>> {
+        // A store restored from a cache can hold two exact generations of every output for unchanged sources, each
+        // naming the project inspection authority its own bake sealed. Picking per target by identity alone can mix
+        // the generations; the scan must pick the one authority every target can satisfy.
+        let project = tempfile::tempdir()?;
+        fs::create_dir(project.path().join("src"))?;
+        fs::write(project.path().join("incan.toml"), "[project]\nname = \"fixture\"\n")?;
+        fs::write(project.path().join("src/lib.incn"), "def helper() -> None:\n    pass\n")?;
+        fs::write(project.path().join("src/main.incn"), "def main() -> None:\n    pass\n")?;
+        let authority = |identity: &str| OvenProjectInspectionAuthorityRef {
+            identity: identity.to_string(),
+            receipt_identity: format!("{identity}-receipt"),
+            build_unit_identity: format!("{identity}-build-unit"),
+        };
+        let store_root = tempfile::tempdir()?;
+        let store = OvenStore::new(
+            store_root.path(),
+            crate::oven::store::OvenStoreLimits::new(1024 * 1024, 1024 * 1024, 1024 * 1024),
+        );
+        let library_entrypoint = project
+            .path()
+            .join(OvenBakeProjectTarget::Library.source_relative_path());
+        let mut library_generations = Vec::new();
+        for identity in ["sha256:authority-a", "sha256:authority-b"] {
+            let (receipt, payload, files) = fixture_project_output_publication_for(
+                project.path(),
+                "debug",
+                "library",
+                OvenBakeProjectTarget::Library,
+                authority(identity),
+            )?;
+            write_receipt(
+                &receipt,
+                project_bake_receipt_path(
+                    project.path(),
+                    OvenBakeProjectTarget::Library,
+                    &library_entrypoint,
+                    "debug",
+                )?,
+            )?;
+            let published = publish_project_output_loaf(&store, &receipt, &payload, &files)?;
+            library_generations.push((published.identity.clone(), identity));
+            drop(published);
+        }
+        assert_ne!(
+            library_generations[0].0, library_generations[1].0,
+            "two generations with different authorities must publish as distinct Loafs"
+        );
+        // An identity-ordered pick would take the smallest library output; give the executable only the generation
+        // that names the other authority, so the targets agree only when the scan prefers the shared lineage.
+        library_generations.sort();
+        let shared = library_generations
+            .last()
+            .map(|(_, identity)| *identity)
+            .ok_or("no library generation was published")?;
+        let executable_entrypoint = project
+            .path()
+            .join(OvenBakeProjectTarget::Executable.source_relative_path());
+        let (receipt, payload, files) = fixture_project_output_publication_for(
+            project.path(),
+            "debug",
+            "executable",
+            OvenBakeProjectTarget::Executable,
+            authority(shared),
+        )?;
+        write_receipt(
+            &receipt,
+            project_bake_receipt_path(
+                project.path(),
+                OvenBakeProjectTarget::Executable,
+                &executable_entrypoint,
+                "debug",
+            )?,
+        )?;
+        drop(publish_project_output_loaf(&store, &receipt, &payload, &files)?);
+
+        let targets = discover_oven_bake_project_targets(project.path())?;
+        let selected = select_current_debug_project_outputs(
+            &store,
+            project.path(),
+            &targets,
+            &digest_baked_project_source_authority(project.path())?,
+            &receipt.intent.target,
+            &receipt.intent.toolchain,
+        )?
+        .ok_or("the two-target project with exact outputs was not selected")?;
+        assert_eq!(selected.len(), 2);
+        for (target, output) in &selected {
+            assert_eq!(
+                output
+                    .payload
+                    .inspection_authority
+                    .as_ref()
+                    .map(|authority| authority.identity.as_str()),
+                Some(shared),
+                "{} output must name the authority every target shares",
+                target.as_str()
+            );
+        }
         Ok(())
     }
 

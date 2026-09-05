@@ -140,6 +140,26 @@ impl TypeChecker {
         fields.iter().find(|field| field.name == source_name)
     }
 
+    /// Resolve the type of one field on a value typed by a Rust path, as the field is written in Incan source.
+    ///
+    /// The path is the value's own `RustPath` spelling; the metadata lookup normalises the `rust::` prefix and any
+    /// type arguments, exactly as a field read does. Field access and field assignment resolve through this one
+    /// lookup, so a field that can be read can also be assigned.
+    pub(in crate::frontend::typechecker) fn rust_path_field_type(
+        &self,
+        path: &str,
+        field: &str,
+    ) -> Option<ResolvedType> {
+        // Field reads pass the value's path straight to the metadata lookup, which owns the `rust::` and generic
+        // normalisation; a bare `demo::Holder` has no `<...>` to strip and must resolve exactly like a read does.
+        let metadata = self.rust_item_metadata_for_path(path)?;
+        let RustItemKind::Type(info) = &metadata.kind else {
+            return None;
+        };
+        let rust_field = Self::rust_field_for_source_name(&info.fields, field)?;
+        Some(self.resolved_rust_field_type(path, rust_field))
+    }
+
     /// Resolve a Rust field type from its display string against the owning Rust type.
     ///
     /// Rust field metadata carries both a structural shape and the source display. Field access should use the display

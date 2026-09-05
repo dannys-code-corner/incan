@@ -529,6 +529,27 @@ impl TypeChecker {
                     }
                 }
             }
+            // A value typed by a Rust path (`mut plan = empty_plan()` where the helper returns
+            // `rust::substrait::proto::Plan`) assigns a field through the same metadata that answers a read of it,
+            // and the expected field type drives the value's boundary coercions exactly as a constructor argument
+            // would.
+            ResolvedType::RustPath(path) => match self.rust_path_field_type(path, field) {
+                Some(expected_ty) => {
+                    let value_ty = self.check_expr_with_expected(&field_assign.value, Some(&expected_ty));
+                    if !self.types_compatible(&value_ty, &expected_ty) {
+                        self.errors.push(errors::field_type_mismatch(
+                            field,
+                            &expected_ty.to_string(),
+                            &value_ty.to_string(),
+                            field_assign.value.span,
+                        ));
+                    }
+                }
+                None => {
+                    self.errors
+                        .push(errors::missing_field(&obj_ty.to_string(), field, span));
+                }
+            },
             ResolvedType::Unknown => {
                 // Don't report additional errors on unknown types
             }
