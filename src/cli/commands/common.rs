@@ -656,13 +656,30 @@ fn sync_sdk_provider_store(store_root: &Path) -> CliResult<()> {
     })
 }
 
+/// Characters of an artifact identity retained in a Windows staging directory name.
+///
+/// Purely for tracing a stray directory back to its artifact; uniqueness is supplied by the process id and timestamp
+/// that follow it. Kept short because the surrounding path must leave room for a nested Cargo build tree inside
+/// Windows' 260-character limit.
+const STAGING_IDENTITY_TRACE_LENGTH: usize = 12;
+
 /// Allocate a unique private staging directory for one artifact identity.
+///
+/// Uniqueness comes from the process id and nanosecond timestamp; the identity is carried in the name so a stray
+/// staging directory can be traced back to what produced it. On Windows the identity is abbreviated because the full
+/// digest costs 64 characters of a 260-character path budget that a nested Cargo build then has to fit inside, and
+/// `link.exe` is not long-path aware. The abbreviation is presentational only, so it cannot affect uniqueness.
 fn staged_sdk_provider_root(store_root: &Path, identity: &str) -> CliResult<PathBuf> {
     let elapsed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|error| CliError::failure(format!("system clock predates Unix epoch: {error}")))?;
+    let traced_identity = if cfg!(windows) {
+        identity.get(..STAGING_IDENTITY_TRACE_LENGTH).unwrap_or(identity)
+    } else {
+        identity
+    };
     Ok(store_root.join(format!(
-        ".staging-{identity}-{}-{}",
+        ".staging-{traced_identity}-{}-{}",
         std::process::id(),
         elapsed.as_nanos()
     )))
