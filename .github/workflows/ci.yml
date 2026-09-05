@@ -2,9 +2,16 @@ name: CI
 
 on:
   push:
-    branches: [ main, 0.6.0-dev.2, release/** ]
+    # Match the development-line convention (`<major>.<minor>.<patch>-dev.<n>`) rather than naming one branch, so a
+    # new line does not need a workflow edit to get CI. Feature branches keep getting CI through the pull request.
+    branches: [ main, '*.*.*-dev.*', release/** ]
   pull_request:
-    branches: [ main, 0.6.0-dev.2, release/** ]
+    # `labeled` is here so `full-ci` takes effect on an existing pull request. Without it the label is inert: the
+    # default types are opened/synchronize/reopened, so a label only ever reaches the scope step if a run happens to
+    # start afterwards. The `changes` job discards any other label immediately, so the auto-labeller does not double
+    # every pull request's CI.
+    types: [opened, synchronize, reopened, labeled]
+    branches: [ main, '*.*.*-dev.*', release/** ]
   workflow_dispatch:
     inputs:
       heavy:
@@ -25,6 +32,9 @@ env:
 jobs:
   changes:
     name: CI Scope
+    # A label event is only interesting when it is the one that changes the scope. Every other label -- including
+    # everything the auto-labeller applies -- skips the whole workflow rather than running it a second time.
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     runs-on: ubuntu-latest
     outputs:
       docs_only: ${{ steps.scope.outputs.docs_only }}
@@ -89,7 +99,7 @@ jobs:
               [ "$DISPATCH_HEAVY" = "true" ] && heavy=true
               ;;
             pull_request)
-              # A pull request into `main` or a release branch is a release candidate. One into a `0.6.0-dev.*` line
+              # A pull request into `main` or a release branch is a release candidate. One into a development line
               # is not, until it is labelled `full-ci`.
               case "$BASE_REF" in
                 main|release/*) heavy=true ;;
