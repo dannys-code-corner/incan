@@ -1081,6 +1081,65 @@ def use() -> None:
     );
 }
 
+/// RFC 107: a concrete type may constrain a type parameter, so an overload set can be keyed on `T` itself.
+///
+/// Trait bounds cannot express this for primitives. Incan adopts traits at the declaration site, so a library can
+/// never make `int` satisfy a marker trait it defines -- which left `cast[int](expr)`, the RFC's own example,
+/// inexpressible while `cast[SomeNewtypeTag](expr)` worked. Constraining by the type itself removes the tag.
+#[test]
+fn test_concrete_type_bound_selects_the_matching_overload() {
+    let source = r#"
+model Col:
+  name: str
+
+model IntCol:
+  src: str
+
+model FloatCol:
+  src: str
+
+def cast[T with int](expr: Col) -> IntCol:
+  return IntCol(src=expr.name)
+
+def cast[T with float](expr: Col) -> FloatCol:
+  return FloatCol(src=expr.name)
+
+def use() -> None:
+  a: IntCol = cast[int](Col(name="q"))
+  b: FloatCol = cast[float](Col(name="p"))
+  return
+"#;
+    let result = check_str(source);
+    assert!(
+        result.is_ok(),
+        "expected a concrete type bound to select its overload, got {result:?}"
+    );
+}
+
+/// The bound is a constraint, not a suggestion: a type argument that is not the bound type is rejected.
+#[test]
+fn test_concrete_type_bound_rejects_a_different_type_argument() {
+    let source = r#"
+model Col:
+  name: str
+
+model IntCol:
+  src: str
+
+def only_int[T with int](expr: Col) -> IntCol:
+  return IntCol(src=expr.name)
+
+def use() -> None:
+  value = only_int[str](Col(name="q"))
+  return
+"#;
+    let errs = check_str_err(source, "a concrete type bound should reject a mismatched type argument");
+    assert!(
+        errs.iter().any(|err| err.message.contains("violates generic bound")),
+        "expected a bound-violation diagnostic, got {errs:?}"
+    );
+}
+
 #[test]
 fn test_generic_type_token_parameter_accepts_type_name_value() {
     let source = r#"

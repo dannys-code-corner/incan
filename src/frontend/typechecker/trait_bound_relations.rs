@@ -126,12 +126,39 @@ impl TypeChecker {
             .flatten()
     }
 
+    /// Resolve a bound spelling that names a type rather than a trait.
+    ///
+    /// RFC 107 keys an overload set on the compile-time type argument itself, so `with int` constrains `T` to the
+    /// type `int` rather than to a trait named `int`. Traits are checked first everywhere this is consulted, so a
+    /// spelling that is a trait never reaches here and a library cannot shadow a trait bound with a type of the
+    /// same name.
+    ///
+    /// The name is resolved through the ordinary annotation resolver rather than compared as text, so `int`, a
+    /// model, an imported type, and an alias of one all reach the same answer a parameter annotation would.
+    fn bound_names_a_type(&self, bound: &str) -> Option<ResolvedType> {
+        if builtin_traits::from_str(bound).is_some() || self.lookup_semantic_trait_info(bound).is_some() {
+            return None;
+        }
+        let annotation = crate::frontend::ast::Type::Simple(bound.to_string());
+        match crate::frontend::symbols::resolve_type(&annotation, &self.symbols) {
+            // An unresolved name is not a type bound; leaving it here lets the trait paths report it as they do now.
+            ResolvedType::Unknown | ResolvedType::Named(_) => None,
+            resolved => Some(resolved),
+        }
+    }
+
     /// Best-effort check whether a concrete type satisfies an explicit generic bound.
     pub(in crate::frontend::typechecker) fn type_satisfies_explicit_bound(
         &self,
         ty: &ResolvedType,
         bound: &str,
     ) -> bool {
+        // RFC 107: a bound may name a type, and a type argument satisfies it by being that type. Checked before the
+        // trait paths only for spellings `bound_names_a_type` has already proven are not traits, so trait bounds
+        // keep their existing meaning exactly.
+        if let Some(bound_ty) = self.bound_names_a_type(bound) {
+            return *ty == bound_ty;
+        }
         if bound == builtin_traits::as_str(TraitId::Awaitable) {
             return self.type_satisfies_awaitable_bound(ty, None);
         }
