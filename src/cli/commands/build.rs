@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use crate::backend::project::generator::GENERATED_CARGO_TARGET_DIR_ENV;
 use crate::backend::project::runner::resolved_cargo_executable;
 use crate::backend::replacement::{
-    ReplacementExecutionError, execute_prevalidated_free_function, prepare_free_function_execution,
+    ReplacementExecutionError, ReplacementExecutionGraph, execute_prevalidated_free_function,
+    prepare_free_function_execution_in_graph,
 };
 use crate::backend::selection::{
     BackendExecutionReceipt, BackendKind, BackendSelection, FallbackOutcome, FallbackPolicy, SemanticModuleProvenance,
@@ -2513,6 +2514,68 @@ fn replacement_profile_cli_error(error: ReplacementExecutionError, entrypoint: &
     }
 }
 
+/// Return the file a refusal's span was measured in, falling back to the executed entrypoint.
+///
+/// A refusal raised while walking a module the entrypoint merely reaches carries that module's identity. Resolving it
+/// back to a file keeps the reported location and the reported span describing the same source.
+fn replacement_refusal_source<'a>(
+    error: &ReplacementExecutionError,
+    entrypoint: &'a Path,
+    reachable: &'a [ReplacementModuleInputs],
+) -> &'a Path {
+    let Some(module_id) = error.measured_module() else {
+        return entrypoint;
+    };
+    reachable
+        .iter()
+        .find(|module| incan_semantics_core::module_identity_for_path(&module.module_path) == module_id)
+        .map_or(entrypoint, |module| module.file_path.as_path())
+}
+
+/// Whether one import names another module of the project currently being built.
+///
+/// #1260 executes a call that leaves the entry module, so an import naming a sibling of that module is now inside the
+/// profile: the session analyzes the whole source graph at once, and the execution graph resolves the callee's
+/// canonical identity to the module that declares it. Everything reaching outside that graph stays refused -- the
+/// standard library, a `pub::` package dependency, and every Rust or Python interop form each bring a boundary the
+/// source-only profile has no evidence for, and each is owned by a separate child of #989.
+fn replacement_local_module_import(import: &crate::frontend::ast::ImportDecl) -> bool {
+    let path = match &import.kind {
+        ImportKind::Module(path) | ImportKind::From { module: path, .. } => path,
+        // `pub::` dependencies, Rust crates and Python modules are other packages by construction.
+        _ => return false,
+    };
+    let Some(first) = path.segments.first() else {
+        return false;
+    };
+    first.as_str() != incan_core::lang::stdlib::STDLIB_ROOT
+}
+
+/// Describe a Rust-interop import in terms of the boundary it crosses, when it is one.
+///
+/// A `rust::` import is refused for a different reason than an ordinary one, and #1262 requires the difference to be
+/// visible: a reader has to be able to tell a construct this profile has not reached yet from a boundary that needs a
+/// host it does not have. Reporting both as "import declaration" told them neither, and named the wrong thing to go
+/// looking for.
+///
+/// The crate is named because it is the actionable part. Which crate a call would have entered is what a reader needs
+/// to know, and it is the identity the eventual interop plan is selected against.
+fn replacement_rust_interop_boundary(import: &crate::frontend::ast::ImportDecl) -> Option<String> {
+    let (crate_name, form) = match &import.kind {
+        ImportKind::RustCrate { crate_name, .. } => (crate_name, "module import"),
+        ImportKind::RustFrom { crate_name, .. } => (crate_name, "item import"),
+        ImportKind::Python(module) => {
+            return Some(format!(
+                "Python interop import of `{module}`, which this backend has no host for"
+            ));
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "Rust interop {form} of crate `{crate_name}`: executing it needs a Rust interop host, and this route has none"
+    ))
+}
+
 /// Return the first unsupported source-module boundary with its original Incan source span.
 fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> Option<ReplacementExecutionError> {
     if let Some(rust_module) = &program.rust_module_path {
@@ -2523,8 +2586,14 @@ fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> 
     }
     let mut async_activation_seen = false;
     for declaration in &program.declarations {
-        if matches!(declaration.node, Declaration::Function(_) | Declaration::Docstring(_))
-            || matches!(&declaration.node, Declaration::Model(model) if is_direct_replacement_plain_model(model))
+        // An alias is a binding to a declaration, not a declaration of its own: it introduces a second name for a
+        // symbol that already exists and is admitted, or refused, on its own terms wherever it is declared. Refusing
+        // the binding would refuse a name rather than any behavior, and the target is reached through the same
+        // canonical identity either way -- which is the property #1261 exists to prove.
+        if matches!(
+            declaration.node,
+            Declaration::Function(_) | Declaration::Docstring(_) | Declaration::Alias(_)
+        ) || matches!(&declaration.node, Declaration::Model(model) if is_direct_replacement_plain_model(model))
             || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_fieldless_enum(enum_decl))
             || matches!(&declaration.node, Declaration::Enum(enum_decl) if is_direct_replacement_value_enum(enum_decl))
         {
@@ -2542,10 +2611,15 @@ fn replacement_module_profile_error(program: &crate::frontend::ast::Program) -> 
                 async_activation_seen = true;
                 continue;
             }
+            if !exact_async_activation && replacement_local_module_import(import) {
+                continue;
+            }
             let description = if exact_async_activation {
-                "duplicate `import std.async` replacement activation"
+                "duplicate `import std.async` replacement activation".to_string()
+            } else if let Some(boundary) = replacement_rust_interop_boundary(import) {
+                boundary
             } else {
-                "import declaration"
+                "import declaration".to_string()
             };
             return Some(ReplacementExecutionError::unsupported_profile(
                 description,
@@ -2599,6 +2673,26 @@ struct ReplacementSessionInputs {
     module_path: Vec<String>,
     type_info: typechecker::TypeCheckInfo,
     semantic_module: SemanticModuleProvenance,
+    /// Every non-entry module the one analysis already checked, in collection order.
+    ///
+    /// The session collects and analyzes the whole root source graph and previously kept only the entrypoint, which
+    /// is all the same-module #988 profile can execute. #1260 executes a call that leaves the entry module, so the
+    /// modules that call may reach have to survive the same analysis rather than be re-collected or re-checked
+    /// later: re-analysis would produce a second checker authority, and identities minted by two analyses cannot be
+    /// compared.
+    ///
+    /// The entrypoint is deliberately not repeated here. It stays in the fields above so existing readers keep
+    /// working unchanged, and the execution graph is assembled with the entry module as its primary.
+    reachable_modules: Vec<ReplacementModuleInputs>,
+}
+
+/// One checked non-entry module retained from the replacement session's single analysis.
+struct ReplacementModuleInputs {
+    program: crate::frontend::ast::Program,
+    module_path: Vec<String>,
+    type_info: typechecker::TypeCheckInfo,
+    /// The file this module was collected from, so a refusal raised in it can name its own source.
+    file_path: PathBuf,
 }
 
 /// Collect and analyze the replacement entrypoint once through the project-selected compilation session.
@@ -2640,10 +2734,26 @@ fn replacement_session_inputs(
     let semantic_snapshot_rendering = semantic_snapshot.render_snapshot();
     let source_identity = digest_output(&[entry_module.source.as_str()]);
 
+    let reachable_modules = modules
+        .iter()
+        .filter(|module| module.file_path != entry_module.file_path)
+        .filter_map(|module| {
+            analysis
+                .module_analysis_for_path(&module.file_path)
+                .map(|checked| ReplacementModuleInputs {
+                    program: module.ast.clone(),
+                    module_path: module.path_segments.clone(),
+                    type_info: checked.type_info().clone(),
+                    file_path: module.file_path.clone(),
+                })
+        })
+        .collect();
+
     Ok(ReplacementSessionInputs {
         program: entry_module.ast.clone(),
         module_path: entry_module.path_segments.clone(),
         type_info: entry_analysis.type_info().clone(),
+        reachable_modules,
         semantic_module: SemanticModuleProvenance::new(
             semantic_snapshot.hir.id.to_string(),
             semantic_snapshot.hir.path.clone(),
@@ -2696,21 +2806,66 @@ fn build_replacement_file_report(
         session_inputs.semantic_module.source_identity(),
         options.backend.fallback_policy,
     );
-    if let Some(error) = replacement_module_profile_error(&session_inputs.program) {
-        return refuse_replacement_profile(&selection, error, &entrypoint);
+    // Every module the call can reach has to satisfy the profile, not only the entrypoint. Allowing a local import
+    // means an unsupported declaration is now reachable from a file the entry never names, and refusing it here keeps
+    // the boundary a property of the executed graph rather than of whichever file happened to be the entrypoint.
+    // A refusal carries a span, and a span only means something beside the file it was measured in. Reporting every
+    // refusal against the entrypoint was harmless while only the entrypoint could raise one; now that a reachable
+    // module can, the pair has to travel together or the diagnostic points at the wrong file.
+    let profile_error = replacement_module_profile_error(&session_inputs.program)
+        .map(|error| (error, entrypoint.clone()))
+        .or_else(|| {
+            session_inputs
+                .reachable_modules
+                .iter()
+                // The one analysis also checks the standard-library modules the graph pulled in, which arrive under the
+                // generated `__incan_std` namespace rather than the source `std` spelling. Those are not project source
+                // and were never meant to satisfy a source-only profile -- `import std.async` legitimately reaches
+                // stdlib modules full of classes and imports. Only the project's own modules are
+                // executed here, so only they are held to the profile.
+                .filter(|module| {
+                    !matches!(
+                        module.module_path.first().map(String::as_str),
+                        Some(incan_core::lang::stdlib::STDLIB_ROOT | incan_core::lang::stdlib::INCAN_STD_NAMESPACE)
+                    )
+                })
+                .find_map(|module| {
+                    replacement_module_profile_error(&module.program).map(|error| (error, module.file_path.clone()))
+                })
+        });
+    if let Some((error, source_path)) = profile_error {
+        return refuse_replacement_profile(&selection, error, &source_path);
     }
     let body_ir = build_body_ir_module_v0(
         &session_inputs.program,
         &session_inputs.module_path,
         &session_inputs.type_info,
     );
-    let execution_plan = match prepare_free_function_execution(&body_ir, "main", &[]) {
-        Ok(plan) => plan,
+    // Lower every module the one analysis checked, not just the entrypoint. A call that leaves the entry module can
+    // only resolve if its callee's module was lowered from that same analysis; lowering it later, or from a second
+    // analysis, would mint identities that cannot be compared with the ones the entry module carries.
+    let reachable_body_ir: Vec<_> = session_inputs
+        .reachable_modules
+        .iter()
+        .map(|module| build_body_ir_module_v0(&module.program, &module.module_path, &module.type_info))
+        .collect();
+    let execution_graph = match ReplacementExecutionGraph::new(&body_ir, reachable_body_ir.iter()) {
+        Ok(graph) => graph,
         Err(error) => return refuse_replacement_profile(&selection, error, &entrypoint),
     };
+    let execution_plan = match prepare_free_function_execution_in_graph(execution_graph, "main", &[], None) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let source =
+                replacement_refusal_source(&error, &entrypoint, &session_inputs.reachable_modules).to_path_buf();
+            return refuse_replacement_profile(&selection, error, &source);
+        }
+    };
     let executed = resolve_available_replacement_execution(&selection)?;
-    let execution = execute_prevalidated_free_function(execution_plan)
-        .map_err(|error| replacement_profile_cli_error(error, &entrypoint))?;
+    let execution = execute_prevalidated_free_function(execution_plan).map_err(|error| {
+        let source = replacement_refusal_source(&error, &entrypoint, &session_inputs.reachable_modules);
+        replacement_profile_cli_error(error, source)
+    })?;
     let result_type = execution.value.scalar_type_name().ok_or_else(|| {
         CliError::failure("replacement execution produced a non-scalar value after scalar-result validation")
     })?;

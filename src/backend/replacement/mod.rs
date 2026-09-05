@@ -994,8 +994,119 @@ pub struct ReplacementExecution {
 /// The capability retains the exact typed Body IR, source-level function name, and concrete arguments that were
 /// validated. It lets selection/receipt code decide whether direct execution may proceed without rerunning profile
 /// validation or allowing an unvalidated Body IR body to reach the executor.
+/// The set of Body-IR modules one replacement execution may resolve a call into.
+///
+/// The executor previously held a single `&BodyIrModule`, which is exactly right for the bounded #988 profile where
+/// every reachable call is same-module: an imported callable deliberately carries no same-module `direct_call_id`,
+/// so there was nothing to resolve elsewhere. #1260 widens that to a call graph crossing one source-local module
+/// edge or one direct public path-package edge, which needs somewhere to look the callee's owning module up.
+///
+/// Resolution is by compiler-owned module identity. A module is never selected from a source spelling, an import
+/// spelling, a source path, a generated Rust name, or declaration order, which is the property that lets the same
+/// graph serve a local module edge and a package edge without the executor knowing which it crossed.
+///
+/// The single-module case remains a one-node graph, so the existing #988 behaviour is unchanged and its tests keep
+/// proving the same thing.
+#[derive(Debug, Clone)]
+pub struct ReplacementExecutionGraph<'module> {
+    primary: &'module BodyIrModule,
+    reachable: Vec<&'module BodyIrModule>,
+}
+
+impl<'module> ReplacementExecutionGraph<'module> {
+    /// Build the one-node graph that represents today's single-module execution.
+    #[must_use]
+    pub fn single_module(primary: &'module BodyIrModule) -> Self {
+        Self {
+            primary,
+            reachable: Vec::new(),
+        }
+    }
+
+    /// Build a graph whose entrypoint is `primary` and whose reachable callees may live in `reachable`.
+    ///
+    /// Duplicate module identities are rejected rather than silently de-duplicated: two modules claiming one identity
+    /// means the caller assembled the graph from disagreeing analyses, and picking either one would make dispatch
+    /// depend on assembly order.
+    pub fn new(
+        primary: &'module BodyIrModule,
+        reachable: impl IntoIterator<Item = &'module BodyIrModule>,
+    ) -> Result<Self, ReplacementExecutionError> {
+        let mut modules: Vec<&'module BodyIrModule> = Vec::new();
+        for module in reachable {
+            if module.module_id == primary.module_id || modules.iter().any(|seen| seen.module_id == module.module_id) {
+                // Anchor the refusal at the entrypoint module's first body, which is the only span this graph owns.
+                // A graph-assembly fault has no single source construct to point at, and inventing a synthetic span
+                // would put a location in a diagnostic that no source position backs.
+                let span = primary
+                    .bodies
+                    .first()
+                    .map(|body| body.span)
+                    .unwrap_or(incan_semantics_core::HirSourceSpan { start: 0, end: 0 });
+                return Err(unsupported(
+                    "duplicate module identity in the replacement execution graph",
+                    span,
+                ));
+            }
+            modules.push(module);
+        }
+        Ok(Self {
+            primary,
+            reachable: modules,
+        })
+    }
+
+    /// Return the module owning the entrypoint this execution was prepared for.
+    #[must_use]
+    pub fn primary(&self) -> &'module BodyIrModule {
+        self.primary
+    }
+
+    /// Return every module this execution may resolve into, entrypoint first.
+    pub fn modules(&self) -> impl Iterator<Item = &'module BodyIrModule> + '_ {
+        std::iter::once(self.primary).chain(self.reachable.iter().copied())
+    }
+
+    /// Resolve the declaration a canonical target selects, together with the module that owns it.
+    ///
+    /// This is the cross-module counterpart to [`BodyIrModule::body_for_canonical_target`], which answers only for
+    /// the module it is asked. Each module in the graph is asked in turn, and that method already refuses a target
+    /// whose module path is not its own, so a match means the owning module was found rather than a same-named
+    /// declaration in the wrong place.
+    ///
+    /// Two modules answering for one canonical identity is a contradiction rather than an ambiguity to break by
+    /// order: an identity names exactly one declaration site. `None` is returned instead, because dispatching to
+    /// either would make the choice depend on graph assembly order.
+    #[must_use]
+    pub fn body_for_canonical_target(
+        &self,
+        target: &incan_semantics_core::CanonicalSymbolId,
+    ) -> Option<(&'module BodyIrModule, &'module Body)> {
+        let mut found = self
+            .modules()
+            .filter_map(|module| module.body_for_canonical_target(target).map(|body| (module, body)));
+        let first = found.next()?;
+        found.next().is_none().then_some(first)
+    }
+
+    /// Resolve the module owning `module_id`, or `None` when the graph does not contain it.
+    ///
+    /// A `None` here is a refusal, not a fallback: an unresolvable callee must fail before program effects rather
+    /// than resolve against the caller's own module, which is the invariant
+    /// `a_cross_module_call_is_refused_by_the_single_module_executor` pins.
+    #[must_use]
+    pub fn module_for(&self, module_id: &CompilerNodeId) -> Option<&'module BodyIrModule> {
+        self.modules().find(|module| module.module_id == *module_id)
+    }
+}
+
 pub struct ValidatedFreeFunctionExecution<'module, 'args> {
-    module: &'module BodyIrModule,
+    /// Every module this execution may resolve a call into, entrypoint first.
+    ///
+    /// Held as a graph rather than a single module so #1260 can widen dispatch without changing this type again. The
+    /// single-module profile is a one-node graph, so today's resolution is unchanged: `graph.primary()` is the same
+    /// module the executor used before.
+    graph: ReplacementExecutionGraph<'module>,
     name: String,
     args: &'args [ReplacementValue],
     /// The provider runtime this execution's admitted provider operations were validated against.
@@ -1078,6 +1189,12 @@ pub enum ReplacementExecutionError {
         span_start: usize,
         /// End byte offset duplicated for typed error formatting.
         span_end: usize,
+        /// Module identity the span was measured in, when it is not the executed entrypoint's.
+        ///
+        /// A span is a byte range and means nothing without the file it was measured in. While only the entrypoint
+        /// could raise a refusal this was implicit; once a call can leave that module, a refusal raised in another
+        /// one has to say so or the diagnostic points at the wrong file.
+        module_id: Option<String>,
     },
     /// A selected operation reached a source-observable runtime failure.
     #[error("replacement backend runtime failure at original Incan source span {span_start}..{span_end}: {detail}")]
@@ -1153,6 +1270,38 @@ pub enum ReplacementExecutionError {
 }
 
 impl ReplacementExecutionError {
+    /// Record the module a refusal's span was measured in, when it is not the executed entrypoint's.
+    ///
+    /// Applied where a walk crosses into another module, so every refusal raised beyond that point carries its own
+    /// source rather than inheriting the entrypoint's. An error that already names a module keeps it: the innermost
+    /// module that refused is the one that owns the span.
+    pub(crate) fn measured_in_module(self, module: &str) -> Self {
+        match self {
+            Self::Unsupported {
+                description,
+                span,
+                span_start,
+                span_end,
+                module_id,
+            } => Self::Unsupported {
+                description,
+                span,
+                span_start,
+                span_end,
+                module_id: module_id.or_else(|| Some(module.to_string())),
+            },
+            other => other,
+        }
+    }
+
+    /// Return the module identity a refusal's span was measured in, when it is not the entrypoint's.
+    pub(crate) fn measured_module(&self) -> Option<&str> {
+        match self {
+            Self::Unsupported { module_id, .. } => module_id.as_deref(),
+            _ => None,
+        }
+    }
+
     /// Construct a typed, source-span-preserving refusal for an unsupported source-profile boundary.
     #[must_use]
     pub fn unsupported_profile(description: impl Into<String>, span: HirSourceSpan) -> Self {
@@ -1235,6 +1384,25 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
     args: &'args [ReplacementValue],
     providers: Option<&Rc<ProviderRuntime>>,
 ) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
+    prepare_free_function_execution_in_graph(ReplacementExecutionGraph::single_module(module), name, args, providers)
+}
+
+/// Validate and prepare one Body-IR free function whose reachable calls may leave its own module.
+///
+/// The graph names every module a call may resolve into, entrypoint first. Validation still runs against the
+/// entrypoint's module, because that is where the selected body and its arguments live; what the graph adds is the
+/// ability for a frame to execute against the module its callee was resolved to rather than the module the call was
+/// written in.
+///
+/// A one-node graph is exactly the previous behaviour, which is why
+/// [`prepare_free_function_execution_with_providers`] delegates here rather than duplicating the validation order.
+pub fn prepare_free_function_execution_in_graph<'module, 'args>(
+    graph: ReplacementExecutionGraph<'module>,
+    name: &str,
+    args: &'args [ReplacementValue],
+    providers: Option<&Rc<ProviderRuntime>>,
+) -> Result<ValidatedFreeFunctionExecution<'module, 'args>, ReplacementExecutionError> {
+    let module = graph.primary();
     let body = named_free_function(module, name)?;
     if body.is_generator() {
         return Err(unsupported("generator body", body.span));
@@ -1248,10 +1416,15 @@ pub fn prepare_free_function_execution_with_providers<'module, 'args>(
     }
     validate_scalar_arguments(args, body.span)?;
     validate_selected_parameter_arguments(&body.params, args)?;
-    validate_reachable_typed_numeric_profile(module, body)?;
-    execution_preflight::validate(module, body, providers.map(Rc::as_ref))?;
+    validate_reachable_typed_numeric_profile(&graph, module, body)?;
+    let preflight_reachable: Vec<BodyIrModule> = graph
+        .modules()
+        .filter(|candidate| candidate.module_id != module.module_id)
+        .cloned()
+        .collect();
+    execution_preflight::validate(module, &preflight_reachable, body, providers.map(Rc::as_ref))?;
     Ok(ValidatedFreeFunctionExecution {
-        module,
+        graph,
         name: name.to_string(),
         args,
         providers: providers.cloned(),
@@ -1467,9 +1640,9 @@ pub fn execute_prevalidated_free_function_with_io(
     execution: ValidatedFreeFunctionExecution<'_, '_>,
     io: &mut ProgramIo<'_>,
 ) -> Result<ReplacementExecution, ReplacementExecutionError> {
-    let body = named_free_function(execution.module, &execution.name)?;
+    let body = named_free_function(execution.graph.primary(), &execution.name)?;
     let checkpoint = io.checkpoint();
-    let mut executor = BodyExecutor::new(execution.module, body, execution.args, execution.providers.clone(), io)?;
+    let mut executor = BodyExecutor::new(&execution.graph, body, execution.args, execution.providers.clone(), io)?;
     let (value, result_span) = if body.is_async {
         let task = executor.construct_task(body.clone(), executor.locals.clone(), body.span)?;
         (executor.drive_task(&task, body.span)?, body.span)
@@ -1677,15 +1850,17 @@ impl TypedNumericProfileKind {
 /// lossless widening, direct calls, scalar conversions and Display output, while keeping arithmetic, Debug,
 /// aggregates, methods and other unproved behavior explicitly non-green under #988.
 fn validate_reachable_typed_numeric_profile(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     root: &Body,
 ) -> Result<(), ReplacementExecutionError> {
     let mut visited = BTreeSet::new();
-    validate_typed_numeric_body_profile(module, root, &mut visited)
+    validate_typed_numeric_body_profile(graph, module, root, &mut visited)
 }
 
 /// Validate one reachable body once, following its source defaults and identity-selected sibling calls.
 fn validate_typed_numeric_body_profile(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     body: &Body,
     visited: &mut BTreeSet<CompilerNodeId>,
@@ -1693,31 +1868,34 @@ fn validate_typed_numeric_body_profile(
     if !visited.insert(body.direct_call_id.clone()) {
         return Ok(());
     }
-    validate_typed_numeric_types(body)?;
+    validate_typed_numeric_types(body).map_err(|error| error.measured_in_module(module.module_id.path()))?;
     for parameter in &body.params {
         if let CallableParamDefault::Source(computation) = &parameter.default {
-            validate_typed_numeric_statements(module, body, &computation.stmts, visited)?;
+            validate_typed_numeric_statements(graph, module, body, &computation.stmts, visited)?;
             let _ = typed_numeric_operand_kind(body, &computation.result, computation.span)?;
         }
     }
-    validate_typed_numeric_statements(module, body, &body.block.stmts, visited)
+    validate_typed_numeric_statements(graph, module, body, &body.block.stmts, visited)
+        .map_err(|error| error.measured_in_module(module.module_id.path()))
 }
 
 /// Validate a statement sequence for typed-numeric carrier movement and explicit operation refusals.
 fn validate_typed_numeric_statements(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     body: &Body,
     statements: &[Statement],
     visited: &mut BTreeSet<CompilerNodeId>,
 ) -> Result<(), ReplacementExecutionError> {
     for statement in statements {
-        validate_typed_numeric_statement(module, body, statement, visited)?;
+        validate_typed_numeric_statement(graph, module, body, statement, visited)?;
     }
     Ok(())
 }
 
 /// Validate one normalized statement without executing its effects.
 fn validate_typed_numeric_statement(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     body: &Body,
     statement: &Statement,
@@ -1725,10 +1903,10 @@ fn validate_typed_numeric_statement(
 ) -> Result<(), ReplacementExecutionError> {
     match &statement.kind {
         StatementKind::Assign { rvalue, .. } => {
-            validate_typed_numeric_rvalue(module, body, rvalue, statement.span, visited)
+            validate_typed_numeric_rvalue(graph, module, body, rvalue, statement.span, visited)
         }
         StatementKind::Call { callee, args, .. } => {
-            validate_typed_numeric_call(module, body, callee, args, statement.span, visited)
+            validate_typed_numeric_call(graph, module, body, callee, args, statement.span, visited)
         }
         StatementKind::Drop { .. } | StatementKind::Continue | StatementKind::Unsupported { .. } => Ok(()),
         StatementKind::If {
@@ -1737,14 +1915,14 @@ fn validate_typed_numeric_statement(
             else_block,
         } => {
             refuse_typed_numeric_operand(body, cond, statement.span, "condition")?;
-            validate_typed_numeric_statements(module, body, &then_block.stmts, visited)?;
+            validate_typed_numeric_statements(graph, module, body, &then_block.stmts, visited)?;
             if let Some(else_block) = else_block {
-                validate_typed_numeric_statements(module, body, &else_block.stmts, visited)?;
+                validate_typed_numeric_statements(graph, module, body, &else_block.stmts, visited)?;
             }
             Ok(())
         }
         StatementKind::Loop { body: loop_body } => {
-            validate_typed_numeric_statements(module, body, &loop_body.stmts, visited)
+            validate_typed_numeric_statements(graph, module, body, &loop_body.stmts, visited)
         }
         StatementKind::Break { value } => {
             if let Some(value) = value {
@@ -1791,7 +1969,7 @@ fn validate_typed_numeric_statement(
         StatementKind::Race { arms, .. } => {
             for arm in arms {
                 refuse_typed_numeric_operand(body, &arm.awaitable, statement.span, "race awaitable")?;
-                validate_typed_numeric_statements(module, body, &arm.body.stmts, visited)?;
+                validate_typed_numeric_statements(graph, module, body, &arm.body.stmts, visited)?;
                 let _ = typed_numeric_operand_kind(body, &arm.result, statement.span)?;
             }
             Ok(())
@@ -1801,6 +1979,7 @@ fn validate_typed_numeric_statement(
 
 /// Validate one rvalue, admitting carrier movement and refusing unproved typed-numeric operations.
 fn validate_typed_numeric_rvalue(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     body: &Body,
     rvalue: &Rvalue,
@@ -1881,11 +2060,11 @@ fn validate_typed_numeric_rvalue(
             }
             for parameter in params {
                 if let CallableParamDefault::Source(computation) = &parameter.default {
-                    validate_typed_numeric_statements(module, body, &computation.stmts, visited)?;
+                    validate_typed_numeric_statements(graph, module, body, &computation.stmts, visited)?;
                     let _ = typed_numeric_operand_kind(body, &computation.result, computation.span)?;
                 }
             }
-            validate_typed_numeric_statements(module, body, &closure.stmts, visited)?;
+            validate_typed_numeric_statements(graph, module, body, &closure.stmts, visited)?;
             let _ = typed_numeric_operand_kind(body, &closure.result, span)?;
             Ok(())
         }
@@ -1898,17 +2077,17 @@ fn validate_typed_numeric_rvalue(
             for operand in captured_operands {
                 let _ = typed_numeric_operand_kind(body, operand, span)?;
             }
-            validate_typed_numeric_statements(module, body, &generator.stmts, visited)
+            validate_typed_numeric_statements(graph, module, body, &generator.stmts, visited)
         }
         Rvalue::Match { scrutinee, arms } => {
             refuse_typed_numeric_operand(body, scrutinee, span, "match")?;
             for arm in arms {
                 validate_typed_numeric_pattern(&arm.pattern, span)?;
-                validate_typed_numeric_statements(module, body, &arm.guard_stmts, visited)?;
+                validate_typed_numeric_statements(graph, module, body, &arm.guard_stmts, visited)?;
                 if let Some(guard) = &arm.guard {
                     refuse_typed_numeric_operand(body, guard, span, "match guard")?;
                 }
-                validate_typed_numeric_statements(module, body, &arm.body_stmts, visited)?;
+                validate_typed_numeric_statements(graph, module, body, &arm.body_stmts, visited)?;
                 let _ = typed_numeric_operand_kind(body, &arm.result, span)?;
             }
             Ok(())
@@ -1919,6 +2098,7 @@ fn validate_typed_numeric_rvalue(
 
 /// Validate one call that receives a typed-numeric operand and follow any retained same-module target.
 fn validate_typed_numeric_call(
+    graph: &ReplacementExecutionGraph<'_>,
     module: &BodyIrModule,
     body: &Body,
     callee: &Callee,
@@ -1933,12 +2113,21 @@ fn validate_typed_numeric_call(
         .flatten()
         .collect::<Vec<_>>();
 
+    // Follow the callee into whichever module declares it. A same-module target is reached by its span identity; one
+    // that left the module carries a canonical identity instead, and the graph owns that resolution. Following both is
+    // what makes admitting a cross-module call below sound: the callee's own operations are validated under the same
+    // contract, in its own module, rather than being trusted because the call site could not see them.
     if let Callee::Function(CallableTarget::Named(target)) = callee
-        && target.direct_call_id.is_some()
         && target.builtin.is_none()
     {
-        let called = named_callable_body(module, target, span)?;
-        validate_typed_numeric_body_profile(module, called, visited)?;
+        if target.direct_call_id.is_some() {
+            let called = named_callable_body(module, target, span)?;
+            validate_typed_numeric_body_profile(graph, module, called, visited)?;
+        } else if let Some(canonical) = target.canonical.as_ref()
+            && let Some((owner, called)) = graph.body_for_canonical_target(canonical)
+        {
+            validate_typed_numeric_body_profile(graph, owner, called, visited)?;
+        }
     }
     let Some(kind) = kinds.first().copied() else {
         return Ok(());
@@ -1953,7 +2142,10 @@ fn validate_typed_numeric_call(
                 format!("`{}` conversion", target.name),
                 span,
             )),
-            None if target.direct_call_id.is_some() => Ok(()),
+            // A direct call is admitted whether the declaration is in this module or another one the graph resolved.
+            // `direct_call_id` alone made locality the criterion; the callee's operations are validated above either
+            // way, so the distinction the profile actually cares about is that the frontend resolved the call at all.
+            None if target.direct_call_id.is_some() || target.canonical.is_some() => Ok(()),
             other => Err(typed_numeric_operation_refusal(
                 kind,
                 format!(
@@ -3098,7 +3290,12 @@ fn validate_call_profile(
             true
         }
         Callee::Function(CallableTarget::Named(target)) => {
-            target.direct_call_id.is_some()
+            // `direct_call_id` is a span identity that only exists for a same-module declaration, so requiring it made
+            // locality the admission criterion. #1260 executes calls that leave the entry module, where the frontend
+            // resolves the callee to a canonical identity instead. Resolution is the property this gate actually
+            // needs: an unresolved call carries neither. Whether the execution graph holds that identity's body is
+            // decided at dispatch, which reports its own error rather than being silently admitted here.
+            (target.direct_call_id.is_some() || target.canonical.is_some())
                 && target.builtin.is_none()
                 && validate_argument_binding_profile(&target.binding)
         }
@@ -3742,6 +3939,12 @@ fn validate_write_place(
 /// Mutable interpreter state for one Body-IR execution.
 struct BodyExecutor<'run, 'writer> {
     module: BodyIrModule,
+    /// Modules other than this frame's own that a resolved call may execute against.
+    ///
+    /// Shared rather than cloned per frame: a nested frame inherits the same set, and the graph is immutable for the
+    /// life of one execution. `module` stays owned because a frame executes against exactly one module and every
+    /// existing lookup reads it directly.
+    reachable: Rc<Vec<BodyIrModule>>,
     locals: BTreeMap<LocalId, ReplacementValue>,
     /// Checked local types for the currently selected declaration or its nested source-local frame.
     local_types: BTreeMap<LocalId, IncanType>,
@@ -3773,14 +3976,23 @@ struct BodyExecutor<'run, 'writer> {
 impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     /// Bind the already-typechecked call arguments to their Body-IR parameter locals.
     fn new(
-        module: &BodyIrModule,
+        graph: &ReplacementExecutionGraph<'_>,
         body: &Body,
         args: &[ReplacementValue],
         providers: Option<Rc<ProviderRuntime>>,
         io: &'run mut ProgramIo<'writer>,
     ) -> Result<Self, ReplacementExecutionError> {
+        let module = graph.primary();
+        let reachable = Rc::new(
+            graph
+                .modules()
+                .filter(|candidate| candidate.module_id != module.module_id)
+                .cloned()
+                .collect::<Vec<_>>(),
+        );
         let mut executor = Self {
             module: module.clone(),
+            reachable,
             locals: BTreeMap::new(),
             local_types: BTreeMap::new(),
             ownership_reads: Vec::new(),
@@ -3802,6 +4014,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     /// Build an isolated executor for a nested callable, default computation, or suspended generator frame.
     fn with_locals(
         module: &BodyIrModule,
+        reachable: Rc<Vec<BodyIrModule>>,
         locals: BTreeMap<LocalId, ReplacementValue>,
         local_types: BTreeMap<LocalId, IncanType>,
         steps: usize,
@@ -3809,6 +4022,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     ) -> Self {
         Self {
             module: module.clone(),
+            reachable,
             locals,
             local_types,
             ownership_reads: Vec::new(),
@@ -3868,6 +4082,9 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
     }
 
     /// Execute an isolated frame against the local-type table owned by that frame's declaration.
+    ///
+    /// The frame runs in this executor's own module, which is correct for every same-module call in the #988 profile.
+    /// A frame whose callee was resolved to another module goes through [`Self::execute_child_in_module`] instead.
     fn execute_child_with_local_types<T>(
         &mut self,
         locals: BTreeMap<LocalId, ReplacementValue>,
@@ -3875,10 +4092,36 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         steps: usize,
         execute: impl FnOnce(&mut BodyExecutor<'_, 'writer>) -> Result<T, ReplacementExecutionError>,
     ) -> Result<T, ReplacementExecutionError> {
-        let mut child = BodyExecutor::with_locals(&self.module, locals, local_types, steps, self.io);
+        let module = self.module.clone();
+        self.execute_child_in_module(&module, locals, local_types, steps, execute)
+    }
+
+    /// Execute an isolated frame that is owned by `module` rather than by this executor's own module.
+    ///
+    /// Every nested frame -- callable, generator, task, default computation, and adapter -- reaches its executor
+    /// through here, so this is the one place a cross-module call changes what a child frame executes against. The
+    /// caller passes the module the callee was *resolved* to, never the module the call was written in: a frame that
+    /// kept the caller's module would resolve an imported body against the wrong declaration table, which is the
+    /// failure `a_cross_module_call_is_refused_by_the_single_module_executor` exists to prevent.
+    ///
+    /// Evidence merging is unchanged and deliberately module-agnostic. Ownership reads, runtime requirements, body
+    /// snapshots, step count, task identities, and lifecycle events belong to the one receipt-bound execution rather
+    /// than to whichever module a frame happened to run in, so they merge upward the same way across a module edge.
+    fn execute_child_in_module<T>(
+        &mut self,
+        module: &BodyIrModule,
+        locals: BTreeMap<LocalId, ReplacementValue>,
+        local_types: BTreeMap<LocalId, IncanType>,
+        steps: usize,
+        execute: impl FnOnce(&mut BodyExecutor<'_, 'writer>) -> Result<T, ReplacementExecutionError>,
+    ) -> Result<T, ReplacementExecutionError> {
+        let mut child =
+            BodyExecutor::with_locals(module, Rc::clone(&self.reachable), locals, local_types, steps, self.io);
         child.next_task_id = self.next_task_id;
         child.providers = self.providers.clone();
-        let result = execute(&mut child);
+        // A frame running in another module raises refusals measured in that module's source, so record it here
+        // rather than letting the failure inherit the entrypoint's file on its way out.
+        let result = execute(&mut child).map_err(|error| error.measured_in_module(module.module_id.path()));
         let BodyExecutor {
             ownership_reads,
             runtime_requirements,
@@ -4664,7 +4907,7 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
         args: &[&Operand],
         span: HirSourceSpan,
     ) -> Result<ReplacementValue, ReplacementExecutionError> {
-        let body = named_callable_body(&self.module, target, span)?.clone();
+        let (callee_module, body) = self.resolve_named_callable(target, span)?;
         validate_direct_body_profile(&body)?;
         if body.is_async && !target.type_args.is_empty() {
             return Err(unsupported("generic async callable target", span));
@@ -4694,7 +4937,9 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 )),
             })));
         }
-        self.execute_child(locals, self.steps, |child| {
+        let frame_module = callee_module.unwrap_or_else(|| self.module.clone());
+        let local_types_for_frame = self.local_types.clone();
+        self.execute_child_in_module(&frame_module, locals, local_types_for_frame, self.steps, |child| {
             child.record_body(&body);
             match child.execute_block(&body.block)? {
                 Flow::Return(Some(value), return_span) => {
@@ -4706,6 +4951,59 @@ impl<'run, 'writer> BodyExecutor<'run, 'writer> {
                 }
             }
         })
+    }
+
+    /// Resolve a named call to its declaration, and to the module that owns it when that is not this frame's own.
+    ///
+    /// A same-module call keeps its existing path exactly: `direct_call_id` is a span identity that only exists for a
+    /// declaration physically present here, so its presence already proves the callee is local and
+    /// `named_callable_body` performs the same checks it always did. `None` for the owning module means "this
+    /// frame's module", so nothing about same-module execution changes.
+    ///
+    /// A call whose callee is imported has no such span identity, and this is the only case that consults the wider
+    /// graph. It resolves on the canonical identity the typechecker selected, never on the callee's spelling: an
+    /// import spelling, alias, or source path is not a dispatch key, and a same-named declaration in a reachable
+    /// module must not answer for a different one.
+    fn resolve_named_callable(
+        &self,
+        target: &NamedCallableTarget,
+        span: HirSourceSpan,
+    ) -> Result<(Option<BodyIrModule>, Body), ReplacementExecutionError> {
+        if target.direct_call_id.is_some() {
+            return Ok((None, named_callable_body(&self.module, target, span)?.clone()));
+        }
+        let canonical = target.canonical.as_ref().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "named callable `{}` without a same-module declaration identity or a canonical target",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        let mut resolved = self
+            .reachable
+            .iter()
+            .filter_map(|module| module.body_for_canonical_target(canonical).map(|body| (module, body)));
+        let (module, body) = resolved.next().ok_or_else(|| {
+            unsupported(
+                format!(
+                    "named callable `{}` resolves to a declaration outside this execution graph",
+                    target.name
+                ),
+                span,
+            )
+        })?;
+        if resolved.next().is_some() {
+            return Err(unsupported(
+                format!(
+                    "named callable `{}` resolves to more than one module in this execution graph",
+                    target.name
+                ),
+                span,
+            ));
+        }
+        Ok((Some(module.clone()), body.clone()))
     }
 
     /// Capture one admitted map or filter adapter without polling its source or callback.
@@ -7068,6 +7366,7 @@ fn unsupported(description: impl Into<String>, span: HirSourceSpan) -> Replaceme
         span,
         span_start: span.start,
         span_end: span.end,
+        module_id: None,
     }
 }
 
@@ -7656,8 +7955,14 @@ mod tests {
         let mut stdout = std::io::sink();
         let mut stderr = std::io::sink();
         let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-        let mut executor =
-            BodyExecutor::with_locals(&module, BTreeMap::new(), BTreeMap::new(), MAX_EXECUTION_STEPS, &mut io);
+        let mut executor = BodyExecutor::with_locals(
+            &module,
+            Rc::new(Vec::new()),
+            BTreeMap::new(),
+            BTreeMap::new(),
+            MAX_EXECUTION_STEPS,
+            &mut io,
+        );
         let mut generator = ReplacementGenerator {
             frame: GeneratorFrame::new(
                 BTreeMap::new(),
@@ -7743,7 +8048,7 @@ mod tests {
         let mut stdout = std::io::sink();
         let mut stderr = std::io::sink();
         let mut io = ProgramIo::new(&mut stdout, &mut stderr);
-        let mut executor = BodyExecutor::with_locals(&module, locals, BTreeMap::new(), 0, &mut io);
+        let mut executor = BodyExecutor::with_locals(&module, Rc::new(Vec::new()), locals, BTreeMap::new(), 0, &mut io);
         let arms = [
             RaceArm {
                 awaitable: Operand::place(Place::from_local(winner_local), OwnershipFact::Borrow, false),
