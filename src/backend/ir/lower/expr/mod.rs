@@ -90,7 +90,9 @@ impl AstLowering {
         receiver: &TypedExpr,
         dispatch: Option<IrMethodDispatch>,
     ) -> (String, Option<IrMethodDispatch>) {
-        if !can_use_source_method_projection(receiver, dispatch.as_ref()) {
+        if !can_use_source_method_projection(receiver, dispatch.as_ref())
+            || self.method_belongs_to_an_imported_type(call_span, dispatch.as_ref())
+        {
             return (source_method.to_string(), dispatch);
         }
         let rebase_source_stdlib = !matches!(dispatch, Some(IrMethodDispatch::Trait(_)));
@@ -105,6 +107,27 @@ impl AstLowering {
             other => other,
         };
         (projection, dispatch)
+    }
+
+    /// Whether this call reaches an inherent method declared by a package rather than by this compilation.
+    ///
+    /// A recoverable projection is a wrapper emitted beside a declaration, and only the compilation that declares the
+    /// type emits one. A package's inherent method therefore has no wrapper this compilation can name -- and when the
+    /// package's type is itself a newtype over a Rust type, as `std.async.sync.MutexGuard` is over
+    /// `incan_stdlib`'s `MutexGuard`, no wrapper exists at all, because Rust forbids an inherent `impl` on a foreign
+    /// type. Those methods are facades over the Rust ones and the call has to reach the Rust slot.
+    ///
+    /// Trait dispatch is deliberately excluded rather than caught here. A local type adopting a package's trait
+    /// carries that trait's package identity while its wrapper is emitted locally, so the trait cases are decided by
+    /// `can_use_source_method_projection` on the trait's own terms.
+    fn method_belongs_to_an_imported_type(&self, call_span: ast::Span, dispatch: Option<&IrMethodDispatch>) -> bool {
+        if dispatch.is_some() {
+            return false;
+        }
+        self.type_info
+            .as_ref()
+            .and_then(|info| info.resolved_identity(call_span))
+            .is_some_and(|identity| matches!(identity.origin, incan_semantics_core::SymbolOrigin::Package { .. }))
     }
 
     /// Convert a contained checked-C value contract into its private generated-Rust carrier.
