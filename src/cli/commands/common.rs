@@ -4138,6 +4138,39 @@ pub(crate) fn collect_incan_source_files(directory: &Path, files: &mut Vec<PathB
 }
 
 /// Collect one source graph from explicit seed modules through an already-resolved compilation session.
+/// Key one source file by identity rather than by the spelling used to reach it.
+///
+/// Module collection dedupes visited files and records dependency edges by path string. On Unix a file has one
+/// spelling, so the string is already an identity. Windows reaches the same file through several: `\` and `/` both
+/// separate components, `fs::canonicalize` returns the `\\?\` extended-length prefix, and components compare
+/// case-insensitively. A resolver and an enumerator can therefore hand back the same file as two different strings,
+/// which collects it twice and surfaces much later as a duplicate checked module rather than as a path problem.
+///
+/// This is deliberately an identity function off Windows. Canonicalizing everywhere would also resolve symlinks,
+/// which would change which files Unix considers already visited, and that is not this function's business to decide.
+pub(crate) fn source_identity_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        fs::canonicalize(path)
+            .map(|canonical| canonical.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| path.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
+    }
+}
+
+/// Parse every source file reachable from the given seeds and return them in dependency order.
+///
+/// Seeds are `(file path, module name, module segments)` triples. Each file is parsed once, its imports are resolved
+/// into further seeds, and the resulting edges drive a topological sort so a module is always parsed before the
+/// modules that depend on it.
+///
+/// Visited files and dependency edges are keyed through [`source_identity_key`] rather than by the path string the
+/// file happened to be reached by. Both sides of that keying must agree with the key
+/// [`topologically_sort_modules`] builds its module map from: if they diverge, edges silently fail to match a module
+/// and the sort quietly loses ordering constraints rather than reporting a problem.
 fn collect_modules_detailed_from_seeds(
     path: PathBuf,
     session: &CompilationSession,
@@ -4159,11 +4192,12 @@ fn collect_modules_detailed_from_seeds(
         }
     };
     while let Some((file_path, module_name, path_segments)) = to_process.pop() {
-        if processed.contains(&file_path) {
+        let file_key = source_identity_key(&file_path);
+        if processed.contains(&file_key) {
             continue;
         }
-        processed.insert(file_path.clone());
-        dependency_edges.entry(file_path.clone()).or_default();
+        processed.insert(file_key.clone());
+        dependency_edges.entry(file_key.clone()).or_default();
 
         let source = read_source_for_diagnostics(&file_path)?;
         let file_path_obj = Path::new(&file_path);
@@ -4200,13 +4234,11 @@ fn collect_modules_detailed_from_seeds(
                 let module_segments = stdlib_module_segments(&module_path);
                 let module_name = module_segments.join("_");
                 let dep_path_str = source_path.to_string_lossy().to_string();
-                if !processed.contains(&dep_path_str) {
-                    to_process.push((dep_path_str.clone(), module_name, module_segments));
+                let dep_key = source_identity_key(&dep_path_str);
+                if !processed.contains(&dep_key) {
+                    to_process.push((dep_path_str, module_name, module_segments));
                 }
-                dependency_edges
-                    .entry(file_path.clone())
-                    .or_default()
-                    .insert(dep_path_str);
+                dependency_edges.entry(file_key.clone()).or_default().insert(dep_key);
             }
         }
         if uses_result_combinator_surface(&ast) {
@@ -4216,13 +4248,11 @@ fn collect_modules_detailed_from_seeds(
                 let module_segments = stdlib_module_segments(&module_path);
                 let module_name = module_segments.join("_");
                 let dep_path_str = source_path.to_string_lossy().to_string();
-                if !processed.contains(&dep_path_str) {
-                    to_process.push((dep_path_str.clone(), module_name, module_segments));
+                let dep_key = source_identity_key(&dep_path_str);
+                if !processed.contains(&dep_key) {
+                    to_process.push((dep_path_str, module_name, module_segments));
                 }
-                dependency_edges
-                    .entry(file_path.clone())
-                    .or_default()
-                    .insert(dep_path_str);
+                dependency_edges.entry(file_key.clone()).or_default().insert(dep_key);
             }
         }
         for resolved in resolve_program_source_imports(&ast, current_base, Some(&session.source_root)) {
@@ -4247,25 +4277,21 @@ fn collect_modules_detailed_from_seeds(
                     let module_segments = stdlib_module_segments(&module_path);
                     let module_name = module_segments.join("_");
                     let dep_path_str = source_path.to_string_lossy().to_string();
-                    if !processed.contains(&dep_path_str) {
-                        to_process.push((dep_path_str.clone(), module_name, module_segments));
+                    let dep_key = source_identity_key(&dep_path_str);
+                    if !processed.contains(&dep_key) {
+                        to_process.push((dep_path_str, module_name, module_segments));
                     }
-                    dependency_edges
-                        .entry(file_path.clone())
-                        .or_default()
-                        .insert(dep_path_str);
+                    dependency_edges.entry(file_key.clone()).or_default().insert(dep_key);
                 }
                 SourceModuleImportResolution::Local(module_ref) => {
                     let dep_path_str = module_ref.file_path.to_string_lossy().to_string();
+                    let dep_key = source_identity_key(&dep_path_str);
                     let module_segments = canonicalize_source_module_segments(&module_ref.path_segments);
                     let module_name = module_segments.join("_");
-                    if !processed.contains(&dep_path_str) {
-                        to_process.push((dep_path_str.clone(), module_name, module_segments));
+                    if !processed.contains(&dep_key) {
+                        to_process.push((dep_path_str, module_name, module_segments));
                     }
-                    dependency_edges
-                        .entry(file_path.clone())
-                        .or_default()
-                        .insert(dep_path_str);
+                    dependency_edges.entry(file_key.clone()).or_default().insert(dep_key);
                 }
                 SourceModuleImportResolution::SelfImport {
                     module_ref,
@@ -4315,7 +4341,7 @@ pub(crate) fn topologically_sort_modules(
     let mut module_by_path: HashMap<String, ParsedModule> = HashMap::new();
     let mut order_index: HashMap<String, usize> = HashMap::new();
     for (idx, module) in modules.into_iter().enumerate() {
-        let key = module.file_path.to_string_lossy().to_string();
+        let key = source_identity_key(&module.file_path.to_string_lossy());
         order_index.insert(key.clone(), idx);
         module_by_path.insert(key, module);
     }
@@ -8130,5 +8156,43 @@ def main() -> None:
             vec![PathBuf::from("nested/module.incn"), PathBuf::from("root.incn")]
         );
         Ok(())
+    }
+
+    /// Two spellings of one file must key to the same identity, or module collection visits it twice.
+    ///
+    /// This is the defect behind #1357: Windows reaches a file through backslash and forward-slash separators and
+    /// through the extended-length prefix that `fs::canonicalize` returns, so a raw-string key let the same source be
+    /// collected twice and surface later as a duplicate checked module.
+    #[cfg(windows)]
+    #[test]
+    fn source_identity_key_collapses_windows_path_spellings() -> Result<(), Box<dyn std::error::Error>> {
+        let directory = tempfile::tempdir()?;
+        let file = directory.path().join("ops.incn");
+        fs::write(&file, "\n")?;
+
+        let backslashes = file.to_string_lossy().replace('/', "\\");
+        let forward_slashes = backslashes.replace('\\', "/");
+        let canonical = fs::canonicalize(&file)?.to_string_lossy().into_owned();
+
+        let key = super::source_identity_key(&backslashes);
+        assert_eq!(
+            super::source_identity_key(&forward_slashes),
+            key,
+            "separator spelling must not change a file's identity"
+        );
+        assert_eq!(
+            super::source_identity_key(&canonical),
+            key,
+            "the extended-length canonical form must not change a file's identity"
+        );
+        Ok(())
+    }
+
+    /// Off Windows the key is deliberately the path itself, so Unix visit behavior is unchanged.
+    #[cfg(not(windows))]
+    #[test]
+    fn source_identity_key_is_an_identity_function_off_windows() {
+        let path = "/tmp/some/module.incn";
+        assert_eq!(super::source_identity_key(path), path);
     }
 }
