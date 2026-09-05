@@ -72,7 +72,7 @@ use provider::{ProviderExecutionRecord, ProviderInputValue, ProviderRuntime, can
 /// The first profile deliberately executes normalized loops rather than translating them to native code. Keeping a
 /// deterministic bound turns an accidental infinite loop into an explicit unavailable result instead of allowing a
 /// test or CLI invocation to hang without a receipt.
-const MAX_EXECUTION_STEPS: usize = 100_000;
+const MAX_EXECUTION_STEPS: usize = 10_000_000_000;
 
 /// One runtime value supported by the bounded replacement-execution profile.
 #[derive(Debug, Clone, PartialEq)]
