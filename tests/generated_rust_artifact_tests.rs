@@ -534,3 +534,50 @@ def main() -> None:
 
     Ok(())
 }
+
+/// A package that calls between its own modules must project the callee's emitted name.
+///
+/// Regression for #1174. A package origin says which library *declares* a method; it does not say the method is
+/// foreign to this build. Reading it as the latter made a package's own build treat its own declarations as imported
+/// and emit a raw `c.bumped()` where the wrapper it was itself emitting is named `__incan_v1_…`. Building
+/// `stdlib-core` then failed with 67 lowering errors, because the checked registry lowering requires the projected
+/// name.
+///
+/// Deliberately a generated-Rust assertion rather than a build-to-completion one: `incan build --lib` emits the
+/// generated project *before* the dependency check stops it, so this costs about a second and needs no Oven bake.
+/// That matters, because the defect is otherwise reachable only through a cold SDK component build -- minutes of
+/// work that neither a local suite nor a gated development pull request performs.
+#[test]
+fn a_package_projects_a_call_into_its_own_sibling_module() -> Result<(), Box<dyn std::error::Error>> {
+    let tmp = tempfile::tempdir()?;
+    let root = tmp.path().join("pkgprobe");
+    let src = root.join("src");
+    fs::create_dir_all(&src)?;
+    fs::write(
+        root.join("incan.toml"),
+        "[project]\nname = \"pkgprobe\"\nversion = \"0.1.0\"\n",
+    )?;
+    fs::write(
+        src.join("types.incn"),
+        "pub model Counter:\n    pub value: int\n\n    def bumped(self) -> int:\n        return self.value + 1\n",
+    )?;
+    fs::write(
+        src.join("lib.incn"),
+        "from types import Counter\n\npub def probe() -> int:\n  c = Counter(value=41)\n  return c.bumped()\n",
+    )?;
+
+    // The command stops at the dependency check, which is expected and not what this pins. The generated project is
+    // already written by then, and it is the artifact under test.
+    let _ = run_incan(&root, &["build", "--lib", "src/lib.incn"])?;
+
+    let generated = fs::read_to_string(root.join("target/lib/src/lib.rs"))?;
+    assert!(
+        !generated.contains("c.bumped()"),
+        "a sibling module's method must not be called by its source spelling:\n{generated}"
+    );
+    assert!(
+        generated.contains("__incan_v1_"),
+        "the call must name the projected wrapper this build emits:\n{generated}"
+    );
+    Ok(())
+}
