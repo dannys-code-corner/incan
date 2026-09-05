@@ -117,6 +117,8 @@ wasmtime = { version = "36.0.14", default-features = false, features = ["craneli
 wasmtime-wasi = { version = "36.0.14", default-features = false, features = ["preview1"] }
 
 [dev-dependencies]
+# SPIKE ONLY -- binary encoding comparison for the package-representation spike.
+postcard = { version = "1", features = ["alloc"], default-features = false }
 # Artifact-level `incan-v1` conformance decodes the pinned toolchain's v0 symbols independently of compiler state.
 rustc-demangle = "0.1.27"
 # Unix process-group cleanup for bounded subprocess regression tests.

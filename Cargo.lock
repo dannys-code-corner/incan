@@ -1458,6 +1458,7 @@ dependencies = [
  "libc",
  "md-5",
  "miette",
+ "postcard",
  "prettyplease",
  "proc-macro2",
  "proptest",
