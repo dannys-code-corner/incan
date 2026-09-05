@@ -73,6 +73,15 @@ endif
 # blank spacer lines, which carry no escapes.
 ECHO := printf '%b\n'
 
+# Status glyphs, spelled as octal escapes rather than written literally. GNU Make on Windows re-encodes non-ASCII
+# recipe text on its way to the shell — it reads the file's UTF-8 as the ANSI codepage and re-emits that as UTF-8, so
+# a literal check mark arrives as mojibake no matter which emitter prints it. Keeping the bytes as escapes leaves the
+# recipe pure ASCII, which Make passes through untouched, and `printf %b` reconstructs the exact character at runtime.
+# Identical output on every host.
+SYM_CHECK := \0342\0234\0223
+SYM_WARN := \0342\0232\0240
+SYM_INFO := \0342\0204\0271
+
 # Interpreter for the repository check scripts. `python3` is the right name on Linux and macOS, but native Windows has
 # no such command: python.org installs `python` and the `py` launcher, and the `python3` name there resolves to a
 # Microsoft Store alias stub that prints an install advert and exits without running anything. Override with
@@ -121,10 +130,10 @@ _incan_link_debug_to_cargo_bin:
 	if [ ! -f "$(CURDIR)/target/debug/incan" ]; then echo "incan: expected $(CURDIR)/target/debug/incan after build"; exit 1; fi; \
 	mkdir -p "$(HOME)/.cargo/bin"; \
 	ln -sf "$(CURDIR)/target/debug/incan" "$(HOME)/.cargo/bin/incan"; \
-	$(ECHO) "\033[32m✓ Linked ~/.cargo/bin/incan -> $(CURDIR)/target/debug/incan\033[0m"; \
+	$(ECHO) "\033[32m$(SYM_CHECK) Linked ~/.cargo/bin/incan -> $(CURDIR)/target/debug/incan\033[0m"; \
 	if [ -f "$(CURDIR)/target/debug/incan-lsp" ]; then \
 		ln -sf "$(CURDIR)/target/debug/incan-lsp" "$(HOME)/.cargo/bin/incan-lsp"; \
-		$(ECHO) "\033[32m✓ Linked ~/.cargo/bin/incan-lsp -> $(CURDIR)/target/debug/incan-lsp\033[0m"; \
+		$(ECHO) "\033[32m$(SYM_CHECK) Linked ~/.cargo/bin/incan-lsp -> $(CURDIR)/target/debug/incan-lsp\033[0m"; \
 	fi
 
 .PHONY: build  ## build - Debug build (compiler + LSP); links ~/.cargo/bin/incan + incan-lsp locally
@@ -152,7 +161,7 @@ release:
 install:
 	@$(ECHO) "\033[1mInstalling incan...\033[0m"
 	@cargo install --path .
-	@$(ECHO) "\033[32m✓ Installed to ~/.cargo/bin/incan\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Installed to ~/.cargo/bin/incan\033[0m"
 
 # =============================================================================
 # Code Quality
@@ -162,18 +171,18 @@ install:
 fmt:
 	@$(ECHO) "\033[1mFormatting code...\033[0m"
 	@cargo +nightly fmt --version >/dev/null 2>&1 || ( \
-		$(ECHO) "\033[33m⚠ nightly rustfmt is required for this project formatting config.\033[0m"; \
+		$(ECHO) "\033[33m$(SYM_WARN) nightly rustfmt is required for this project formatting config.\033[0m"; \
 		$(ECHO) "\033[33m  Install it via: rustup toolchain install nightly --component rustfmt\033[0m"; \
 		exit 1; \
 	)
 	@cargo +nightly fmt --all
-	@$(ECHO) "\033[32m✓ Code formatted\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Code formatted\033[0m"
 
 .PHONY: fmt-check  ## quality - Check formatting without changes
 fmt-check:
 	@$(ECHO) "\033[1mChecking formatting...\033[0m"
 	@cargo +nightly fmt --version >/dev/null 2>&1 || ( \
-		$(ECHO) "\033[33m⚠ nightly rustfmt is required for this project formatting config.\033[0m"; \
+		$(ECHO) "\033[33m$(SYM_WARN) nightly rustfmt is required for this project formatting config.\033[0m"; \
 		$(ECHO) "\033[33m  Install it via: rustup toolchain install nightly --component rustfmt\033[0m"; \
 		exit 1; \
 	)
@@ -192,7 +201,7 @@ lint-fast:
 .PHONY: fmt-check-ci
 fmt-check-ci:
 	@cargo +nightly fmt --version >/dev/null 2>&1 || ( \
-		$(ECHO) "\033[33m⚠ nightly rustfmt is required for this project formatting config.\033[0m"; \
+		$(ECHO) "\033[33m$(SYM_WARN) nightly rustfmt is required for this project formatting config.\033[0m"; \
 		$(ECHO) "\033[33m  Install it via: rustup toolchain install nightly --component rustfmt\033[0m"; \
 		exit 1; \
 	)
@@ -241,12 +250,12 @@ check-fast-ci:
 
 .PHONY: check  ## quality - Run all quality checks (fmt + lint)
 check: fmt-check lint
-	@$(ECHO) "\033[32m✓ All checks passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) All checks passed\033[0m"
 
 .PHONY: udeps  ## quality - Check for unused dependencies (requires nightly + cargo-udeps)
 udeps:
 	@$(ECHO) "\033[1mChecking for unused dependencies...\033[0m"
-	@cargo +nightly udeps --quiet 2>/dev/null || $(ECHO) "\033[33m⚠ cargo-udeps skipped (requires cargo-udeps + nightly rustc 1.85+. Run `rustup update nightly` if needed.)\033[0m"
+	@cargo +nightly udeps --quiet 2>/dev/null || $(ECHO) "\033[33m$(SYM_WARN) cargo-udeps skipped (requires cargo-udeps + nightly rustc 1.85+. Run `rustup update nightly` if needed.)\033[0m"
 
 .PHONY: pre-commit-fast  ## quality - Fast local gate: fmt-check + cargo check with phase timing
 pre-commit-fast:
@@ -272,7 +281,7 @@ pre-commit-fast:
 	$(MAKE) -s check-fast-ci; \
 	$(ECHO) "\033[32mDONE\033[0m"; \
 	t3=$$(date +%s); \
-	$(ECHO) "\033[32m✓ Pre-commit checks passed (fast)\033[0m"; \
+	$(ECHO) "\033[32m$(SYM_CHECK) Pre-commit checks passed (fast)\033[0m"; \
 	$(ECHO) "\033[36mPhase timing:\033[0m fmt-check=$$((t1-start))s, rustdoc=$$((t2-t1))s, version-gate=$$((t2a-t2))s, agents-doc-sync=$$((t2b-t2a))s, check=$$((t3-t2b))s, total=$$((t3-start))s"
 
 .PHONY: pre-commit-full-gate  ## quality - Full local gate core: fmt-check + tests + clippy + cargo-deny with phase timing
@@ -303,7 +312,7 @@ pre-commit-full-gate:
 	$(MAKE) -s cargo-deny-ci; \
 	$(ECHO) "\033[32mDONE\033[0m"; \
 	t5=$$(date +%s); \
-	$(ECHO) "\033[32m✓ Pre-commit checks passed (full)\033[0m"; \
+	$(ECHO) "\033[32m$(SYM_CHECK) Pre-commit checks passed (full)\033[0m"; \
 	$(ECHO) "\033[36mPhase timing:\033[0m fmt-check=$$((t1-start))s, rustdoc=$$((t2-t1))s, agents-doc-sync=$$((t2b-t2))s, tests=$$((t3-t2b))s, lint=$$((t4-t3))s, deny=$$((t5-t4))s, total=$$((t5-start))s"
 
 .PHONY: pre-commit  ## quality - Full local gate: pre-commit-full-gate + smoke-test-fast
@@ -311,7 +320,7 @@ pre-commit:
 	@$(ECHO) "\033[1mRunning pre-commit (full local gate)...\033[0m"
 	@$(MAKE) pre-commit-full-gate
 	@$(MAKE) smoke-test-fast
-	@$(ECHO) "\033[32m✓ Pre-commit passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Pre-commit passed\033[0m"
 
 .PHONY: ci-full  ## quality - Full CI check: fmt, lint, udeps, test, and release build
 ci-full: fmt lint udeps
@@ -319,7 +328,7 @@ ci-full: fmt lint udeps
 	@$(MAKE) -s test-oven
 	@$(ECHO) "\033[1mBuilding release...\033[0m"
 	@cargo build --release --quiet
-	@$(ECHO) "\033[32m✓ Full CI checks passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Full CI checks passed\033[0m"
 
 # =============================================================================
 # Testing
@@ -441,7 +450,7 @@ shadow-comparison-evidence:
 		test -f "$$receipt" || { echo "Oven bake did not publish an executable debug receipt" >&2; exit 1; }; \
 		$(SHADOW_TEST_ENV) INCAN_SHADOW_OVEN_RECEIPT="$$receipt" \
 			cargo test --test shadow_comparison_tests --test parity_corpus_tests
-	@$(ECHO) "\033[32m✓ the #1146 comparison ran under Oven authority and its corpus row is green\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) the #1146 comparison ran under Oven authority and its corpus row is green\033[0m"
 
 # Oven home the staged comparison publishes its direct-rustc plan into, kept out of the developer's own store.
 INCAN_SHADOW_OVEN_HOME ?= $(CURDIR)/target/incan_shadow_oven_home
@@ -571,7 +580,7 @@ generated-rust-audit-gate:
 	@$(PYTHON) scripts/generated_rust_audit.py --format json --fail-on-missing \
 		--artifact program-main=tests/fixtures/generated_rust_audit/main.rs \
 		--artifact stdlib-copy=tests/fixtures/generated_rust_audit/nested >/dev/null
-	@$(ECHO) "\033[32m✓ Generated Rust audit helper checks passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Generated Rust audit helper checks passed\033[0m"
 
 .PHONY: examples  ## test - Smoke test examples (check all, run entrypoints with timeout)
 examples: release
@@ -610,7 +619,7 @@ smoke-test-canary:
 	@$(ECHO) "\033[1mRunning Incan assertion canary...\033[0m"
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		./target/release/incan test tests/fixtures/test_assert_canary.incn
-	@$(ECHO) "\033[32m✓ Incan assertion canary passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Incan assertion canary passed\033[0m"
 
 .PHONY: smoke-test-web-example
 smoke-test-web-example:
@@ -618,7 +627,7 @@ smoke-test-web-example:
 	@$(ECHO) "\033[1mBuilding web example (build-only)...\033[0m"
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		./target/release/incan build examples/web/hello_web.incn
-	@$(ECHO) "\033[32m✓ Web example built\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Web example built\033[0m"
 
 .PHONY: smoke-test-nested-project-example
 smoke-test-nested-project-example:
@@ -626,7 +635,7 @@ smoke-test-nested-project-example:
 	@$(ECHO) "\033[1mBuilding nested_project example (build-only)...\033[0m"
 	@$(TEST_RUNTIME_ENV) RUSTUP_TOOLCHAIN="$(INCAN_TEST_SUITE_TOOLCHAIN)" INCAN_NO_BANNER=1 \
 		./target/release/incan build examples/advanced/nested_project/src/main.incn
-	@$(ECHO) "\033[32m✓ Nested project example built\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Nested project example built\033[0m"
 
 .PHONY: smoke-test-examples
 smoke-test-examples:
@@ -679,13 +688,13 @@ smoke-test:
 	@$(ECHO) "\033[1mRunning smoke-test...\033[0m"
 	@$(MAKE) test
 	@$(MAKE) smoke-test-core
-	@$(ECHO) "\033[32m✓ Smoke-test passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Smoke-test passed\033[0m"
 
 .PHONY: smoke-test-fast  ## test - Fast smoke test for after pre-commit (skips duplicate unit test suite)
 smoke-test-fast:
 	@$(ECHO) "\033[1mRunning smoke-test-fast...\033[0m"
 	@$(MAKE) smoke-test-core
-	@$(ECHO) "\033[32m✓ Smoke-test-fast passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Smoke-test-fast passed\033[0m"
 
 .PHONY: verify  ## test - Compatibility alias to pre-commit
 verify:
@@ -693,17 +702,17 @@ verify:
 
 .PHONY: test-verbose  ## test - Run the complete compiler suite through Oven
 test-verbose: test-oven
-	@$(ECHO) "\033[32m✓ Oven reports each root and retains the runner transcript on failure\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Oven reports each root and retains the runner transcript on failure\033[0m"
 
 .PHONY: test-diagnose  ## test - Run the complete compiler suite through Oven and retain failure evidence
 test-diagnose: test-oven
-	@$(ECHO) "\033[32m✓ Oven diagnostics are retained in the caller output only when a root fails\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Oven diagnostics are retained in the caller output only when a root fails\033[0m"
 
 .PHONY: test-timings  ## test - Generate cargo compile-timing report (target/cargo-timings)
 test-timings:
 	@$(ECHO) "\033[1mGenerating cargo timing report for test build...\033[0m"
 	@cargo test --all --no-run --timings
-	@$(ECHO) "\033[32m✓ Timing report generated in target/cargo-timings\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Timing report generated in target/cargo-timings\033[0m"
 
 # Keep single-root diagnostics on the same short, invocation-owned scratch policy as full suite replay.
 .PHONY: test-one  ## test - Run one receipt-bound compiler-suite source root (optional TEST_EXACT=module::case)
@@ -751,32 +760,32 @@ test-one: test-prewarm-oven-loafs
 lsp:
 	@$(ECHO) "\033[1mBuilding LSP server...\033[0m"
 	@cargo build --release --features lsp --bin incan-lsp
-	@$(ECHO) "\033[32m✓ LSP server built: target/release/incan-lsp\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) LSP server built: target/release/incan-lsp\033[0m"
 
 .PHONY: install-lsp  ## tool - Install incan-lsp to ~/.cargo/bin
 install-lsp:
 	@$(ECHO) "\033[1mInstalling incan-lsp...\033[0m"
 	@cargo install --path . --features lsp --bin incan-lsp --force
-	@$(ECHO) "\033[32m✓ Installed to ~/.cargo/bin/incan-lsp\033[0m"
-	@$(ECHO) "\033[33mℹ Ensure ~/.cargo/bin is on your PATH\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Installed to ~/.cargo/bin/incan-lsp\033[0m"
+	@$(ECHO) "\033[33m$(SYM_INFO) Ensure ~/.cargo/bin is on your PATH\033[0m"
 
 .PHONY: test-incan-canary  ## test - End-to-end Incan test canary (assertion codegen)
 test-incan-canary: release
 	@$(ECHO) "\033[1mRunning Incan assertion canary...\033[0m"
 	@INCAN_NO_BANNER=1 ./target/release/incan test tests/fixtures/test_assert_canary.incn
-	@$(ECHO) "\033[32m✓ Incan assertion canary passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Incan assertion canary passed\033[0m"
 
 .PHONY: examples-web-build  ## test - Build-only web example (no run)
 examples-web-build: release
 	@$(ECHO) "\033[1mBuilding web example (build-only)...\033[0m"
 	@INCAN_NO_BANNER=1 ./target/release/incan build examples/web/hello_web.incn
-	@$(ECHO) "\033[32m✓ Web example built\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Web example built\033[0m"
 
 .PHONY: examples-nested-project-build  ## test - Build-only nested_project example (multi-module imports)
 examples-nested-project-build: release
 	@$(ECHO) "\033[1mBuilding nested_project example (build-only)...\033[0m"
 	@INCAN_NO_BANNER=1 ./target/release/incan build examples/advanced/nested_project/src/main.incn
-	@$(ECHO) "\033[32m✓ Nested project example built\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Nested project example built\033[0m"
 
 .PHONY: vscode-package  ## tool - Package VS Code extension
 vscode-package:
@@ -784,13 +793,13 @@ vscode-package:
 	@cd workspaces/ide/vscode && npm ci
 	@cd workspaces/ide/vscode && npm run compile
 	@cd workspaces/ide/vscode && npx @vscode/vsce package
-	@$(ECHO) "\033[32m✓ Extension packaged\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Extension packaged\033[0m"
 
 .PHONY: toolchain-release-build  ## tool - Build toolchain release binaries (compiler + LSP)
 toolchain-release-build:
 	@$(ECHO) "\033[1mBuilding toolchain release binaries...\033[0m"
 	@cargo build --locked --release --features lsp --bin incan --bin incan-lsp
-	@$(ECHO) "\033[32m✓ toolchain release binaries built\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) toolchain release binaries built\033[0m"
 
 .PHONY: toolchain-release-package  ## tool - Package local toolchain archive (TOOLCHAIN_DIST=/private/tmp/incan-local-test)
 toolchain-release-package: toolchain-release-build
@@ -846,7 +855,7 @@ bench-build-times:
 gate-release:
 	@$(MAKE) gate-incql
 	@$(MAKE) gate-cleanroom
-	@$(ECHO) "\033[32m✓ Release gates passed\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Release gates passed\033[0m"
 
 .PHONY: watch  ## tool - Watch for changes and rebuild (requires cargo-watch)
 watch:
@@ -871,7 +880,7 @@ clean:
 	@$(ECHO) "\033[1mCleaning...\033[0m"
 	@cargo clean
 	@rm -rf target/incan/
-	@$(ECHO) "\033[32m✓ Clean\033[0m"
+	@$(ECHO) "\033[32m$(SYM_CHECK) Clean\033[0m"
 
 .PHONY: docs  ## docs - Build and serve the documentation site locally
 docs:
