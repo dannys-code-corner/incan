@@ -240,11 +240,24 @@ pub struct AstLowering {
     /// Canonical package identity supplied by the build or test orchestration layer.
     ///
     /// Explicit `RegistrySubject.package()` entries need this boundary-owned fact so their runtime value agrees with
-    /// the checked package artifact rather than preserving a source placeholder.
+    /// the checked package artifact rather than preserving a source placeholder. It is also the only fact this stage
+    /// has for "which library is this compilation producing", which method projection needs to tell a package's own
+    /// declarations from another package's -- see [`AstLowering::produced_library_identity`]. It is `None` when no
+    /// project owns the compilation, and every package identity is then genuinely foreign.
     pub(super) registry_package_identity: Option<String>,
 }
 
 impl AstLowering {
+    /// The library this compilation is producing, when a project owns it.
+    ///
+    /// A [`SymbolOrigin::Package`](incan_semantics_core::SymbolOrigin::Package) says which library *declares* a
+    /// symbol; it does not say the symbol is foreign. Comparing against this answers the second question, which is
+    /// the one an emission decision usually needs: a package's own declarations are emitted by this build, another
+    /// package's are not.
+    fn produced_library_identity(&self) -> Option<&str> {
+        self.registry_package_identity.as_deref()
+    }
+
     /// Return the compiler-minted identity for a linker-visible source function declaration.
     fn emitted_function_identity(&self, name: &str, span: ast::Span) -> Result<CanonicalSymbolId, LoweringError> {
         let identity = self.type_info.as_ref().and_then(|info| {
