@@ -8561,7 +8561,16 @@ fn create_publisher_staging(parent: &Path) -> Result<PathBuf, OvenLegacyCargoErr
         })?
         .as_nanos();
     for sequence in 0_u32..128 {
-        let path = parent.join(format!(".legacy-cargo-{}-{timestamp}-{sequence}", std::process::id()));
+        // The full nanosecond timestamp costs 19 characters inside a staging chain that already nests several
+        // unique names before a Cargo build tree. On Windows that is enough of the 260-character path budget to
+        // fail the innermost link, so only its low digits are kept: `create_dir` below is what actually guarantees
+        // uniqueness, and the process id already separates concurrent publishers.
+        let stamp = if cfg!(windows) {
+            timestamp % 100_000_000
+        } else {
+            timestamp
+        };
+        let path = parent.join(format!(".legacy-cargo-{}-{stamp}-{sequence}", std::process::id()));
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

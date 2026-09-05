@@ -318,7 +318,32 @@ pub(crate) struct LoafTemporaryDirectory {
 
 impl LoafTemporaryDirectory {
     /// Create a unique owner-scoped Loaf staging directory below `parent`.
+    /// Abbreviate a staging prefix on hosts with a restrictive path budget.
+    ///
+    /// These prefixes are opaque scratch names, so their spelling carries no meaning beyond telling a reader which
+    /// stage produced a stray directory. On Windows several of them nest inside one another before a Cargo build
+    /// tree, and the descriptive spellings cost enough of the 260-character limit that the innermost link fails. The
+    /// initial of each hyphen-separated word keeps them distinct from one another while costing a few characters:
+    /// `.incan-oven-loaf-envelope-` becomes `.iole-`, `.incan-oven-loaf-store-` becomes `.iols-`.
+    ///
+    /// Off Windows the prefix is returned unchanged, so existing layouts and any tooling that recognises them are
+    /// untouched.
+    fn staging_prefix(prefix: &str) -> std::borrow::Cow<'_, str> {
+        #[cfg(windows)]
+        {
+            let body = prefix.trim_start_matches('.').trim_end_matches('-');
+            if !body.is_empty() {
+                let initials: String = body.split('-').filter_map(|word| word.chars().next()).collect();
+                if !initials.is_empty() {
+                    return std::borrow::Cow::Owned(format!(".{initials}-"));
+                }
+            }
+        }
+        std::borrow::Cow::Borrowed(prefix)
+    }
+
     pub(crate) fn create(parent: &Path, prefix: &str) -> io::Result<Self> {
+        let prefix = Self::staging_prefix(prefix);
         for _ in 0..128 {
             let sequence = LOAF_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = parent.join(format!("{prefix}{}-{sequence}", std::process::id()));
