@@ -1,0 +1,31 @@
+# Line-ending policy for the whole repository.
+#
+# Git for Windows sets `core.autocrlf=true` in its system configuration, so without this file a stock Windows clone
+# rewrites every checked-out file to CRLF. That is unsafe here: `tests/snapshots/*.snap` and the generated-output
+# fixtures compare compiler output byte for byte, so a converted checkout fails tests in ways that look like compiler
+# defects rather than a checkout artifact. Normalizing to LF everywhere keeps one canonical form in the repository and
+# in every working tree, on every host.
+* text=auto eol=lf
+
+# Files whose bytes must never be rewritten, marked explicitly rather than relying on content detection.
+*.png    binary
+*.webp   binary
+*.ico    binary
+*.jpg    binary
+*.jpeg   binary
+*.gif    binary
+*.pdf    binary
+*.woff   binary
+*.woff2  binary
+*.ttf    binary
+*.otf    binary
+*.vsix   binary
+*.wasm   binary
+*.snap.bin binary
+
+# Snapshots and generated fixtures are compared byte for byte; state the requirement rather than inferring it.
+*.snap   text eol=lf
+*.incn   text eol=lf
+
+# Shell scripts must keep LF regardless of host, or they fail to execute.
+*.sh     text eol=lf
