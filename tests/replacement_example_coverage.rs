@@ -31,13 +31,20 @@ use incan::frontend::{lexer, parser};
 /// consumer, not a successful lowering result. RFC 120's checked-identity integration then exposed ten more examples
 /// whose resolved callable or type-member references never had a Body-IR value/place representation; the old 59
 /// baseline counted those silent omissions as represented. They remain source-representation work under #1101.
-const REPRESENTED_BASELINE: usize = 49;
+///
+/// Moved 49 -> 52 when the corpus grew by the six sources described on [`EXAMPLE_SOURCE_BASELINE`]. Three of them
+/// lower without a Body-IR refusal; the rest still refuse, and none of the six changes what executes.
+const REPRESENTED_BASELINE: usize = 52;
 
 /// Number of committed example sources included in this fixed corpus.
 ///
 /// Keeping the denominator explicit makes additions/removals reviewed coverage events rather than silently changing
 /// the percentage while the representation and execution baselines happen to stay the same.
-const EXAMPLE_SOURCE_BASELINE: usize = 68;
+///
+/// Moved 68 -> 74 for the `vocab_markform`, `vocab_scriptkit` and `vocab_styleforge` producer/consumer pairs, added
+/// to `examples/pro/` after this denominator was last recorded. This is the reviewed coverage event the doc comment
+/// above asks for: the corpus grew, representation went up with it, and execution did not move.
+const EXAMPLE_SOURCE_BASELINE: usize = 74;
 
 /// Examples whose `main` executes today. Update this in the same change that moves it.
 ///
