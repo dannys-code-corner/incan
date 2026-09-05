@@ -1,17 +1,18 @@
 # RFC 123: Package executable representation
 
-- **Status:** Draft
+- **Status:** Planned
 - **Created:** 2026-09-05
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
+    - RFC 034 (`incan.pub` package registry and the `.incanpkg` format)
     - RFC 118 (Oven API and operational core)
     - RFC 120 (canonical source symbol identity)
     - RFC 097 (Rust-hosted Incan caller)
     - #989 (executable public-boundary evidence)
     - #1260 (package and local-module import execution)
     - #1261 (facade identity on the replacement route)
-- **Issue:** —
-- **RFC PR:** —
+- **Issue:** [#1339](https://github.com/encero-systems/incan/issues/1339)
+- **RFC PR:** [#1324](https://github.com/encero-systems/incan/pull/1324)
 - **Written against:** v0.6
 - **Shipped in:** —
 
@@ -46,7 +47,7 @@ Identity is what makes this coherent rather than duplicative. A package already 
 
 ## Non-Goals
 
-- Defining the representation's encoding. This RFC fixes the contract, not the format.
+- Defining the exact wire encoding. This RFC fixes the contract and constrains the encoding to be binary; it does not select a specific binary format.
 - Replacing the compiled Rust library. Packages continue to ship one, and it remains what the Rust-linking route uses.
 - Making a package's private implementation executable. Only the public surface is in scope.
 - Cross-version execution guarantees. A representation produced by one compiler release need not be interpretable by another; it must only say so clearly.
@@ -78,6 +79,10 @@ A consumer that requires a representation and cannot obtain a usable one **must*
 
 A consumer **must** resolve an imported declaration to its representation through canonical identity alone. Where a package's declaration is a projection of another — an alias, a re-export, or a facade — the consumer **must** resolve to the declaration the identity names rather than to the projection's spelling.
 
+A representation **must** use a binary encoding. A self-describing text encoding **must not** be used: measured against the same content, JSON was an order of magnitude larger and several times slower to decode than a binary encoding, and a representation is read by every consumer of the package on every route that needs it.
+
+A representation **must** be addressable by canonical identity without decoding the whole of it. A consumer that calls three declarations of four hundred **must not** be required to load four hundred.
+
 A representation **must not** expose a package's private declarations, its compiler-session state, or its generated Rust layout. A consumer **must not** derive compatibility from any of those, and **must** derive it from the declared version and requirements alone.
 
 ## Design details
@@ -91,6 +96,26 @@ Coverage is permitted to be partial. A package may publish a representation for 
 Projections resolve to their target. A consumer calling through an alias, a re-export, or a facade resolves to the declaration the canonical identity names, so a chain of projections does not multiply representations and a facade does not need one of its own.
 
 The compiled Rust artifact is unaffected. It remains the product the Rust-linking route consumes, and nothing here changes how that route selects or verifies it.
+
+### Where it ships, and why a prebuilt Loaf is not the same thing
+
+RFC 034 already reserves the slot. A `.incanpkg` carries `semantic/` for "optional semantic package fragments" beside `artifacts/` for target artifacts, and states that generated Rust "must not be the public compatibility contract." This representation is what `semantic/` holds; a Loaf, when one is published, is an entry under `artifacts/`. Both travel in one signed archive.
+
+They are not substitutes, because they answer different halves of one question:
+
+| | any target | no local compilation |
+| --- | --- | --- |
+| source snapshot | yes | no |
+| prebuilt Loaf | no -- one target, toolchain and profile | yes |
+| this representation | yes | yes |
+
+A registry can publish Loaves for the combinations it chooses to precompile, and every one of them serves the Rust-linking route on one platform. The representation is a single artifact that serves every route that does not link, on every platform. Publishing more Loaves does not reduce the need for it, and publishing a representation does not reduce the value of a Loaf.
+
+### Cost
+
+The shape of the cost is known rather than assumed. Measured over a module's Body IR in a binary encoding, a twenty-five-declaration surface was roughly 16 KB and under a millisecond to load; a four-hundred-declaration surface was roughly 293 KB and about fourteen milliseconds. Loading was consistently cheaper than compiling the same declarations from source. The same measurement demonstrated the contract end to end: a representation round-tripped exactly, and a call executed from the decoded copy produced the result the compiled-from-source module produced.
+
+Those numbers are why addressing by identity is normative rather than advisory. Whole-surface loading is affordable at the small end and wasteful at the large end, and the difference is entirely in declarations the consumer never calls.
 
 ## Alternatives considered
 
@@ -110,7 +135,7 @@ A package build produces more, and a published package is larger, for a benefit 
 
 Two independently versioned products describing one surface can disagree. The self-consistency rule constrains what a valid package may publish, but a consumer must still handle the case, and "the manifest says this exists but the representation does not cover it" becomes a state that has to be reported well.
 
-A representation is a second thing to keep correct as the language grows. A construct that becomes executable is not executable across a package boundary until the representation covers it, and that lag is visible to users as a route difference.
+A representation is a second thing to keep correct as the language grows. A construct that becomes executable is not executable across a package boundary until the representation covers it, and that lag is visible to users as a route difference. Declared coverage makes the lag legible rather than removing it: a consumer can see what a package supports on its route, but it still has to wait for a republish.
 
 ## Implementation architecture
 
@@ -118,7 +143,9 @@ A representation is a second thing to keep correct as the language grows. A cons
 
 The natural producer is the same library build that emits the manifest, because it already holds the checked public surface and the identities the representation must use. The natural consumer boundary is wherever a route resolves an imported declaration, so that a missing or unusable representation is discovered at resolution rather than part-way through execution.
 
-Coverage is likely to grow along the same axis as executable constructs generally, which suggests recording coverage explicitly rather than inferring it from what happens to be present.
+Coverage is likely to grow along the same axis as executable constructs generally, which is one reason the decision below records it explicitly rather than inferring it from what happens to be present.
+
+Consumers will want the decoded form to outlive one invocation, and the natural shape for that is an identity-keyed local store rather than a cache private to this contract. Nothing here requires one, and nothing here should prevent one: a consumer that keeps decoded declarations addressed by the same canonical identities the representation uses needs no format of its own.
 
 ## Layers affected
 
@@ -126,12 +153,13 @@ Coverage is likely to grow along the same axis as executable constructs generall
 - **Emission**: producing the representation for a library's public surface as part of the same build that produces its manifest.
 - **Tooling**: publishing and locating the representation beside a package's other products, and surfacing version and coverage in inspection output.
 
-## Unresolved questions
+## Design Decisions
 
-- Should a representation's coverage be declared explicitly, or inferred from the identities it contains?
-- Should a consumer be able to require a representation, so that a package lacking one fails at resolution rather than at the first call that needs it?
-- What is the right granularity for the representation's version: one version for the whole representation, or per covered construct class?
-- Should a package be permitted to publish a representation for a declaration whose executable form differs from what the Rust-linking route would produce, or must the two agree by construction?
+**Coverage is declared explicitly, not inferred from the identities present.** A consumer must be able to answer "can this route execute this call?" before decoding the declaration, and a reader must be able to see what a package supports without executing anything. Inferring coverage from content also conflates two different states -- "this declaration is not covered" and "this declaration is covered and its body happens to be empty" -- which a refusal has to tell apart.
 
-<!-- Rename this section to "Design Decisions" once all questions have been resolved.
-     An RFC cannot move from Draft to Planned until no unresolved questions remain. -->
+**A consumer may require a representation, and the requirement is resolved at resolution time.** A route that cannot proceed without one reports at the point the dependency is resolved, naming the package and version, rather than at whichever call happens to cross the boundary first. Deferring to first call makes the failure depend on control flow: the same program reports in different places on different inputs, and a consumer cannot tell whether a dependency is usable without running it. Routes that do not require a representation are unaffected and continue to resolve packages that ship none.
+
+**The representation carries one version for the whole representation.** Integrity and identity are already settled at the archive: RFC 034 covers the package with one checksum and one signature, so the representation's version answers only "can this compiler interpret this?" That is a property of the encoding and the fact vocabulary, not of individual constructs, and per-construct versioning would multiply a compatibility surface that the coverage declaration already expresses more directly.
+
+**A representation and the Rust-linking route must agree by construction.** They are produced by one compilation of one package version and ship inside one signed archive, so a disagreement between them is not two artifacts drifting apart -- it is one publisher being internally inconsistent within a single signed unit. Permitting divergence would also make a package's meaning depend on how a consumer reached it, which is the outcome this RFC exists to prevent. Where a construct cannot be represented for a route, the answer is to leave it uncovered and refuse, not to represent it differently.
+
