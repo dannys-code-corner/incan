@@ -33,7 +33,7 @@ def actual_skills() -> set[str]:
 
 
 def documented_skills() -> set[str]:
-    text = AGENTS_MD.read_text()
+    text = AGENTS_MD.read_text(encoding="utf-8")
     # Capture everything between "### Skills" and the next heading, so this
     # doesn't stop early at a blank line inside the section (e.g. the intro
     # sentence before the table).

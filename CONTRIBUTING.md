@@ -30,6 +30,38 @@ Thank you for your interest in contributing to the Incan programming language! T
    cargo test
    ```
 
+### Developing on native Windows
+
+Native Windows x64 works. It needs three host tools that Linux and macOS supply by default, and one habit about where you clone.
+
+Run `make` targets from **Git Bash**, not PowerShell or `cmd`. Git for Windows supplies the POSIX tools the Makefile relies on — `sh`, `sed`, `awk`, `grep`, `date` — and GNU Make discovers Git's `sh.exe` automatically, so no extra configuration is required.
+
+**Rust** must use the MSVC toolchain (`x86_64-pc-windows-msvc`), which is rustup's default and which needs Visual Studio Build Tools with the C++ workload. The `--add` argument matters: without it the installer produces an empty shell with no compiler.
+
+```powershell
+winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
+```
+
+**MinGW-w64** supplies a C compiler for dependencies that build C sources, and also ships GNU Make itself.
+
+```powershell
+winget install BrechtSanders.WinLibs.POSIX.MSVCRT
+```
+
+It installs Make as `mingw32-make`. Either use that name, or copy it to `make.exe` alongside it so the `make <target>` commands used throughout this repository work verbatim.
+
+**Python** runs the repository check scripts.
+
+```powershell
+winget install Python.Python.3.13
+```
+
+The Makefile resolves the interpreter through `$(PYTHON)`, which defaults to `python` on Windows. This is deliberate: `python3` is not a real command there, and on a default install that name resolves to a Microsoft Store alias stub that prints an advert and exits without running anything. Override with `make PYTHON=<interpreter> <target>` if your host needs a different name.
+
+Finally, **clone to a short path** such as `C:\dev\incan`. Windows limits paths to 260 characters. The `LongPathsEnabled` registry setting lifts that limit only for programs that declare themselves long-path aware, and neither `link.exe` nor libgit2 does, so a deeply nested clone fails at link time with `LNK1104` on a file whose path is simply too long. Pointing `CARGO_TARGET_DIR` at a short directory is an equally good fix, because the paths that overrun are the build outputs rather than the sources.
+
+Line endings need no configuration: the repository's `.gitattributes` normalizes every text file to LF, which matters because the snapshot fixtures compare compiler output byte for byte.
+
 ## Project Structure
 
 The compiler is organized into a **frontend** (lex/parse/typecheck), a **backend** (lowering + Rust emission), plus CLI and tooling.

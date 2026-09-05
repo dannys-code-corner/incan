@@ -219,7 +219,7 @@ def function_end_line(lines: list[str], fn_index: int) -> int:
 
 def missing_docs(path: Path, changed_lines: set[int]) -> list[tuple[int, str]]:
     """Return undocumented non-test function definitions for one Rust source file."""
-    lines = path.read_text().splitlines()
+    lines = path.read_text(encoding="utf-8").splitlines()
     test_lines = test_module_lines(lines)
     quoted_lines = quote_macro_lines(lines)
     trait_impls = trait_impl_lines(lines)

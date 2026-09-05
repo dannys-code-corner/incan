@@ -58,8 +58,23 @@ endif
 # INCAN_SKIP_CARGO_BIN_LINK=1.
 ifneq ($(CI),)
 INCAN_LINK_CARGO_BIN ?= 0
+else ifeq ($(OS),Windows_NT)
+# Git for Windows implements `ln -s` as a file copy unless MSYS=winsymlinks:nativestrict is set, so enabling this on
+# native Windows would copy the whole debug binary into ~/.cargo/bin on every build instead of linking to it. Opt in
+# with INCAN_LINK_CARGO_BIN=1 if that tradeoff is wanted.
+INCAN_LINK_CARGO_BIN ?= 0
 else
 INCAN_LINK_CARGO_BIN ?= 1
+endif
+
+# Interpreter for the repository check scripts. `python3` is the right name on Linux and macOS, but native Windows has
+# no such command: python.org installs `python` and the `py` launcher, and the `python3` name there resolves to a
+# Microsoft Store alias stub that prints an install advert and exits without running anything. Override with
+# `make PYTHON=<interpreter>` on a host that needs a different one.
+ifeq ($(OS),Windows_NT)
+PYTHON ?= python
+else
+PYTHON ?= python3
 endif
 
 .PHONY: help
@@ -94,12 +109,14 @@ help: build-quiet  ## Display this help message
 
 .PHONY: _incan_link_debug_to_cargo_bin
 _incan_link_debug_to_cargo_bin:
-	@if [ "$(INCAN_LINK_CARGO_BIN)" != "1" ] || [ "$(INCAN_SKIP_CARGO_BIN_LINK)" = "1" ]; then exit 0; fi
-	@if [ ! -f "$(CURDIR)/target/debug/incan" ]; then echo "incan: expected $(CURDIR)/target/debug/incan after build"; exit 1; fi
-	@mkdir -p "$(HOME)/.cargo/bin"
-	@ln -sf "$(CURDIR)/target/debug/incan" "$(HOME)/.cargo/bin/incan"
-	@echo "\033[32m✓ Linked ~/.cargo/bin/incan -> $(CURDIR)/target/debug/incan\033[0m"
-	@if [ -f "$(CURDIR)/target/debug/incan-lsp" ]; then \
+	@# One shell for the whole recipe: `exit 0` only leaves the line it runs on, so with a line-per-shell recipe the
+	@# opt-out below never skipped anything and the link happened even when it was switched off.
+	@if [ "$(INCAN_LINK_CARGO_BIN)" != "1" ] || [ "$(INCAN_SKIP_CARGO_BIN_LINK)" = "1" ]; then exit 0; fi; \
+	if [ ! -f "$(CURDIR)/target/debug/incan" ]; then echo "incan: expected $(CURDIR)/target/debug/incan after build"; exit 1; fi; \
+	mkdir -p "$(HOME)/.cargo/bin"; \
+	ln -sf "$(CURDIR)/target/debug/incan" "$(HOME)/.cargo/bin/incan"; \
+	echo "\033[32m✓ Linked ~/.cargo/bin/incan -> $(CURDIR)/target/debug/incan\033[0m"; \
+	if [ -f "$(CURDIR)/target/debug/incan-lsp" ]; then \
 		ln -sf "$(CURDIR)/target/debug/incan-lsp" "$(HOME)/.cargo/bin/incan-lsp"; \
 		echo "\033[32m✓ Linked ~/.cargo/bin/incan-lsp -> $(CURDIR)/target/debug/incan-lsp\033[0m"; \
 	fi
@@ -184,24 +201,24 @@ lint-fast-ci:
 .PHONY: rustdoc-gate  ## quality - Require rustdoc on changed Rust functions/methods
 rustdoc-gate:
 	@echo "\033[1mChecking rustdoc coverage for changed Rust functions/methods...\033[0m"
-	@python3 scripts/check_changed_rustdocs.py
+	@$(PYTHON) scripts/check_changed_rustdocs.py
 
 .PHONY: rustdoc-gate-ci
 rustdoc-gate-ci:
-	@python3 scripts/check_changed_rustdocs.py
+	@$(PYTHON) scripts/check_changed_rustdocs.py
 
 .PHONY: version-gate  ## quality - Require hand-written version literals to match the workspace version
 version-gate:
-	@python3 scripts/check_release_version_consistency.py
+	@$(PYTHON) scripts/check_release_version_consistency.py
 
 .PHONY: agents-doc-sync  ## quality - Check AGENTS.md's skill table matches .agents/skills/ (local only, not CI)
 agents-doc-sync:
 	@echo "\033[1mChecking AGENTS.md skill table against .agents/skills/...\033[0m"
-	@python3 scripts/check_agents_doc_sync.py
+	@$(PYTHON) scripts/check_agents_doc_sync.py
 
 .PHONY: agents-doc-sync-ci
 agents-doc-sync-ci:
-	@python3 scripts/check_agents_doc_sync.py
+	@$(PYTHON) scripts/check_agents_doc_sync.py
 
 .PHONY: cargo-deny  ## quality - Run cargo-deny policy checks
 cargo-deny:
@@ -545,7 +562,7 @@ test-rust-inspect:
 generated-rust-audit-gate:
 	@echo "\033[1mRunning generated Rust audit helper checks...\033[0m"
 	@cargo test --test generated_rust_audit_tests
-	@python3 scripts/generated_rust_audit.py --format json --fail-on-missing \
+	@$(PYTHON) scripts/generated_rust_audit.py --format json --fail-on-missing \
 		--artifact program-main=tests/fixtures/generated_rust_audit/main.rs \
 		--artifact stdlib-copy=tests/fixtures/generated_rust_audit/nested >/dev/null
 	@echo "\033[32m✓ Generated Rust audit helper checks passed\033[0m"
