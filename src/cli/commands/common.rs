@@ -628,14 +628,12 @@ fn sync_sdk_provider_tree(path: &Path) -> CliResult<()> {
         if file_type.is_dir() {
             sync_sdk_provider_tree(&entry_path)?;
         } else if file_type.is_file() {
-            fs::File::open(&entry_path)
-                .and_then(|file| file.sync_all())
-                .map_err(|error| {
-                    CliError::failure(format!(
-                        "failed to synchronize staged artifact file {}: {error}",
-                        entry_path.display()
-                    ))
-                })?;
+            crate::durable_publication::sync_file(&entry_path).map_err(|error| {
+                CliError::failure(format!(
+                    "failed to synchronize staged artifact file {}: {error}",
+                    entry_path.display()
+                ))
+            })?;
         }
     }
     crate::durable_publication::sync_directory(path).map_err(|error| {

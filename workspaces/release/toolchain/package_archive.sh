@@ -171,6 +171,23 @@ stage_tracked_tree() {
   rm "$source_archive"
 }
 
+# Render a host executable path the way a native program will be able to open it.
+#
+# Under Git Bash a resolved tool path looks like `/c/Users/.../cargo`: an MSYS-style root that a native Windows
+# binary cannot open, and no `.exe`, because the shell resolves the extension implicitly while Windows does not. A
+# path in that form reaches the compiler as a file that simply does not exist, which surfaces as a confusing
+# complaint about the tool rather than about its path. Everywhere else this is the identity.
+normalize_host_executable() {
+  local candidate="$1"
+  if [ "$(uname -s 2>/dev/null | cut -c1-5)" = "MINGW" ]; then
+    if [ -f "$candidate.exe" ]; then
+      candidate="$candidate.exe"
+    fi
+    candidate="$(cygpath -w "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+  fi
+  printf '%s' "$candidate"
+}
+
 validate_sdk_provider_seed() {
   local seed_dir="$1"
   [ -d "$seed_dir" ] || fail "SDK provider seed directory does not exist: $seed_dir"
@@ -514,8 +531,8 @@ else
     --output "$loaf_root" \
     --envelope release \
     --sdk-inventory "$sdk_seed_root/sdk-inventory.json" \
-    --cargo "$cargo_bin" \
-    --rustc "$rustc_bin" \
+    --cargo "$(normalize_host_executable "$cargo_bin")" \
+    --rustc "$(normalize_host_executable "$rustc_bin")" \
     --format json >/dev/null \
     || fail "could not bake the release Oven Loaf envelope"
 fi

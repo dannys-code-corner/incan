@@ -424,12 +424,10 @@ pub(crate) fn commit_loaf_generation(
         path: staged_manifest.clone(),
         source,
     })?;
-    File::open(&staged_manifest)
-        .and_then(|file| file.sync_all())
-        .map_err(|source| OvenLoafError::Io {
-            path: staged_manifest.clone(),
-            source,
-        })?;
+    crate::durable_publication::sync_file(&staged_manifest).map_err(|source| OvenLoafError::Io {
+        path: staged_manifest.clone(),
+        source,
+    })?;
     before_manifest_commit().map_err(|source| OvenLoafError::Io {
         path: staged_manifest.clone(),
         source,
