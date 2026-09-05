@@ -638,26 +638,22 @@ fn sync_sdk_provider_tree(path: &Path) -> CliResult<()> {
                 })?;
         }
     }
-    fs::File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            CliError::failure(format!(
-                "failed to synchronize staged artifact directory {}: {error}",
-                path.display()
-            ))
-        })
+    crate::durable_publication::sync_directory(path).map_err(|error| {
+        CliError::failure(format!(
+            "failed to synchronize staged artifact directory {}: {error}",
+            path.display()
+        ))
+    })
 }
 
 /// Flush the artifact store after publishing a new immutable artifact directory.
 fn sync_sdk_provider_store(store_root: &Path) -> CliResult<()> {
-    fs::File::open(store_root)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            CliError::failure(format!(
-                "failed to synchronize artifact store {}: {error}",
-                store_root.display()
-            ))
-        })
+    crate::durable_publication::sync_directory(store_root).map_err(|error| {
+        CliError::failure(format!(
+            "failed to synchronize artifact store {}: {error}",
+            store_root.display()
+        ))
+    })
 }
 
 /// Allocate a unique private staging directory for one artifact identity.
