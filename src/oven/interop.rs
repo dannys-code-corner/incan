@@ -1623,8 +1623,12 @@ fn run_interop_tool(mut command: Command, executable: &Path, label: &str) -> Res
             Some(status) => break status,
             None if Instant::now() >= deadline => {
                 timed_out = true;
-                break terminate_process_group(&mut child)
+                let termination = terminate_process_group(&mut child)
                     .map_err(|error| format!("could not terminate timed-out {label}: {error}"))?;
+                if let Some(note) = termination.uncontained_note() {
+                    tracing::warn!("timed-out {label} was terminated, but {note}");
+                }
+                break termination.status;
             }
             None => thread::sleep(Duration::from_millis(5)),
         }

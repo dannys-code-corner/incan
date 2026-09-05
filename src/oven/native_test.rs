@@ -825,10 +825,17 @@ fn terminate_native_batch_child(
     child: &mut std::process::Child,
     executable: &Path,
 ) -> Result<std::process::ExitStatus, OvenNativeTestError> {
-    terminate_process_group(child).map_err(|source| OvenNativeTestError::Io {
+    let termination = terminate_process_group(child).map_err(|source| OvenNativeTestError::Io {
         path: executable.to_path_buf(),
         source,
-    })
+    })?;
+    if let Some(note) = termination.uncontained_note() {
+        tracing::warn!(
+            "timed-out native test {} was terminated, but {note}",
+            executable.display()
+        );
+    }
+    Ok(termination.status)
 }
 
 /// Join one concurrent pipe reader and preserve its failure as an ordinary native-runner error.

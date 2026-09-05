@@ -1474,13 +1474,19 @@ fn run_bounded_loaf_cargo(
         })?;
         peak = peak.max(observed);
         if observed > transient_limit {
-            terminate_process_group(&mut child).map_err(|source| OvenLoafError::Io {
+            let termination = terminate_process_group(&mut child).map_err(|source| OvenLoafError::Io {
                 path: PathBuf::from(label),
                 source,
             })?;
+            // The capacity guard exists to stop a runaway build consuming disk, so a host that cannot contain
+            // descendants has not actually stopped the growth this failure reports. Say so in the failure itself.
+            let containment = termination
+                .uncontained_note()
+                .map(|note| format!("; {note}, so the measured usage may continue to grow"))
+                .unwrap_or_default();
             return Err(OvenLoafError::Preparation {
                 message: format!(
-                    "{label} exceeded the {transient_limit}-byte Loaf transient allowance at {observed} bytes"
+                    "{label} exceeded the {transient_limit}-byte Loaf transient allowance at {observed} bytes{containment}"
                 ),
             });
         }
