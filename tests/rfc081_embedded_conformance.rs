@@ -517,3 +517,100 @@ fn fragment_syntax_stays_invalid_outside_an_eligible_position() -> TestResult {
     }
     Ok(())
 }
+
+// ============================================================================
+// Diagnostics inside a fragment
+// ============================================================================
+
+/// One submode's rejection fixture: source the submode's own grammar must refuse, and the message it must give.
+struct RejectionCase {
+    /// The submode whose grammar rejects this fixture.
+    submode: incan_vocab::EmbeddedFragmentSubmode,
+    /// Block keyword the fixture descriptor claims.
+    keyword: &'static str,
+    /// Fixture source whose fragment body is invalid for its submode.
+    source: &'static str,
+    /// Text the reported diagnostic must contain, so the reader learns what the grammar actually wanted.
+    expected_message: &'static str,
+}
+
+/// Return one rejection fixture per submode that has a rejectable shape.
+///
+/// `RawText` is deliberately absent: its grammar accepts any content interleaved with holes, so it has no
+/// malformed body to reject. That is a property of the submode, not a gap in this suite.
+fn rejection_cases() -> Vec<RejectionCase> {
+    vec![
+        RejectionCase {
+            submode: incan_vocab::EmbeddedFragmentSubmode::Markup,
+            keyword: "html",
+            source: "import pub::conformance\n\ndef render() -> None:\n    html:\n        <section></div>\n",
+            expected_message: "Mismatched closing tag",
+        },
+        RejectionCase {
+            submode: incan_vocab::EmbeddedFragmentSubmode::Style,
+            keyword: "css",
+            source: "import pub::conformance\n\ndef render() -> None:\n    css:\n        .card {\n            color: red;\n",
+            expected_message: "to close this declaration block",
+        },
+        RejectionCase {
+            submode: incan_vocab::EmbeddedFragmentSubmode::RegexTemplate,
+            keyword: "script",
+            source: "import pub::conformance\n\ndef render() -> None:\n    script:\n        not_a_regex_or_template\n",
+            expected_message: "must be a `/pattern/flags` regex literal",
+        },
+        RejectionCase {
+            submode: incan_vocab::EmbeddedFragmentSubmode::SelectorDeclarationValue,
+            keyword: "spacing",
+            source: "import pub::conformance\n\ndef render() -> None:\n    spacing:\n        2rem 4px\n",
+            expected_message: "Unexpected trailing content",
+        },
+        RejectionCase {
+            submode: incan_vocab::EmbeddedFragmentSubmode::TypePosition,
+            keyword: "typeof",
+            source: "import pub::conformance\n\ndef render() -> None:\n    typeof:\n        Foo<Bar\n",
+            expected_message: "to close this generic argument list",
+        },
+    ]
+}
+
+#[test]
+fn a_rejected_fragment_reports_its_own_grammar_and_nothing_else() -> TestResult {
+    // Diagnostics are the third editor surface #1022 names, and a fragment makes them easy to get wrong twice
+    // over. A fragment body is re-tokenized by its own submode, so the ordinary lexer's confusion about bytes it
+    // could never tokenize (`;`, `` ` ``, `$`) must not reach the user as invented errors — the parser reconciles
+    // those away. And the real diagnostic must be anchored inside the fragment, at the construct that caused it,
+    // rather than at the block header or the whole declaration.
+    for case in rejection_cases() {
+        let (keyword_map, surface_map) = fixture_maps(case.keyword, case.submode, false);
+        let (tokens, _lex_errors) = lexer::lex_tolerant(case.source);
+        let Err(errors) = parser::parse_with_source(&tokens, None, Some(&keyword_map), Some(&surface_map), case.source)
+        else {
+            return Err(format!("{:?}: this fixture must not parse", case.submode).into());
+        };
+
+        // The fragment body starts at the first non-whitespace byte after the block header's newline.
+        let body_start = case
+            .source
+            .find(&format!("{}:\n", case.keyword))
+            .map(|header| header + case.keyword.len() + 2)
+            .ok_or_else(|| format!("{:?}: fixture is missing its block header", case.submode))?;
+
+        assert!(
+            errors.iter().any(|error| error.message.contains(case.expected_message)),
+            "{:?}: expected a diagnostic naming what the grammar wanted, got {errors:?}",
+            case.submode
+        );
+        for error in &errors {
+            assert!(
+                error.span.start >= body_start,
+                "{:?}: every diagnostic must be anchored inside the fragment that caused it, but `{}` points at \
+                 byte {} (the fragment starts at {})",
+                case.submode,
+                error.message,
+                error.span.start,
+                body_start
+            );
+        }
+    }
+    Ok(())
+}
