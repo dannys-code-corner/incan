@@ -28,7 +28,7 @@
       <td>Accepted constructs have parity, diagnostics, inspection, and migration evidence.</td>
     </tr>
     <tr data-v06-slice-target="slice-04-oven-authority-native-rust">
-      <td><button type="button" class="inc-v06-slice-toggle">4. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">43 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">4. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">44 open</span></div></td>
       <td>Loaf authority, governed providers, and bounded Rust facets.</td>
       <td>Incan-only, Rust-only, and mixed Loaves bake without Cargo being authoritative.</td>
     </tr>
@@ -313,6 +313,7 @@ flowchart LR
   i1212["#1212<br/>establish RFC 104 operation-receipt fac…"]
   i1266["#1266<br/>move Oven's plan/build-unit/artifact/re…"]
   i1337["#1337<br/>invoke Rust behavior from the replaceme…"]
+  i1339["#1339<br/>RFC 123 package executable representation"]
   i975 -- owns --> i429
   s1141 -- owns --> i662
   i975 -- owns --> i870
@@ -359,6 +360,7 @@ flowchart LR
   i1028 -- owns --> i1212
   i1094 -- owns --> i1266
   s1141 -- owns --> i1337
+  s1141 -- owns --> i1339
   i990 -. blocks .-> i1027
   i1028 -. blocks .-> i1027
   i1029 -. blocks .-> i1028
@@ -411,6 +413,7 @@ flowchart LR
   click i1212 href "https://github.com/encero-systems/incan/issues/1212" "Open #1212 on GitHub"
   click i1266 href "https://github.com/encero-systems/incan/issues/1266" "Open #1266 on GitHub"
   click i1337 href "https://github.com/encero-systems/incan/issues/1337" "Open #1337 on GitHub"
+  click i1339 href "https://github.com/encero-systems/incan/issues/1339" "Open #1339 on GitHub"
 ```
 [Open Slice 4 in GitHub](https://github.com/encero-systems/incan/issues/1141)
 
