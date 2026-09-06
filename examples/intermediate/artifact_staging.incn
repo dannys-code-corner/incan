@@ -79,7 +79,7 @@ def compression_failed(error: CompressionError) -> StageError:
 
 
 def write_failed(error: IoError) -> StageError:
-    """Report anything the filesystem refused -- the scratch directory or the artifact itself -- as one failure."""
+    """Report anything the filesystem refused, the scratch directory or the artifact itself, as one failure."""
     return StageError.Write(error.detail)
 
 
