@@ -84,27 +84,21 @@ One-shot namespace helpers that are infallible raise `ValueError` for the same v
 
 ## Keyed authentication
 
-The digests above are unkeyed. They prove that a value is internally self-consistent, and no more: the hash formula is public, so anyone can compute a matching digest for a value they made up. That catches accidental corruption, not a caller who fabricates a value and its digest together.
+`hmac_sha256` is the only keyed namespace on this page; every other namespace is unkeyed.
 
-`hmac_sha256` closes that gap. The key stays in your process and never crosses the boundary the value arrives from, so a tag that verifies is evidence the value was produced by you.
+| API | Returns | Notes |
+| --- | --- | --- |
+| `hmac_sha256.digest(key: bytes, data: bytes)` | `bytes` | 32-byte HMAC-SHA256 tag. |
+| `hmac_sha256.verify(key: bytes, data: bytes, tag: bytes)` | `bool` | Constant-time comparison; does not short-circuit on the first differing byte. |
+| `hmac_sha256.new(key: bytes)` | `HmacSha256Signer` | Incremental signer keyed with `key`. |
 
-```incan
-from std.hash import hmac_sha256
-
-tag = hmac_sha256.digest(key, payload)
-if hmac_sha256.verify(key, payload, submitted_tag):
-    accept(payload)
-```
-
-| Member | Purpose |
+| Hasher family | Methods |
 | --- | --- |
-| `hmac_sha256.digest(key, data)` | Return the tag for `data` under `key`. |
-| `hmac_sha256.verify(key, data, tag)` | Return whether `tag` authenticates `data`, comparing in constant time. |
-| `hmac_sha256.new(key)` | Return an incremental signer for streamed input. |
+| Keyed signer | `update(chunk: bytes) -> None`, `finalize_bytes() -> bytes` |
 
-HMAC accepts a key of any length: shorter keys are zero-padded to the block size, longer ones are hashed first.
+`finalize_bytes` returns the tag for the bytes supplied so far and resets the signer for a subsequent stream under the same key.
 
-Use `verify` rather than computing a tag and comparing it with `==`. An equality comparison stops at the first differing byte, so how long it takes reveals how much of a candidate tag was correct, and that lets an attacker search for a valid tag one byte at a time instead of guessing it whole.
+Keys of any length are accepted: shorter keys are zero-padded to the block size, longer keys are hashed first. Comparing tag bytes with `==` is not constant time; use `verify`.
 
 ## Boundaries
 

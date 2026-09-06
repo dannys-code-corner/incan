@@ -23,9 +23,12 @@ from rust::sha2 import Sha256
 type _HmacSha256 = rusttype Hmac[Sha256]
 
 
-def _keyed(key: bytes) -> _HmacSha256:
+def _must_keyed(key: bytes) -> _HmacSha256:
     """
-    Return a fresh MAC state keyed with `key`.
+    Return a fresh MAC state keyed with `key`, or raise `ValueError`.
+
+    Named `_must_` after the `_must_digest_bytes` family in `_core`: it converts a fallible constructor into an
+    infallible signature by raising, which is what lets the public namespace helpers stay unfallible.
 
     HMAC accepts a key of any length: shorter keys are zero-padded to the block size and longer ones are hashed
     first, so this does not fail on key size. The underlying constructor still reports a length error in its
@@ -81,7 +84,7 @@ pub class hmac_sha256:
         """
         Create an incremental signer keyed with `key`.
         """
-        return HmacSha256Signer(handle=_keyed(key))
+        return HmacSha256Signer(handle=_must_keyed(key))
 
     @staticmethod
     def verify(key: bytes, data: bytes, tag: bytes) -> bool:
@@ -91,7 +94,7 @@ pub class hmac_sha256:
         Use this rather than computing a tag and comparing it yourself: the comparison here does not short-circuit on
         the first differing byte, so it does not leak how much of a candidate tag was correct.
         """
-        mut state = _keyed(key)
+        mut state = _must_keyed(key)
         state.update(data.as_slice())
         match state.verify_slice(tag.as_slice()):
             Ok(_) => return true

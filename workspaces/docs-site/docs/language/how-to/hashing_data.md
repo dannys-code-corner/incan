@@ -11,7 +11,7 @@ Use `std.hash` when a program needs deterministic byte digests, file fingerprint
 | Variable-length extendable output           | `shake128` or `shake256`                               |
 | Fast non-security partitioning or bucketing | `xxh3_64`, `xxh3_128`, `xxh64`, or `xxh32`             |
 
-Do not use `sha1` or `md5` for collision-resistant security decisions. Do not use `std.hash` for password hashing, signatures, authenticated encryption, CRC, or Adler checksums. For keyed authentication of untrusted input, use [`hmac_sha256`](../reference/stdlib/hash.md#keyed-authentication) rather than an unkeyed digest. Use [`std.checksum`](../reference/stdlib/checksum.md) when a protocol or file format requires CRC32.
+Do not use `sha1` or `md5` for collision-resistant security decisions. Do not use `std.hash` for password hashing, signatures, authenticated encryption, CRC, or Adler checksums. For keyed authentication of untrusted input, see [Authenticate a value that crossed a boundary](#authenticate-a-value-that-crossed-a-boundary). Use [`std.checksum`](../reference/stdlib/checksum.md) when a protocol or file format requires CRC32.
 
 ## Hash bytes in one call
 
@@ -121,6 +121,34 @@ digest = reader_digest(BytesIO(b"payload"), "shake256", 1024, 32)?
 ```
 
 Use `reader_hash_u32`, `reader_hash_u64`, and `reader_hash_u128` for matching non-cryptographic reader hashes.
+
+## Authenticate a value that crossed a boundary
+
+An unkeyed digest proves a value is internally self-consistent and nothing more. The hash formula is public source, so anyone who reads it can compute a matching digest for a value they made up — which catches accidental corruption, not a caller who fabricates a value and its digest together.
+
+Use `hmac_sha256` when the value arrives from somewhere you do not control. The key stays in your process and never crosses that boundary, so a tag that verifies is evidence the value was produced by you.
+
+```incan
+from std.hash import hmac_sha256
+
+def issue(key: bytes, payload: bytes) -> bytes:
+    return hmac_sha256.digest(key, payload)
+
+
+def accept(key: bytes, payload: bytes, submitted_tag: bytes) -> bool:
+    return hmac_sha256.verify(key, payload, submitted_tag)
+```
+
+Verify with `verify`, not by recomputing a tag and comparing it with `==`. An equality comparison stops at the first differing byte, so how long it takes reveals how much of a candidate tag was correct — which lets an attacker search for a valid tag one byte at a time instead of guessing it whole. `verify` compares in constant time.
+
+For a value built up in pieces, keep a signer instead of concatenating first:
+
+```incan
+mut signer = hmac_sha256.new(key)
+for chunk in chunks:
+    signer.update(chunk)
+tag = signer.finalize_bytes()
+```
 
 ## Handle invalid requests
 
