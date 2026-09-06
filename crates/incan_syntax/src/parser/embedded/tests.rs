@@ -815,6 +815,7 @@ mod embedded_fragment_tests {
                 keywords: vec![
                     incan_vocab::KeywordSpec::block("pattern"),
                     incan_vocab::KeywordSpec::block("shape"),
+                    incan_vocab::KeywordSpec::block("note"),
                 ],
                 valid_decorators: Vec::new(),
             }],
@@ -826,6 +827,15 @@ mod embedded_fragment_tests {
                 incan_vocab::DslSurface::on_import("scriptkit")
                     .with_declaration(incan_vocab::DeclarationSurface::named("pattern"))
                     .with_declaration(incan_vocab::DeclarationSurface::named("shape"))
+                    .with_declaration(incan_vocab::DeclarationSurface::named("note"))
+                    .with_embedded_fragment(
+                        incan_vocab::EmbeddedFragmentDescriptor::new(
+                            "note.fragment",
+                            incan_vocab::EmbeddedFragmentSubmode::RawText,
+                            "note_nodes",
+                        )
+                        .in_declaration_body("note"),
+                    )
                     .with_embedded_fragment(
                         incan_vocab::EmbeddedFragmentDescriptor::new(
                             "pattern.fragment",
