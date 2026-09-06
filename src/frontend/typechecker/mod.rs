@@ -2788,11 +2788,16 @@ impl TypeChecker {
         if let Some(info) = self.lookup_type_info(name) {
             return Some(info);
         }
-        if let Some(info) = self.transitive_stdlib_stub_types.get(name) {
-            return Some(info);
+        // A project's own transitively-reachable type wins over a stdlib stub of the same name. Both are fallbacks
+        // for a name the current module does not declare, but only one of them is a type this program actually
+        // built: a user class called `Registry` resolved to `incan_stdlib_core`'s `Registry` and reported its own
+        // `pub` field private, because the stub was consulted first.
+        if let Some(infos) = self.transitive_pub_types.get(name)
+            && infos.len() == 1
+        {
+            return Some(&infos[0]);
         }
-        let infos = self.transitive_pub_types.get(name)?;
-        (infos.len() == 1).then(|| &infos[0])
+        self.transitive_stdlib_stub_types.get(name)
     }
 
     /// Look up semantic trait metadata, including transitive `pub::` exports referenced only through imported
