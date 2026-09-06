@@ -107,6 +107,7 @@ Keys of any length are accepted: shorter keys are zero-padded to the block size,
 ## See also
 
 - [Hashing data](../../how-to/hashing_data.md)
+- [What hashing proves](../../explanation/hashing_guarantees.md)
 - [`std.checksum` reference](checksum.md)
 - [`std.encoding` reference](encoding.md)
 - [`std.io` reference](io.md)

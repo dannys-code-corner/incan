@@ -124,9 +124,7 @@ Use `reader_hash_u32`, `reader_hash_u64`, and `reader_hash_u128` for matching no
 
 ## Authenticate a value that crossed a boundary
 
-An unkeyed digest proves a value is internally self-consistent and nothing more. The hash formula is public source, so anyone who reads it can compute a matching digest for a value they made up — which catches accidental corruption, not a caller who fabricates a value and its digest together.
-
-Use `hmac_sha256` when the value arrives from somewhere you do not control. The key stays in your process and never crosses that boundary, so a tag that verifies is evidence the value was produced by you.
+Use `hmac_sha256` when a value arrives from somewhere you do not control and you need to know it is one you issued. An unkeyed digest cannot answer that — see [What hashing proves](../explanation/hashing_guarantees.md) for why.
 
 ```incan
 from std.hash import hmac_sha256
@@ -139,7 +137,9 @@ def accept(key: bytes, payload: bytes, submitted_tag: bytes) -> bool:
     return hmac_sha256.verify(key, payload, submitted_tag)
 ```
 
-Verify with `verify`, not by recomputing a tag and comparing it with `==`. An equality comparison stops at the first differing byte, so how long it takes reveals how much of a candidate tag was correct — which lets an attacker search for a valid tag one byte at a time instead of guessing it whole. `verify` compares in constant time.
+Verify with `verify`, not by recomputing a tag and comparing it with `==`. The comparison must be constant time, and `verify` is; an equality check on tag bytes is not.
+
+Keep the key out of whatever the value crossed to reach you. A key on the far side of that boundary makes the check decorative.
 
 For a value built up in pieces, keep a signer instead of concatenating first:
 
@@ -167,6 +167,7 @@ Common error categories include `unknown_algorithm`, `unsupported_width`, `inval
 
 ## See also
 
+- [What hashing proves](../explanation/hashing_guarantees.md)
 - [`std.hash` reference](../reference/stdlib/hash.md)
 - [`std.checksum` reference](../reference/stdlib/checksum.md)
 - [`std.encoding` reference](../reference/stdlib/encoding.md)
