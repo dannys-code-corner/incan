@@ -581,6 +581,11 @@ pub const STDLIB_NAMESPACES: &[StdlibNamespace] = &[
                 features: &[],
             },
             StdlibExtraCrateDep {
+                crate_name: "hmac",
+                source: StdlibExtraCrateSource::Version("0.12"),
+                features: &["reset"],
+            },
+            StdlibExtraCrateDep {
                 crate_name: "md5",
                 source: StdlibExtraCrateSource::Version("0.10"),
                 features: &[],
@@ -606,7 +611,7 @@ pub const STDLIB_NAMESPACES: &[StdlibNamespace] = &[
                 features: &["xxh3", "xxh32", "xxh64"],
             },
         ],
-        submodules: &["_core", "_streaming", "prelude"],
+        submodules: &["_core", "_hmac", "_streaming", "prelude"],
         typechecker_only: false,
     },
     StdlibNamespace {
@@ -1246,7 +1251,16 @@ mod tests {
         assert_eq!(hash_ns.map(|ns| ns.feature), Some(None));
         assert_eq!(
             hash_ns.map(|ns| ns.extra_crate_deps.iter().map(|dep| dep.crate_name).collect::<Vec<_>>()),
-            Some(vec!["blake2", "blake3", "md5", "sha1", "sha2", "sha3", "xxhash_rust",])
+            Some(vec![
+                "blake2",
+                "blake3",
+                "hmac",
+                "md5",
+                "sha1",
+                "sha2",
+                "sha3",
+                "xxhash_rust",
+            ])
         );
         assert_eq!(hash_ns.map(|ns| ns.submodules.contains(&"prelude")), Some(true));
         assert_eq!(hash_ns.map(|ns| ns.submodules.contains(&"_core")), Some(true));

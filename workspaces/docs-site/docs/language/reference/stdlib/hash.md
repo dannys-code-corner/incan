@@ -82,9 +82,33 @@ Fallible helpers return `Result[..., HashError]`.
 
 One-shot namespace helpers that are infallible raise `ValueError` for the same validation detail where applicable.
 
+## Keyed authentication
+
+The digests above are unkeyed. They prove that a value is internally self-consistent, and no more: the hash formula is public, so anyone can compute a matching digest for a value they made up. That catches accidental corruption, not a caller who fabricates a value and its digest together.
+
+`hmac_sha256` closes that gap. The key stays in your process and never crosses the boundary the value arrives from, so a tag that verifies is evidence the value was produced by you.
+
+```incan
+from std.hash import hmac_sha256
+
+tag = hmac_sha256.digest(key, payload)
+if hmac_sha256.verify(key, payload, submitted_tag):
+    accept(payload)
+```
+
+| Member | Purpose |
+| --- | --- |
+| `hmac_sha256.digest(key, data)` | Return the tag for `data` under `key`. |
+| `hmac_sha256.verify(key, data, tag)` | Return whether `tag` authenticates `data`, comparing in constant time. |
+| `hmac_sha256.new(key)` | Return an incremental signer for streamed input. |
+
+HMAC accepts a key of any length: shorter keys are zero-padded to the block size, longer ones are hashed first.
+
+Use `verify` rather than computing a tag and comparing it with `==`. An equality comparison stops at the first differing byte, so how long it takes reveals how much of a candidate tag was correct, and that lets an attacker search for a valid tag one byte at a time instead of guessing it whole.
+
 ## Boundaries
 
-`std.hash` does not provide password hashing, keyed MACs, signatures, authenticated encryption, CRC, or Adler checksums. Those require separate APIs because their security and compatibility contracts are different from ordinary byte hashing. Use [`std.checksum`](checksum.md) for CRC32 compatibility checksums.
+`std.hash` does not provide password hashing, signatures, authenticated encryption, CRC, or Adler checksums. Those require separate APIs because their security and compatibility contracts are different from ordinary byte hashing. Use [`std.checksum`](checksum.md) for CRC32 compatibility checksums.
 
 ## See also
 
