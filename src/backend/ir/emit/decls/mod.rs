@@ -845,7 +845,27 @@ impl super::super::IrEmitter<'_> {
     ) -> String {
         let mut canonical_path = path.to_vec();
         canonical_path.push(item.name.clone());
+        // A consumer imports through a facade; a provider publishes the declaring module. `from std.datetime import
+        // utc` asks for `std.datetime.utc`, while the provider published `std.datetime.civil.naive.utc` -- a prelude
+        // re-export is not itself an export entry, so the facade path is absent and the lookup misses. Import
+        // resolution already proved which module declares the item, so ask the provider again by that path before
+        // falling back to an identity naming a declaration the provider never emitted.
+        let declared_path = item.canonical.as_ref().and_then(|identity| match &identity.origin {
+            incan_semantics_core::SymbolOrigin::Module(declaring_module) => Some(
+                declaring_module
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once(identity.declaration_name.clone()))
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        });
         self.canonical_stdlib_function_identity(&canonical_path)
+            .or_else(|| {
+                declared_path
+                    .as_deref()
+                    .and_then(|p| self.canonical_stdlib_function_identity(p))
+            })
             .or_else(|| self.function_registry.canonical_identity_for_source_name(&item.name))
             .map(incan_semantics_core::encode_incan_symbol_identity)
             .unwrap_or_else(|| item.emitted_name())
@@ -867,6 +887,76 @@ mod tests {
     use crate::library_manifest::{
         CanonicalIdentityExport, ExportIdentity, ExportIdentityKind, ExportIdentityProjection, LibraryManifest,
     };
+
+    #[test]
+    fn stdlib_import_through_a_facade_finds_the_provider_by_the_declaring_module() {
+        // A provider publishes the module that declares an item, not every facade re-exporting it. `from std.datetime
+        // import utc` looks up `std.datetime.utc`, which the graph does not carry; the declaration lives at
+        // `std.datetime.civil.naive.utc`, which it does.
+        let provider_identity = CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_data".to_string(),
+                module_path: vec!["datetime".to_string(), "civil".to_string(), "naive".to_string()],
+            },
+            declaration_name: "utc".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(10, 20),
+        };
+        let mut manifest = LibraryManifest::new("incan_stdlib_data", "0.6.0");
+        manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+            public_name: "utc".to_string(),
+            public_path: vec![
+                "incan_stdlib_data".to_string(),
+                "datetime".to_string(),
+                "civil".to_string(),
+                "naive".to_string(),
+                "utc".to_string(),
+            ],
+            source_path: vec![
+                "datetime".to_string(),
+                "civil".to_string(),
+                "naive".to_string(),
+                "utc".to_string(),
+            ],
+            kind: ExportIdentityKind::Function,
+            projection: ExportIdentityProjection::Direct,
+            canonical: CanonicalIdentityExport::from_canonical("incan_stdlib_data", &provider_identity),
+        });
+
+        let registry = FunctionRegistry::new();
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.seed_sdk_provider_manifest_metadata(&manifest);
+
+        // Import resolution proved the declaring module even though the facade path is not published.
+        let item = IrImportItem {
+            name: "utc".to_string(),
+            alias: None,
+            canonical: Some(CanonicalSymbolId::module_declaration(
+                vec![
+                    "std".to_string(),
+                    "datetime".to_string(),
+                    "civil".to_string(),
+                    "naive".to_string(),
+                ],
+                "utc",
+                SemanticSourceTargetKind::Function,
+                HirSourceSpan::new(30, 40),
+            )),
+            is_static: false,
+            force_reexport: false,
+            rust_trait_import: None,
+        };
+
+        let emitted = emitter.stdlib_import_item_emitted_name(&["std".to_string(), "datetime".to_string()], &item);
+
+        assert_eq!(
+            emitted,
+            encode_incan_symbol_identity(&provider_identity),
+            "a facade import must resolve to the provider's declaration, not a source-shaped stand-in"
+        );
+    }
 
     #[test]
     fn stdlib_import_reexports_the_providers_identity_over_a_same_named_source_declaration() {
