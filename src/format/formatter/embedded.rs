@@ -7,8 +7,11 @@
 //!
 //! Rendering is idempotent by construction: layout whitespace between structural nodes is dropped and reproduced
 //! from the tree's own shape, while content whitespace is collapsed to single spaces. Re-parsing formatted output
-//! therefore yields a tree that renders to the same bytes. `RawText` is the deliberate exception — its whole point
-//! is verbatim content, so its text runs are never collapsed.
+//! therefore yields a tree that renders to the same bytes. `RawText` is the deliberate exception to *collapsing* —
+//! its whole point is verbatim content, so its text runs are never collapsed — but not to idempotency: like the
+//! layout-preserving mode, it drops the trailing newline the enclosing block re-supplies (see
+//! [`without_trailing_block_newlines`]), which is what stops a preserved fragment from growing a blank line on
+//! every formatting pass.
 
 use crate::frontend::ast::{
     EmbeddedAttr, EmbeddedDeclaration, EmbeddedFragmentExpr, EmbeddedNode, EmbeddedStyleRule, EmbeddedTypeShape,
@@ -35,11 +38,45 @@ fn collapse_whitespace(text: &str) -> String {
     text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Strip the trailing line breaks that a fragment's preserved text carries but the enclosing block re-supplies.
+///
+/// A fragment's body runs from the indent that opened it to the dedent that closes it, so its preserved text ends
+/// with the newline that terminated its last line. The statement writer emits that terminator itself. The two
+/// paths that write preserved text verbatim — a layout-sensitive descriptor, and the `RawText` submode's content
+/// runs — would otherwise emit it twice, and every `incan fmt` pass would add another blank line to the file.
+/// Trailing newlines immediately before a dedent are block layout rather than fragment content, so dropping them
+/// keeps both modes idempotent without touching anything the DSL actually owns.
+fn without_trailing_block_newlines(text: &str) -> &str {
+    text.trim_end_matches('\n')
+}
+
+/// Re-escape a template string's literal text so re-parsing the rendered fragment yields the same text back.
+///
+/// `parse_template_string` resolves `` \` ``, `\$`, `\\` and `\n` while parsing, so the `Text` nodes it produces
+/// hold the *resolved* characters. Writing them back raw would change what the fragment means — a literal
+/// backtick would close the string early — so each one is escaped again on the way out. Escaping every `$` rather
+/// than only the ones before `{` is deliberate: it costs nothing, and it removes the case where appending a hole
+/// next to a literal `$` would silently turn it into an interpolation.
+fn escape_template_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for character in text.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '`' => escaped.push_str("\\`"),
+            '$' => escaped.push_str("\\$"),
+            '\n' => escaped.push_str("\\n"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
 impl Formatter {
     /// Format one embedded fragment, honoring the claiming descriptor's layout-sensitivity declaration.
     pub(super) fn format_embedded_fragment(&mut self, fragment: &EmbeddedFragmentExpr) {
         if fragment.layout_sensitive {
-            self.writer.write(&fragment.source_text);
+            self.writer
+                .write(without_trailing_block_newlines(&fragment.source_text));
             return;
         }
         self.format_embedded_nodes(&fragment.nodes, fragment.submode);
@@ -48,9 +85,14 @@ impl Formatter {
     /// Render a fragment's top-level nodes for its submode.
     fn format_embedded_nodes(&mut self, nodes: &[Spanned<EmbeddedNode>], submode: EmbeddedFragmentSubmode) {
         if matches!(submode, EmbeddedFragmentSubmode::RawText) {
-            for node in nodes {
-                self.format_embedded_raw_node(&node.node);
+            let last = nodes.len().saturating_sub(1);
+            for (index, node) in nodes.iter().enumerate() {
+                self.format_embedded_raw_node(&node.node, index == last);
             }
+            return;
+        }
+        if matches!(submode, EmbeddedFragmentSubmode::RegexTemplate) {
+            self.format_embedded_regex_template(nodes);
             return;
         }
 
@@ -70,13 +112,47 @@ impl Formatter {
     /// Render a `RawText` node, preserving its content exactly.
     ///
     /// A raw-text submode exists to keep content untouched, so collapsing or re-indenting it here would change the
-    /// program's meaning rather than its layout.
-    fn format_embedded_raw_node(&mut self, node: &EmbeddedNode) {
+    /// program's meaning rather than its layout. `is_last` marks the final node of the fragment, whose trailing
+    /// newline belongs to the enclosing block rather than to the content — see
+    /// [`without_trailing_block_newlines`].
+    fn format_embedded_raw_node(&mut self, node: &EmbeddedNode, is_last: bool) {
         match node {
+            EmbeddedNode::Text(text) if is_last => self.writer.write(without_trailing_block_newlines(text)),
             EmbeddedNode::Text(text) => self.writer.write(text),
             EmbeddedNode::Hole(expr) => self.format_embedded_hole(expr),
             other => self.format_embedded_node(other, EmbeddedFragmentSubmode::RawText),
         }
+    }
+
+    /// Render a `RegexTemplate` fragment as one of the exactly two forms that submode accepts.
+    ///
+    /// A regex literal keeps its own node, but a template string's backticks and `${...}` delimiters are consumed
+    /// during parsing and never stored, so the node tree alone is `Text`/`Hole` runs indistinguishable from raw
+    /// content. Rendering those the way every other submode renders its nodes would emit `hello {name}!` for
+    /// `` `hello ${name}!` `` — not merely different layout, but a fragment this submode rejects outright, so
+    /// `incan fmt` would rewrite a valid file into one that no longer parses. Reconstructing the delimiters is
+    /// what makes the structural mode a faithful round trip here.
+    fn format_embedded_regex_template(&mut self, nodes: &[Spanned<EmbeddedNode>]) {
+        if let Some(only) = nodes.first()
+            && nodes.len() == 1
+            && matches!(only.node, EmbeddedNode::Regex { .. })
+        {
+            self.format_embedded_node(&only.node, EmbeddedFragmentSubmode::RegexTemplate);
+            return;
+        }
+
+        self.writer.write("`");
+        for node in nodes {
+            match &node.node {
+                EmbeddedNode::Text(text) => self.writer.write(&escape_template_text(text)),
+                EmbeddedNode::Hole(expr) => {
+                    self.writer.write("$");
+                    self.format_embedded_hole(expr);
+                }
+                other => self.format_embedded_node(other, EmbeddedFragmentSubmode::RegexTemplate),
+            }
+        }
+        self.writer.write("`");
     }
 
     /// Render one structural node in block position.
