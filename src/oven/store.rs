@@ -40,9 +40,28 @@ const PHYSICAL_BYTES_CACHE_FILE: &str = ".physical-bytes-cache";
 const UNIQUE_FILE_RECORDS_CACHE_FILE: &str = ".physical-bytes-unique-cache";
 const ACTIVE_LOCK_FILE: &str = ".active.lock";
 const MANAGER_LOCK_FILE: &str = ".manager.lock";
-const LEGACY_CARGO_STAGING_DIRECTORY: &str = "legacy-cargo-staging";
+/// Directory below the store root holding publisher-owned staging trees.
+///
+/// Abbreviated on Windows. This name sits above a nested Cargo build tree whose innermost object paths
+/// must satisfy the shortest limit any tool in the chain imposes, and MASM's is tighter than `MAX_PATH`:
+/// `ml64.exe` accepts a 255-character output path and rejects 258 with `A1009`, a message about line length
+/// that says nothing about paths. The abbreviation is presentational, so it cannot affect correctness.
+#[cfg(windows)]
+pub(crate) const LEGACY_CARGO_STAGING_DIRECTORY: &str = "lcs";
+
+/// Directory below the store root holding publisher-owned staging trees.
+#[cfg(not(windows))]
+pub(crate) const LEGACY_CARGO_STAGING_DIRECTORY: &str = "legacy-cargo-staging";
 const LEGACY_CARGO_PUBLISHER_LOCK_FILE: &str = ".publisher.lock";
-const LEGACY_CARGO_STAGING_PREFIX: &str = ".legacy-cargo-";
+/// Prefix marking one publisher-owned staging tree, so a stray tree can be recognised and reclaimed.
+///
+/// Abbreviated on Windows for the reason given on [`LEGACY_CARGO_STAGING_DIRECTORY`].
+#[cfg(windows)]
+pub(crate) const LEGACY_CARGO_STAGING_PREFIX: &str = ".lc-";
+
+/// Prefix marking one publisher-owned staging tree, so a stray tree can be recognised and reclaimed.
+#[cfg(not(windows))]
+pub(crate) const LEGACY_CARGO_STAGING_PREFIX: &str = ".legacy-cargo-";
 static STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Policy enforced before an Oven artifact becomes visible in the store.

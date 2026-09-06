@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::cli::commands::common::discover_active_sdk_inventory;
 use crate::host_paths::tool_visible_path;
 use crate::library_manifest::{LibraryManifest, digest_provider_artifact, digest_toolchain_source_tree_with_cache};
+use crate::oven::store::{LEGACY_CARGO_STAGING_DIRECTORY, LEGACY_CARGO_STAGING_PREFIX};
 use crate::provider::{SDK_INVENTORY_FILE, SdkInventory};
 
 use super::process::{isolate_process_group, terminate_process_group};
@@ -1370,7 +1371,7 @@ pub fn prepare_direct_rustc_plan(
             request.receipt.project.name.clone(),
         );
     }
-    let staging_parent = request.store.root().join("legacy-cargo-staging");
+    let staging_parent = request.store.root().join(LEGACY_CARGO_STAGING_DIRECTORY);
     let publisher_lock = acquire_publisher_lock(&staging_parent)?;
     // The fast lookup above deliberately precedes manifest inspection. Recheck after taking the cross-process
     // publisher lock so a concurrent winner cannot make this request rebuild and publish a second byte-distinct
@@ -1823,7 +1824,7 @@ pub fn prepare_compiler_test_suite(
     let _ =
         receipt_authorized_generated_root_bytes(&generated_project, &request.receipt, &request.source_evidence_key)?;
     let cargo_version = tool_version(&request.cargo, "cargo")?;
-    let staging_parent = request.store.root().join("legacy-cargo-staging");
+    let staging_parent = request.store.root().join(LEGACY_CARGO_STAGING_DIRECTORY);
     let publisher_lock = acquire_publisher_lock(&staging_parent)?;
     reclaim_stale_publisher_staging(&staging_parent)?;
     let publisher_reservation = request
@@ -8550,7 +8551,7 @@ fn reclaim_stale_publisher_staging(parent: &Path) -> Result<(), OvenLegacyCargoE
             source,
         })?;
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with(".legacy-cargo-") {
+        if !name.to_string_lossy().starts_with(LEGACY_CARGO_STAGING_PREFIX) {
             continue;
         }
         let path = entry.path();
@@ -8576,15 +8577,14 @@ fn create_publisher_staging(parent: &Path) -> Result<PathBuf, OvenLegacyCargoErr
         .as_nanos();
     for sequence in 0_u32..128 {
         // The full nanosecond timestamp costs 19 characters inside a staging chain that already nests several
-        // unique names before a Cargo build tree. On Windows that is enough of the 260-character path budget to
-        // fail the innermost link, so only its low digits are kept: `create_dir` below is what actually guarantees
+        // unique names before a Cargo build tree. On Windows that is enough of the path budget to fail the
+        // innermost compile, so only its low digits are kept: `create_dir` below is what actually guarantees
         // uniqueness, and the process id already separates concurrent publishers.
-        let stamp = if cfg!(windows) {
-            timestamp % 100_000_000
-        } else {
-            timestamp
-        };
-        let path = parent.join(format!(".legacy-cargo-{}-{stamp}-{sequence}", std::process::id()));
+        let stamp = if cfg!(windows) { timestamp % 100_000 } else { timestamp };
+        let path = parent.join(format!(
+            "{LEGACY_CARGO_STAGING_PREFIX}{}-{stamp}-{sequence}",
+            std::process::id()
+        ));
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,

@@ -1257,7 +1257,9 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         .ok_or_else(|| CliError::failure("Loaf output has no parent directory".to_string()))?;
     let scratch = LoafTemporaryDirectory::create(output_parent, ".incan-oven-loaf-envelope-")
         .map_err(|error| CliError::failure(format!("could not allocate Loaf baker scratch directory: {error}")))?;
-    let staged_root = scratch.path().join("staged");
+    // Abbreviated on Windows: this segment sits above the publisher's nested Cargo build tree, whose
+    // innermost object paths must fit MASM's limit. See `LEGACY_CARGO_STAGING_DIRECTORY`.
+    let staged_root = scratch.path().join(if cfg!(windows) { "s" } else { "staged" });
     fs::create_dir_all(&staged_root)
         .map_err(|error| CliError::failure(format!("could not create Loaf staging root: {error}")))?;
 
