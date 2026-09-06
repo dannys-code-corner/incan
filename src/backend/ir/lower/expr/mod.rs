@@ -133,6 +133,12 @@ impl AstLowering {
             IrType::Struct(name) | IrType::Enum(name) | IrType::NamedGeneric(name, _) => name.as_str(),
             _ => return true,
         };
+        // A receiver typed as the dispatched trait itself names no implementation. The trait's own declaration is an
+        // abstract slot with no wrapper beside it -- only the types adopting it emit one -- so projecting a call on
+        // `data: DataSet[T]` named the trait's declaration span while every wrapper carries an implementation's.
+        if type_name == trait_declaration_name(trait_dispatch) {
+            return false;
+        }
         let Some(adopted) = self.adopted_traits_by_type.get(type_name) else {
             return true;
         };
@@ -2893,6 +2899,23 @@ mod tests {
             &receiver,
             Some(&trait_dispatch(builtin_traits::as_str(TraitId::Clone)))
         ));
+    }
+
+    #[test]
+    fn a_receiver_typed_as_the_dispatched_trait_keeps_the_trait_slot_spelling() {
+        // `display[T](data: DataSet[T])` calls `data.to_substrait_plan()`. The trait's own declaration is an abstract
+        // slot with no wrapper beside it -- only adopting types emit one -- so projecting named the trait
+        // declaration's span while every emitted wrapper carries an implementation's.
+        let lowering = AstLowering::new();
+        let receiver = TypedExpr::new(
+            IrExprKind::Unit,
+            IrType::NamedGeneric("DataSet".to_string(), vec![IrType::Int]),
+        );
+
+        assert!(
+            !lowering.receiver_adopts_the_dispatched_trait(&receiver, Some(&trait_dispatch("DataSet"))),
+            "a value typed as the trait itself names no implementation to project"
+        );
     }
 
     #[test]
