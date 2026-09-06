@@ -2188,14 +2188,13 @@ fn write_staged_entry(
                 source,
             })?;
         } else if is_private_publisher_materialized_source(root, &file.source_path)? {
-            OpenOptions::new()
-                .read(true)
-                .open(&file.source_path)
-                .and_then(|source| source.sync_all())
-                .map_err(|source| OvenStoreError::Io {
-                    path: file.source_path.clone(),
-                    source,
-                })?;
+            // The publisher's own file is about to become a store entry by hard link, so its bytes must be on
+            // disk first. Flushing needs a write-capable handle, and these staged files may already be read-only,
+            // which is why this goes through the shared helper rather than opening the path here.
+            crate::durable_publication::sync_file(&file.source_path).map_err(|source| OvenStoreError::Io {
+                path: file.source_path.clone(),
+                source,
+            })?;
             fs::hard_link(&file.source_path, &destination).map_err(|source| OvenStoreError::Io {
                 path: destination.clone(),
                 source,
