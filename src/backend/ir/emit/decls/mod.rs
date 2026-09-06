@@ -829,14 +829,15 @@ fn rustdoc_safe_doc_line(line: &str, in_fenced_block: &mut bool) -> String {
     format!("{}{}", &line[..leading_len], "```ignore")
 }
 
-/// Return the emitted Rust item name for one item of an Incan-source stdlib import.
-///
-/// The import path names the declaration; the bare source name does not. A consumer that materializes stdlib source
-/// registers a module-origin declaration under the same short name as the linked provider's export, so resolving by
-/// name first bound the re-export to an identity the provider never emitted and left `pub use` naming an item that
-/// does not exist. The qualified path is therefore asked first — that lookup consults the compiled-SDK manifest and
-/// fails closed when a path is ambiguous — and the name-only registry stays the fallback it has always been.
 impl super::super::IrEmitter<'_> {
+    /// Return the emitted Rust item name for one item of an Incan-source stdlib import.
+    ///
+    /// The import path names the declaration; the bare source name does not. A consumer that materializes stdlib
+    /// source registers a module-origin declaration under the same short name as the linked provider's export, so
+    /// resolving by name first bound the re-export to an identity the provider never emitted and left `pub use`
+    /// naming an item that does not exist. The qualified path is therefore asked first — that lookup consults the
+    /// compiled-SDK manifest and fails closed when a path is ambiguous — and the name-only registry stays the
+    /// fallback it has always been.
     pub(super) fn stdlib_import_item_emitted_name(
         &self,
         path: &[String],
