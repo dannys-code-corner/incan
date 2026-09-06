@@ -303,7 +303,7 @@ fn resolve_helper_binding<'a>(
             binding.exported_name, duplicate.exported_name
         ));
     }
-    let Some(kind) = helper_export_kind(manifest.as_ref(), &binding.exported_name) else {
+    let Some(kind) = manifest.exports.view().helper_export_kind(&binding.exported_name) else {
         return Err(format!(
             "provider `pub::{dependency_key}` binds helper `{helper_key}` to missing export `{}`",
             binding.exported_name
@@ -312,147 +312,12 @@ fn resolve_helper_binding<'a>(
     if !kind.is_callable() {
         return Err(format!(
             "provider `pub::{dependency_key}` binds helper `{helper_key}` to {} `{}`, which cannot be called; \
-             bind the helper to a function, class, model, newtype, or enum variant",
+             bind the helper to a function, class, model, newtype, enum variant, partial, or alias",
             kind.label(),
             binding.exported_name
         ));
     }
     Ok(binding)
-}
-
-/// What a helper's exported name resolves to on the provider's public surface.
-///
-/// A desugared helper reference is spliced into call position, so the kind decides whether the emitted program can
-/// actually run. Resolving only "is this name exported" accepted traits and constants, which typecheck as names and
-/// then fail in generated Rust as calls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum HelperExportKind {
-    Function,
-    Class,
-    Model,
-    Newtype,
-    EnumVariant,
-    /// A reexport alias whose target resolves to something callable.
-    Alias,
-    Enum,
-    Trait,
-    TypeAlias,
-    Const,
-    Static,
-}
-
-impl HelperExportKind {
-    /// Return whether a value of this kind may appear as the callee of a desugared helper call.
-    fn is_callable(self) -> bool {
-        matches!(
-            self,
-            Self::Function | Self::Class | Self::Model | Self::Newtype | Self::EnumVariant | Self::Alias
-        )
-    }
-
-    /// Return the user-facing noun for this kind, for diagnostics.
-    fn label(self) -> &'static str {
-        match self {
-            Self::Function => "function",
-            Self::Class => "class",
-            Self::Model => "model",
-            Self::Newtype => "newtype",
-            Self::EnumVariant => "enum variant",
-            Self::Alias => "alias",
-            Self::Enum => "enum",
-            Self::Trait => "trait",
-            Self::TypeAlias => "type alias",
-            Self::Const => "const",
-            Self::Static => "static",
-        }
-    }
-}
-
-/// Resolve one exported name on a provider manifest to the kind of item it names.
-///
-/// Callable kinds are checked first so a name that is both an enum and a variant resolves to the usable one.
-fn helper_export_kind(manifest: &crate::library_manifest::LibraryManifest, name: &str) -> Option<HelperExportKind> {
-    helper_export_kind_with_hops(manifest, name, 0)
-}
-
-/// Classify one exported name, carrying the reexport hop budget shared with [`resolve_alias_kind`].
-fn helper_export_kind_with_hops(
-    manifest: &crate::library_manifest::LibraryManifest,
-    name: &str,
-    hops: usize,
-) -> Option<HelperExportKind> {
-    let exports = &manifest.exports;
-    if exports.functions.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Function);
-    }
-    if exports.classes.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Class);
-    }
-    if exports.models.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Model);
-    }
-    if exports.newtypes.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Newtype);
-    }
-    if exports
-        .enums
-        .iter()
-        .any(|item| item.variants.iter().any(|variant| variant.name == name))
-    {
-        return Some(HelperExportKind::EnumVariant);
-    }
-    if exports.enums.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Enum);
-    }
-    if exports.traits.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Trait);
-    }
-    if exports.type_aliases.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::TypeAlias);
-    }
-    if let Some(alias) = exports.aliases.iter().find(|item| item.name == name) {
-        return Some(resolve_alias_kind(manifest, alias, hops));
-    }
-    if exports.consts.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Const);
-    }
-    if exports.statics.iter().any(|item| item.name == name) {
-        return Some(HelperExportKind::Static);
-    }
-    None
-}
-
-/// Maximum reexport hops followed before giving up, so a cyclic alias chain cannot loop forever.
-const MAX_ALIAS_HOPS: usize = 8;
-
-/// Resolve what a reexport alias ultimately names.
-///
-/// A library may publish a helper under an alias rather than its declaration name, and a consumer binding that alias
-/// should resolve exactly as the original does. `projected_function` settles the common case directly; otherwise the
-/// alias is followed by its target's final path segment, which is how the manifest spells a reexport. An unresolvable
-/// or over-long chain stays `Alias`, which is callable, so an alias whose target cannot be classified is admitted
-/// rather than rejected on incomplete information.
-fn resolve_alias_kind(
-    manifest: &crate::library_manifest::LibraryManifest,
-    alias: &crate::library_manifest::AliasExport,
-    hops: usize,
-) -> HelperExportKind {
-    if alias.projected_function.is_some() {
-        return HelperExportKind::Function;
-    }
-    if hops >= MAX_ALIAS_HOPS {
-        return HelperExportKind::Alias;
-    }
-    let Some(target) = alias.target_path.last() else {
-        return HelperExportKind::Alias;
-    };
-    if target == &alias.name {
-        return HelperExportKind::Alias;
-    }
-    match helper_export_kind_with_hops(manifest, target, hops + 1) {
-        Some(kind) => kind,
-        None => HelperExportKind::Alias,
-    }
 }
 
 #[cfg(test)]
@@ -515,6 +380,42 @@ mod tests {
                 ),
             },
         )]))
+    }
+
+    /// Build a minimal exported public partial for helper-resolution fixtures.
+    fn partial_export(name: &str) -> crate::library_manifest::PartialExport {
+        crate::library_manifest::PartialExport {
+            name: name.to_string(),
+            target_path: vec!["demo".to_string(), "filter_rows".to_string()],
+            target_kind: crate::library_manifest::PartialTargetKindExport::Function,
+            presets: Vec::new(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: crate::library_manifest::TypeRef::Named {
+                name: "None".to_string(),
+            },
+            is_async: false,
+        }
+    }
+
+    #[test]
+    fn helper_resolution_accepts_a_public_partial() -> Result<(), Box<dyn std::error::Error>> {
+        // A public partial is a preset over a callable target, so it is callable itself and belongs on the surface a
+        // companion may bind to. Leaving it out rejected a legitimate public export as missing.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "filter_active".to_string(),
+            }],
+            |manifest| {
+                manifest.exports.functions.push(function_export("filter_rows"));
+                manifest.exports.partials.push(partial_export("filter_active"));
+            },
+        );
+
+        let binding = resolve_helper_binding(&index, "demo", "filter")?;
+        assert_eq!(binding.exported_name, "filter_active");
+        Ok(())
     }
 
     #[test]

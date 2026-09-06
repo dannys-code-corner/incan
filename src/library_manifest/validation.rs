@@ -2404,7 +2404,7 @@ fn validate_helper_bindings(
         if let Some(kind) = uncallable_export_kind(exports, binding.exported_name.as_str()) {
             return Err(LibraryManifestError::Invalid(format!(
                 "vocab helper binding `{}` points to {} `{}`, which cannot be called; bind the helper to a function, \
-                 class, model, newtype, enum variant, or alias",
+                 class, model, newtype, enum variant, partial, or alias",
                 binding.key, kind, binding.exported_name
             )));
         }
@@ -2417,37 +2417,9 @@ fn validate_helper_bindings(
 ///
 /// A helper reference is spliced into call position by the desugarer, so binding one to a trait, constant, static, or
 /// bare enum type produces generated Rust that cannot compile. Rejecting it here fails the provider's own build
-/// rather than every consumer's, which is where the author can actually act on it. Callable kinds are checked first
-/// so a name that is both an enum and one of its variants is admitted as the variant.
+/// rather than every consumer's, which is where the author can actually act on it.
 fn uncallable_export_kind(exports: &RawLibraryExports, name: &str) -> Option<&'static str> {
-    let callable = exports.functions.iter().any(|item| item.name == name)
-        || exports.classes.iter().any(|item| item.name == name)
-        || exports.models.iter().any(|item| item.name == name)
-        || exports.newtypes.iter().any(|item| item.name == name)
-        || exports.aliases.iter().any(|item| item.name == name)
-        || exports
-            .enums
-            .iter()
-            .any(|item| item.variants.iter().any(|variant| variant.name == name));
-    if callable {
-        return None;
-    }
-    if exports.enums.iter().any(|item| item.name == name) {
-        return Some("enum");
-    }
-    if exports.traits.iter().any(|item| item.name == name) {
-        return Some("trait");
-    }
-    if exports.type_aliases.iter().any(|item| item.name == name) {
-        return Some("type alias");
-    }
-    if exports.consts.iter().any(|item| item.name == name) {
-        return Some("const");
-    }
-    if exports.statics.iter().any(|item| item.name == name) {
-        return Some("static");
-    }
-    None
+    exports.view().uncallable_kind(name)
 }
 
 /// Collect the set of exportable names that helper bindings are allowed to target.
@@ -2455,22 +2427,5 @@ fn uncallable_export_kind(exports: &RawLibraryExports, name: &str) -> Option<&'s
 /// This flattens the public surface into a simple membership check so helper binding validation can reject drift
 /// without re-encoding export-shape logic in multiple places.
 fn library_export_names(exports: &RawLibraryExports) -> HashSet<&str> {
-    let mut names = HashSet::new();
-    names.extend(exports.aliases.iter().map(|item| item.name.as_str()));
-    names.extend(exports.models.iter().map(|item| item.name.as_str()));
-    names.extend(exports.classes.iter().map(|item| item.name.as_str()));
-    names.extend(exports.functions.iter().map(|item| item.name.as_str()));
-    names.extend(exports.traits.iter().map(|item| item.name.as_str()));
-    names.extend(exports.enums.iter().map(|item| item.name.as_str()));
-    names.extend(
-        exports
-            .enums
-            .iter()
-            .flat_map(|item| item.variants.iter().map(|variant| variant.name.as_str())),
-    );
-    names.extend(exports.type_aliases.iter().map(|item| item.name.as_str()));
-    names.extend(exports.newtypes.iter().map(|item| item.name.as_str()));
-    names.extend(exports.consts.iter().map(|item| item.name.as_str()));
-    names.extend(exports.statics.iter().map(|item| item.name.as_str()));
-    names
+    exports.view().names()
 }
