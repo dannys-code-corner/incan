@@ -17,6 +17,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::commands::common::discover_active_sdk_inventory;
+use crate::host_paths::tool_visible_path;
 use crate::library_manifest::{LibraryManifest, digest_provider_artifact, digest_toolchain_source_tree_with_cache};
 use crate::provider::{SDK_INVENTORY_FILE, SdkInventory};
 
@@ -7224,8 +7225,12 @@ fn run_legacy_cargo_invocation(
         .arg(cargo_manifest)
         .arg("--target")
         .arg(target_triple)
+        // Only the target directory is handed over in tool-visible form; see `tool_visible_path`. Cargo echoes each
+        // input path back in the spelling it was given, so converting this one moves the build outputs -- the paths
+        // that reach `link.exe` -- out of verbatim form while leaving every source path canonical, and with it the
+        // module identity that the rest of the pipeline derives from source spelling.
         .arg("--target-dir")
-        .arg(target)
+        .arg(tool_visible_path(target.to_path_buf()))
         .arg("--message-format=json-render-diagnostics");
     // Existing locks are immutable publisher authority. The explicit project publisher alone may resolve a missing
     // first lock; once Cargo writes it, every remaining publisher action is locked and offline. Compiler-root and
@@ -7298,6 +7303,12 @@ fn run_legacy_cargo_invocation(
     // StableCrateId values). Remapping every machine-variant root to a stable virtual prefix makes identical units
     // byte-identical everywhere, so shared leaves reconcile by digest instead. RUSTFLAGS do not enter the
     // extra-filename hash, so these per-machine flag strings never fork unit identities.
+    //
+    // Each prefix must be spelled the way the paths it covers are spelled. rustc normalizes `/` against `\` before
+    // comparing, so separator spelling is free, but it treats the extended-length `\\?\` prefix as part of the
+    // string: a verbatim prefix never matches a plain path, nor the reverse, and a mismatched flag fails open and
+    // silent. The target directory alone is passed to Cargo in tool-visible form, so its prefix is converted to
+    // match while the others stay canonical.
     let cargo_home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
@@ -7309,7 +7320,10 @@ fn run_legacy_cargo_invocation(
         ));
     }
     remap_flags.push(format!("--remap-path-prefix={}=/incan/package", package_root.display()));
-    remap_flags.push(format!("--remap-path-prefix={}=/incan/target", target.display()));
+    remap_flags.push(format!(
+        "--remap-path-prefix={}=/incan/target",
+        tool_visible_path(target.to_path_buf()).display()
+    ));
     // Standard-library spans leak through inlined core/alloc generics. A toolchain with the `rust-src` component
     // resolves them to its real sysroot checkout while one without emits the virtual `/rustc/<commit>` form, so the
     // same unit compiles to different bytes depending on which components happen to be installed. Remap the source
