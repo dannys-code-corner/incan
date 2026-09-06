@@ -197,9 +197,9 @@ pub(super) fn resolve_helper_bindings_in_expr(
                     "keyword `{keyword}` does not carry provider metadata, so helper `{helper_key}` cannot be resolved"
                 )
             })?;
-            let helper_binding =
-                resolve_helper_binding(library_manifest_index, &keyword_metadata.dependency_key, helper_key)?;
-            let alias = helper_imports.register(&keyword_metadata.dependency_key, &helper_binding.exported_name);
+            let exported_name =
+                resolve_helper_export_name(library_manifest_index, &keyword_metadata.dependency_key, helper_key)?;
+            let alias = helper_imports.register(&keyword_metadata.dependency_key, &exported_name);
             *expr = incan_vocab::IncanExpr::Name(alias);
             Ok(())
         }
@@ -271,12 +271,20 @@ pub(super) fn resolve_helper_bindings_in_expr(
     }
 }
 
-/// Resolve one helper key against the provider manifest and exported library surface.
-fn resolve_helper_binding<'a>(
-    library_manifest_index: &'a LibraryManifestIndex,
+/// Resolve one helper key to the public export name a desugared reference should import.
+///
+/// An explicit `HelperBinding` is the override, for a key whose export spelling deliberately differs from the key
+/// the desugarer emits. With no binding, the key resolves directly against the provider's own checked public
+/// surface, which is the same surface an ordinary consumer imports through.
+///
+/// That default is the point of #1032. A companion that re-states its package's export names is maintaining a
+/// second copy of that surface, kept honest only by a test; the copy is what drifts. Resolving the key against the
+/// package removes the copy rather than validating it.
+fn resolve_helper_export_name(
+    library_manifest_index: &LibraryManifestIndex,
     dependency_key: &str,
     helper_key: &str,
-) -> Result<&'a incan_vocab::HelperBinding, String> {
+) -> Result<String, String> {
     let Some(entry) = library_manifest_index.get(dependency_key) else {
         return Err(format!("provider `pub::{dependency_key}` is not loaded"));
     };
@@ -288,36 +296,48 @@ fn resolve_helper_binding<'a>(
             "provider `pub::{dependency_key}` does not expose vocab metadata"
         ));
     };
+
     let mut matching = vocab
         .provider_manifest
         .helper_bindings
         .iter()
         .filter(|binding| binding.key == helper_key);
-    let binding = matching
-        .next()
-        .ok_or_else(|| format!("provider `pub::{dependency_key}` does not bind helper `{helper_key}`"))?;
-    if let Some(duplicate) = matching.next() {
+    let bound = matching.next();
+    if let (Some(binding), Some(duplicate)) = (bound, matching.next()) {
         return Err(format!(
             "provider `pub::{dependency_key}` binds helper `{helper_key}` more than once, to `{}` and `{}`; \
              remove the duplicate so the helper has one spelling",
             binding.exported_name, duplicate.exported_name
         ));
     }
-    let Some(kind) = manifest.exports.view().helper_export_kind(&binding.exported_name) else {
-        return Err(format!(
-            "provider `pub::{dependency_key}` binds helper `{helper_key}` to missing export `{}`",
-            binding.exported_name
-        ));
+
+    // With no explicit binding the key names the export directly, so the diagnostics below have to say which of the
+    // two the author actually wrote; "binds helper X to missing export X" would read as a broken binding that does
+    // not exist.
+    let exported_name = match bound {
+        Some(binding) => binding.exported_name.as_str(),
+        None => helper_key,
+    };
+
+    let Some(kind) = manifest.exports.view().helper_export_kind(exported_name) else {
+        return Err(match bound {
+            Some(_) => format!(
+                "provider `pub::{dependency_key}` binds helper `{helper_key}` to missing export `{exported_name}`"
+            ),
+            None => format!(
+                "provider `pub::{dependency_key}` does not export `{helper_key}`; export it, or bind the helper to \
+                 the name it should resolve to"
+            ),
+        });
     };
     if !kind.is_callable() {
         return Err(format!(
-            "provider `pub::{dependency_key}` binds helper `{helper_key}` to {} `{}`, which cannot be called; \
-             bind the helper to a function, class, model, newtype, enum variant, partial, or alias",
-            kind.label(),
-            binding.exported_name
+            "provider `pub::{dependency_key}` resolves helper `{helper_key}` to {} `{exported_name}`, which cannot \
+             be called; a helper must resolve to a function, class, model, newtype, enum variant, partial, or alias",
+            kind.label()
         ));
     }
-    Ok(binding)
+    Ok(exported_name.to_string())
 }
 
 #[cfg(test)]
@@ -399,6 +419,76 @@ mod tests {
     }
 
     #[test]
+    fn helper_resolution_derives_an_unbound_key_from_the_package_surface() -> Result<(), Box<dyn std::error::Error>> {
+        // With no explicit binding the helper key names the export directly. A companion that re-stated its own
+        // package's export names was keeping a second copy of the public surface, and the copy is what drifts
+        // (#1032).
+        let index = index_with(Vec::new(), |manifest| {
+            manifest.exports.functions.push(function_export("col"));
+        });
+
+        let exported_name = resolve_helper_export_name(&index, "demo", "col")?;
+        assert_eq!(exported_name, "col");
+        Ok(())
+    }
+
+    #[test]
+    fn an_explicit_binding_still_overrides_the_package_surface() -> Result<(), Box<dyn std::error::Error>> {
+        // Deriving from the surface is the default, not the only path: a key whose export spelling deliberately
+        // differs still resolves through its declared binding.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "filter_rows".to_string(),
+            }],
+            |manifest| {
+                manifest.exports.functions.push(function_export("filter_rows"));
+                manifest.exports.functions.push(function_export("filter"));
+            },
+        );
+
+        let exported_name = resolve_helper_export_name(&index, "demo", "filter")?;
+        assert_eq!(
+            exported_name, "filter_rows",
+            "the declared binding should win over the same-spelled export"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_derived_key_that_names_nothing_reports_the_key_the_author_wrote() -> Result<(), Box<dyn std::error::Error>> {
+        // The bound and derived paths fail differently, and the message has to name what the author actually
+        // wrote. "binds helper `col` to missing export `col`" would describe a binding that does not exist.
+        let index = index_with(Vec::new(), |manifest| {
+            manifest.exports.functions.push(function_export("lit"));
+        });
+
+        let err = match resolve_helper_export_name(&index, "demo", "col") {
+            Err(err) => err,
+            Ok(exported_name) => panic!("expected an unknown-key rejection, resolved to `{exported_name}`"),
+        };
+        assert!(err.contains("does not export `col`"), "unexpected error: {err}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_derived_key_that_names_an_uncallable_export_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
+        // A helper reference is spliced into call position, so deriving from the surface must not admit a name the
+        // surface exports but nothing can call.
+        let index = index_with(Vec::new(), |manifest| {
+            manifest.exports.consts.push(const_export("col"));
+        });
+
+        let err = match resolve_helper_export_name(&index, "demo", "col") {
+            Err(err) => err,
+            Ok(exported_name) => panic!("expected an uncallable rejection, resolved to `{exported_name}`"),
+        };
+        assert!(err.contains("const `col`"), "unexpected error: {err}");
+        assert!(err.contains("cannot"), "unexpected error: {err}");
+        Ok(())
+    }
+
+    #[test]
     fn helper_resolution_accepts_a_public_partial() -> Result<(), Box<dyn std::error::Error>> {
         // A public partial is a preset over a callable target, so it is callable itself and belongs on the surface a
         // companion may bind to. Leaving it out rejected a legitimate public export as missing.
@@ -413,8 +503,8 @@ mod tests {
             },
         );
 
-        let binding = resolve_helper_binding(&index, "demo", "filter")?;
-        assert_eq!(binding.exported_name, "filter_active");
+        let exported_name = resolve_helper_export_name(&index, "demo", "filter")?;
+        assert_eq!(exported_name, "filter_active");
         Ok(())
     }
 
@@ -437,8 +527,8 @@ mod tests {
             },
         );
 
-        let binding = resolve_helper_binding(&index, "demo", "filter")?;
-        assert_eq!(binding.exported_name, "where_");
+        let exported_name = resolve_helper_export_name(&index, "demo", "filter")?;
+        assert_eq!(exported_name, "where_");
         Ok(())
     }
 
@@ -461,7 +551,7 @@ mod tests {
             },
         );
 
-        let err = match resolve_helper_binding(&index, "demo", "filter") {
+        let err = match resolve_helper_export_name(&index, "demo", "filter") {
             Err(err) => err,
             Ok(_) => panic!("expected the alias target to be rejected"),
         };
@@ -493,8 +583,8 @@ mod tests {
 
         // Terminating at all is the assertion; an unresolvable chain stays callable rather than being rejected on
         // incomplete information.
-        let binding = resolve_helper_binding(&index, "demo", "filter")?;
-        assert_eq!(binding.exported_name, "a");
+        let exported_name = resolve_helper_export_name(&index, "demo", "filter")?;
+        assert_eq!(exported_name, "a");
         Ok(())
     }
 
@@ -516,9 +606,9 @@ mod tests {
             |_| {},
         );
 
-        let err = match resolve_helper_binding(&index, "demo", "filter") {
+        let err = match resolve_helper_export_name(&index, "demo", "filter") {
             Err(err) => err,
-            Ok(binding) => panic!("expected duplicate rejection, resolved to `{}`", binding.exported_name),
+            Ok(exported_name) => panic!("expected duplicate rejection, resolved to `{exported_name}`"),
         };
         assert!(err.contains("more than once"), "unexpected error: {err}");
         assert!(
@@ -549,7 +639,7 @@ mod tests {
             },
         );
 
-        let err = match resolve_helper_binding(&index, "demo", "filter") {
+        let err = match resolve_helper_export_name(&index, "demo", "filter") {
             Err(err) => err,
             Ok(_) => panic!("expected an ineligible-kind rejection"),
         };
@@ -587,7 +677,7 @@ mod tests {
             },
         )]));
 
-        let err = match resolve_helper_binding(&index, "demo", "filter") {
+        let err = match resolve_helper_export_name(&index, "demo", "filter") {
             Err(err) => err,
             Ok(_) => panic!("expected missing export rejection"),
         };
