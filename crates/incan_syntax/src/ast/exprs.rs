@@ -212,9 +212,15 @@ pub struct EmbeddedFragmentExpr {
     pub submode: incan_vocab::EmbeddedFragmentSubmode,
     /// Structural node tree produced by the submode's grammar, in source order.
     pub nodes: Vec<Spanned<EmbeddedNode>>,
-    /// Verbatim original source text of the whole fragment, for the formatter's layout-preserving fallback and for
+    /// Verbatim original source text of the whole fragment, for the formatter's layout-preserving mode and for
     /// tooling that needs the untouched source rather than the structural tree.
     pub source_text: String,
+    /// Whether the claiming descriptor declared itself layout-sensitive.
+    ///
+    /// RFC 081 gives the formatter exactly two modes: render from this structural tree, or preserve `source_text`
+    /// verbatim for a DSL that declares itself layout-sensitive. The descriptor owns that choice, and the parser
+    /// resolves it here so the formatter never has to rediscover the descriptor to answer it.
+    pub layout_sensitive: bool,
 }
 
 impl EmbeddedFragmentExpr {
