@@ -5015,25 +5015,33 @@ fn write_native_test_failure_transcript(output: &Path, transcript: &str) -> CliR
     Ok(path)
 }
 
-/// Collect every test libtest reported as failing, in the order libtest first named them.
+/// Collect every test libtest reported as failing, in the order it first named them.
 ///
-/// libtest introduces each captured failure body with `---- <name> stdout ----` before repeating the same names in
-/// its trailing `failures:` roster. Reading the body headers keeps the roster complete even when a run ends before
-/// libtest prints that trailing block, and de-duplicating keeps one entry per test when both forms are present.
+/// Two spellings have to be read because the suite runs libtest in both modes. With output captured, each failure
+/// body is introduced by `---- <name> stdout ----`. With output passed through, no such header is printed and the
+/// only place the test is named is the panic line, where libtest has set the thread name to the test name. Reading
+/// both keeps the roster complete in either mode, and de-duplicating keeps one entry per test when both appear.
 fn failing_test_names(output: &str) -> Vec<&str> {
     let mut names = Vec::new();
     for line in output.lines() {
-        let Some(name) = line
-            .trim()
+        let trimmed = line.trim();
+        let captured = trimmed
             .strip_prefix("---- ")
-            .and_then(|rest| rest.strip_suffix(" stdout ----"))
-            .map(str::trim)
-        else {
+            .and_then(|rest| rest.strip_suffix(" stdout ----"));
+        let passed_through = trimmed
+            .contains("panicked at")
+            .then(|| trimmed.split_once("thread '"))
+            .flatten()
+            .and_then(|(_, rest)| rest.split_once('\''))
+            .map(|(name, _)| name);
+        let Some(name) = captured.or(passed_through).map(str::trim) else {
             continue;
         };
-        if !name.is_empty() && !names.contains(&name) {
-            names.push(name);
+        // A panic on the harness thread names the runner, not a test; it would add noise to every roster.
+        if name.is_empty() || name == "main" || names.contains(&name) {
+            continue;
         }
+        names.push(name);
     }
     names
 }
@@ -6155,6 +6163,22 @@ mod tests {
         assert!(summary.contains("benchmark fixture failed"));
         assert!(summary.contains("stdout: missing Loaf"));
         assert!(summary.contains("stderr: no Cargo fallback"));
+    }
+
+    #[test]
+    fn native_test_failure_summary_names_tests_libtest_only_identified_by_panic_thread() {
+        let bulky_panic_body = "y".repeat(20_000);
+        let transcript = format!(
+            "thread 'noisy_first_failure' (2719) panicked at tests/integration_tests.rs:1324:9:\n{bulky_panic_body}\nthread 'quiet_last_failure' (4810) panicked at tests/integration_tests.rs:8361:9:\nassertion failed\n"
+        );
+
+        let summary = native_test_failure_summary(&transcript);
+
+        assert!(
+            summary.starts_with("failing tests (2):\n    noisy_first_failure\n    quiet_last_failure\n"),
+            "a pass-through libtest run names its failures only on the panic line: {}",
+            &summary[..summary.len().min(200)]
+        );
     }
 
     #[test]
