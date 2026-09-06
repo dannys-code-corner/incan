@@ -23,12 +23,12 @@
       <td>Source spans, semantic facts, and paired receipts survive execution.</td>
     </tr>
     <tr data-v06-slice-target="slice-03-language-runtime-matrix">
-      <td><button type="button" class="inc-v06-slice-toggle">3. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">13 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">3. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">4 open</span></div></td>
       <td>Embedded fragments, capabilities, and package vocabulary.</td>
       <td>Accepted constructs have parity, diagnostics, inspection, and migration evidence.</td>
     </tr>
     <tr data-v06-slice-target="slice-04-oven-authority-native-rust">
-      <td><button type="button" class="inc-v06-slice-toggle">4. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">2 complete</span><span class="inc-v06-status inc-v06-status--open">39 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">4. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">44 open</span></div></td>
       <td>Loaf authority, governed providers, and bounded Rust facets.</td>
       <td>Incan-only, Rust-only, and mixed Loaves bake without Cargo being authoritative.</td>
     </tr>
@@ -43,12 +43,12 @@
       <td>CLI, LSP, Architect, MCP, and Rust inspection agree on identity and provenance.</td>
     </tr>
     <tr data-v06-slice-target="slice-07-canonical-source-meaning">
-      <td><button type="button" class="inc-v06-slice-toggle">7. Canonical source meaning</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">6 complete</span><span class="inc-v06-status inc-v06-status--open">6 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">7. Canonical source meaning</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">7 complete</span><span class="inc-v06-status inc-v06-status--open">8 open</span></div></td>
       <td>One source identity across compiler, tools, and backend facts.</td>
       <td>Aliases, imports, locals, members, and binders resolve consistently.</td>
     </tr>
     <tr data-v06-slice-target="slice-08-native-windows">
-      <td><button type="button" class="inc-v06-slice-toggle">8. Native Windows support</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">20 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">8. Native Windows support</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">11 complete</span><span class="inc-v06-status inc-v06-status--open">11 open</span></div></td>
       <td>A Windows host that builds, bakes, and ships like the others.</td>
       <td>A packaged Windows toolchain builds and runs a project, not merely a bake that exits zero.</td>
     </tr>
@@ -230,63 +230,29 @@ flowchart LR
 ```mermaid
 flowchart LR
   i555["#555<br/>RFC 081 - full language-shaped DSL embe…"]
-  i662["#662<br/>RFC 104 - full ambient runtime capabili…"]
-  i759["#759<br/>package-derived vocab helper bindings f…"]
-  i990["#990<br/>implement governed std.process for Oven…"]
   i1020["#1020<br/>RFC 081 resolve design decisions and em…"]
   i1022["#1022<br/>RFC 081 formatting, LSP, and full embed…"]
   i1023["#1023<br/>RFC 081 descriptor-gated lexical submod…"]
-  i1027["#1027<br/>RFC 104 semantic inspection, policy int…"]
-  i1028["#1028<br/>RFC 104 stdlib and package receipts, re…"]
-  i1029["#1029<br/>RFC 104 authority context, declarations…"]
-  i1031["#1031<br/>package-derived vocab helper resolution…"]
-  i1032["#1032<br/>package-derived vocab contracts, InQL m…"]
   i1038["#1038<br/>RFC 081 formatting, LSP, and full embed…"]
   i1075["#1075<br/>add keyed MAC (HMAC) primitives to std.…"]
   s1140["Slice 3<br/>#1140"]
-  i1211["#1211<br/>establish RFC 104 authority-decision fa…"]
-  i1212["#1212<br/>establish RFC 104 operation-receipt fac…"]
   i1252["#1252<br/>example corpus covers a third of the do…"]
   s1140 -- owns --> i555
-  s1140 -- owns --> i662
-  s1140 -- owns --> i759
   i555 -- owns --> i1020
   i555 -- owns --> i1022
   i555 -- owns --> i1023
-  i662 -- owns --> i1027
-  i662 -- owns --> i1028
-  i662 -- owns --> i1029
-  i759 -- owns --> i1031
-  i759 -- owns --> i1032
   s1140 -- owns --> i1038
   s1140 -- owns --> i1075
-  i1029 -- owns --> i1211
-  i1028 -- owns --> i1212
   s1140 -- owns --> i1252
-  i1023 -. blocks .-> i1022
-  i990 -. blocks .-> i1027
-  i1028 -. blocks .-> i1027
-  i1029 -. blocks .-> i1028
-  i1031 -. blocks .-> i1032
   classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i1020,i1038,i1211,i1212 incv06complete
+  class i1020,i1023,i1038,i1075 incv06complete
   click i555 href "https://github.com/encero-systems/incan/issues/555" "Open #555 on GitHub"
-  click i662 href "https://github.com/encero-systems/incan/issues/662" "Open #662 on GitHub"
-  click i759 href "https://github.com/encero-systems/incan/issues/759" "Open #759 on GitHub"
-  click i990 href "https://github.com/encero-systems/incan/issues/990" "Open #990 on GitHub"
   click i1020 href "https://github.com/encero-systems/incan/issues/1020" "Open #1020 on GitHub"
   click i1022 href "https://github.com/encero-systems/incan/issues/1022" "Open #1022 on GitHub"
   click i1023 href "https://github.com/encero-systems/incan/issues/1023" "Open #1023 on GitHub"
-  click i1027 href "https://github.com/encero-systems/incan/issues/1027" "Open #1027 on GitHub"
-  click i1028 href "https://github.com/encero-systems/incan/issues/1028" "Open #1028 on GitHub"
-  click i1029 href "https://github.com/encero-systems/incan/issues/1029" "Open #1029 on GitHub"
-  click i1031 href "https://github.com/encero-systems/incan/issues/1031" "Open #1031 on GitHub"
-  click i1032 href "https://github.com/encero-systems/incan/issues/1032" "Open #1032 on GitHub"
   click i1038 href "https://github.com/encero-systems/incan/issues/1038" "Open #1038 on GitHub"
   click i1075 href "https://github.com/encero-systems/incan/issues/1075" "Open #1075 on GitHub"
   click s1140 href "https://github.com/encero-systems/incan/issues/1140" "Open #1140 on GitHub"
-  click i1211 href "https://github.com/encero-systems/incan/issues/1211" "Open #1211 on GitHub"
-  click i1212 href "https://github.com/encero-systems/incan/issues/1212" "Open #1212 on GitHub"
   click i1252 href "https://github.com/encero-systems/incan/issues/1252" "Open #1252 on GitHub"
 ```
 [Open Slice 3 in GitHub](https://github.com/encero-systems/incan/issues/1140)
@@ -301,19 +267,23 @@ flowchart LR
 ```mermaid
 flowchart LR
   i429["#429<br/>Oven-managed pinned Rust host toolchain…"]
+  i662["#662<br/>RFC 104 - full ambient runtime capabili…"]
   i870["#870<br/>Incan-authored Oven and toolchain compo…"]
   i871["#871<br/>complete Oven/toolchain ownership map f…"]
   i872["#872<br/>complete runtime and interop bridge mat…"]
   i975["#975<br/>Oven: Cargo-free Incan/Rust toolchain a…"]
   i990["#990<br/>implement governed std.process for Oven…"]
   i991["#991<br/>establish the Oven host-kernel and Inca…"]
-  i1008["#1008<br/>adopt the Loaf.toml envelope for Oven i…"]
+  i1008["#1008<br/>adopt the loaf.toml envelope for Oven i…"]
   i1012["#1012<br/>RFC 119: Oven-native Rust build facets …"]
+  i1027["#1027<br/>RFC 104 semantic inspection, policy int…"]
+  i1028["#1028<br/>RFC 104 stdlib and package receipts, re…"]
+  i1029["#1029<br/>RFC 104 authority context, declarations…"]
   i1034["#1034<br/>migrate the full Oven semantic control …"]
   i1035["#1035<br/>RFC 119 typed Rust build-script and pro…"]
   i1037["#1037<br/>RFC 119 native Rust facets and direct-r…"]
   i1040["#1040<br/>RFC 119 Rust roles, IDE projection, Car…"]
-  i1063["#1063<br/>RFC 117: Loaf.toml and Oven language-ne…"]
+  i1063["#1063<br/>RFC 117: loaf.toml and Oven language-ne…"]
   i1065["#1065<br/>Reduce oven-linux-replay CI wall-clock:…"]
   i1068["#1068<br/>diagnose declared script paths that col…"]
   i1081["#1081<br/>migrate project_lifecycle/env.rs env-ov…"]
@@ -339,9 +309,13 @@ flowchart LR
   i1111["#1111<br/>investigate the warm rebuild floor: a n…"]
   s1141["Slice 4<br/>#1141"]
   i1149["#1149<br/>bug - regenerate tracked example locks …"]
+  i1211["#1211<br/>establish RFC 104 authority-decision fa…"]
+  i1212["#1212<br/>establish RFC 104 operation-receipt fac…"]
   i1266["#1266<br/>move Oven's plan/build-unit/artifact/re…"]
   i1337["#1337<br/>invoke Rust behavior from the replaceme…"]
+  i1339["#1339<br/>RFC 123 package executable representation"]
   i975 -- owns --> i429
+  s1141 -- owns --> i662
   i975 -- owns --> i870
   i870 -- owns --> i871
   i870 -- owns --> i872
@@ -350,6 +324,9 @@ flowchart LR
   i870 -- owns --> i991
   i975 -- owns --> i1008
   i975 -- owns --> i1012
+  i662 -- owns --> i1027
+  i662 -- owns --> i1028
+  i662 -- owns --> i1029
   i870 -- owns --> i1034
   i1012 -- owns --> i1035
   i1012 -- owns --> i1037
@@ -379,11 +356,18 @@ flowchart LR
   i1034 -- owns --> i1100
   s1141 -- owns --> i1111
   s1141 -- owns --> i1149
+  i1029 -- owns --> i1211
+  i1028 -- owns --> i1212
   i1094 -- owns --> i1266
   s1141 -- owns --> i1337
+  s1141 -- owns --> i1339
+  i990 -. blocks .-> i1027
+  i1028 -. blocks .-> i1027
+  i1029 -. blocks .-> i1028
   classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i871,i1063 incv06complete
+  class i871,i1063,i1211,i1212 incv06complete
   click i429 href "https://github.com/encero-systems/incan/issues/429" "Open #429 on GitHub"
+  click i662 href "https://github.com/encero-systems/incan/issues/662" "Open #662 on GitHub"
   click i870 href "https://github.com/encero-systems/incan/issues/870" "Open #870 on GitHub"
   click i871 href "https://github.com/encero-systems/incan/issues/871" "Open #871 on GitHub"
   click i872 href "https://github.com/encero-systems/incan/issues/872" "Open #872 on GitHub"
@@ -392,6 +376,9 @@ flowchart LR
   click i991 href "https://github.com/encero-systems/incan/issues/991" "Open #991 on GitHub"
   click i1008 href "https://github.com/encero-systems/incan/issues/1008" "Open #1008 on GitHub"
   click i1012 href "https://github.com/encero-systems/incan/issues/1012" "Open #1012 on GitHub"
+  click i1027 href "https://github.com/encero-systems/incan/issues/1027" "Open #1027 on GitHub"
+  click i1028 href "https://github.com/encero-systems/incan/issues/1028" "Open #1028 on GitHub"
+  click i1029 href "https://github.com/encero-systems/incan/issues/1029" "Open #1029 on GitHub"
   click i1034 href "https://github.com/encero-systems/incan/issues/1034" "Open #1034 on GitHub"
   click i1035 href "https://github.com/encero-systems/incan/issues/1035" "Open #1035 on GitHub"
   click i1037 href "https://github.com/encero-systems/incan/issues/1037" "Open #1037 on GitHub"
@@ -422,8 +409,11 @@ flowchart LR
   click i1111 href "https://github.com/encero-systems/incan/issues/1111" "Open #1111 on GitHub"
   click s1141 href "https://github.com/encero-systems/incan/issues/1141" "Open #1141 on GitHub"
   click i1149 href "https://github.com/encero-systems/incan/issues/1149" "Open #1149 on GitHub"
+  click i1211 href "https://github.com/encero-systems/incan/issues/1211" "Open #1211 on GitHub"
+  click i1212 href "https://github.com/encero-systems/incan/issues/1212" "Open #1212 on GitHub"
   click i1266 href "https://github.com/encero-systems/incan/issues/1266" "Open #1266 on GitHub"
   click i1337 href "https://github.com/encero-systems/incan/issues/1337" "Open #1337 on GitHub"
+  click i1339 href "https://github.com/encero-systems/incan/issues/1339" "Open #1339 on GitHub"
 ```
 [Open Slice 4 in GitHub](https://github.com/encero-systems/incan/issues/1141)
 
@@ -500,7 +490,10 @@ flowchart LR
 ```mermaid
 flowchart LR
   i752["#752<br/>RFC 107 - full type-directed library AP…"]
+  i759["#759<br/>package-derived vocab helper bindings f…"]
   i1030["#1030<br/>RFC 107 public API metadata, tooling, a…"]
+  i1031["#1031<br/>package-derived vocab helper resolution…"]
+  i1032["#1032<br/>package-derived vocab contracts, InQL m…"]
   i1033["#1033<br/>RFC 107 complete Type[T] semantics and …"]
   i1042["#1042<br/>RFC 120: canonical source symbol identity"]
   i1072["#1072<br/>bug - plain assignment inside a nested …"]
@@ -513,7 +506,10 @@ flowchart LR
   i1210["#1210<br/>establish canonical callable-target fac…"]
   i1374["#1374<br/>bug - Default is derivable but unusable…"]
   s1139 -- owns --> i752
+  s1139 -- owns --> i759
   i752 -- owns --> i1030
+  i759 -- owns --> i1031
+  i759 -- owns --> i1032
   i752 -- owns --> i1033
   s1139 -- owns --> i1042
   s1139 -- owns --> i1072
@@ -526,9 +522,12 @@ flowchart LR
   i1033 -. blocks .-> i1030
   i1168 -. blocks .-> i1174
   classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i1042,i1072,i1117,i1132,i1174,i1210 incv06complete
+  class i1031,i1042,i1072,i1117,i1132,i1174,i1210 incv06complete
   click i752 href "https://github.com/encero-systems/incan/issues/752" "Open #752 on GitHub"
+  click i759 href "https://github.com/encero-systems/incan/issues/759" "Open #759 on GitHub"
   click i1030 href "https://github.com/encero-systems/incan/issues/1030" "Open #1030 on GitHub"
+  click i1031 href "https://github.com/encero-systems/incan/issues/1031" "Open #1031 on GitHub"
+  click i1032 href "https://github.com/encero-systems/incan/issues/1032" "Open #1032 on GitHub"
   click i1033 href "https://github.com/encero-systems/incan/issues/1033" "Open #1033 on GitHub"
   click i1042 href "https://github.com/encero-systems/incan/issues/1042" "Open #1042 on GitHub"
   click i1072 href "https://github.com/encero-systems/incan/issues/1072" "Open #1072 on GitHub"
@@ -572,6 +571,8 @@ flowchart LR
   i1366["#1366<br/>bug - Windows: std.fs imports unix-only…"]
   i1368["#1368<br/>bug - Windows: shipped Oven store layou…"]
   s1379["Slice 8<br/>#1379"]
+  i1396["#1396<br/>bug - Windows: std.fs disk usage is uni…"]
+  i1397["#1397<br/>Windows: contributor prerequisites are …"]
   s1379 -- owns --> i433
   i433 -- owns --> i1282
   i433 -- owns --> i1283
@@ -591,8 +592,12 @@ flowchart LR
   i1282 -- owns --> i1364
   i1282 -- owns --> i1366
   i1282 -- owns --> i1368
+  i1282 -- owns --> i1396
+  i433 -- owns --> i1397
   i1282 -. blocks .-> i1284
   i1283 -. blocks .-> i1284
+  classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
+  class i1340,i1345,i1351,i1355,i1357,i1358,i1362,i1364,i1366,i1368,i1397 incv06complete
   click i433 href "https://github.com/encero-systems/incan/issues/433" "Open #433 on GitHub"
   click i1282 href "https://github.com/encero-systems/incan/issues/1282" "Open #1282 on GitHub"
   click i1283 href "https://github.com/encero-systems/incan/issues/1283" "Open #1283 on GitHub"
@@ -613,6 +618,8 @@ flowchart LR
   click i1366 href "https://github.com/encero-systems/incan/issues/1366" "Open #1366 on GitHub"
   click i1368 href "https://github.com/encero-systems/incan/issues/1368" "Open #1368 on GitHub"
   click s1379 href "https://github.com/encero-systems/incan/issues/1379" "Open #1379 on GitHub"
+  click i1396 href "https://github.com/encero-systems/incan/issues/1396" "Open #1396 on GitHub"
+  click i1397 href "https://github.com/encero-systems/incan/issues/1397" "Open #1397 on GitHub"
 ```
 [Open Slice 8 in GitHub](https://github.com/encero-systems/incan/issues/1379)
 
