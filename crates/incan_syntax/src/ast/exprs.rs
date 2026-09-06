@@ -212,9 +212,61 @@ pub struct EmbeddedFragmentExpr {
     pub submode: incan_vocab::EmbeddedFragmentSubmode,
     /// Structural node tree produced by the submode's grammar, in source order.
     pub nodes: Vec<Spanned<EmbeddedNode>>,
-    /// Verbatim original source text of the whole fragment, for the formatter's layout-preserving fallback and for
+    /// Verbatim original source text of the whole fragment, for the formatter's layout-preserving mode and for
     /// tooling that needs the untouched source rather than the structural tree.
     pub source_text: String,
+    /// Whether the claiming descriptor declared itself layout-sensitive.
+    ///
+    /// RFC 081 gives the formatter exactly two modes: render from this structural tree, or preserve `source_text`
+    /// verbatim for a DSL that declares itself layout-sensitive. The descriptor owns that choice, and the parser
+    /// resolves it here so the formatter never has to rediscover the descriptor to answer it.
+    pub layout_sensitive: bool,
+}
+
+impl EmbeddedFragmentExpr {
+    /// Collect every ordinary-Incan expression hole in this fragment, in source order.
+    ///
+    /// A hole is genuine Incan syntax: the typechecker and lowering already treat it exactly as they would the same
+    /// expression written in ordinary position. Tooling that walks expressions has to reach holes the same way, or a
+    /// fragment becomes an opaque region where hover, signature help, and scoped-symbol resolution stop working for
+    /// code that is not embedded at all. This is the one traversal that answers "which expressions does this
+    /// fragment own", so the compiler and its tooling cannot drift into different answers (RFC 081, #1022).
+    pub fn holes(&self) -> Vec<&Spanned<Expr>> {
+        let mut holes = Vec::new();
+        collect_embedded_holes(&self.nodes, &mut holes);
+        holes
+    }
+}
+
+/// Walk embedded nodes in source order, collecting the expression holes reachable from each.
+///
+/// `Hole` is the one leaf carrying an ordinary expression. Container kinds recurse into their own children; every
+/// remaining kind is DSL-owned syntax that cannot contain one.
+fn collect_embedded_holes<'a>(nodes: &'a [Spanned<EmbeddedNode>], holes: &mut Vec<&'a Spanned<Expr>>) {
+    for node in nodes {
+        match &node.node {
+            EmbeddedNode::Hole(expr) => holes.push(expr.as_ref()),
+            EmbeddedNode::Element(element) => {
+                for attr in &element.attrs {
+                    if let Some(value) = &attr.value {
+                        collect_embedded_holes(std::slice::from_ref(value), holes);
+                    }
+                }
+                collect_embedded_holes(&element.children, holes);
+            }
+            EmbeddedNode::StyleRule(rule) => {
+                collect_embedded_holes(&rule.selectors, holes);
+                collect_embedded_holes(&rule.declarations, holes);
+            }
+            EmbeddedNode::Declaration(declaration) => collect_embedded_holes(&declaration.value, holes),
+            EmbeddedNode::Text(_)
+            | EmbeddedNode::EntityRef(_)
+            | EmbeddedNode::Comment(_)
+            | EmbeddedNode::Value(_)
+            | EmbeddedNode::Regex { .. }
+            | EmbeddedNode::TypeShape(_) => {}
+        }
+    }
 }
 
 /// One structural node inside a descriptor-gated embedded fragment.
