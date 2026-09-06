@@ -22,38 +22,38 @@
       <td>Direct execution of a bounded Body-IR program.</td>
       <td>Source spans, semantic facts, and paired receipts survive execution.</td>
     </tr>
-    <tr data-v06-slice-target="slice-03-canonical-source-meaning">
-      <td><button type="button" class="inc-v06-slice-toggle">3. Canonical source meaning</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">6 complete</span><span class="inc-v06-status inc-v06-status--open">6 open</span></div></td>
-      <td>One source identity across compiler, tools, and backend facts.</td>
-      <td>Aliases, imports, locals, members, and binders resolve consistently.</td>
-    </tr>
-    <tr data-v06-slice-target="slice-04-language-runtime-matrix">
-      <td><button type="button" class="inc-v06-slice-toggle">4. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">13 open</span></div></td>
+    <tr data-v06-slice-target="slice-03-language-runtime-matrix">
+      <td><button type="button" class="inc-v06-slice-toggle">3. Language and runtime matrix</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">4 complete</span><span class="inc-v06-status inc-v06-status--open">13 open</span></div></td>
       <td>Embedded fragments, capabilities, and package vocabulary.</td>
       <td>Accepted constructs have parity, diagnostics, inspection, and migration evidence.</td>
     </tr>
-    <tr data-v06-slice-target="slice-05-oven-authority-native-rust">
-      <td><button type="button" class="inc-v06-slice-toggle">5. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">2 complete</span><span class="inc-v06-status inc-v06-status--open">39 open</span></div></td>
+    <tr data-v06-slice-target="slice-04-oven-authority-native-rust">
+      <td><button type="button" class="inc-v06-slice-toggle">4. Oven authority and native Rust</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">2 complete</span><span class="inc-v06-status inc-v06-status--open">39 open</span></div></td>
       <td>Loaf authority, governed providers, and bounded Rust facets.</td>
       <td>Incan-only, Rust-only, and mixed Loaves bake without Cargo being authoritative.</td>
     </tr>
-    <tr data-v06-slice-target="slice-06-oven-cli-delivery">
-      <td><button type="button" class="inc-v06-slice-toggle">6. Oven CLI delivery</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">2 open</span></div></td>
+    <tr data-v06-slice-target="slice-05-oven-cli-delivery">
+      <td><button type="button" class="inc-v06-slice-toggle">5. Oven CLI delivery</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">2 open</span></div></td>
       <td>Shared Oven planning for build and bake.</td>
       <td>One plan and receipt model; neither CLI gains a competing planner.</td>
     </tr>
-    <tr data-v06-slice-target="slice-07-first-class-inspectability">
-      <td><button type="button" class="inc-v06-slice-toggle">7. First-class inspectability</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">9 open</span></div></td>
+    <tr data-v06-slice-target="slice-06-first-class-inspectability">
+      <td><button type="button" class="inc-v06-slice-toggle">6. First-class inspectability</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">9 open</span></div></td>
       <td>Shared compiler, package, artifact, and Rust/Oven inspection facts.</td>
       <td>CLI, LSP, Architect, MCP, and Rust inspection agree on identity and provenance.</td>
     </tr>
+    <tr data-v06-slice-target="slice-07-canonical-source-meaning">
+      <td><button type="button" class="inc-v06-slice-toggle">7. Canonical source meaning</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">6 complete</span><span class="inc-v06-status inc-v06-status--open">6 open</span></div></td>
+      <td>One source identity across compiler, tools, and backend facts.</td>
+      <td>Aliases, imports, locals, members, and binders resolve consistently.</td>
+    </tr>
     <tr data-v06-slice-target="slice-08-native-windows">
-      <td><button type="button" class="inc-v06-slice-toggle">8. Native Windows support</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">19 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">8. Native Windows support</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">0 complete</span><span class="inc-v06-status inc-v06-status--open">20 open</span></div></td>
       <td>A Windows host that builds, bakes, and ships like the others.</td>
       <td>A packaged Windows toolchain builds and runs a project, not merely a bake that exits zero.</td>
     </tr>
     <tr data-v06-slice-target="slice-09-cutover-release">
-      <td><button type="button" class="inc-v06-slice-toggle">9. Cutover and release</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">1 complete</span><span class="inc-v06-status inc-v06-status--open">28 open</span></div></td>
+      <td><button type="button" class="inc-v06-slice-toggle">9. Cutover and release</button><div class="inc-v06-slice-status"><span class="inc-v06-status inc-v06-status--complete">1 complete</span><span class="inc-v06-status inc-v06-status--open">9 open</span></div></td>
       <td>Corpus-led compatibility reporting and normal-path removal.</td>
       <td>The complete matrix is green or explicitly migrated before generated Rust loses authority.</td>
     </tr>
@@ -222,61 +222,8 @@ flowchart LR
 
 </details>
 
-<details id="slice-03-canonical-source-meaning" class="inc-v06-slice" markdown="1">
-<summary>3. Canonical source meaning</summary>
-
-**Exit evidence:** aliases, imports, re-exports, locals, members, and generic binders resolve to one identity across compiler, LSP, graph, and backend facts.
-
-```mermaid
-flowchart LR
-  i752["#752<br/>RFC 107 - full type-directed library AP…"]
-  i1030["#1030<br/>RFC 107 public API metadata, tooling, a…"]
-  i1033["#1033<br/>RFC 107 complete Type[T] semantics and …"]
-  i1042["#1042<br/>RFC 120: canonical source symbol identity"]
-  i1072["#1072<br/>bug - plain assignment inside a nested …"]
-  i1116["#1116<br/>bug - builtin function name shadowing i…"]
-  i1117["#1117<br/>bug - dead code after an unconditional …"]
-  i1132["#1132<br/>bug - statement-level tuple unpack of a…"]
-  s1139["Slice 3<br/>#1139"]
-  i1168["#1168<br/>bump generated projects to Rust edition…"]
-  i1174["#1174<br/>tighten RFC 120 so the emitted-name pro…"]
-  i1210["#1210<br/>establish canonical callable-target fac…"]
-  i1374["#1374<br/>bug - Default is derivable but unusable…"]
-  s1139 -- owns --> i752
-  i752 -- owns --> i1030
-  i752 -- owns --> i1033
-  s1139 -- owns --> i1042
-  s1139 -- owns --> i1072
-  s1139 -- owns --> i1116
-  s1139 -- owns --> i1117
-  s1139 -- owns --> i1132
-  s1139 -- owns --> i1174
-  i1042 -- owns --> i1210
-  s1139 -- owns --> i1374
-  i1033 -. blocks .-> i1030
-  i1168 -. blocks .-> i1174
-  classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i1042,i1072,i1117,i1132,i1174,i1210 incv06complete
-  click i752 href "https://github.com/encero-systems/incan/issues/752" "Open #752 on GitHub"
-  click i1030 href "https://github.com/encero-systems/incan/issues/1030" "Open #1030 on GitHub"
-  click i1033 href "https://github.com/encero-systems/incan/issues/1033" "Open #1033 on GitHub"
-  click i1042 href "https://github.com/encero-systems/incan/issues/1042" "Open #1042 on GitHub"
-  click i1072 href "https://github.com/encero-systems/incan/issues/1072" "Open #1072 on GitHub"
-  click i1116 href "https://github.com/encero-systems/incan/issues/1116" "Open #1116 on GitHub"
-  click i1117 href "https://github.com/encero-systems/incan/issues/1117" "Open #1117 on GitHub"
-  click i1132 href "https://github.com/encero-systems/incan/issues/1132" "Open #1132 on GitHub"
-  click s1139 href "https://github.com/encero-systems/incan/issues/1139" "Open #1139 on GitHub"
-  click i1168 href "https://github.com/encero-systems/incan/issues/1168" "Open #1168 on GitHub"
-  click i1174 href "https://github.com/encero-systems/incan/issues/1174" "Open #1174 on GitHub"
-  click i1210 href "https://github.com/encero-systems/incan/issues/1210" "Open #1210 on GitHub"
-  click i1374 href "https://github.com/encero-systems/incan/issues/1374" "Open #1374 on GitHub"
-```
-[Open Slice 3 in GitHub](https://github.com/encero-systems/incan/issues/1139)
-
-</details>
-
-<details id="slice-04-language-runtime-matrix" class="inc-v06-slice" markdown="1">
-<summary>4. Language and runtime matrix</summary>
+<details id="slice-03-language-runtime-matrix" class="inc-v06-slice" markdown="1">
+<summary>3. Language and runtime matrix</summary>
 
 **Exit evidence:** every accepted construct has parity coverage, diagnostics, inspection output, formatter/LSP proof where relevant, and an explicit migration disposition.
 
@@ -296,7 +243,7 @@ flowchart LR
   i1032["#1032<br/>package-derived vocab contracts, InQL m…"]
   i1038["#1038<br/>RFC 081 formatting, LSP, and full embed…"]
   i1075["#1075<br/>add keyed MAC (HMAC) primitives to std.…"]
-  s1140["Slice 4<br/>#1140"]
+  s1140["Slice 3<br/>#1140"]
   i1211["#1211<br/>establish RFC 104 authority-decision fa…"]
   i1212["#1212<br/>establish RFC 104 operation-receipt fac…"]
   i1252["#1252<br/>example corpus covers a third of the do…"]
@@ -342,12 +289,12 @@ flowchart LR
   click i1212 href "https://github.com/encero-systems/incan/issues/1212" "Open #1212 on GitHub"
   click i1252 href "https://github.com/encero-systems/incan/issues/1252" "Open #1252 on GitHub"
 ```
-[Open Slice 4 in GitHub](https://github.com/encero-systems/incan/issues/1140)
+[Open Slice 3 in GitHub](https://github.com/encero-systems/incan/issues/1140)
 
 </details>
 
-<details id="slice-05-oven-authority-native-rust" class="inc-v06-slice" markdown="1">
-<summary>5. Oven authority and native Rust</summary>
+<details id="slice-04-oven-authority-native-rust" class="inc-v06-slice" markdown="1">
+<summary>4. Oven authority and native Rust</summary>
 
 **Exit evidence:** Rust-only, Incan-only, and mixed Loaves bake without Cargo being the project authority; Cargo remains valid as explicit compatibility/adoption mode.
 
@@ -390,7 +337,7 @@ flowchart LR
   i1099["#1099<br/>narrow legacy_cargo.rs's Cargo.lock/man…"]
   i1100["#1100<br/>reconcile LSP -> CLI internals boundary…"]
   i1111["#1111<br/>investigate the warm rebuild floor: a n…"]
-  s1141["Slice 5<br/>#1141"]
+  s1141["Slice 4<br/>#1141"]
   i1149["#1149<br/>bug - regenerate tracked example locks …"]
   i1266["#1266<br/>move Oven's plan/build-unit/artifact/re…"]
   i1337["#1337<br/>invoke Rust behavior from the replaceme…"]
@@ -478,12 +425,12 @@ flowchart LR
   click i1266 href "https://github.com/encero-systems/incan/issues/1266" "Open #1266 on GitHub"
   click i1337 href "https://github.com/encero-systems/incan/issues/1337" "Open #1337 on GitHub"
 ```
-[Open Slice 5 in GitHub](https://github.com/encero-systems/incan/issues/1141)
+[Open Slice 4 in GitHub](https://github.com/encero-systems/incan/issues/1141)
 
 </details>
 
-<details id="slice-06-oven-cli-delivery" class="inc-v06-slice" markdown="1">
-<summary>6. Oven CLI delivery</summary>
+<details id="slice-05-oven-cli-delivery" class="inc-v06-slice" markdown="1">
+<summary>5. Oven CLI delivery</summary>
 
 **Exit evidence:** one installation, two non-competing CLIs, one Loaf authority, and one plan/receipt model.
 
@@ -491,19 +438,19 @@ flowchart LR
 flowchart LR
   i1010["#1010<br/>RFC 118: Incan and Oven command-line su…"]
   i1094["#1094<br/>decide how to extract Oven's plan/build…"]
-  s1142["Slice 6<br/>#1142"]
+  s1142["Slice 5<br/>#1142"]
   s1142 -- owns --> i1010
   i1094 -. blocks .-> i1010
   click i1010 href "https://github.com/encero-systems/incan/issues/1010" "Open #1010 on GitHub"
   click i1094 href "https://github.com/encero-systems/incan/issues/1094" "Open #1094 on GitHub"
   click s1142 href "https://github.com/encero-systems/incan/issues/1142" "Open #1142 on GitHub"
 ```
-[Open Slice 6 in GitHub](https://github.com/encero-systems/incan/issues/1142)
+[Open Slice 5 in GitHub](https://github.com/encero-systems/incan/issues/1142)
 
 </details>
 
-<details id="slice-07-first-class-inspectability" class="inc-v06-slice" markdown="1">
-<summary>7. First-class inspectability</summary>
+<details id="slice-06-first-class-inspectability" class="inc-v06-slice" markdown="1">
+<summary>6. First-class inspectability</summary>
 
 **Exit evidence:** CLI, LSP, Architect, MCP, and Rust inspection agree on identity, range, provenance, and stale-state semantics.
 
@@ -516,7 +463,7 @@ flowchart LR
   i775["#775<br/>RFC 106 process-risk signals and evalua…"]
   i777["#777<br/>RFC 106 Rust/Incan build and interop gr…"]
   i1019["#1019<br/>RFC 106 full graph/context conformance …"]
-  s1143["Slice 7<br/>#1143"]
+  s1143["Slice 6<br/>#1143"]
   i1346["#1346<br/>persist, log, and index the semantic la…"]
   s1143 -- owns --> i573
   i573 -- owns --> i772
@@ -541,7 +488,60 @@ flowchart LR
   click s1143 href "https://github.com/encero-systems/incan/issues/1143" "Open #1143 on GitHub"
   click i1346 href "https://github.com/encero-systems/incan/issues/1346" "Open #1346 on GitHub"
 ```
-[Open Slice 7 in GitHub](https://github.com/encero-systems/incan/issues/1143)
+[Open Slice 6 in GitHub](https://github.com/encero-systems/incan/issues/1143)
+
+</details>
+
+<details id="slice-07-canonical-source-meaning" class="inc-v06-slice" markdown="1">
+<summary>7. Canonical source meaning</summary>
+
+**Exit evidence:** aliases, imports, re-exports, locals, members, and generic binders resolve to one identity across compiler, LSP, graph, and backend facts.
+
+```mermaid
+flowchart LR
+  i752["#752<br/>RFC 107 - full type-directed library AP…"]
+  i1030["#1030<br/>RFC 107 public API metadata, tooling, a…"]
+  i1033["#1033<br/>RFC 107 complete Type[T] semantics and …"]
+  i1042["#1042<br/>RFC 120: canonical source symbol identity"]
+  i1072["#1072<br/>bug - plain assignment inside a nested …"]
+  i1116["#1116<br/>bug - builtin function name shadowing i…"]
+  i1117["#1117<br/>bug - dead code after an unconditional …"]
+  i1132["#1132<br/>bug - statement-level tuple unpack of a…"]
+  s1139["Slice 7<br/>#1139"]
+  i1168["#1168<br/>bump generated projects to Rust edition…"]
+  i1174["#1174<br/>tighten RFC 120 so the emitted-name pro…"]
+  i1210["#1210<br/>establish canonical callable-target fac…"]
+  i1374["#1374<br/>bug - Default is derivable but unusable…"]
+  s1139 -- owns --> i752
+  i752 -- owns --> i1030
+  i752 -- owns --> i1033
+  s1139 -- owns --> i1042
+  s1139 -- owns --> i1072
+  s1139 -- owns --> i1116
+  s1139 -- owns --> i1117
+  s1139 -- owns --> i1132
+  s1139 -- owns --> i1174
+  i1042 -- owns --> i1210
+  s1139 -- owns --> i1374
+  i1033 -. blocks .-> i1030
+  i1168 -. blocks .-> i1174
+  classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
+  class i1042,i1072,i1117,i1132,i1174,i1210 incv06complete
+  click i752 href "https://github.com/encero-systems/incan/issues/752" "Open #752 on GitHub"
+  click i1030 href "https://github.com/encero-systems/incan/issues/1030" "Open #1030 on GitHub"
+  click i1033 href "https://github.com/encero-systems/incan/issues/1033" "Open #1033 on GitHub"
+  click i1042 href "https://github.com/encero-systems/incan/issues/1042" "Open #1042 on GitHub"
+  click i1072 href "https://github.com/encero-systems/incan/issues/1072" "Open #1072 on GitHub"
+  click i1116 href "https://github.com/encero-systems/incan/issues/1116" "Open #1116 on GitHub"
+  click i1117 href "https://github.com/encero-systems/incan/issues/1117" "Open #1117 on GitHub"
+  click i1132 href "https://github.com/encero-systems/incan/issues/1132" "Open #1132 on GitHub"
+  click s1139 href "https://github.com/encero-systems/incan/issues/1139" "Open #1139 on GitHub"
+  click i1168 href "https://github.com/encero-systems/incan/issues/1168" "Open #1168 on GitHub"
+  click i1174 href "https://github.com/encero-systems/incan/issues/1174" "Open #1174 on GitHub"
+  click i1210 href "https://github.com/encero-systems/incan/issues/1210" "Open #1210 on GitHub"
+  click i1374 href "https://github.com/encero-systems/incan/issues/1374" "Open #1374 on GitHub"
+```
+[Open Slice 7 in GitHub](https://github.com/encero-systems/incan/issues/1139)
 
 </details>
 
@@ -552,90 +552,10 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-  s433["Slice 8<br/>#433"]
-  i1282["#1282<br/>support native Windows x64 CLI and Oven…"]
-  i1283["#1283<br/>ship native Windows x64 artifacts and a…"]
-  i1284["#1284<br/>make native Windows x64 a blocking v0.6…"]
-  i1340["#1340<br/>bug - Windows: durable-write directory …"]
-  i1342["#1342<br/>bug - Windows: Oven store over-counts d…"]
-  i1343["#1343<br/>Windows: restore coverage for cfg(unix)…"]
-  i1344["#1344<br/>Windows: decide and document the Rust t…"]
-  i1345["#1345<br/>Windows: make the contributor workflow …"]
-  i1351["#1351<br/>Windows: Makefile colour codes print li…"]
-  i1353["#1353<br/>Windows: full user-facing documentation…"]
-  i1355["#1355<br/>bug - Windows: process containment repo…"]
-  i1357["#1357<br/>bug - Windows: source files collected t…"]
-  i1358["#1358<br/>bug - Windows: release staging paths ex…"]
-  i1361["#1361<br/>bug - Windows: reproducibility path rem…"]
-  i1362["#1362<br/>bug - Windows: verbatim target paths de…"]
-  i1364["#1364<br/>bug - Windows: transient Cargo target p…"]
-  i1366["#1366<br/>bug - Windows: std.fs imports unix-only…"]
-  i1368["#1368<br/>bug - Windows: shipped Oven store layou…"]
-  s433 -- owns --> i1282
-  s433 -- owns --> i1283
-  s433 -- owns --> i1284
-  i1282 -- owns --> i1340
-  i1282 -- owns --> i1342
-  i1282 -- owns --> i1343
-  i1283 -- owns --> i1344
-  s433 -- owns --> i1345
-  s433 -- owns --> i1351
-  s433 -- owns --> i1353
-  i1282 -- owns --> i1355
-  i1282 -- owns --> i1357
-  i1283 -- owns --> i1358
-  i1282 -- owns --> i1361
-  i1282 -- owns --> i1362
-  i1282 -- owns --> i1364
-  i1282 -- owns --> i1366
-  i1282 -- owns --> i1368
-  i1282 -. blocks .-> i1284
-  i1283 -. blocks .-> i1284
-  click s433 href "https://github.com/encero-systems/incan/issues/433" "Open #433 on GitHub"
-  click i1282 href "https://github.com/encero-systems/incan/issues/1282" "Open #1282 on GitHub"
-  click i1283 href "https://github.com/encero-systems/incan/issues/1283" "Open #1283 on GitHub"
-  click i1284 href "https://github.com/encero-systems/incan/issues/1284" "Open #1284 on GitHub"
-  click i1340 href "https://github.com/encero-systems/incan/issues/1340" "Open #1340 on GitHub"
-  click i1342 href "https://github.com/encero-systems/incan/issues/1342" "Open #1342 on GitHub"
-  click i1343 href "https://github.com/encero-systems/incan/issues/1343" "Open #1343 on GitHub"
-  click i1344 href "https://github.com/encero-systems/incan/issues/1344" "Open #1344 on GitHub"
-  click i1345 href "https://github.com/encero-systems/incan/issues/1345" "Open #1345 on GitHub"
-  click i1351 href "https://github.com/encero-systems/incan/issues/1351" "Open #1351 on GitHub"
-  click i1353 href "https://github.com/encero-systems/incan/issues/1353" "Open #1353 on GitHub"
-  click i1355 href "https://github.com/encero-systems/incan/issues/1355" "Open #1355 on GitHub"
-  click i1357 href "https://github.com/encero-systems/incan/issues/1357" "Open #1357 on GitHub"
-  click i1358 href "https://github.com/encero-systems/incan/issues/1358" "Open #1358 on GitHub"
-  click i1361 href "https://github.com/encero-systems/incan/issues/1361" "Open #1361 on GitHub"
-  click i1362 href "https://github.com/encero-systems/incan/issues/1362" "Open #1362 on GitHub"
-  click i1364 href "https://github.com/encero-systems/incan/issues/1364" "Open #1364 on GitHub"
-  click i1366 href "https://github.com/encero-systems/incan/issues/1366" "Open #1366 on GitHub"
-  click i1368 href "https://github.com/encero-systems/incan/issues/1368" "Open #1368 on GitHub"
-```
-[Open Slice 8 in GitHub](https://github.com/encero-systems/incan/issues/433)
-
-</details>
-
-<details id="slice-09-cutover-release" class="inc-v06-slice" markdown="1">
-<summary>9. Cutover and release</summary>
-
-**Exit evidence:** generated Rust is an inspection/debug projection only; normal compilation, package contracts, and Oven no longer depend on it as semantic authority.
-
-```mermaid
-flowchart LR
   i433["#433<br/>support native Windows x64 as a v0.6 pl…"]
-  i654["#654<br/>remove Rust-source backend and generate…"]
-  i655["#655<br/>v0.6 backend compatibility report and m…"]
-  i656["#656<br/>RFC - Rust-facing ABI and Incan package…"]
-  i1112["#1112<br/>pin an explicit Rust version for releas…"]
-  i1118["#1118<br/>no test can observe a packaged-only defect"]
-  i1119["#1119<br/>make producing a release archive locall…"]
-  i1128["#1128<br/>versioned docs never deploy automatical…"]
-  s1144["Slice 9<br/>#1144"]
   i1282["#1282<br/>support native Windows x64 CLI and Oven…"]
   i1283["#1283<br/>ship native Windows x64 artifacts and a…"]
   i1284["#1284<br/>make native Windows x64 a blocking v0.6…"]
-  i1291["#1291<br/>complete the residual direct language/r…"]
-  i1332["#1332<br/>widen the source-observable comparison …"]
   i1340["#1340<br/>bug - Windows: durable-write directory …"]
   i1342["#1342<br/>bug - Windows: Oven store over-counts d…"]
   i1343["#1343<br/>Windows: restore coverage for cfg(unix)…"]
@@ -651,19 +571,11 @@ flowchart LR
   i1364["#1364<br/>bug - Windows: transient Cargo target p…"]
   i1366["#1366<br/>bug - Windows: std.fs imports unix-only…"]
   i1368["#1368<br/>bug - Windows: shipped Oven store layou…"]
-  s1144 -- owns --> i433
-  s1144 -- owns --> i654
-  s1144 -- owns --> i655
-  s1144 -- owns --> i656
-  s1144 -- owns --> i1112
-  s1144 -- owns --> i1118
-  s1144 -- owns --> i1119
-  s1144 -- owns --> i1128
+  s1379["Slice 8<br/>#1379"]
+  s1379 -- owns --> i433
   i433 -- owns --> i1282
   i433 -- owns --> i1283
   i433 -- owns --> i1284
-  i654 -- owns --> i1291
-  s1144 -- owns --> i1332
   i1282 -- owns --> i1340
   i1282 -- owns --> i1342
   i1282 -- owns --> i1343
@@ -679,26 +591,12 @@ flowchart LR
   i1282 -- owns --> i1364
   i1282 -- owns --> i1366
   i1282 -- owns --> i1368
-  i655 -. blocks .-> i654
-  i1291 -. blocks .-> i654
   i1282 -. blocks .-> i1284
   i1283 -. blocks .-> i1284
-  classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
-  class i656 incv06complete
   click i433 href "https://github.com/encero-systems/incan/issues/433" "Open #433 on GitHub"
-  click i654 href "https://github.com/encero-systems/incan/issues/654" "Open #654 on GitHub"
-  click i655 href "https://github.com/encero-systems/incan/issues/655" "Open #655 on GitHub"
-  click i656 href "https://github.com/encero-systems/incan/issues/656" "Open #656 on GitHub"
-  click i1112 href "https://github.com/encero-systems/incan/issues/1112" "Open #1112 on GitHub"
-  click i1118 href "https://github.com/encero-systems/incan/issues/1118" "Open #1118 on GitHub"
-  click i1119 href "https://github.com/encero-systems/incan/issues/1119" "Open #1119 on GitHub"
-  click i1128 href "https://github.com/encero-systems/incan/issues/1128" "Open #1128 on GitHub"
-  click s1144 href "https://github.com/encero-systems/incan/issues/1144" "Open #1144 on GitHub"
   click i1282 href "https://github.com/encero-systems/incan/issues/1282" "Open #1282 on GitHub"
   click i1283 href "https://github.com/encero-systems/incan/issues/1283" "Open #1283 on GitHub"
   click i1284 href "https://github.com/encero-systems/incan/issues/1284" "Open #1284 on GitHub"
-  click i1291 href "https://github.com/encero-systems/incan/issues/1291" "Open #1291 on GitHub"
-  click i1332 href "https://github.com/encero-systems/incan/issues/1332" "Open #1332 on GitHub"
   click i1340 href "https://github.com/encero-systems/incan/issues/1340" "Open #1340 on GitHub"
   click i1342 href "https://github.com/encero-systems/incan/issues/1342" "Open #1342 on GitHub"
   click i1343 href "https://github.com/encero-systems/incan/issues/1343" "Open #1343 on GitHub"
@@ -714,6 +612,52 @@ flowchart LR
   click i1364 href "https://github.com/encero-systems/incan/issues/1364" "Open #1364 on GitHub"
   click i1366 href "https://github.com/encero-systems/incan/issues/1366" "Open #1366 on GitHub"
   click i1368 href "https://github.com/encero-systems/incan/issues/1368" "Open #1368 on GitHub"
+  click s1379 href "https://github.com/encero-systems/incan/issues/1379" "Open #1379 on GitHub"
+```
+[Open Slice 8 in GitHub](https://github.com/encero-systems/incan/issues/1379)
+
+</details>
+
+<details id="slice-09-cutover-release" class="inc-v06-slice" markdown="1">
+<summary>9. Cutover and release</summary>
+
+**Exit evidence:** generated Rust is an inspection/debug projection only; normal compilation, package contracts, and Oven no longer depend on it as semantic authority.
+
+```mermaid
+flowchart LR
+  i654["#654<br/>remove Rust-source backend and generate…"]
+  i655["#655<br/>v0.6 backend compatibility report and m…"]
+  i656["#656<br/>RFC - Rust-facing ABI and Incan package…"]
+  i1112["#1112<br/>pin an explicit Rust version for releas…"]
+  i1118["#1118<br/>no test can observe a packaged-only defect"]
+  i1119["#1119<br/>make producing a release archive locall…"]
+  i1128["#1128<br/>versioned docs never deploy automatical…"]
+  s1144["Slice 9<br/>#1144"]
+  i1291["#1291<br/>complete the residual direct language/r…"]
+  i1332["#1332<br/>widen the source-observable comparison …"]
+  s1144 -- owns --> i654
+  s1144 -- owns --> i655
+  s1144 -- owns --> i656
+  s1144 -- owns --> i1112
+  s1144 -- owns --> i1118
+  s1144 -- owns --> i1119
+  s1144 -- owns --> i1128
+  i654 -- owns --> i1291
+  s1144 -- owns --> i1332
+  i655 -. blocks .-> i654
+  i1291 -. blocks .-> i654
+  classDef incv06complete fill:#0b2724,stroke:#66d9a3,color:#e4ebf2,stroke-width:1.7px
+  class i656 incv06complete
+  click i654 href "https://github.com/encero-systems/incan/issues/654" "Open #654 on GitHub"
+  click i655 href "https://github.com/encero-systems/incan/issues/655" "Open #655 on GitHub"
+  click i656 href "https://github.com/encero-systems/incan/issues/656" "Open #656 on GitHub"
+  click i1112 href "https://github.com/encero-systems/incan/issues/1112" "Open #1112 on GitHub"
+  click i1118 href "https://github.com/encero-systems/incan/issues/1118" "Open #1118 on GitHub"
+  click i1119 href "https://github.com/encero-systems/incan/issues/1119" "Open #1119 on GitHub"
+  click i1128 href "https://github.com/encero-systems/incan/issues/1128" "Open #1128 on GitHub"
+  click s1144 href "https://github.com/encero-systems/incan/issues/1144" "Open #1144 on GitHub"
+  click i1291 href "https://github.com/encero-systems/incan/issues/1291" "Open #1291 on GitHub"
+  click i1332 href "https://github.com/encero-systems/incan/issues/1332" "Open #1332 on GitHub"
 ```
 [Open Slice 9 in GitHub](https://github.com/encero-systems/incan/issues/1144)
 
