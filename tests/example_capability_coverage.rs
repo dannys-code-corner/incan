@@ -50,7 +50,11 @@ const SOURCE_SHAPED_BASELINE: usize = 56;
 ///
 /// Moved 21 -> 22 by `examples/intermediate/signed_payload.incn`. `std.hash` had no example at all despite being
 /// stable since 0.3, so the module was one of the fourteen `std.*` gaps this issue names.
-const COVERED_BASELINE: usize = 22;
+///
+/// Moved 22 -> 25 by `examples/intermediate/job_triage.incn`, covering `std.collections`, iterator adapters, and
+/// `Result` combinators together. They are grouped because they genuinely co-occur: a batch is parsed through a
+/// pipeline, its failures handled with combinators, and its results held in the containers built for the job.
+const COVERED_BASELINE: usize = 25;
 
 /// One capability entry read from the v0.5 catalogue.
 struct Capability {
