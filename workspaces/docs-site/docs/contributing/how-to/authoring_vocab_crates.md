@@ -442,7 +442,11 @@ EmbeddedFragmentDescriptor::new("html.fragment", EmbeddedFragmentSubmode::Markup
     .layout_sensitive()
 ```
 
-The formatter has exactly two states for an embedded fragment: format it structurally from the typed artifact, or preserve its original source layout verbatim. `layout_sensitive()` requests the second -- this is a stable, load-bearing signal for that future formatter work, but the formatter itself does not consume it yet. Today the formatter always writes an embedded fragment's verbatim source text regardless of this flag; `layout_sensitive()` has no observable effect until the structural-formatting path lands.
+The formatter has exactly two states for an embedded fragment, and this flag selects between them. By default it renders the fragment from the typed artifact: your submode's structure is laid out consistently and the whitespace a user happened to write between nodes is re-derived rather than reproduced. `layout_sensitive()` requests the other state, in which the fragment's original source text is reproduced exactly.
+
+Choose it when whitespace inside your fragment is content rather than presentation. It is a per-descriptor declaration, so a consumer cannot opt in or out per file.
+
+Both states are idempotent: formatting already-formatted source returns the same bytes, which is what makes `incan fmt --check` meaningful for files containing your blocks. If you add a submode whose delimiters the parser consumes rather than storing as nodes -- the way `RegexTemplate` handles a template string's backticks and `${...}` -- the structural renderer has to reconstruct them, or formatting will emit something your own grammar rejects.
 
 ## 7. Add an optional desugarer
 
