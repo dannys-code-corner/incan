@@ -24169,6 +24169,49 @@ pub def charge(amount: int) -> int:
     Ok(())
 }
 
+/// RFC 104 maps stdlib boundaries onto host capabilities, so an operation must be able to declare that it needs one.
+/// The reserved set lives in the compiler's own bundled `std.runtime` source rather than in a package dependency, and
+/// dependency resolution alone cannot see it.
+#[test]
+fn provider_operation_decorator_resolves_a_host_capability() -> Result<(), String> {
+    let source = r#"
+from std.runtime import host
+
+@provider_operation(host.fs.read)
+pub def read_bytes(path: str) -> int:
+    return 0
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["storage".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("a host-capability provider operation should typecheck: {errs:?}"))?;
+
+    let operations = &checker.type_info().declarations.provider_operations;
+    let collected = operations.values().collect::<Vec<_>>();
+    let [operation] = collected.as_slice() else {
+        return Err(format!("expected one checked provider operation, got {operations:?}"));
+    };
+    assert_eq!(operation.required_capability.kind, SemanticSourceTargetKind::Capability);
+    assert_eq!(operation.required_capability.declaration_name, "read");
+    assert_eq!(
+        operation.required_capability.module_path(),
+        Some(
+            vec![
+                "std".to_string(),
+                "runtime".to_string(),
+                "host".to_string(),
+                "fs".to_string()
+            ]
+            .as_slice()
+        ),
+        "the requirement must carry the host capability's own declaring module, not the consumer's"
+    );
+    Ok(())
+}
+
 /// A provider operation may only name a resolved RFC 104 capability, never a callable or a stringly value.
 #[test]
 fn provider_operation_decorator_rejects_a_non_capability_reference() -> Result<(), String> {

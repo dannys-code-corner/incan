@@ -5448,7 +5448,12 @@ impl TypeChecker {
                 .flatten()
                 .and_then(|resolved| resolved.canonical)
         } else {
-            self.dependency_member_identity(&ImportPath::simple(module_path), name)
+            // A host capability lives in the compiler's own bundled `std.runtime` source rather than in a package
+            // dependency, so dependency resolution alone cannot see it. This is the same fallback
+            // `check_capability_requirement` uses, which keeps `@provider_operation(host.fs.read)` and
+            // `requires = [host.fs.read]` resolving through one story instead of two.
+            self.dependency_member_identity(&ImportPath::simple(module_path.clone()), name)
+                .or_else(|| self.stdlib_cache.lookup_identity(&module_path, name))
         };
         match identity {
             Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => Some(identity),
