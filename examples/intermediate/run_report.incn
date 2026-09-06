@@ -1,5 +1,6 @@
 """
-What a nightly job says about itself: structured events, values that keep their shape, and dates it can do arithmetic on.
+What a nightly job says about itself: structured events, values that keep their shape, and dates it can do
+arithmetic on.
 
 The three pieces answer three different questions. `std.logging` decides what is emitted and at which level, so the
 entrypoint owns policy and the rest of the program only emits. `std.telemetry.core` is what a field is made of once
@@ -25,7 +26,12 @@ from std.telemetry.core import TelemetryValue
 
 
 def cutoff(today: Date, keep_days: int) -> Date:
-    """Return the oldest date a snapshot may carry and still be kept."""
+    """
+    Return the oldest date a snapshot may carry and still be kept.
+
+    Adding a negative interval rather than subtracting a positive one keeps the result a `Date`; `Date - interval`
+    is the spelling that also has to cover date-minus-date, so it widens to a union the caller would have to narrow.
+    """
     return today + TimeDelta.days(-keep_days)
 
 

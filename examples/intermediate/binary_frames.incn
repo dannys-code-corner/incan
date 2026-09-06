@@ -58,9 +58,28 @@ def frame_sizes(feed: bytes) -> Result[list[int], IoError]:
     """
     stream = BytesIO(feed).chunks(6)
     mut sizes: list[int] = []
-    for item in stream?:
-        sizes.append(len(item))
+    for frame in stream?:
+        sizes.append(len(frame))
     return Ok(sizes)
+
+
+def whole_feed(feed: bytes) -> Result[list[bytes], IoError]:
+    """
+    Read the entire feed in one go instead of a frame at a time.
+
+    `collect` is the terminal form of the same stream: it folds every poll into one `Result`, so the caller decides
+    once whether the read succeeded rather than at each step.
+    """
+    stream = BytesIO(feed).chunks(6)
+    return stream.collect()
+
+
+def report_frame(frame: bytes) -> None:
+    """Print one encoded frame and the values it decodes back to."""
+    println(f"encoded {len(frame)} bytes")
+    match read_frame(frame):
+        Ok(description) => println(description)
+        Err(error) => println(f"could not read frame: {error.detail}")
 
 
 def main() -> None:
@@ -77,10 +96,6 @@ def main() -> None:
                 println(f"  frame of {size} bytes")
         Err(error) => println(f"feed stopped early: {error.detail}")
 
-
-def report_frame(frame: bytes) -> None:
-    """Print one encoded frame and the values it decodes back to."""
-    println(f"encoded {len(frame)} bytes")
-    match read_frame(frame):
-        Ok(description) => println(description)
-        Err(error) => println(f"could not read frame: {error.detail}")
+    match whole_feed(feed):
+        Ok(frames) => println(f"the same feed collected in one call: {len(frames)} frames")
+        Err(error) => println(f"feed stopped early: {error.detail}")

@@ -40,6 +40,13 @@ def describe_wire_names(user: User) -> None:
         println(f"  {field.name} -> {field.wire_name}")
 
 
+def report_decode(label: str, token: str, original: bytes) -> None:
+    """Decode one token and say whether it survived the trip, or why it was refused."""
+    match base64.urlsafe_b64decode(token):
+        Ok(decoded) => println(f"{label}: accepted, matches the original = {decoded == original}")
+        Err(error) => println(f"{label}: rejected ({error.message()})")
+
+
 def main() -> None:
     user = User(user_id=17, full_name="Ada Lovelace", email_address="ada@example.com")
 
@@ -58,9 +65,5 @@ def main() -> None:
     println(f"crc32 hex: {hex.hexlify(crc32.digest(payload))}")
 
     # Decoding is strict at the boundary, so a mangled token is rejected here rather than parsed as nonsense.
-    match base64.urlsafe_b64decode(token):
-        Ok(decoded) => println(f"round trip intact: {decoded == payload}")
-        Err(error) => println(f"token rejected: {error.message()}")
-    match base64.urlsafe_b64decode("not a token!"):
-        Ok(decoded) => println(f"unexpectedly decoded {len(decoded)} bytes")
-        Err(error) => println(f"token rejected: {error.message()}")
+    report_decode("round trip", token, payload)
+    report_decode("mangled   ", "not a token!", payload)

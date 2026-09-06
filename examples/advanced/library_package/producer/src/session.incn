@@ -23,7 +23,4 @@ pub model Session:
 
     def total(self) -> float:
         """Return what the basket costs, summing each line's own subtotal."""
-        mut running = 0.0
-        for item in self.items:
-            running += subtotal(item)
-        return running
+        return self.items.iter().map(subtotal).sum()

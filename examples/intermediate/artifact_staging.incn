@@ -40,7 +40,8 @@ enum StageError:
 model Staged:
     """What staging produced: the artifact's identity and how much smaller it got."""
 
-    artifact_id: str
+    artifact_id: UUID
+    file_name: str
     raw_bytes: int
     stored_bytes: int
 
@@ -52,16 +53,19 @@ def stage(payload: bytes) -> Result[Staged, StageError]:
     The directory is removed when `workspace` goes out of scope, so nothing here has to remember to clean up on the
     error paths.
     """
-    workspace = TemporaryDirectory.try_new().map_err(io_failed)?
+    workspace = TemporaryDirectory.try_new().map_err(write_failed)?
     artifact_id = UUID.v7().map_err(identity_failed)?
     stored = gzip.compress(payload).map_err(compression_failed)?
 
-    name = f"{artifact_id}.gz"
-    target = workspace.path() / name
-    target.write_bytes(stored).map_err(write_failed)?
-    println(f"wrote {name} into the scratch workspace")
+    file_name = f"{artifact_id}.gz"
+    (workspace.path() / file_name).write_bytes(stored).map_err(write_failed)?
 
-    return Ok(Staged(artifact_id=artifact_id.to_string(), raw_bytes=len(payload), stored_bytes=len(stored)))
+    return Ok(Staged(
+        artifact_id=artifact_id,
+        file_name=file_name,
+        raw_bytes=len(payload),
+        stored_bytes=len(stored),
+    ))
 
 
 def identity_failed(error: UuidError) -> StageError:
@@ -74,13 +78,8 @@ def compression_failed(error: CompressionError) -> StageError:
     return StageError.Compress(error.message())
 
 
-def io_failed(error: IoError) -> StageError:
-    """Report a scratch directory that could not be created as a staging failure."""
-    return StageError.Write(error.detail)
-
-
 def write_failed(error: IoError) -> StageError:
-    """Report an artifact that could not be written as a staging failure."""
+    """Report anything the filesystem refused -- the scratch directory or the artifact itself -- as one failure."""
     return StageError.Write(error.detail)
 
 
@@ -90,7 +89,7 @@ def main() -> None:
     match stage(payload):
         Ok(staged) =>
             println(f"artifact {staged.artifact_id}")
-            println(f"{staged.raw_bytes} bytes in, {staged.stored_bytes} bytes stored")
+            println(f"wrote {staged.file_name}: {staged.raw_bytes} bytes in, {staged.stored_bytes} bytes stored")
         Err(StageError.Identity(reason)) => println(f"no artifact id: {reason}")
         Err(StageError.Compress(reason)) => println(f"payload not compressible: {reason}")
         Err(StageError.Write(reason)) => println(f"nowhere to put it: {reason}")
