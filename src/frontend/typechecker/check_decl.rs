@@ -15,8 +15,8 @@ use crate::frontend::typechecker::helpers::{collection_type_id, dict_ty, list_ty
 use super::collect::decorators::resolve_decorator_id;
 use super::collect::{capability_description_text, dotted_path_segments};
 use super::type_info::{
-    ProviderOperationDeclarationInfo, RegistryDefinitionInfo, RegistryDescriptionInfo, RegistryDescriptionRegistry,
-    RegistryExplicitEntryInfo,
+    CapabilityDeclarationInfo, ProviderOperationDeclarationInfo, RegistryDefinitionInfo, RegistryDescriptionInfo,
+    RegistryDescriptionRegistry, RegistryExplicitEntryInfo,
 };
 use super::{
     DecoratedFunctionBindingInfo, DecoratedMethodBindingInfo, FunctionBindingInfo, MemberBindingSurface,
@@ -2285,14 +2285,52 @@ impl TypeChecker {
             Some(_) => {}
         }
 
+        let mut requires = Vec::new();
         for entry in &cap.requires {
             let Some(path) = dotted_path_segments(&entry.node) else {
                 self.errors
                     .push(errors::capability_requirement_not_a_reference(entry.span));
                 continue;
             };
-            self.check_capability_requirement(&path, entry.span);
+            if let Some(identity) = self.check_capability_requirement(&path, entry.span) {
+                requires.push(identity);
+            }
         }
+
+        self.record_checked_capability_declaration(cap, requires);
+    }
+
+    /// Retain one validated capability declaration as a checked fact.
+    ///
+    /// The declaration has just been validated, so its resolved requirement identities are known here and nowhere
+    /// else; discarding them would make every later consumer re-resolve a dotted reference to learn what the
+    /// authority contract says. Reading the description and scope back from the collected symbol rather than the AST
+    /// keeps one interpretation of the clauses instead of a second parse (RFC 104, #1027).
+    fn record_checked_capability_declaration(&mut self, cap: &CapabilityDecl, requires: Vec<CanonicalSymbolId>) {
+        let Some(symbol_id) = self.symbols.lookup(&cap.name) else {
+            return;
+        };
+        let Some(identity) = self.symbols.identity_of(symbol_id).cloned() else {
+            return;
+        };
+        let Some(symbol) = self.symbols.get(symbol_id) else {
+            return;
+        };
+        let SymbolKind::Capability(info) = &symbol.kind else {
+            return;
+        };
+        let declaration = CapabilityDeclarationInfo {
+            capability: identity.clone(),
+            description: info.description.clone(),
+            scope: info
+                .scope
+                .iter()
+                .map(|(name, ty)| (name.clone(), ty.to_string()))
+                .collect(),
+            requires,
+            is_public: info.is_public,
+        };
+        self.type_info.declarations.capabilities.insert(identity, declaration);
     }
 
     /// Resolve one `requires` entry and confirm it names a capability.
@@ -2301,15 +2339,16 @@ impl TypeChecker {
     /// module its leading segments name, the same way an import resolves against a definition. RFC 104 asks for
     /// exactly that equivalence, so that a misspelled capability is an unresolved-symbol error at the reference
     /// rather than a runtime denial reported somewhere else entirely.
-    fn check_capability_requirement(&mut self, path: &[String], span: Span) {
+    fn check_capability_requirement(&mut self, path: &[String], span: Span) -> Option<CanonicalSymbolId> {
         let rendered = path.join(".");
-        let Some((item_name, module_segments)) = path.split_last() else {
-            return;
-        };
+        let (item_name, module_segments) = path.split_last()?;
 
         if module_segments.is_empty() {
-            match self.lookup_symbol(item_name).map(|symbol| &symbol.kind) {
-                Some(SymbolKind::Capability(_)) => {}
+            let symbol_id = self.symbols.lookup(item_name);
+            match symbol_id.and_then(|id| self.symbols.get(id)).map(|symbol| &symbol.kind) {
+                Some(SymbolKind::Capability(_)) => {
+                    return symbol_id.and_then(|id| self.symbols.identity_of(id)).cloned();
+                }
                 Some(other) => {
                     let found = Self::symbol_kind_noun(other);
                     self.errors
@@ -2319,7 +2358,7 @@ impl TypeChecker {
                     .errors
                     .push(errors::capability_requirement_unresolved(&rendered, span)),
             }
-            return;
+            return None;
         }
 
         let module = ImportPath::simple(module_segments.to_vec());
@@ -2327,15 +2366,18 @@ impl TypeChecker {
             .dependency_member_identity(&module, item_name)
             .or_else(|| self.imported_module_capability_identity(module_segments, item_name));
         match resolved {
-            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => {}
+            Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => Some(identity),
             Some(identity) => {
                 let found = identity.kind.as_str();
                 self.errors
                     .push(errors::capability_requirement_not_a_capability(&rendered, found, span));
+                None
             }
-            None => self
-                .errors
-                .push(errors::capability_requirement_unresolved(&rendered, span)),
+            None => {
+                self.errors
+                    .push(errors::capability_requirement_unresolved(&rendered, span));
+                None
+            }
         }
     }
 

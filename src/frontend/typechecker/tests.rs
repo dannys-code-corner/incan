@@ -24313,6 +24313,104 @@ capability refund:
     );
 }
 
+/// RFC 104's authority contract has to be inspectable as static facts, without executing source. The declaration is
+/// validated at its own site, so its resolved requirement identities are known there and nowhere else; a consumer
+/// that had to re-resolve a dotted reference would be re-implementing the check it is meant to be reading.
+#[test]
+fn a_capability_declaration_is_retained_as_a_checked_fact() -> Result<(), String> {
+    let source = r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    scope:
+        tenant: str
+    requires = [host.fs.read]
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["policy".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("the capability should typecheck: {errs:?}"))?;
+
+    let capabilities = &checker.type_info().declarations.capabilities;
+    let collected = capabilities.values().collect::<Vec<_>>();
+    let [declaration] = collected.as_slice() else {
+        return Err(format!("expected one checked capability, got {capabilities:?}"));
+    };
+    assert_eq!(declaration.capability.declaration_name, "load_policy");
+    assert_eq!(
+        declaration.description.as_deref(),
+        Some("Load a policy document from disk")
+    );
+    assert_eq!(
+        declaration.scope,
+        vec![("tenant".to_string(), "str".to_string())],
+        "the typed scope dimensions should be retained in declaration order"
+    );
+
+    let [requirement] = declaration.requires.as_slice() else {
+        return Err(format!(
+            "expected one resolved requirement, got {:?}",
+            declaration.requires
+        ));
+    };
+    assert_eq!(requirement.declaration_name, "read");
+    assert_eq!(
+        requirement.module_path(),
+        Some(
+            vec![
+                "std".to_string(),
+                "runtime".to_string(),
+                "host".to_string(),
+                "fs".to_string()
+            ]
+            .as_slice()
+        ),
+        "a requirement must carry the capability's own declaring module, never the consumer's spelling"
+    );
+    Ok(())
+}
+
+/// A requirement that failed to resolve already reported its own error, so recording a placeholder edge would let a
+/// consumer read an unproven relationship as a checked one.
+#[test]
+fn an_unresolved_requirement_is_absent_from_the_checked_fact() {
+    let source = r#"
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [nonexistent]
+"#;
+    let Ok(tokens) = lexer::lex(source) else {
+        panic!("lex failed");
+    };
+    let Ok(program) = parser::parse(&tokens) else {
+        panic!("parse failed");
+    };
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["policy".to_string()]));
+    let errors = checker.check_program(&program).err().unwrap_or_default();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Unknown capability 'nonexistent'")),
+        "expected the unresolved-requirement diagnostic; got: {errors:?}"
+    );
+
+    let capabilities = &checker.type_info().declarations.capabilities;
+    let collected = capabilities.values().collect::<Vec<_>>();
+    let [declaration] = collected.as_slice() else {
+        panic!("expected the capability itself to still be recorded, got {capabilities:?}");
+    };
+    assert!(
+        declaration.requires.is_empty(),
+        "an unproven requirement must not be recorded: {:?}",
+        declaration.requires
+    );
+}
+
 /// RFC 104 reserves `host.*` for the toolchain's own authority and declares it through the same mechanism a package
 /// uses, in the compiler's bundled `std.runtime` source. A `requires` entry naming one therefore has to resolve like
 /// any other capability reference, rather than being a spelling the compiler has no declaration for.
