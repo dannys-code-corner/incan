@@ -223,3 +223,83 @@ fn preserved_fragment_text_does_not_grow_a_blank_line_per_pass() -> Result<(), S
     }
     Ok(())
 }
+
+// ---- Declaration and literal round trips (#1401) ----
+
+/// Format `source` through the public entrypoint, or fail with the formatter's own message.
+fn formatted(source: &str) -> Result<String, String> {
+    crate::format::format_source(source).map_err(|error| error.to_string())
+}
+
+#[test]
+fn an_enum_keeps_its_trait_adoption() -> Result<(), String> {
+    // `enum Level with Display` and `enum Level` are different types. The writer omitted `en.traits` entirely, so
+    // formatting silently rewrote the first into the second — a meaning change reported as success.
+    let source = "from std.traits import Display
+
+enum Level with Display:
+    Low
+    High
+";
+    let once = formatted(source)?;
+    assert!(
+        once.contains("enum Level with Display:"),
+        "the adoption clause was dropped:
+{once}"
+    );
+    assert_eq!(
+        once,
+        formatted(&once)?,
+        "formatting is not a fixed point:
+{once}"
+    );
+    Ok(())
+}
+
+#[test]
+fn a_byte_literal_keeps_its_escapes() -> Result<(), String> {
+    // A quote or backslash byte sits in the printable range, so writing it raw closed the literal early or began a
+    // bogus escape. An escaped quote came back unescaped, producing source that no longer parses.
+    let source = r#"def main() -> None:
+    quoted = b"a\"b"
+    slashed = b"x\\y"
+    println(f"{len(quoted)}{len(slashed)}")
+"#;
+    let once = formatted(source)?;
+    assert!(once.contains(r#"b"a\"b""#), "the escaped quote was lost:\n{once}");
+    assert!(once.contains(r#"b"x\\y""#), "the escaped backslash was lost:\n{once}");
+    assert_eq!(once, formatted(&once)?, "formatting is not a fixed point:\n{once}");
+    Ok(())
+}
+
+#[test]
+fn a_guarded_match_arm_stays_in_case_form() -> Result<(), String> {
+    // Only `case <pattern> if <cond>:` can carry a guard: the arrow form's parser hardcodes `guard: None`. Writing
+    // the guard before an arrow produced `_ if n <= 0 => ...`, which the parser rejects, so `examples/simple/fib.incn`
+    // was reformatted into a syntax error.
+    let source = "def fib(n: int) -> int:
+    match n:
+        case _ if n <= 0:
+            return 0
+        case _:
+            return 1
+";
+    let once = formatted(source)?;
+    assert!(
+        once.contains("case _ if n <= 0:"),
+        "the guard lost its case form:
+{once}"
+    );
+    assert!(
+        !once.contains("if n <= 0 =>"),
+        "a guard was written before an arrow:
+{once}"
+    );
+    assert_eq!(
+        once,
+        formatted(&once)?,
+        "formatting is not a fixed point:
+{once}"
+    );
+    Ok(())
+}
