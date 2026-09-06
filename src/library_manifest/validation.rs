@@ -2401,9 +2401,53 @@ fn validate_helper_bindings(
                 binding.key, binding.exported_name
             )));
         }
+        if let Some(kind) = uncallable_export_kind(exports, binding.exported_name.as_str()) {
+            return Err(LibraryManifestError::Invalid(format!(
+                "vocab helper binding `{}` points to {} `{}`, which cannot be called; bind the helper to a function, \
+                 class, model, newtype, enum variant, or alias",
+                binding.key, kind, binding.exported_name
+            )));
+        }
     }
 
     Ok(())
+}
+
+/// Return the noun for an exported name that a helper cannot legally call, or `None` when it is callable.
+///
+/// A helper reference is spliced into call position by the desugarer, so binding one to a trait, constant, static, or
+/// bare enum type produces generated Rust that cannot compile. Rejecting it here fails the provider's own build
+/// rather than every consumer's, which is where the author can actually act on it. Callable kinds are checked first
+/// so a name that is both an enum and one of its variants is admitted as the variant.
+fn uncallable_export_kind(exports: &RawLibraryExports, name: &str) -> Option<&'static str> {
+    let callable = exports.functions.iter().any(|item| item.name == name)
+        || exports.classes.iter().any(|item| item.name == name)
+        || exports.models.iter().any(|item| item.name == name)
+        || exports.newtypes.iter().any(|item| item.name == name)
+        || exports.aliases.iter().any(|item| item.name == name)
+        || exports
+            .enums
+            .iter()
+            .any(|item| item.variants.iter().any(|variant| variant.name == name));
+    if callable {
+        return None;
+    }
+    if exports.enums.iter().any(|item| item.name == name) {
+        return Some("enum");
+    }
+    if exports.traits.iter().any(|item| item.name == name) {
+        return Some("trait");
+    }
+    if exports.type_aliases.iter().any(|item| item.name == name) {
+        return Some("type alias");
+    }
+    if exports.consts.iter().any(|item| item.name == name) {
+        return Some("const");
+    }
+    if exports.statics.iter().any(|item| item.name == name) {
+        return Some("static");
+    }
+    None
 }
 
 /// Collect the set of exportable names that helper bindings are allowed to target.

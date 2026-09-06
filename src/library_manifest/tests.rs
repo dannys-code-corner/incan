@@ -3667,6 +3667,48 @@ fn manifest_writer_rejects_helper_binding_to_unknown_export() -> Result<(), Box<
 }
 
 #[test]
+fn manifest_writer_rejects_helper_binding_to_an_uncallable_export() -> Result<(), Box<dyn std::error::Error>> {
+    // The name is exported, so the unknown-symbol check passes; a helper reference is spliced into call position
+    // though, and a trait cannot go there. Failing the provider's own build puts the error where its author can act
+    // on it, rather than surfacing in every consumer as broken generated Rust.
+    let mut manifest = legacy_manifest_fixture("mylib", "0.1.0");
+    manifest.exports.traits.push(TraitExport {
+        name: "Filterable".to_string(),
+        source_name: None,
+        type_params: Vec::new(),
+        supertraits: Vec::new(),
+        requires: Vec::new(),
+        methods: Vec::new(),
+    });
+    manifest.vocab = Some(VocabExports {
+        crate_path: "crates/mylib_vocab".to_string(),
+        package_name: "mylib_vocab".to_string(),
+        keyword_registrations: Vec::new(),
+        dsl_surfaces: Vec::new(),
+        provider_manifest: incan_vocab::LibraryManifest {
+            helper_bindings: vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "Filterable".to_string(),
+            }],
+            ..incan_vocab::LibraryManifest::default()
+        },
+        desugarer_artifact: None,
+    });
+
+    let tmp = tempfile::tempdir()?;
+    let err = manifest.write_to_path(&tmp.path().join("mylib.incnlib"));
+    assert!(
+        matches!(&err, Err(LibraryManifestError::Invalid(msg)) if msg.contains("trait `Filterable`")),
+        "error should name the kind: {err:?}"
+    );
+    assert!(
+        matches!(&err, Err(LibraryManifestError::Invalid(msg)) if msg.contains("cannot be called")),
+        "unexpected error: {err:?}"
+    );
+    Ok(())
+}
+
+#[test]
 fn manifest_writer_rejects_duplicate_helper_binding_keys() -> Result<(), Box<dyn std::error::Error>> {
     let mut manifest = legacy_manifest_fixture("mylib", "0.1.0");
     manifest.exports.functions.push(FunctionExport {

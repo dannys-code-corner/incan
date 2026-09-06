@@ -332,10 +332,13 @@ enum HelperExportKind {
     Model,
     Newtype,
     EnumVariant,
+    /// A reexport alias whose target resolves to something callable.
+    Alias,
     Enum,
     Trait,
     TypeAlias,
     Const,
+    Static,
 }
 
 impl HelperExportKind {
@@ -343,7 +346,7 @@ impl HelperExportKind {
     fn is_callable(self) -> bool {
         matches!(
             self,
-            Self::Function | Self::Class | Self::Model | Self::Newtype | Self::EnumVariant
+            Self::Function | Self::Class | Self::Model | Self::Newtype | Self::EnumVariant | Self::Alias
         )
     }
 
@@ -355,10 +358,12 @@ impl HelperExportKind {
             Self::Model => "model",
             Self::Newtype => "newtype",
             Self::EnumVariant => "enum variant",
+            Self::Alias => "alias",
             Self::Enum => "enum",
             Self::Trait => "trait",
             Self::TypeAlias => "type alias",
             Self::Const => "const",
+            Self::Static => "static",
         }
     }
 }
@@ -367,6 +372,15 @@ impl HelperExportKind {
 ///
 /// Callable kinds are checked first so a name that is both an enum and a variant resolves to the usable one.
 fn helper_export_kind(manifest: &crate::library_manifest::LibraryManifest, name: &str) -> Option<HelperExportKind> {
+    helper_export_kind_with_hops(manifest, name, 0)
+}
+
+/// Classify one exported name, carrying the reexport hop budget shared with [`resolve_alias_kind`].
+fn helper_export_kind_with_hops(
+    manifest: &crate::library_manifest::LibraryManifest,
+    name: &str,
+    hops: usize,
+) -> Option<HelperExportKind> {
     let exports = &manifest.exports;
     if exports.functions.iter().any(|item| item.name == name) {
         return Some(HelperExportKind::Function);
@@ -396,10 +410,49 @@ fn helper_export_kind(manifest: &crate::library_manifest::LibraryManifest, name:
     if exports.type_aliases.iter().any(|item| item.name == name) {
         return Some(HelperExportKind::TypeAlias);
     }
+    if let Some(alias) = exports.aliases.iter().find(|item| item.name == name) {
+        return Some(resolve_alias_kind(manifest, alias, hops));
+    }
     if exports.consts.iter().any(|item| item.name == name) {
         return Some(HelperExportKind::Const);
     }
+    if exports.statics.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Static);
+    }
     None
+}
+
+/// Maximum reexport hops followed before giving up, so a cyclic alias chain cannot loop forever.
+const MAX_ALIAS_HOPS: usize = 8;
+
+/// Resolve what a reexport alias ultimately names.
+///
+/// A library may publish a helper under an alias rather than its declaration name, and a consumer binding that alias
+/// should resolve exactly as the original does. `projected_function` settles the common case directly; otherwise the
+/// alias is followed by its target's final path segment, which is how the manifest spells a reexport. An unresolvable
+/// or over-long chain stays `Alias`, which is callable, so an alias whose target cannot be classified is admitted
+/// rather than rejected on incomplete information.
+fn resolve_alias_kind(
+    manifest: &crate::library_manifest::LibraryManifest,
+    alias: &crate::library_manifest::AliasExport,
+    hops: usize,
+) -> HelperExportKind {
+    if alias.projected_function.is_some() {
+        return HelperExportKind::Function;
+    }
+    if hops >= MAX_ALIAS_HOPS {
+        return HelperExportKind::Alias;
+    }
+    let Some(target) = alias.target_path.last() else {
+        return HelperExportKind::Alias;
+    };
+    if target == &alias.name {
+        return HelperExportKind::Alias;
+    }
+    match helper_export_kind_with_hops(manifest, target, hops + 1) {
+        Some(kind) => kind,
+        None => HelperExportKind::Alias,
+    }
 }
 
 #[cfg(test)]
@@ -408,6 +461,30 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    /// Build a minimal exported function record for helper-resolution fixtures.
+    fn function_export(name: &str) -> crate::library_manifest::FunctionExport {
+        crate::library_manifest::FunctionExport {
+            name: name.to_string(),
+            emitted_name: None,
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: crate::library_manifest::TypeRef::Named {
+                name: "None".to_string(),
+            },
+            is_async: false,
+        }
+    }
+
+    /// Build a minimal exported const record for helper-resolution fixtures.
+    fn const_export(name: &str) -> crate::library_manifest::ConstExport {
+        crate::library_manifest::ConstExport {
+            name: name.to_string(),
+            ty: crate::library_manifest::TypeRef::Named {
+                name: "int".to_string(),
+            },
+        }
+    }
 
     /// Build a one-provider index whose manifest carries the given helper bindings and exports.
     fn index_with(
@@ -438,6 +515,86 @@ mod tests {
                 ),
             },
         )]))
+    }
+
+    #[test]
+    fn helper_resolution_follows_a_reexport_alias_to_its_target() -> Result<(), Box<dyn std::error::Error>> {
+        // A library may publish a helper under an alias rather than its declaration name. Binding the alias must
+        // resolve exactly as binding the original would, instead of failing as an unknown export.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "where_".to_string(),
+            }],
+            |manifest| {
+                manifest.exports.functions.push(function_export("filter_rows"));
+                manifest.exports.aliases.push(crate::library_manifest::AliasExport {
+                    name: "where_".to_string(),
+                    target_path: vec!["demo".to_string(), "filter_rows".to_string()],
+                    projected_function: None,
+                });
+            },
+        );
+
+        let binding = resolve_helper_binding(&index, "demo", "filter")?;
+        assert_eq!(binding.exported_name, "where_");
+        Ok(())
+    }
+
+    #[test]
+    fn helper_resolution_rejects_an_alias_that_lands_on_an_uncallable_target() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // Following the alias must not launder an ineligible target into an eligible one.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "Filterish".to_string(),
+            }],
+            |manifest| {
+                manifest.exports.consts.push(const_export("FILTER_LIMIT"));
+                manifest.exports.aliases.push(crate::library_manifest::AliasExport {
+                    name: "Filterish".to_string(),
+                    target_path: vec!["demo".to_string(), "FILTER_LIMIT".to_string()],
+                    projected_function: None,
+                });
+            },
+        );
+
+        let err = match resolve_helper_binding(&index, "demo", "filter") {
+            Err(err) => err,
+            Ok(_) => panic!("expected the alias target to be rejected"),
+        };
+        assert!(
+            err.contains("const `Filterish`"),
+            "error should name the resolved kind: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn helper_resolution_survives_a_cyclic_alias_chain() -> Result<(), Box<dyn std::error::Error>> {
+        // A manifest that aliases in a loop must terminate rather than recurse forever.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "a".to_string(),
+            }],
+            |manifest| {
+                for (name, target) in [("a", "b"), ("b", "a")] {
+                    manifest.exports.aliases.push(crate::library_manifest::AliasExport {
+                        name: name.to_string(),
+                        target_path: vec!["demo".to_string(), target.to_string()],
+                        projected_function: None,
+                    });
+                }
+            },
+        );
+
+        // Terminating at all is the assertion; an unresolvable chain stays callable rather than being rejected on
+        // incomplete information.
+        let binding = resolve_helper_binding(&index, "demo", "filter")?;
+        assert_eq!(binding.exported_name, "a");
+        Ok(())
     }
 
     #[test]
