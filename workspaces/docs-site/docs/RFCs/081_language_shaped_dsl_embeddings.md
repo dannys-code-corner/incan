@@ -1,6 +1,6 @@
 # RFC 081: Language-shaped DSL embeddings
 
-- **Status:** Planned
+- **Status:** In Progress
 - **Created:** 2026-04-27
 - **Author(s):** Danny Meijer (@dannymeijer)
 - **Related:**
@@ -150,6 +150,51 @@ This RFC is additive. Code that does not import and use a DSL with language-shap
 - **LSP / tooling** — must expose ownership, highlighting, hover, diagnostics, and completions across ordinary Incan and embedded submodes.
 - **Docs / examples** — must clearly distinguish narrow product-specific fragments from full language-compatible embeddings.
 - **Vocab / desugarer tooling** — must support compiling Incan-authored desugarers through the replacement backend to the existing WASM artifact contract, and must retire the Rust-native authoring surface for new work without breaking already-published artifacts.
+
+## Implementation Plan
+
+### Phase 1: Descriptor-gated lexical submodes
+
+- Admit a lexical submode only where its owning descriptor claims an eligible position, so no fragment syntax leaks into ordinary Incan.
+- Parse the accepted submode families: markup, style, raw text and comments, regex and template literals, selector and declaration values, and type positions.
+- Reject ambiguous same-depth descriptor claims deterministically rather than resolving them by declaration order.
+
+### Phase 2: Typed fragment artifacts through the pipeline
+
+- Carry a typed fragment artifact with source anchors through parsing, typechecking, symbol ownership, and lowering.
+- Type expression holes as ordinary Incan expressions rather than erasing them before typechecking.
+- Refuse emission explicitly, since a descriptor owns its fragment's runtime semantics and the compiler must not guess them.
+
+### Phase 3: Representative consumer fixtures
+
+- Prove each submode through a real example project rather than parser fixtures alone.
+
+### Phase 4: Formatting, LSP, and conformance
+
+- Keep formatting structural for known fragments and source-preserving for opaque ones, and complete editor and conformance surfaces. Tracked by #1022.
+
+## Progress Checklist
+
+### Descriptor-gated parsing
+
+- [x] Admit lexical submodes only through an owning descriptor's claimed position.
+- [x] Parse markup, style, raw-text/comment, regex/template, selector/declaration-value, and type-position submodes.
+- [x] Reject ambiguous same-depth descriptor claims with a deterministic diagnostic.
+- [x] Leave core Incan behavior unchanged outside eligible positions.
+
+### Typed artifacts and pipeline
+
+- [x] Carry typed fragment artifacts and source anchors through parsing and typechecking.
+- [x] Type expression holes as real Incan expressions inside a fragment.
+- [x] Lower fragments and refuse emission with an explicit, documented message rather than guessing runtime semantics.
+
+### Fixtures and conformance
+
+- [x] Markup fixture (`examples/pro/vocab_markform`).
+- [x] Style and selector/declaration-value fixtures (`examples/pro/vocab_styleforge`).
+- [x] Regex/template and type-position fixtures (`examples/pro/vocab_scriptkit`).
+- [ ] Raw-text/comment consumer fixture; the submode is parser-tested but has no example project.
+- [ ] Formatting, LSP, and full embedding conformance (#1022).
 
 ## Design Decisions
 
