@@ -7443,13 +7443,16 @@ async def main() -> Result[None, str]:
             panic!("failed to read generated Rust source");
         };
         let normalized: String = main_rs.chars().filter(|c| !c.is_whitespace()).collect();
+        // Assert the ordering, not the callee's spelling. RFC 120 projections emit a linker-visible
+        // `__incan_v1_...` name for `register_sources`, so pinning the source spelling tested the projection rather
+        // than the await/try ordering this case exists for.
         assert!(
-            normalized.contains("register_sources().await?;"),
+            normalized.contains(").await?;"),
             "expected awaited-then-try ordering in generated Rust, got:\n{}",
             main_rs
         );
         assert!(
-            !normalized.contains("register_sources()?.await;"),
+            !normalized.contains(")?.await"),
             "generated Rust must not apply `?` before `.await`, got:\n{}",
             main_rs
         );
@@ -7516,12 +7519,14 @@ def main() -> None:
             normalized_main.contains("#[path=\"extern.rs\"]modr#extern;"),
             "expected top-level keyword module path attr in generated main.rs, got:\n{main_rs}"
         );
+        // The escape is `crate::r#extern::`; what follows it is the callee's emitted name, which RFC 120 projections
+        // now own. Asserting the raw `root_value` spelling tested the projection instead of the keyword escaping.
         assert!(
-            normalized_main.contains("crate::r#extern::root_value"),
+            normalized_main.contains("crate::r#extern::"),
             "expected generated use path to escape top-level keyword module, got:\n{main_rs}"
         );
         assert!(
-            normalized_main.contains("crate::api::r#extern::nested_value"),
+            normalized_main.contains("crate::api::r#extern::"),
             "expected generated use path to escape nested keyword module, got:\n{main_rs}"
         );
         assert!(
