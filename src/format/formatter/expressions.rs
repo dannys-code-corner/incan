@@ -565,10 +565,15 @@ impl Formatter {
             Literal::Bytes(b) => {
                 self.writer.write("b\"");
                 for byte in b {
-                    if *byte >= 32 && *byte < 127 {
-                        self.writer.write(&(*byte as char).to_string());
-                    } else {
-                        self.writer.write(&format!("\\x{:02x}", byte));
+                    // A quote or backslash byte is printable, so writing it raw closed the literal early or began a
+                    // bogus escape: `b"a\\"b"` came back as `b"a"b"`, which no longer parses. Both need escaping
+                    // before the printable-range shortcut, exactly as the string arm escapes through
+                    // `escape_string` (#1401).
+                    match byte {
+                        b'"' => self.writer.write("\\\""),
+                        b'\\' => self.writer.write("\\\\"),
+                        _ if *byte >= 32 && *byte < 127 => self.writer.write(&(*byte as char).to_string()),
+                        _ => self.writer.write(&format!("\\x{:02x}", byte)),
                     }
                 }
                 self.writer.write("\"");
@@ -662,11 +667,34 @@ impl Formatter {
     fn format_match_arm(&mut self, arm: &Spanned<MatchArm>) {
         self.writer.blank_lines(arm.leading_blank_lines as usize);
         let arm = &arm.node;
-        self.format_pattern(&arm.pattern.node);
+
+        // A guard is only expressible in `case <pattern> if <cond>:` form. The arrow form's parser hardcodes
+        // `guard: None` and refuses `<pattern> if <cond> =>`, so writing the guard before an arrow produced source
+        // that no longer parses — `examples/simple/fib.incn` was reformatted into a syntax error (#1401).
         if let Some(guard) = &arm.guard {
+            self.writer.write("case ");
+            self.format_pattern(&arm.pattern.node);
             self.writer.write(" if ");
             self.format_expr(&guard.node);
+            self.writer.write(":");
+            self.writer.newline();
+            self.writer.indent();
+            match &arm.body {
+                MatchBody::Expr(expr) => {
+                    self.format_expr(&expr.node);
+                    self.writer.newline();
+                }
+                MatchBody::Block(stmts) => {
+                    for stmt in stmts {
+                        self.format_statement(stmt);
+                    }
+                }
+            }
+            self.writer.dedent();
+            return;
         }
+
+        self.format_pattern(&arm.pattern.node);
         match &arm.body {
             MatchBody::Expr(expr) => {
                 self.writer.write(" => ");
