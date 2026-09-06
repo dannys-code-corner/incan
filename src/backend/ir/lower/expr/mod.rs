@@ -136,7 +136,7 @@ impl AstLowering {
         // A receiver typed as the dispatched trait itself names no implementation. The trait's own declaration is an
         // abstract slot with no wrapper beside it -- only the types adopting it emit one -- so projecting a call on
         // `data: DataSet[T]` named the trait's declaration span while every wrapper carries an implementation's.
-        if type_name == trait_declaration_name(trait_dispatch) {
+        if type_name == trait_declaration_name(trait_dispatch) || self.declared_trait_names.contains(type_name) {
             return false;
         }
         let Some(adopted) = self.adopted_traits_by_type.get(type_name) else {
@@ -2899,6 +2899,24 @@ mod tests {
             &receiver,
             Some(&trait_dispatch(builtin_traits::as_str(TraitId::Clone)))
         ));
+    }
+
+    #[test]
+    fn a_receiver_typed_as_a_supertrait_adopter_keeps_the_trait_slot_spelling() {
+        // `take_sorted(..)` returns `OrderedCollection[int]`, and calling `.first()` on it dispatches `Collection`.
+        // The receiver is still a trait, so it names no implementation even though the two trait names differ.
+        let mut lowering = AstLowering::new();
+        lowering.declared_trait_names.insert("Collection".to_string());
+        lowering.declared_trait_names.insert("OrderedCollection".to_string());
+        let receiver = TypedExpr::new(
+            IrExprKind::Unit,
+            IrType::NamedGeneric("OrderedCollection".to_string(), vec![IrType::Int]),
+        );
+
+        assert!(
+            !lowering.receiver_adopts_the_dispatched_trait(&receiver, Some(&trait_dispatch("Collection"))),
+            "a supertrait-typed receiver still names no implementation"
+        );
     }
 
     #[test]
