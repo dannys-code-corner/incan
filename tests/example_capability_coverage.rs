@@ -47,7 +47,10 @@ const SOURCE_SHAPED_BASELINE: usize = 56;
 /// alternation, and `loop:` expressions in one program rather than four. That grouping is deliberate: #1252 asks the
 /// corpus to stay readable as teaching material rather than become a conformance dump, so features that co-occur in
 /// real code are shown co-occurring.
-const COVERED_BASELINE: usize = 21;
+///
+/// Moved 21 -> 22 by `examples/intermediate/signed_payload.incn`. `std.hash` had no example at all despite being
+/// stable since 0.3, so the module was one of the fourteen `std.*` gaps this issue names.
+const COVERED_BASELINE: usize = 22;
 
 /// One capability entry read from the v0.5 catalogue.
 struct Capability {
