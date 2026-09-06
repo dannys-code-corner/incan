@@ -722,7 +722,11 @@ impl<'a> IrEmitter<'a> {
         } else if let Some(path) = canonical_path {
             let materialize_internal_path =
                 *self.qualify_internal_canonical_paths.borrow() || Self::callee_is_imported_module_path(func);
-            self.emit_canonical_callee_path(path, materialize_internal_path)?
+            let resolved_declaration = match &func.kind {
+                IrExprKind::Var { name, .. } => Some(name.as_str()),
+                _ => None,
+            };
+            self.emit_canonical_callee_path(path, materialize_internal_path, resolved_declaration)?
                 .unwrap_or(self.emit_expr(func)?)
         } else {
             self.emit_expr(func)?
@@ -1243,6 +1247,7 @@ impl<'a> IrEmitter<'a> {
         &self,
         canonical_path: &[String],
         materialize_internal_path: bool,
+        resolved_declaration: Option<&str>,
     ) -> Result<Option<TokenStream>, EmitError> {
         if canonical_path.len() < 2 {
             return Ok(None);
@@ -1328,6 +1333,12 @@ impl<'a> IrEmitter<'a> {
             return Ok(None);
         };
 
+        // The path lookups own the ordinary case and must run first: they resolve the exact physical symbol from
+        // compiled-provider metadata, and a projection substituted into the path ahead of them makes that miss.
+        // They cannot resolve every callee, though. An overload set has no single declaration, so its path is
+        // ambiguous by construction and both lookups fail closed -- and the source spelling they then fell back to
+        // is one a provider never exports. Lowering already resolved which declaration the call selected, so prefer
+        // that over a spelling chosen only because nothing better was found.
         let emitted_name = self
             .canonical_stdlib_function_identity(canonical_path)
             .or_else(|| {
@@ -1335,6 +1346,14 @@ impl<'a> IrEmitter<'a> {
                     .canonical_identity_for_path(canonical_path)
             })
             .map(incan_semantics_core::encode_incan_symbol_identity)
+            .or_else(|| {
+                // Only a reserved Incan projection may stand in for a declaration. Lowering rewrites a resolved
+                // callee to its projection, but the same slot also carries ordinary bindings -- vocab helper
+                // functions among them -- whose names are local spellings, not declarations a provider exports.
+                resolved_declaration
+                    .filter(|name| name.starts_with(incan_semantics_core::INCAN_SYMBOL_RUST_PREFIX))
+                    .map(str::to_string)
+            })
             .unwrap_or_else(|| function_name.clone());
         let fn_ident = Self::rust_ident(&emitted_name);
         segments.push(quote! { #fn_ident });
@@ -1506,6 +1525,57 @@ mod tests {
 
     fn render(tokens: TokenStream) -> String {
         tokens.to_string().replace(' ', "")
+    }
+
+    #[test]
+    fn a_callee_path_the_lookups_cannot_resolve_names_the_declaration_lowering_selected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // An overload set has no single declaration, so its path is ambiguous by construction and both identity
+        // lookups fail closed. The bare set spelling they used to fall back to is one a provider never exports.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let selected = encode_incan_symbol_identity(&CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_system".to_string(),
+                module_path: vec!["environ".to_string()],
+            },
+            declaration_name: "get_as".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(7763, 8373),
+        });
+        let path = ["std".to_string(), "environ".to_string(), "get_as".to_string()];
+
+        let emitted = emitter
+            .emit_canonical_callee_path(&path, false, Some(&selected))?
+            .ok_or("expected a canonical callee path")?;
+
+        assert!(
+            render(emitted).ends_with(&format!("::{selected}")),
+            "the callee must name the declaration lowering selected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_callee_path_ignores_a_resolved_name_that_is_not_an_incan_projection() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The same slot carries ordinary bindings -- vocab helper functions among them -- whose names are local
+        // spellings, not declarations any provider exports.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let path = ["std".to_string(), "environ".to_string(), "get_as".to_string()];
+
+        let emitted = emitter
+            .emit_canonical_callee_path(&path, false, Some("__incan_vocab_helper_query_filter"))?
+            .ok_or("expected a canonical callee path")?;
+
+        assert!(
+            render(emitted).ends_with("::get_as"),
+            "only a reserved Incan projection may stand in for the source spelling"
+        );
+        Ok(())
     }
 
     fn rust_call_target(name: &str) -> TypedExpr {

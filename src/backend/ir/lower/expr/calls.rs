@@ -21,7 +21,7 @@ use crate::frontend::ast::{self, TypeConstraintKey};
 use crate::frontend::library_exports::CheckedPresetValue;
 use crate::frontend::library_manifest_index::LibraryManifestIndexEntry;
 use crate::frontend::partial_projection::{PartialPresetRef, merge_named_partial_args};
-use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ResolvedType, is_overload_emitted_name};
+use crate::frontend::symbols::{CallableParam, NewtypePrimitiveConstraint, ResolvedType};
 use crate::frontend::typechecker::{
     FixedUnpackPlan, IdentKind, ResolvedOperatorKind, RustArgCoercionKind, ValidatedNewtypeCoercionMode,
     ValidatedNewtypeCoercionStep,
@@ -44,25 +44,6 @@ use incan_semantics_core::{SemanticSourceTargetKind, SymbolOrigin};
 
 const TYPE_CONSTRUCTOR_HOOK: &str = "__incan_new";
 const API_CRATE_ROOT_SEGMENT: &str = "crate";
-
-/// Name the concrete overload a call selected in its canonical callee path.
-///
-/// An overload set has no single declaration, so the checked callee path ends with the set's source spelling. A
-/// provider exports only the concrete overloads -- each named with a signature hash -- and never that bare spelling,
-/// so leaving it in place emitted a call to a function that is not there. The emitter cannot recover the choice
-/// itself: an overload path is ambiguous by construction, so its identity lookups fail closed and it falls back to
-/// the very spelling that does not exist.
-///
-/// Only an overload spelling is substituted. The path must stay source-shaped for the emitter's package-metadata
-/// lookup, which an RFC 120 projection in this position would defeat.
-fn canonical_path_naming_selected_overload(mut path: Vec<String>, selected: Option<&str>) -> Vec<String> {
-    if let (Some(selected), Some(declaration)) = (selected, path.last_mut())
-        && is_overload_emitted_name(selected)
-    {
-        *declaration = selected.to_string();
-    }
-    path
-}
 
 impl AstLowering {
     /// Preserve the frontend type of builtins whose result participates in later type-directed lowering.
@@ -3207,9 +3188,7 @@ impl AstLowering {
         // Keep the checked source path available for semantic lookups. RFC 120's emitted projection is a physical
         // Rust name, not a replacement for the declaration path that owns defaults, parameter types, provider
         // identity, and compiler-known helper behavior.
-        let imported_callee_path = self
-            .imported_callee_path_for_expr(f)
-            .map(|path| canonical_path_naming_selected_overload(path, selected_reference_name.as_deref()));
+        let imported_callee_path = self.imported_callee_path_for_expr(f);
         let imported_source_callee_path = imported_callee_path
             .as_deref()
             .map(|path| self.semantic_imported_callee_path(path));
@@ -3999,39 +3978,7 @@ mod tests {
     use std::collections::{BTreeSet, HashMap};
     use std::sync::Arc;
 
-    use super::{AstLowering, canonical_path_naming_selected_overload};
-    #[test]
-    fn canonical_path_names_the_overload_a_call_selected() {
-        let path = vec!["std".to_string(), "environ".to_string(), "get_as".to_string()];
-
-        let named = canonical_path_naming_selected_overload(path, Some("get_as_overload_4b1ac1f4d4e08f1f"));
-
-        assert_eq!(
-            named,
-            vec![
-                "std".to_string(),
-                "environ".to_string(),
-                "get_as_overload_4b1ac1f4d4e08f1f".to_string()
-            ],
-            "a provider exports the concrete overload, never the bare set spelling"
-        );
-    }
-
-    #[test]
-    fn canonical_path_keeps_its_source_spelling_for_a_non_overload_selection() {
-        let path = vec!["std".to_string(), "environ".to_string(), "get".to_string()];
-
-        // An RFC 120 projection in the declaration segment would defeat the emitter's package-metadata lookup, and a
-        // call with no overload selection has nothing to substitute.
-        for selected in [None, Some("__incan_v1_0000deadbeef")] {
-            assert_eq!(
-                canonical_path_naming_selected_overload(path.clone(), selected),
-                path,
-                "only an overload spelling may replace the declaration segment"
-            );
-        }
-    }
-
+    use super::AstLowering;
     use crate::backend::ir::decl::IrDeclKind;
     use crate::backend::ir::expr::{IrExprKind, IrInteropCoercionKind, MethodCallArgPolicy, VarRefKind};
     use crate::backend::ir::stmt::IrStmtKind;
