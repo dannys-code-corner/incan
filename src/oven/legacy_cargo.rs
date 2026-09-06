@@ -7382,10 +7382,18 @@ fn run_legacy_cargo_invocation(
                     0
                 };
                 if reservation > transient_limit {
-                    terminate_process_group(&mut child).map_err(|source| OvenLegacyCargoError::Io {
-                        path: cargo.clone(),
-                        source,
-                    })?;
+                    let termination =
+                        terminate_process_group(&mut child).map_err(|source| OvenLegacyCargoError::Io {
+                            path: cargo.clone(),
+                            source,
+                        })?;
+                    if let Some(note) = termination.uncontained_note() {
+                        // The capacity guard exists to stop a runaway build consuming disk. Surviving descendants
+                        // keep writing, so the reservation this failure reports can still grow after it is raised.
+                        tracing::warn!(
+                            "terminated the publisher for exceeding its transient allowance, but {note}, so the measured reservation may continue to grow"
+                        );
+                    }
                     return Err(OvenLegacyCargoError::TransientCapacityExceeded {
                         path: capacity_root.to_path_buf(),
                         observed_physical_bytes: reservation,

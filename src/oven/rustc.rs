@@ -5152,10 +5152,14 @@ fn run_supervised_rustdoc_command(
             Some(status) => break status,
             None if Instant::now() >= deadline => {
                 timed_out = true;
-                break terminate_process_group(&mut child).map_err(|source| OvenRustcError::Io {
+                let termination = terminate_process_group(&mut child).map_err(|source| OvenRustcError::Io {
                     path: rustdoc.to_path_buf(),
                     source,
                 })?;
+                if let Some(note) = termination.uncontained_note() {
+                    tracing::warn!("timed-out rustdoc was terminated, but {note}");
+                }
+                break termination.status;
             }
             None => thread::sleep(Duration::from_millis(1)),
         }
