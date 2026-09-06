@@ -9253,7 +9253,7 @@
 <li>This RFC does not require a Rust application to run the Incan compiler at runtime.</li>
 <li>This RFC does not eagerly build a caller wrapper for every <code>pub</code> export regardless of whether anything calls it from Rust; only exports actually referenced by a Rust-authored unit in the same build graph enter the caller build (see "Public export profiles").</li>
 <li>This RFC does not define registry publication mechanics beyond compatibility with RFC 034 and RFC 079.</li>
-<li>This RFC does not define <code>loaf.toml</code>, <code>Oven.lock</code>, or the <code>*.loaf</code> asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.</li>
+<li>This RFC does not define <code>loaf.toml</code>, <code>oven.lock</code>, or the <code>*.loaf</code> asset format; it consumes the project, asset-identity, and receipt contract from RFC 117.</li>
 <li>This RFC does not define the full implementation of async runtime internals, host capability enforcement, or telemetry backends.</li>
 <li>This RFC does not guarantee that every Rust type imported through <code>rust::</code> can automatically cross back into a caller-visible Rust type without an adapter.</li>
 </ul>

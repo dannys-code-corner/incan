@@ -9582,7 +9582,7 @@
 </ul>
 <h2 id="non-goals">Non-Goals<a class="headerlink" href="#non-goals" title="Permanent link">&para;</a></h2>
 <ul>
-<li>Defining <code>loaf.toml</code>, <code>Oven.lock</code>, dependency resolution, target/carrier semantics, artifact format, or interop safety rules; RFC 117 and the corresponding interop RFCs own those contracts.</li>
+<li>Defining <code>loaf.toml</code>, <code>oven.lock</code>, dependency resolution, target/carrier semantics, artifact format, or interop safety rules; RFC 117 and the corresponding interop RFCs own those contracts.</li>
 <li>Creating a second resolver, environment manager, cache, registry/trust model, or package lifecycle in the Incan CLI.</li>
 <li>Requiring the Oven CLI itself to be implemented in Incan by v0.7, or allowing its implementation language to change the Oven API/receipt contract.</li>
 <li>Inferring or emulating Cargo workspace, build-script, proc-macro, or manifest semantics in a Loaf command.</li>
@@ -9769,7 +9769,7 @@ oven cargo build --release
 <h3 id="release-boundaries">Release boundaries<a class="headerlink" href="#release-boundaries" title="Permanent link">&para;</a></h3>
 <ul>
 <li><strong>v0.5:</strong> retains the current bounded RFC 116 interop release work and its existing <code>incan.toml</code> contract; this RFC does not backport a Loaf transition into that release.</li>
-<li><strong>v0.6:</strong> RFC 117 introduces <code>loaf.toml</code>, <code>Oven.lock</code>, hierarchical sub-Loaves, and the language-neutral project model.</li>
+<li><strong>v0.6:</strong> RFC 117 introduces <code>loaf.toml</code>, <code>oven.lock</code>, hierarchical sub-Loaves, and the language-neutral project model.</li>
 <li><strong>v0.7:</strong> this RFC introduces the canonical command-surface split over the v0.6 Oven API and project model.</li>
 </ul>
 <h2 id="compatibility-and-migration">Compatibility and migration<a class="headerlink" href="#compatibility-and-migration" title="Permanent link">&para;</a></h2>
@@ -9803,7 +9803,7 @@ oven cargo build --release
 </ul>
 <h2 id="inspectability-and-tooling-surface">Inspectability and tooling surface<a class="headerlink" href="#inspectability-and-tooling-surface" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Artifacts and metadata:</strong> <code>loaf.toml</code>, <code>Oven.lock</code>, selected plan, target-bound <code>*.loaf</code> assets, execution receipt, compiler diagnostics, semantic inspection facts, codegraph records, and architect findings expose the chosen authority.</li>
+<li><strong>Artifacts and metadata:</strong> <code>loaf.toml</code>, <code>oven.lock</code>, selected plan, target-bound <code>*.loaf</code> assets, execution receipt, compiler diagnostics, semantic inspection facts, codegraph records, and architect findings expose the chosen authority.</li>
 <li><strong>Inspection commands:</strong> <code>oven inspect</code> reports operational plan/store/receipt facts; <code>incan inspect</code>, <code>incan codegraph</code>, and <code>incan architect</code> report checked semantic facts.</li>
 <li><strong>Diagnostics:</strong> commands must name whether failure occurred in direct-source mode, Loaf/Oven mode, or explicit Cargo-compatibility mode, and identify the selected manifest or target where relevant.</li>
 <li><strong>Not implicit:</strong> neither command surface may infer Cargo behavior from an adjacent manifest, execute an action during resolution, or hide the delegation path that produced a receipt.</li>

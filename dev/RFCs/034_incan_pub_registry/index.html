@@ -10121,7 +10121,7 @@ mylib = { loaf = &quot;mylib&quot;, version = &quot;0.1.0&quot;, registry = &quo
 <li>Let the backend consume those package facts and emit the target build artifacts</li>
 </ol>
 <p>The resolver must not wire downloaded generated Rust source into generated <code>Cargo.toml</code> as the package compatibility path. Rust-facing consumption should go through the ABI/Cargo-native package direction rather than treating generated Rust internals as public API.</p>
-<p><strong>Lockfile (<code>Oven.lock</code>):</strong> on first resolution, write resolved versions, canonical registry identity, integrity facts, and checksums to <code>Oven.lock</code>. Subsequent bakes use the lockfile for reproducibility. <code>oven update</code> re-resolves.</p>
+<p><strong>Lockfile (<code>oven.lock</code>):</strong> on first resolution, write resolved versions, canonical registry identity, integrity facts, and checksums to <code>oven.lock</code>. Subsequent bakes use the lockfile for reproducibility. <code>oven update</code> re-resolves.</p>
 <h3 id="cli-commands">CLI commands<a class="headerlink" href="#cli-commands" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
@@ -10145,7 +10145,7 @@ mylib = { loaf = &quot;mylib&quot;, version = &quot;0.1.0&quot;, registry = &quo
 </tr>
 <tr>
 <td><code>oven update</code></td>
-<td>Re-resolve the selected closure and update <code>Oven.lock</code></td>
+<td>Re-resolve the selected closure and update <code>oven.lock</code></td>
 </tr>
 <tr>
 <td><code>oven login</code></td>
@@ -10202,7 +10202,7 @@ $<span class="w"> </span>oven<span class="w"> </span>add<span class="w"> </span>
 <li>Default to <code>^major.minor.patch</code> range (SemVer-compatible, like Cargo)</li>
 <li>Write the typed entry to <code>[dependencies]</code></li>
 <li>If the package is already in <code>loaf.toml</code>, update the version (with a confirmation prompt unless <code>--force</code>)</li>
-<li>Update <code>Oven.lock</code> with the resolved closure</li>
+<li>Update <code>oven.lock</code> with the resolved closure</li>
 </ol>
 <p><code>oven remove</code> does the inverse: removes the entry from <code>loaf.toml</code> and re-locks.</p>
 <h2 id="infrastructure-provider-selection">Infrastructure: provider selection<a class="headerlink" href="#infrastructure-provider-selection" title="Permanent link">&para;</a></h2>
@@ -10433,7 +10433,7 @@ $<span class="w"> </span>oven<span class="w"> </span>add<span class="w"> </span>
 
 <h2 id="future-extensions-out-of-scope">Future extensions (out of scope)<a class="headerlink" href="#future-extensions-out-of-scope" title="Permanent link">&para;</a></h2>
 <ul>
-<li><strong>Private registries.</strong> Organizations may register an <code>incan.pub</code>-compatible registry in Oven-controlled organization or user configuration, then allow-list that registered identity from a Loaf or workspace. Credentials and trust policy never live in <code>loaf.toml</code>; <code>Oven.lock</code> records the resolved canonical identity and observed trust facts.</li>
+<li><strong>Private registries.</strong> Organizations may register an <code>incan.pub</code>-compatible registry in Oven-controlled organization or user configuration, then allow-list that registered identity from a Loaf or workspace. Credentials and trust policy never live in <code>loaf.toml</code>; <code>oven.lock</code> records the resolved canonical identity and observed trust facts.</li>
 <li><strong>Trusted Publishers (GitHub Actions OIDC).</strong> Like PyPI's Trusted Publishers — CI/CD can publish without long-lived tokens by using GitHub Actions' OIDC identity directly with Sigstore.</li>
 <li><strong>Package auditing tools.</strong> <code>oven audit</code> to check dependencies against a vulnerability database.</li>
 <li><strong>Mirror support.</strong> Read-only mirrors of <code>incan.pub</code> for network-restricted environments or regional performance.</li>
