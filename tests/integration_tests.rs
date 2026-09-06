@@ -12178,7 +12178,7 @@ def main() -> None:
         let source = r#"
 @derive(Clone)
 class FactoryBox[T with Clone]:
-  value: T
+  pub value: T
 
   @classmethod
   def make(cls, value: T) -> Self:
