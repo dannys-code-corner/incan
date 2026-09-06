@@ -54,7 +54,11 @@ const SOURCE_SHAPED_BASELINE: usize = 56;
 /// Moved 22 -> 25 by `examples/intermediate/job_triage.incn`, covering `std.collections`, iterator adapters, and
 /// `Result` combinators together. They are grouped because they genuinely co-occur: a batch is parsed through a
 /// pipeline, its failures handled with combinators, and its results held in the containers built for the job.
-const COVERED_BASELINE: usize = 25;
+///
+/// Moved 25 -> 28 by `examples/intermediate/order_pipeline.incn`, covering exact numeric types, generators, and
+/// first-class functions. Deliberately model-free: a `model` cannot currently be verified end to end in a local
+/// build, so an example that must be proven locally is written without one.
+const COVERED_BASELINE: usize = 28;
 
 /// One capability entry read from the v0.5 catalogue.
 struct Capability {
