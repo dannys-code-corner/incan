@@ -4447,7 +4447,12 @@ fn explain_reports_known_and_unknown_diagnostic_codes() -> Result<(), Box<dyn st
     let known = run_incan(tmp.path(), &["explain", "INCAN-P0001", "--format", "json"])?;
     assert_success(&known, "incan explain known code json");
     let known_json = parse_json_stdout(&known)?;
-    assert_eq!(known_json["schema_version"], serde_json::json!(1));
+    // Recoverable projections (#1293) widened the stable diagnostic payload, and the explain report carries the same
+    // `DIAGNOSTIC_SCHEMA_VERSION` as every other stable diagnostic surface.
+    assert_eq!(
+        known_json["schema_version"],
+        serde_json::json!(incan::frontend::diagnostics::DIAGNOSTIC_SCHEMA_VERSION)
+    );
     assert_eq!(known_json["found"], serde_json::json!(true));
     assert_eq!(known_json["entry"]["code"], serde_json::json!("INCAN-P0001"));
 
