@@ -92,6 +92,7 @@ impl AstLowering {
     ) -> (String, Option<IrMethodDispatch>) {
         if !can_use_source_method_projection(receiver, dispatch.as_ref())
             || self.method_belongs_to_an_imported_type(call_span, dispatch.as_ref())
+            || !self.receiver_adopts_the_dispatched_trait(receiver, dispatch.as_ref())
         {
             return (source_method.to_string(), dispatch);
         }
@@ -107,6 +108,35 @@ impl AstLowering {
             other => other,
         };
         (projection, dispatch)
+    }
+
+    /// Whether a trait-dispatched call reaches a trait the receiver's own type adopts.
+    ///
+    /// A recoverable projection names a wrapper emitted beside a declaration, and a local type gets one for each
+    /// trait it adopts. A trait method the type never adopted has no such slot: `Score.default()` resolves to
+    /// `std.derives.copying.default`, but `model Score with Serialize` adopts only `Serialize`, so the only wrapper
+    /// on `Score` is the one for `to_json`. Projecting the other named a slot that was never emitted, and the
+    /// generated Rust did not compile.
+    ///
+    /// Only trait dispatch is decided here. Everything else -- inherent methods, provider references, and the
+    /// non-dispatched cases -- is already settled by the checks beside this one, so a receiver whose type is not a
+    /// locally declared nominal type keeps whatever those decided.
+    fn receiver_adopts_the_dispatched_trait(&self, receiver: &TypedExpr, dispatch: Option<&IrMethodDispatch>) -> bool {
+        let Some(IrMethodDispatch::Trait(trait_dispatch)) = dispatch else {
+            return true;
+        };
+        let mut receiver_ty = &receiver.ty;
+        while let IrType::Ref(inner) | IrType::RefMut(inner) = receiver_ty {
+            receiver_ty = inner.as_ref();
+        }
+        let type_name = match receiver_ty {
+            IrType::Struct(name) | IrType::Enum(name) | IrType::NamedGeneric(name, _) => name.as_str(),
+            _ => return true,
+        };
+        let Some(adopted) = self.adopted_traits_by_type.get(type_name) else {
+            return true;
+        };
+        adopted.contains(trait_declaration_name(trait_dispatch))
     }
 
     /// Whether this call reaches an inherent method declared by a package rather than by this compilation.

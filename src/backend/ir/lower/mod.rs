@@ -237,6 +237,13 @@ pub struct AstLowering {
     pub(super) local_generated_method_partial_wrappers: HashSet<(usize, usize, String)>,
     /// Best-effort source module name for compiler-provided call-site metadata.
     pub(super) current_source_module_name: Option<String>,
+    /// Traits each locally declared nominal type adopts, by type name.
+    ///
+    /// A recoverable projection is a wrapper emitted beside a declaration. A local type gets one for a method it
+    /// writes and for a trait it adopts -- and for nothing else. A trait method the type never adopted has no slot
+    /// here even though the call resolves to a real declaration, so projection needs to know which traits were
+    /// actually adopted rather than inferring it from the identity the call resolved to.
+    pub(super) adopted_traits_by_type: HashMap<String, HashSet<String>>,
     /// Canonical package identity supplied by the build or test orchestration layer.
     ///
     /// Explicit `RegistrySubject.package()` entries need this boundary-owned fact so their runtime value agrees with
@@ -650,6 +657,7 @@ impl AstLowering {
             generated_method_partial_wrappers: HashSet::new(),
             local_generated_method_partial_wrappers: HashSet::new(),
             current_source_module_name: None,
+            adopted_traits_by_type: HashMap::new(),
             registry_package_identity: None,
         }
     }
@@ -1982,6 +1990,25 @@ impl AstLowering {
         ir_program.function_reexports = self.collect_function_reexports(program);
         self.imported_alias_targets = self.collect_imported_alias_targets(program);
         self.seed_imported_stdlib_trait_decls(program)?;
+        self.adopted_traits_by_type = program
+            .declarations
+            .iter()
+            .filter_map(|decl| match &decl.node {
+                ast::Declaration::Model(m) => Some((m.name.clone(), &m.traits)),
+                ast::Declaration::Class(c) => Some((c.name.clone(), &c.traits)),
+                _ => None,
+            })
+            .map(|(name, traits)| {
+                let adopted = traits
+                    .iter()
+                    .map(|trait_ref| {
+                        let spelled = trait_ref.node.name.as_str();
+                        spelled.rsplit('.').next().unwrap_or(spelled).to_string()
+                    })
+                    .collect::<HashSet<_>>();
+                (name, adopted)
+            })
+            .collect();
         self.alias_imported_dependency_trait_decls();
         self.symbol_aliases = program
             .declarations

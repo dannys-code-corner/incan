@@ -1720,6 +1720,36 @@ def main() -> None:
     }
 
     #[test]
+    fn a_derived_method_keeps_its_source_spelling_instead_of_a_wrapper_that_does_not_exist() -> TestResult {
+        // `@derive(Default)` produces a Rust `Default` impl, not an Incan wrapper, so `Point.default()` has no
+        // recoverable slot on `Point`. Projecting it named `std.derives.copying.default` -- a real declaration with
+        // nothing emitted for it here -- and the generated Rust did not compile. This is the shape that broke the
+        // RFC 023 parity fixture, minimized to run without Oven.
+        let rust_code = generate_registry_rust(
+            r#"
+@derive(Default)
+model Point:
+  x: int = 0
+
+def main() -> None:
+  p = Point.default()
+  println(f"{p.x}")
+"#,
+            "app.main",
+        );
+
+        assert!(
+            rust_code.contains("Point::default()"),
+            "a derived associated function must keep its source spelling:\n{rust_code}"
+        );
+        assert!(
+            !rust_code.contains("Point::__incan_v1_"),
+            "a derived associated function has no recoverable wrapper, so none may be named:\n{rust_code}"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn adopted_default_method_exposes_a_recoverable_projection_beside_the_trait_slot() -> TestResult {
         let rust_code = generate_registry_rust(
             r#"
