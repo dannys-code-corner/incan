@@ -5015,12 +5015,52 @@ fn write_native_test_failure_transcript(output: &Path, transcript: &str) -> CliR
     Ok(path)
 }
 
+/// Collect every test libtest reported as failing, in the order libtest first named them.
+///
+/// libtest introduces each captured failure body with `---- <name> stdout ----` before repeating the same names in
+/// its trailing `failures:` roster. Reading the body headers keeps the roster complete even when a run ends before
+/// libtest prints that trailing block, and de-duplicating keeps one entry per test when both forms are present.
+fn failing_test_names(output: &str) -> Vec<&str> {
+    let mut names = Vec::new();
+    for line in output.lines() {
+        let Some(name) = line
+            .trim()
+            .strip_prefix("---- ")
+            .and_then(|rest| rest.strip_suffix(" stdout ----"))
+            .map(str::trim)
+        else {
+            continue;
+        };
+        if !name.is_empty() && !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
+}
+
 /// Keep terminal failure reporting actionable without dumping an unbounded libtest transcript into the CLI error path.
 ///
-/// The complete caller-owned transcript is retained beside the direct-rustc test binary on failure.
+/// The roster of failing test names is emitted first and is never truncated: a handful of large panic bodies must not
+/// be able to spend the character budget and leave the remaining failures invisible to whoever reads CI output. The
+/// complete caller-owned transcript is retained beside the direct-rustc test binary on failure.
 fn native_test_failure_summary(output: &str) -> String {
     const MAX_CHARS: usize = 12_000;
     const PANIC_CONTEXT_LINES: usize = 12;
+
+    // ---- Roster: which tests failed, ahead of any bounded detail ----
+    let mut summary = String::new();
+    let failing = failing_test_names(output);
+    if !failing.is_empty() {
+        summary.push_str(&format!("failing tests ({}):\n", failing.len()));
+        for name in &failing {
+            summary.push_str("    ");
+            summary.push_str(name);
+            summary.push('\n');
+        }
+        summary.push('\n');
+    }
+
+    // ---- Detail: panic sites, their immediate context, and terminal libtest lines ----
     let mut relevant = Vec::new();
     let mut panic_context_remaining = 0;
     for line in output.lines() {
@@ -5042,12 +5082,12 @@ fn native_test_failure_summary(output: &str) -> String {
         }
     }
     let relevant = relevant.join("\n");
-    let summary = if relevant.is_empty() { output } else { &relevant };
-    let mut bounded = summary.chars().take(MAX_CHARS).collect::<String>();
-    if summary.chars().count() > MAX_CHARS {
-        bounded.push_str("\n… libtest transcript truncated");
+    let detail = if relevant.is_empty() { output } else { &relevant };
+    summary.extend(detail.chars().take(MAX_CHARS));
+    if detail.chars().count() > MAX_CHARS {
+        summary.push_str("\n… libtest transcript truncated");
     }
-    bounded
+    summary
 }
 
 /// Recompute the source-bound compiler root libtest receipt without invoking Cargo.
@@ -6115,6 +6155,26 @@ mod tests {
         assert!(summary.contains("benchmark fixture failed"));
         assert!(summary.contains("stdout: missing Loaf"));
         assert!(summary.contains("stderr: no Cargo fallback"));
+    }
+
+    #[test]
+    fn native_test_failure_summary_names_every_failing_test_before_bounded_detail() {
+        let bulky_panic_body = "x".repeat(20_000);
+        let transcript = format!(
+            "failures:\n\n---- noisy_first_failure stdout ----\nthread 'noisy_first_failure' panicked at src/fixture.rs:1:1:\n{bulky_panic_body}\n\n---- quiet_last_failure stdout ----\nthread 'quiet_last_failure' panicked at src/fixture.rs:2:2:\nassertion failed\n\ntest result: FAILED. 1 passed; 2 failed; 0 ignored\n"
+        );
+
+        let summary = native_test_failure_summary(&transcript);
+
+        assert!(
+            summary.starts_with("failing tests (2):\n    noisy_first_failure\n    quiet_last_failure\n"),
+            "roster must lead the summary: {}",
+            &summary[..summary.len().min(200)]
+        );
+        assert!(
+            summary.contains("… libtest transcript truncated"),
+            "the oversized body should still be bounded"
+        );
     }
 
     #[test]
