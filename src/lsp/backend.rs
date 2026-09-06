@@ -2875,11 +2875,13 @@ fn local_signature_in_expr(
             .iter()
             .find_map(|arg| local_signature_in_expr(arg, ast, source, offset))
             .or_else(|| local_signature_in_statements(&block.body, ast, source, offset)),
-        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are not recursed into here: hover/signature-help
-        // for content nested inside a fragment's expression holes is `#1022`'s LSP-ownership territory, not part
-        // of what this issue delivers. Treating the fragment as opaque (no signature found inside it) is the
-        // correct conservative default rather than guessing at a traversal shape LSP tooling hasn't settled yet.
-        Expr::Embedded(_) => None,
+        // An embedded fragment's expression holes are ordinary Incan (RFC 081), so signature help has to reach them
+        // through the same traversal the typechecker uses. Treating the fragment as opaque made a call written
+        // inside a hole lose signature help even though nothing about that call is embedded.
+        Expr::Embedded(fragment) => fragment
+            .holes()
+            .into_iter()
+            .find_map(|hole| local_signature_in_expr(hole, ast, source, offset)),
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr => None,
     }
 }
@@ -5736,9 +5738,13 @@ fn scoped_symbol_in_expr<'a>(
         }
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr | Expr::Yield(None) => {}
         Expr::Field(inner, _) => scoped_symbol_in_expr(inner, ident, symbol_span, surfaces, found),
-        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are opaque to scoped-symbol LSP lookups here:
-        // resolving scoped-DSL identifiers inside a fragment's expression holes is `#1022`'s territory.
-        Expr::Embedded(_) => {}
+        // A fragment's expression holes are ordinary Incan (RFC 081), so a scoped symbol written inside one
+        // resolves through the same traversal as anywhere else.
+        Expr::Embedded(fragment) => {
+            for hole in fragment.holes() {
+                scoped_symbol_in_expr(hole, ident, symbol_span, surfaces, found);
+            }
+        }
     }
 }
 
@@ -6280,9 +6286,13 @@ fn scoped_symbol_context_in_expr(expr: &Spanned<Expr>, offset: usize, context: &
         }
         Expr::Ident(_) | Expr::Literal(_) | Expr::SelfExpr | Expr::Yield(None) => {}
         Expr::Field(inner, _) => scoped_symbol_context_in_expr(inner, offset, context),
-        // Descriptor-gated embedded fragments (RFC 081, `#1023`) are opaque to scoped-symbol LSP context tracking
-        // here: this belongs to `#1022`'s LSP-ownership territory, not this issue's parser-to-lowering scope.
-        Expr::Embedded(_) => {}
+        // Completion context follows the cursor into a fragment's expression holes, which are ordinary Incan
+        // (RFC 081); the surrounding DSL syntax carries no scoped-symbol context of its own.
+        Expr::Embedded(fragment) => {
+            for hole in fragment.holes() {
+                scoped_symbol_context_in_expr(hole, offset, context);
+            }
+        }
     }
 }
 
