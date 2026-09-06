@@ -195,7 +195,9 @@ This RFC is additive. Code that does not import and use a DSL with language-shap
 - [x] Regex/template, type-position, and raw-text/comment fixtures (`examples/pro/vocab_scriptkit`).
 - [x] All six accepted submodes have consumer example coverage.
 - [x] User-facing documentation naming the accepted subsets and exclusions honestly, and stating plainly that a submode is not the language it resembles.
-- [ ] Structural formatting for known fragments, and LSP ownership inside expression holes (#1022). Both need a decision the code has so far declined to guess.
+- [x] Structural formatting for known fragments, and LSP ownership inside expression holes (#1022).
+- [x] End-to-end conformance across all six accepted submodes: typed artifact, hole ownership, typecheck, lowering, emission refusal, and both formatter modes (#1022).
+- [x] Editor ownership at the fragment boundary: DSL-owned syntax reports its owning submode and descriptor rather than resolving against ordinary Incan scope (#1022).
 
 ## Design Decisions
 

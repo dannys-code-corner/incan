@@ -36,9 +36,8 @@ use crate::cli::prelude::ParsedModule;
 use crate::cli::{CliError, CliResult, ExitCode};
 use crate::frontend::ast::{
     AssertKind, CallArg, ComprehensionClause, Condition, Declaration, Decorator, DecoratorArg, DecoratorArgValue,
-    DictEntry, EmbeddedNode, Expr, FStringPart, FunctionDecl, ImportDecl, ImportItem, ImportKind, ImportPath,
-    ListEntry, MatchBody, RaceForBody, Span, Spanned, Statement, SurfaceExprPayload, SurfaceStmtPayload, TypeParam,
-    Visibility,
+    DictEntry, Expr, FStringPart, FunctionDecl, ImportDecl, ImportItem, ImportKind, ImportPath, ListEntry, MatchBody,
+    RaceForBody, Span, Spanned, Statement, SurfaceExprPayload, SurfaceStmtPayload, TypeParam, Visibility,
 };
 use crate::frontend::diagnostics::{self, StableDiagnostic};
 use crate::frontend::registry_metadata::{
@@ -1788,61 +1787,15 @@ impl CodegraphBuilder {
                 }
                 self.collect_statements(module, module_id, owner_id, &block.body, degraded);
             }
+            // A fragment's DSL-owned structural content (tags, selectors, declarations, ...) has no ordinary Incan
+            // symbol references of its own — only its expression holes are genuine Incan, so only they contribute
+            // codegraph references and calls. `holes` is the single authority on which those are (RFC 081, #1022).
             Expr::Embedded(fragment) => {
-                for node in &fragment.nodes {
-                    self.collect_embedded_node(module, module_id, owner_id, node, degraded);
+                for hole in fragment.holes() {
+                    self.collect_expr(module, module_id, owner_id, hole, degraded);
                 }
             }
             Expr::Yield(None) => {}
-        }
-    }
-
-    /// Collect source-level reference and call facts from the expression holes nested in one embedded-fragment
-    /// node (RFC 081, `#1023`).
-    ///
-    /// The fragment's DSL-owned structural content (tags, selectors, declarations, ...) has no ordinary Incan
-    /// symbol references of its own — only its holes are genuine Incan expressions, so only they contribute
-    /// codegraph references/calls.
-    #[allow(clippy::too_many_arguments)]
-    fn collect_embedded_node(
-        &mut self,
-        module: &ParsedModule,
-        module_id: &str,
-        owner_id: Option<&str>,
-        node: &Spanned<EmbeddedNode>,
-        degraded: bool,
-    ) {
-        match &node.node {
-            EmbeddedNode::Text(_)
-            | EmbeddedNode::EntityRef(_)
-            | EmbeddedNode::Comment(_)
-            | EmbeddedNode::Value(_)
-            | EmbeddedNode::Regex { .. }
-            | EmbeddedNode::TypeShape(_) => {}
-            EmbeddedNode::Hole(expr) => self.collect_expr(module, module_id, owner_id, expr, degraded),
-            EmbeddedNode::Element(element) => {
-                for attr in &element.attrs {
-                    if let Some(value) = &attr.value {
-                        self.collect_embedded_node(module, module_id, owner_id, value, degraded);
-                    }
-                }
-                for child in &element.children {
-                    self.collect_embedded_node(module, module_id, owner_id, child, degraded);
-                }
-            }
-            EmbeddedNode::StyleRule(rule) => {
-                for selector in &rule.selectors {
-                    self.collect_embedded_node(module, module_id, owner_id, selector, degraded);
-                }
-                for declaration in &rule.declarations {
-                    self.collect_embedded_node(module, module_id, owner_id, declaration, degraded);
-                }
-            }
-            EmbeddedNode::Declaration(declaration) => {
-                for value in &declaration.value {
-                    self.collect_embedded_node(module, module_id, owner_id, value, degraded);
-                }
-            }
         }
     }
 

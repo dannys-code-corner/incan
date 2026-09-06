@@ -146,3 +146,80 @@ fn a_structural_style_fragment_renders_rules_and_declarations() -> Result<(), St
     assert_eq!(once, twice, "style formatting should be a fixed point:\n{once}");
     Ok(())
 }
+
+#[test]
+fn a_regex_template_fragment_survives_a_formatting_round_trip() -> Result<(), String> {
+    // A template string's backticks and `${...}` delimiters are consumed while parsing and never stored as nodes,
+    // so rendering the node tree the way other submodes render theirs emitted `hello {name}!` -- a fragment this
+    // submode rejects outright. `incan fmt` therefore rewrote a valid file into one that no longer parses, which
+    // is why the round trip is the assertion here rather than the output text alone.
+    let (keyword_map, surface_map) = fixture_maps(
+        "script",
+        "scriptkit",
+        incan_vocab::EmbeddedFragmentSubmode::RegexTemplate,
+        false,
+    );
+    let source = "import pub::scriptkit\n\ndef render(name: str) -> None:\n    script:\n        `hello ${name}!`\n";
+
+    let once = format_fixture(source, &keyword_map, &surface_map)?;
+    assert!(
+        once.contains("`hello ${name}!`"),
+        "the template's own delimiters must be reconstructed:\n{once}"
+    );
+    let twice = format_fixture(&once, &keyword_map, &surface_map)?;
+    assert_eq!(once, twice, "template formatting should be a fixed point:\n{once}");
+    Ok(())
+}
+
+#[test]
+fn a_regex_literal_fragment_survives_a_formatting_round_trip() -> Result<(), String> {
+    // The submode's other accepted form. It keeps its own node, so it only has to prove it is not swept into the
+    // template-reconstruction path added for the case above.
+    let (keyword_map, surface_map) = fixture_maps(
+        "script",
+        "scriptkit",
+        incan_vocab::EmbeddedFragmentSubmode::RegexTemplate,
+        false,
+    );
+    let source = "import pub::scriptkit\n\ndef render() -> None:\n    script:\n        /^[a-z]+$/gi\n";
+
+    let once = format_fixture(source, &keyword_map, &surface_map)?;
+    assert!(
+        once.contains("/^[a-z]+$/gi"),
+        "a regex literal must render as itself, not as a template:\n{once}"
+    );
+    let twice = format_fixture(&once, &keyword_map, &surface_map)?;
+    assert_eq!(once, twice, "regex formatting should be a fixed point:\n{once}");
+    Ok(())
+}
+
+#[test]
+fn preserved_fragment_text_does_not_grow_a_blank_line_per_pass() -> Result<(), String> {
+    // Both modes that write preserved text verbatim -- a layout-sensitive descriptor, and `RawText`'s content
+    // runs -- used to emit the newline that terminates the fragment's last line, which the enclosing statement
+    // writer emits as well. Every `incan fmt` pass added one more blank line, so a formatted file was never
+    // stable. Two passes is enough to catch it: the growth is one line per pass.
+    for layout_sensitive in [false, true] {
+        let (keyword_map, surface_map) = fixture_maps(
+            "note",
+            "textkit",
+            incan_vocab::EmbeddedFragmentSubmode::RawText,
+            layout_sensitive,
+        );
+        let source =
+            "import pub::textkit\n\ndef banner(who: str) -> None:\n    note:\n        TODO({who}): still to do\n";
+
+        let once = format_fixture(source, &keyword_map, &surface_map)?;
+        let twice = format_fixture(&once, &keyword_map, &surface_map)?;
+        assert_eq!(
+            once, twice,
+            "layout_sensitive={layout_sensitive}: preserved text must be a fixed point:\n--- once ---\n{once}\n--- \
+             twice ---\n{twice}"
+        );
+        assert!(
+            once.contains("TODO({who}): still to do"),
+            "layout_sensitive={layout_sensitive}: preserved content must survive:\n{once}"
+        );
+    }
+    Ok(())
+}

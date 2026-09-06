@@ -16,7 +16,18 @@ This page explains what that actually is, because the honest answer is narrower 
 
 `<h1>{title}</h1>` is not HTML. Incan has a fixed catalogue of six **submodes** — small grammars owned by the compiler — and a library chooses which one its block claims. `Markup` happens to accept tags, attributes, text, entity references and comments, which covers a useful subset of HTML-shaped syntax and stops there. Namespaces, doctypes and unquoted attribute values are not accepted, and never will be as part of that submode.
 
-The same applies to every other submode. `Style` takes selector lists and a declaration block, but not nested rules or `@media`. `TypePosition` takes qualified names, generics, nullables, arrays and unions, but not bounds or function types.
+The same applies to every other submode. Here is the whole catalogue, with what each one refuses:
+
+| Submode | Accepts | Does not accept |
+| --- | --- | --- |
+| `Markup` | Open, close and self-closing tags; attributes written `name`, `name="literal"` or `name={expr}`; text runs; `&name;` entity references; `<!-- ... -->` comments; `{expr}` holes | Namespaces, doctypes, processing instructions, unquoted attribute values |
+| `Style` | Comma-separated selector lists, captured as flat token runs rather than parsed any further; a `{ property: value; ... }` declaration block; `--custom-property` declarations; `/* ... */` comments | Nested rules, at-rules such as `@media`, any structure within a selector |
+| `RawText` | Verbatim text interleaved with `{expr}` holes | Anything else — there is no structure to parse, by design |
+| `RegexTemplate` | Exactly one of: a `/pattern/flags` regex literal, or a `` `...${expr}...` `` template string | Both forms in one fragment; regex flags outside ASCII letters |
+| `SelectorDeclarationValue` | Exactly one value: a dimension like `16px`, a color like `#1166ff`, a `var(--name)` reference, an identifier, a string, a number, or an `{expr}` hole | More than one value; arithmetic between values |
+| `TypePosition` | `Name`, qualified `a.b.Name`, generic `Name<Arg, ...>`, nullable `T?`, array `T[]`, union `A \| B` | Bounds, variance, wildcards, function types |
+
+Read the "does not accept" column as final for that submode, not as a roadmap. Nothing in it is scheduled.
 
 That boundary is deliberate rather than unfinished. Accepting a real external grammar would mean tracking a specification the compiler does not own, across versions it cannot pin, and would turn every gap into a compatibility bug. A fixed small grammar can be specified exactly and can say no clearly.
 
@@ -55,7 +66,23 @@ A library that has not yet supplied that step still gives you a fragment that pa
 
 ## Formatting
 
-`incan fmt` currently reproduces a fragment's original text exactly. It does not reformat inside a fragment, so whatever layout you write is the layout you keep.
+`incan fmt` has exactly two behaviours inside a fragment, and the library picks which one applies to its blocks.
+
+By default it reformats the fragment from the structure it parsed: elements, rules, declarations and values are laid out consistently, and the whitespace you happened to write between them is not preserved. Expression holes are formatted by the same code that formats that expression anywhere else.
+
+A library can instead declare a block layout-sensitive, and then `incan fmt` reproduces the fragment's original text exactly. That is the right choice when the whitespace is content — indentation-significant templates, for instance. It is the library's declaration, not a per-file setting, so if you need it and your library has not declared it, that is a request to make to the library.
+
+There is no third behaviour. A fragment is either reformatted from its structure or preserved verbatim; the compiler never falls back to leaving a fragment half-handled.
+
+## What editors do inside a fragment
+
+The language server draws the same ownership line the compiler does.
+
+Inside an expression hole you get ordinary Incan tooling: hover, completions, signature help, go-to-definition and type errors all work exactly as they do outside a fragment, because a hole is ordinary Incan.
+
+Everywhere else in the fragment — tag names, selectors, declaration properties, regex patterns, type shapes — you get an ownership hover naming the submode and the library whose descriptor claimed the block, and nothing else. In particular, a name there does not resolve against Incan scope, even when a variable in the same file happens to be spelled the same way. Answering a tag name with an unrelated local's type would be worse than answering nothing.
+
+Diagnostics follow the same split. A construct the submode rejects is reported where you wrote it, in the submode's own terms; a mistake inside a hole is reported as the ordinary Incan error it is.
 
 ## See also
 
