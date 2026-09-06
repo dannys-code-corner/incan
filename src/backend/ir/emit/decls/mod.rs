@@ -856,7 +856,7 @@ impl super::super::IrEmitter<'_> {
 mod tests {
     use incan_semantics_core::{
         CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
-        decode_incan_symbol_identity,
+        encode_incan_symbol_identity,
     };
 
     use super::super::super::FunctionRegistry;
@@ -869,8 +869,7 @@ mod tests {
     };
 
     #[test]
-    fn stdlib_import_reexports_the_providers_identity_over_a_same_named_source_declaration()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn stdlib_import_reexports_the_providers_identity_over_a_same_named_source_declaration() {
         let provider_identity = CanonicalSymbolId {
             namespace: SymbolNamespace::OrdinaryLexical,
             origin: SymbolOrigin::Package {
@@ -935,12 +934,13 @@ mod tests {
         };
         let emitted = emitter.stdlib_import_item_emitted_name(&["std".to_string(), "datetime".to_string()], &item);
 
+        // RFC 120 projection is one-way inside the compiler, so assert the exact spelling emission produces
+        // rather than decoding the emitted name back into an identity.
         assert_eq!(
-            decode_incan_symbol_identity(&emitted)?,
-            Some(provider_identity),
+            emitted,
+            encode_incan_symbol_identity(&provider_identity),
             "a stdlib re-export must name the linked provider's declaration, not a same-named source one"
         );
-        Ok(())
     }
 
     #[test]
