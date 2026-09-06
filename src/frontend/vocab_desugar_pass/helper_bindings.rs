@@ -288,36 +288,118 @@ fn resolve_helper_binding<'a>(
             "provider `pub::{dependency_key}` does not expose vocab metadata"
         ));
     };
-    let binding = vocab
+    let mut matching = vocab
         .provider_manifest
         .helper_bindings
         .iter()
-        .find(|binding| binding.key == helper_key)
+        .filter(|binding| binding.key == helper_key);
+    let binding = matching
+        .next()
         .ok_or_else(|| format!("provider `pub::{dependency_key}` does not bind helper `{helper_key}`"))?;
-    if !library_exports_contains_name(manifest.as_ref(), &binding.exported_name) {
+    if let Some(duplicate) = matching.next() {
+        return Err(format!(
+            "provider `pub::{dependency_key}` binds helper `{helper_key}` more than once, to `{}` and `{}`; \
+             remove the duplicate so the helper has one spelling",
+            binding.exported_name, duplicate.exported_name
+        ));
+    }
+    let Some(kind) = helper_export_kind(manifest.as_ref(), &binding.exported_name) else {
         return Err(format!(
             "provider `pub::{dependency_key}` binds helper `{helper_key}` to missing export `{}`",
+            binding.exported_name
+        ));
+    };
+    if !kind.is_callable() {
+        return Err(format!(
+            "provider `pub::{dependency_key}` binds helper `{helper_key}` to {} `{}`, which cannot be called; \
+             bind the helper to a function, class, model, newtype, or enum variant",
+            kind.label(),
             binding.exported_name
         ));
     }
     Ok(binding)
 }
 
-/// Check whether a provider manifest exports a symbol that may be imported by helper aliasing.
-fn library_exports_contains_name(manifest: &crate::library_manifest::LibraryManifest, name: &str) -> bool {
-    manifest.exports.models.iter().any(|item| item.name == name)
-        || manifest.exports.classes.iter().any(|item| item.name == name)
-        || manifest.exports.functions.iter().any(|item| item.name == name)
-        || manifest.exports.traits.iter().any(|item| item.name == name)
-        || manifest.exports.enums.iter().any(|item| item.name == name)
-        || manifest
-            .exports
-            .enums
-            .iter()
-            .any(|item| item.variants.iter().any(|variant| variant.name == name))
-        || manifest.exports.type_aliases.iter().any(|item| item.name == name)
-        || manifest.exports.newtypes.iter().any(|item| item.name == name)
-        || manifest.exports.consts.iter().any(|item| item.name == name)
+/// What a helper's exported name resolves to on the provider's public surface.
+///
+/// A desugared helper reference is spliced into call position, so the kind decides whether the emitted program can
+/// actually run. Resolving only "is this name exported" accepted traits and constants, which typecheck as names and
+/// then fail in generated Rust as calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HelperExportKind {
+    Function,
+    Class,
+    Model,
+    Newtype,
+    EnumVariant,
+    Enum,
+    Trait,
+    TypeAlias,
+    Const,
+}
+
+impl HelperExportKind {
+    /// Return whether a value of this kind may appear as the callee of a desugared helper call.
+    fn is_callable(self) -> bool {
+        matches!(
+            self,
+            Self::Function | Self::Class | Self::Model | Self::Newtype | Self::EnumVariant
+        )
+    }
+
+    /// Return the user-facing noun for this kind, for diagnostics.
+    fn label(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Class => "class",
+            Self::Model => "model",
+            Self::Newtype => "newtype",
+            Self::EnumVariant => "enum variant",
+            Self::Enum => "enum",
+            Self::Trait => "trait",
+            Self::TypeAlias => "type alias",
+            Self::Const => "const",
+        }
+    }
+}
+
+/// Resolve one exported name on a provider manifest to the kind of item it names.
+///
+/// Callable kinds are checked first so a name that is both an enum and a variant resolves to the usable one.
+fn helper_export_kind(manifest: &crate::library_manifest::LibraryManifest, name: &str) -> Option<HelperExportKind> {
+    let exports = &manifest.exports;
+    if exports.functions.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Function);
+    }
+    if exports.classes.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Class);
+    }
+    if exports.models.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Model);
+    }
+    if exports.newtypes.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Newtype);
+    }
+    if exports
+        .enums
+        .iter()
+        .any(|item| item.variants.iter().any(|variant| variant.name == name))
+    {
+        return Some(HelperExportKind::EnumVariant);
+    }
+    if exports.enums.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Enum);
+    }
+    if exports.traits.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Trait);
+    }
+    if exports.type_aliases.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::TypeAlias);
+    }
+    if exports.consts.iter().any(|item| item.name == name) {
+        return Some(HelperExportKind::Const);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -326,6 +408,97 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+
+    /// Build a one-provider index whose manifest carries the given helper bindings and exports.
+    fn index_with(
+        bindings: Vec<incan_vocab::HelperBinding>,
+        customize: impl FnOnce(&mut crate::library_manifest::LibraryManifest),
+    ) -> LibraryManifestIndex {
+        let mut manifest = crate::library_manifest::LibraryManifest::new("demo", "0.1.0");
+        customize(&mut manifest);
+        manifest.vocab = Some(crate::library_manifest::VocabExports {
+            crate_path: "vocab_companion".to_string(),
+            package_name: "vocab_companion".to_string(),
+            keyword_registrations: Vec::new(),
+            dsl_surfaces: Vec::new(),
+            provider_manifest: incan_vocab::LibraryManifest {
+                helper_bindings: bindings,
+                ..incan_vocab::LibraryManifest::default()
+            },
+            desugarer_artifact: None,
+        });
+        LibraryManifestIndex::from_entries(HashMap::from([(
+            "demo".to_string(),
+            LibraryManifestIndexEntry::Loaded {
+                manifest: Box::new(manifest),
+                metadata: crate::frontend::library_manifest_index::LibraryArtifactMetadata::from_crate_root(
+                    "demo",
+                    "demo",
+                    PathBuf::from("/tmp/demo"),
+                ),
+            },
+        )]))
+    }
+
+    #[test]
+    fn helper_resolution_rejects_a_duplicated_helper_key() -> Result<(), Box<dyn std::error::Error>> {
+        // Two bindings for one key used to resolve silently to whichever was declared first, so a provider could
+        // ship an ambiguous surface and the choice would depend on declaration order.
+        let index = index_with(
+            vec![
+                incan_vocab::HelperBinding {
+                    key: "filter".to_string(),
+                    exported_name: "filter_rows".to_string(),
+                },
+                incan_vocab::HelperBinding {
+                    key: "filter".to_string(),
+                    exported_name: "filter_cols".to_string(),
+                },
+            ],
+            |_| {},
+        );
+
+        let err = match resolve_helper_binding(&index, "demo", "filter") {
+            Err(err) => err,
+            Ok(binding) => panic!("expected duplicate rejection, resolved to `{}`", binding.exported_name),
+        };
+        assert!(err.contains("more than once"), "unexpected error: {err}");
+        assert!(
+            err.contains("filter_rows") && err.contains("filter_cols"),
+            "error should name both: {err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn helper_resolution_rejects_a_binding_to_an_uncallable_export() -> Result<(), Box<dyn std::error::Error>> {
+        // A trait is exported and therefore passed the old name-only check, but a desugared helper reference is
+        // spliced into call position, where a trait cannot go.
+        let index = index_with(
+            vec![incan_vocab::HelperBinding {
+                key: "filter".to_string(),
+                exported_name: "Filterable".to_string(),
+            }],
+            |manifest| {
+                manifest.exports.traits.push(crate::library_manifest::TraitExport {
+                    name: "Filterable".to_string(),
+                    source_name: None,
+                    type_params: Vec::new(),
+                    supertraits: Vec::new(),
+                    requires: Vec::new(),
+                    methods: Vec::new(),
+                });
+            },
+        );
+
+        let err = match resolve_helper_binding(&index, "demo", "filter") {
+            Err(err) => err,
+            Ok(_) => panic!("expected an ineligible-kind rejection"),
+        };
+        assert!(err.contains("trait `Filterable`"), "error should name the kind: {err}");
+        assert!(err.contains("cannot be called"), "unexpected error: {err}");
+        Ok(())
+    }
 
     #[test]
     fn helper_resolution_rejects_bindings_to_missing_exports() -> Result<(), Box<dyn std::error::Error>> {
