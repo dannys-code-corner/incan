@@ -194,7 +194,8 @@ This RFC is additive. Code that does not import and use a DSL with language-shap
 - [x] Style and selector/declaration-value fixtures (`examples/pro/vocab_styleforge`).
 - [x] Regex/template, type-position, and raw-text/comment fixtures (`examples/pro/vocab_scriptkit`).
 - [x] All six accepted submodes have consumer example coverage.
-- [ ] Formatting, LSP, and full embedding conformance (#1022).
+- [x] User-facing documentation naming the accepted subsets and exclusions honestly, and stating plainly that a submode is not the language it resembles.
+- [ ] Structural formatting for known fragments, and LSP ownership inside expression holes (#1022). Both need a decision the code has so far declined to guess.
 
 ## Design Decisions
 
