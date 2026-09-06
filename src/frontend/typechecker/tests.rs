@@ -24169,6 +24169,49 @@ pub def charge(amount: int) -> int:
     Ok(())
 }
 
+/// RFC 104 maps stdlib boundaries onto host capabilities, so an operation must be able to declare that it needs one.
+/// The reserved set lives in the compiler's own bundled `std.runtime` source rather than in a package dependency, and
+/// dependency resolution alone cannot see it.
+#[test]
+fn provider_operation_decorator_resolves_a_host_capability() -> Result<(), String> {
+    let source = r#"
+from std.runtime import host
+
+@provider_operation(host.fs.read)
+pub def read_bytes(path: str) -> int:
+    return 0
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["storage".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("a host-capability provider operation should typecheck: {errs:?}"))?;
+
+    let operations = &checker.type_info().declarations.provider_operations;
+    let collected = operations.values().collect::<Vec<_>>();
+    let [operation] = collected.as_slice() else {
+        return Err(format!("expected one checked provider operation, got {operations:?}"));
+    };
+    assert_eq!(operation.required_capability.kind, SemanticSourceTargetKind::Capability);
+    assert_eq!(operation.required_capability.declaration_name, "read");
+    assert_eq!(
+        operation.required_capability.module_path(),
+        Some(
+            vec![
+                "std".to_string(),
+                "runtime".to_string(),
+                "host".to_string(),
+                "fs".to_string()
+            ]
+            .as_slice()
+        ),
+        "the requirement must carry the host capability's own declaring module, not the consumer's"
+    );
+    Ok(())
+}
+
 /// A provider operation may only name a resolved RFC 104 capability, never a callable or a stringly value.
 #[test]
 fn provider_operation_decorator_rejects_a_non_capability_reference() -> Result<(), String> {
@@ -24267,6 +24310,142 @@ capability refund:
         errs.iter()
             .any(|e| e.message.contains("must be a capability reference")),
         "expected the non-reference diagnostic; got: {errs:?}"
+    );
+}
+
+/// RFC 104's authority contract has to be inspectable as static facts, without executing source. The declaration is
+/// validated at its own site, so its resolved requirement identities are known there and nowhere else; a consumer
+/// that had to re-resolve a dotted reference would be re-implementing the check it is meant to be reading.
+#[test]
+fn a_capability_declaration_is_retained_as_a_checked_fact() -> Result<(), String> {
+    let source = r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    scope:
+        tenant: str
+    requires = [host.fs.read]
+"#;
+    let tokens = lexer::lex(source).map_err(|errs| format!("lex failed: {errs:?}"))?;
+    let program = parser::parse(&tokens).map_err(|errs| format!("parse failed: {errs:?}"))?;
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["policy".to_string()]));
+    checker
+        .check_program(&program)
+        .map_err(|errs| format!("the capability should typecheck: {errs:?}"))?;
+
+    let capabilities = &checker.type_info().declarations.capabilities;
+    let collected = capabilities.values().collect::<Vec<_>>();
+    let [declaration] = collected.as_slice() else {
+        return Err(format!("expected one checked capability, got {capabilities:?}"));
+    };
+    assert_eq!(declaration.capability.declaration_name, "load_policy");
+    assert_eq!(
+        declaration.description.as_deref(),
+        Some("Load a policy document from disk")
+    );
+    assert_eq!(
+        declaration.scope,
+        vec![("tenant".to_string(), "str".to_string())],
+        "the typed scope dimensions should be retained in declaration order"
+    );
+
+    let [requirement] = declaration.requires.as_slice() else {
+        return Err(format!(
+            "expected one resolved requirement, got {:?}",
+            declaration.requires
+        ));
+    };
+    assert_eq!(requirement.declaration_name, "read");
+    assert_eq!(
+        requirement.module_path(),
+        Some(
+            vec![
+                "std".to_string(),
+                "runtime".to_string(),
+                "host".to_string(),
+                "fs".to_string()
+            ]
+            .as_slice()
+        ),
+        "a requirement must carry the capability's own declaring module, never the consumer's spelling"
+    );
+    Ok(())
+}
+
+/// A requirement that failed to resolve already reported its own error, so recording a placeholder edge would let a
+/// consumer read an unproven relationship as a checked one.
+#[test]
+fn an_unresolved_requirement_is_absent_from_the_checked_fact() {
+    let source = r#"
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [nonexistent]
+"#;
+    let Ok(tokens) = lexer::lex(source) else {
+        panic!("lex failed");
+    };
+    let Ok(program) = parser::parse(&tokens) else {
+        panic!("parse failed");
+    };
+    let mut checker = TypeChecker::new();
+    checker.set_current_module_path(Some(vec!["policy".to_string()]));
+    let errors = checker.check_program(&program).err().unwrap_or_default();
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("Unknown capability 'nonexistent'")),
+        "expected the unresolved-requirement diagnostic; got: {errors:?}"
+    );
+
+    let capabilities = &checker.type_info().declarations.capabilities;
+    let collected = capabilities.values().collect::<Vec<_>>();
+    let [declaration] = collected.as_slice() else {
+        panic!("expected the capability itself to still be recorded, got {capabilities:?}");
+    };
+    assert!(
+        declaration.requires.is_empty(),
+        "an unproven requirement must not be recorded: {:?}",
+        declaration.requires
+    );
+}
+
+/// RFC 104 reserves `host.*` for the toolchain's own authority and declares it through the same mechanism a package
+/// uses, in the compiler's bundled `std.runtime` source. A `requires` entry naming one therefore has to resolve like
+/// any other capability reference, rather than being a spelling the compiler has no declaration for.
+#[test]
+fn a_requires_entry_naming_a_host_capability_resolves() -> Result<(), String> {
+    check_str(
+        r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [host.fs.read]
+"#,
+    )
+    .map_err(|errs| format!("host.fs.read should resolve: {errs:?}"))
+}
+
+/// Only `std.runtime`'s own bundled source declares under `host.*`, so a reference that names a spelling it does not
+/// declare stays an unresolved-symbol error rather than being admitted because the namespace looks familiar.
+#[test]
+fn a_requires_entry_naming_an_undeclared_host_capability_is_rejected() {
+    let errs = check_str_err(
+        r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [host.fs.chmod]
+"#,
+        "capability requiring an undeclared host capability",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'host.fs.chmod'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
     );
 }
 
