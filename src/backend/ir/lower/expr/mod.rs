@@ -91,7 +91,7 @@ impl AstLowering {
         dispatch: Option<IrMethodDispatch>,
     ) -> (String, Option<IrMethodDispatch>) {
         if !can_use_source_method_projection(receiver, dispatch.as_ref())
-            || self.method_belongs_to_an_imported_type(call_span, dispatch.as_ref())
+            || self.method_belongs_to_an_imported_type(call_span)
             || !self.receiver_adopts_the_dispatched_trait(receiver, dispatch.as_ref())
         {
             return (source_method.to_string(), dispatch);
@@ -147,18 +147,18 @@ impl AstLowering {
     /// `incan_stdlib`'s `MutexGuard`, no wrapper exists at all, because Rust forbids an inherent `impl` on a foreign
     /// type. Those methods are facades over the Rust ones and the call has to reach the Rust slot.
     ///
-    /// Trait dispatch is deliberately excluded rather than caught here. A local type adopting a package's trait
-    /// carries that trait's package identity while its wrapper is emitted locally, so the trait cases are decided by
-    /// `can_use_source_method_projection` on the trait's own terms.
+    /// Trait dispatch is decided here too. It used to be excluded, on the reasoning that a local type adopting a
+    /// package's trait has its wrapper emitted locally; but `can_use_source_method_projection` never asks which
+    /// library declares the method, so a package trait method reached through a package type -- `BytesIO(..).read(..)`
+    /// dispatching through `BinaryRead` -- passed every check and projected a name only the provider emits. Declining
+    /// the projection keeps the fully-qualified trait call, which also preserves the type arguments that pin an
+    /// otherwise-inferred width.
     ///
     /// A package origin names *which library declares the method*, not that the method is foreign to this build. When
     /// that library is the one this compilation is producing, the wrapper is emitted right here, and suppressing the
-    /// projection would decline to name a slot that does exist. Only another library's inherent method has no wrapper
-    /// this compilation can name.
-    fn method_belongs_to_an_imported_type(&self, call_span: ast::Span, dispatch: Option<&IrMethodDispatch>) -> bool {
-        if dispatch.is_some() {
-            return false;
-        }
+    /// projection would decline to name a slot that does exist. Only another library's method has no wrapper this
+    /// compilation can name.
+    fn method_belongs_to_an_imported_type(&self, call_span: ast::Span) -> bool {
         let Some(identity) = self
             .type_info
             .as_ref()
@@ -2818,7 +2818,7 @@ mod tests {
         let lowering = lowering_resolving_a_package_method("incan_stdlib_core", Some("incan_stdlib_core"), call_span);
 
         assert!(
-            !lowering.method_belongs_to_an_imported_type(call_span, None),
+            !lowering.method_belongs_to_an_imported_type(call_span),
             "a package's own declaration is emitted by this build, so its wrapper can be named"
         );
     }
@@ -2833,27 +2833,32 @@ mod tests {
         let call_span = ast::Span { start: 10, end: 20 };
         let consumer = lowering_resolving_a_package_method("incan_stdlib_core", Some("my_app"), call_span);
         assert!(
-            consumer.method_belongs_to_an_imported_type(call_span, None),
+            consumer.method_belongs_to_an_imported_type(call_span),
             "a dependency's inherent method has no wrapper in the consumer's compilation"
         );
 
         // No project owns an ad-hoc single-file build, and every package identity is then genuinely foreign.
         let unowned = lowering_resolving_a_package_method("incan_stdlib_core", None, call_span);
         assert!(
-            unowned.method_belongs_to_an_imported_type(call_span, None),
+            unowned.method_belongs_to_an_imported_type(call_span),
             "without a produced library every package identity stays foreign"
         );
     }
 
-    /// Trait dispatch stays with `can_use_source_method_projection`, whichever package owns the declaration.
+    /// A dispatched call to another package's method is suppressed too, on the declaring package's terms.
+    ///
+    /// This rule used to exempt trait dispatch, leaving those cases to `can_use_source_method_projection`. That check
+    /// never asks which library declares the method, so `BytesIO(..).read(..)` dispatching through `BinaryRead`
+    /// passed everything and projected a name only `incan_stdlib_system` emits. Declining keeps the fully-qualified
+    /// trait call, which is also what pins the width that `Result[u8, IoError]` would otherwise only infer.
     #[test]
-    fn trait_dispatch_is_not_decided_by_the_declaring_package() {
+    fn a_dispatched_call_to_another_packages_method_is_not_projected() {
         let call_span = ast::Span { start: 10, end: 20 };
         let lowering = lowering_resolving_a_package_method("incan_stdlib_core", Some("my_app"), call_span);
 
         assert!(
-            !lowering.method_belongs_to_an_imported_type(call_span, Some(&trait_dispatch("FallibleIterator"))),
-            "a dispatched call is decided on the trait's own terms, not the declaring package's"
+            lowering.method_belongs_to_an_imported_type(call_span),
+            "a dependency's method has no wrapper here, dispatched or not"
         );
     }
 
