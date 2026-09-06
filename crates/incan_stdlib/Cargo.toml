@@ -19,6 +19,11 @@ tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros
 inventory = { version = "0.3", optional = true }
 xxhash_rust = { package = "xxhash-rust", version = "0.8", optional = true, features = ["xxh3"] }
 
+[target.'cfg(unix)'.dependencies]
+# `statvfs` for `std.fs` disk usage. Unix-only by nature; the Windows side of `host_fs` does not use it.
+# Already resolved in the workspace lock, so this adds an edge rather than a new crate.
+rustix = { version = "1.1", features = ["fs"] }
+
 [features]
 default = []
 ordinal = ["dep:xxhash_rust"]

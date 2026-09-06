@@ -22,11 +22,10 @@ from rust::std::fs import (
     symlink_metadata,
     write as rust_write,
 )
-from rust::std::os::unix::fs import MetadataExt, symlink
+from rust::incan_stdlib::host_fs import disk_usage, is_mount_point, symlink
 from rust::std::path import Path as RustPath
 from rust::std::rc import Rc
 from rust::std::time import SystemTime
-from rust::rustix::fs @ "1.1" with ["fs"] import statvfs
 from std.fs.file import File, _decode_text, _encode_text, _open_file, _validate_open_options
 from std.fs.glob import matches
 from std.fs.locking import FileLock, exclusive as lock_exclusive, shared as lock_shared, try_exclusive as try_lock_exclusive, try_shared as try_lock_shared
@@ -689,13 +688,9 @@ pub type Path = newtype str:
         Returns:
             `DiskUsage` byte counts, or `Err(IoError)` if the host cannot stat the filesystem.
         """
-        match statvfs(RustPath.new(self.0)):
+        match disk_usage(RustPath.new(self.0)):
             Ok(stats) =>
-                block_size = int(stats.f_bsize)
-                total = int(stats.f_blocks) * block_size
-                used = (int(stats.f_blocks) - int(stats.f_bfree)) * block_size
-                free = int(stats.f_bavail) * block_size
-                return Ok(DiskUsage(total=total, used=used, free=free))
+                return Ok(DiskUsage(total=int(stats.total), used=int(stats.used), free=int(stats.free)))
             Err(err) => return Err(_io_error(self, err))
 
     def touch(self, exist_ok: bool) -> Result[None, IoError]:
@@ -743,12 +738,9 @@ pub type Path = newtype str:
         Returns:
             `Ok(true)` for a mount point, `Ok(false)` for a non-mount path, or `Err(IoError)` if metadata cannot be read.
         """
-        if let Some(parent) = RustPath.new(self.0).parent():
-            current = _metadata_for(self)?
-            parent_path = Path(parent.to_string_lossy().into_owned())
-            parent_meta = _metadata_for(parent_path)?
-            return Ok(current.dev() != parent_meta.dev() or current.ino() == parent_meta.ino())
-        return Ok(true)
+        match is_mount_point(RustPath.new(self.0)):
+            Ok(mounted) => return Ok(mounted)
+            Err(err) => return Err(_io_error(self, err))
 
     def expanduser(self) -> Result[Path, IoError]:
         """
