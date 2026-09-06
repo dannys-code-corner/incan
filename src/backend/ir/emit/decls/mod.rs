@@ -643,13 +643,7 @@ impl<'a> IrEmitter<'a> {
                     let binding = item.emitted_binding_name();
                     let source_binding = item.source_binding_name();
                     let emitted_name = if is_incan_source_stdlib {
-                        let mut canonical_path = path.to_vec();
-                        canonical_path.push(item.name.clone());
-                        self.function_registry
-                            .canonical_identity_for_source_name(&item.name)
-                            .or_else(|| self.canonical_stdlib_function_identity(&canonical_path))
-                            .map(incan_semantics_core::encode_incan_symbol_identity)
-                            .unwrap_or_else(|| item.emitted_name())
+                        self.stdlib_import_item_emitted_name(path, item)
                     } else {
                         item.emitted_name()
                     };
@@ -835,9 +829,118 @@ fn rustdoc_safe_doc_line(line: &str, in_fenced_block: &mut bool) -> String {
     format!("{}{}", &line[..leading_len], "```ignore")
 }
 
+/// Return the emitted Rust item name for one item of an Incan-source stdlib import.
+///
+/// The import path names the declaration; the bare source name does not. A consumer that materializes stdlib source
+/// registers a module-origin declaration under the same short name as the linked provider's export, so resolving by
+/// name first bound the re-export to an identity the provider never emitted and left `pub use` naming an item that
+/// does not exist. The qualified path is therefore asked first — that lookup consults the compiled-SDK manifest and
+/// fails closed when a path is ambiguous — and the name-only registry stays the fallback it has always been.
+impl super::super::IrEmitter<'_> {
+    pub(super) fn stdlib_import_item_emitted_name(
+        &self,
+        path: &[String],
+        item: &super::super::decl::IrImportItem,
+    ) -> String {
+        let mut canonical_path = path.to_vec();
+        canonical_path.push(item.name.clone());
+        self.canonical_stdlib_function_identity(&canonical_path)
+            .or_else(|| self.function_registry.canonical_identity_for_source_name(&item.name))
+            .map(incan_semantics_core::encode_incan_symbol_identity)
+            .unwrap_or_else(|| item.emitted_name())
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use incan_semantics_core::{
+        CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
+        decode_incan_symbol_identity,
+    };
+
+    use super::super::super::FunctionRegistry;
+    use super::super::super::decl::IrImportItem;
+    use super::super::super::types::IrType;
+    use super::super::IrEmitter;
     use super::{ZEN_TEXT, normalized_rustdoc_lines};
+    use crate::library_manifest::{
+        CanonicalIdentityExport, ExportIdentity, ExportIdentityKind, ExportIdentityProjection, LibraryManifest,
+    };
+
+    #[test]
+    fn stdlib_import_reexports_the_providers_identity_over_a_same_named_source_declaration()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let provider_identity = CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_data".to_string(),
+                module_path: vec!["datetime".to_string(), "civil".to_string(), "naive".to_string()],
+            },
+            declaration_name: "utc".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(10, 20),
+        };
+        let mut manifest = LibraryManifest::new("incan_stdlib_data", "0.6.0");
+        manifest.contract_metadata.identity_graph.exports.push(ExportIdentity {
+            public_name: "utc".to_string(),
+            public_path: vec![
+                "incan_stdlib_data".to_string(),
+                "datetime".to_string(),
+                "utc".to_string(),
+            ],
+            source_path: vec![
+                "datetime".to_string(),
+                "civil".to_string(),
+                "naive".to_string(),
+                "utc".to_string(),
+            ],
+            kind: ExportIdentityKind::Function,
+            projection: ExportIdentityProjection::Direct,
+            canonical: CanonicalIdentityExport::from_canonical("incan_stdlib_data", &provider_identity),
+        });
+
+        // A consumer that materializes the same stdlib source registers a module-origin `utc` under the short name.
+        let source_identity = CanonicalSymbolId::module_declaration(
+            vec![
+                "std".to_string(),
+                "datetime".to_string(),
+                "civil".to_string(),
+                "naive".to_string(),
+            ],
+            "utc",
+            SemanticSourceTargetKind::Function,
+            HirSourceSpan::new(30, 40),
+        );
+        let mut registry = FunctionRegistry::new();
+        registry.register_canonical_projection(
+            "opaque_projection".to_string(),
+            "utc".to_string(),
+            source_identity,
+            Vec::new(),
+            IrType::Unit,
+        );
+
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.seed_sdk_provider_manifest_metadata(&manifest);
+
+        let item = IrImportItem {
+            name: "utc".to_string(),
+            alias: None,
+            canonical: None,
+            is_static: false,
+            force_reexport: false,
+            rust_trait_import: None,
+        };
+        let emitted = emitter.stdlib_import_item_emitted_name(&["std".to_string(), "datetime".to_string()], &item);
+
+        assert_eq!(
+            decode_incan_symbol_identity(&emitted)?,
+            Some(provider_identity),
+            "a stdlib re-export must name the linked provider's declaration, not a same-named source one"
+        );
+        Ok(())
+    }
 
     #[test]
     fn zen_text_contains_one_obvious_way_once() {
