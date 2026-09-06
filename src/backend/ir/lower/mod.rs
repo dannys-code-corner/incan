@@ -2803,6 +2803,20 @@ impl AstLowering {
                         }
                         for decl in &decls {
                             if let IrDeclKind::Function(func) = &decl.kind {
+                                // A decorator original is lowered under a registry key that is deliberately not valid
+                                // syntax, and only the registry maps it to the private helper name. The undecorated
+                                // path registers that mapping; this one did not, so a decorated overload's key reached
+                                // emission verbatim and building an identifier from it panicked the compiler.
+                                if let Some(physical_name) = Self::decorator_original_physical_name_for_key(&func.name)
+                                {
+                                    ir_program.function_registry.register_generated(
+                                        func.name.clone(),
+                                        physical_name,
+                                        f.name.clone(),
+                                        func.params.clone(),
+                                        func.return_type.clone(),
+                                    );
+                                }
                                 ir_program.function_registry.register(
                                     func.name.clone(),
                                     func.params.clone(),
