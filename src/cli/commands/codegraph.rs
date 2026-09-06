@@ -1520,11 +1520,21 @@ impl CodegraphBuilder {
                 }
             }
             Expr::MethodCall(receiver, method, type_args, args) => {
+                // `helpers.make_widget(..)` parses as a method call, but it is a call into an imported module, not a
+                // method on a value. Labelling it by the bare method name loses which module answers the call and
+                // makes it indistinguishable from a local `make_widget(..)` in the same file.
+                let qualified;
+                let callee_label = if Self::receiver_names_an_imported_module(module, receiver) {
+                    qualified = format!("{}.{method}", expr_label(&receiver.node));
+                    qualified.as_str()
+                } else {
+                    method.as_str()
+                };
                 self.push_call(
                     module,
                     module_id,
                     owner_id,
-                    method,
+                    callee_label,
                     "method",
                     args.len(),
                     type_args.len(),
@@ -1820,6 +1830,29 @@ impl CodegraphBuilder {
                 degraded,
             )));
         }
+    }
+
+    /// Return whether a method-call receiver names a module this file imported as a whole.
+    ///
+    /// Only a plain `import <module>` binding qualifies. An item import (`from m import f`) binds the item, not the
+    /// module, and a value named after a module is still a value.
+    fn receiver_names_an_imported_module(module: &ParsedModule, receiver: &Spanned<Expr>) -> bool {
+        let Expr::Ident(name) = &receiver.node else {
+            return false;
+        };
+        module.ast.declarations.iter().any(|declaration| {
+            let Declaration::Import(import) = &declaration.node else {
+                return false;
+            };
+            let ImportKind::Module(path) = &import.kind else {
+                return false;
+            };
+            let binding = import
+                .alias
+                .as_deref()
+                .or_else(|| path.segments.last().map(String::as_str));
+            binding == Some(name.as_str())
+        })
     }
 
     /// Push one source-level call record and its owner containment edge.
