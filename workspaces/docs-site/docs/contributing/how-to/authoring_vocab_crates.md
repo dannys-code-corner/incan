@@ -317,11 +317,53 @@ let manifest = LibraryManifest {
 
 Then the desugarer can emit `IncanExpr::Helper("filter".to_string())`, and the compiler will inject a hidden `pub::` import for the matching library export before lowering the desugared code back into the host AST.
 
-`incan build --lib` validates these bindings structurally:
+`incan build --lib` validates these bindings before the `.incnlib` artifact is written:
 
 - each helper `key` must be unique within `helper_bindings`
 - each `exported_name` must point at a real public export from the library artifact
-- empty keys or export names are rejected before the `.incnlib` artifact is written
+- each `exported_name` must be something a call can name
+- empty keys or export names are rejected
+
+### What a helper may bind to
+
+A helper reference is spliced into **call position** in the desugared program, so the export it names has to be callable. These kinds are accepted:
+
+| Kind | Why it works |
+| --- | --- |
+| function | called directly |
+| class, model, newtype | called as a constructor |
+| enum variant | called as a constructor |
+| alias | resolved to whatever it reexports, then checked by that kind |
+
+Traits, bare enum types, type aliases, constants, and statics are rejected. They are real public exports, so they pass the unknown-symbol check, but a call cannot name them:
+
+```text
+vocab helper binding `filter` points to trait `Filterable`, which cannot be called;
+bind the helper to a function, class, model, newtype, enum variant, or alias
+```
+
+Catching this at your build rather than a consumer's is deliberate. Without it the mistake surfaces as generated Rust that will not compile, reported against code the consumer never wrote.
+
+### Binding a reexported name
+
+You may bind the spelling your library publishes rather than the one it declares. An alias is followed to its target and then checked as that target's kind, so this works:
+
+```rust
+// The library declares `filter_rows` and reexports it as `where_`.
+HelperBinding { key: "filter".to_string(), exported_name: "where_".to_string() }
+```
+
+Following the alias does not launder an ineligible target: an alias that resolves to a constant is still rejected, and the diagnostic names the resolved kind rather than the alias. A chain that cannot be resolved — because it is cyclic, or reaches something the artifact does not describe — is admitted rather than rejected, on the principle that incomplete information should not fail a build that may be correct.
+
+### Duplicate keys
+
+Two bindings for one key are an error, not a silent choice:
+
+```text
+vocab provider_manifest.helper_bindings contains duplicate key `filter`
+```
+
+Resolution rejects the same case with a message naming both exports, so a manifest that reaches a consumer without revalidation still fails loudly instead of resolving by declaration order.
 
 ## 6. Add descriptor-gated embedded fragments (RFC 081)
 
