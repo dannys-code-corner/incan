@@ -2323,7 +2323,10 @@ impl TypeChecker {
         }
 
         let module = ImportPath::simple(module_segments.to_vec());
-        match self.dependency_member_identity(&module, item_name) {
+        let resolved = self
+            .dependency_member_identity(&module, item_name)
+            .or_else(|| self.imported_module_capability_identity(module_segments, item_name));
+        match resolved {
             Some(identity) if identity.kind == SemanticSourceTargetKind::Capability => {}
             Some(identity) => {
                 let found = identity.kind.as_str();
@@ -2334,6 +2337,31 @@ impl TypeChecker {
                 .errors
                 .push(errors::capability_requirement_unresolved(&rendered, span)),
         }
+    }
+
+    /// Resolve a dotted capability reference that travels through a module imported into this file.
+    ///
+    /// `from std.runtime import host` binds `host` to the module `std.runtime.host`, so `host.fs.read` names the
+    /// `read` capability of `std.runtime.host.fs`. Dependency resolution alone cannot answer that: it resolves
+    /// package dependencies, while the reserved `host.*` namespace is declared by the compiler's own bundled stdlib
+    /// source. RFC 104 asks for exactly one declaration mechanism, so the reference has to resolve through the
+    /// import that brought the module into scope, the same way any other member reference does.
+    fn imported_module_capability_identity(
+        &mut self,
+        module_segments: &[String],
+        item_name: &str,
+    ) -> Option<CanonicalSymbolId> {
+        let (root, nested) = module_segments.split_first()?;
+        let module_path = {
+            let symbol = self.lookup_symbol(root)?;
+            let SymbolKind::Module(info) = &symbol.kind else {
+                return None;
+            };
+            let mut path = info.path.clone();
+            path.extend(nested.iter().cloned());
+            path
+        };
+        self.stdlib_cache.lookup_identity(&module_path, item_name)
     }
 
     /// Name a symbol kind for a diagnostic that reports the wrong kind was referenced.

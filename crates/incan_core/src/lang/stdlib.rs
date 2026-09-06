@@ -495,6 +495,23 @@ pub const STDLIB_NAMESPACES: &[StdlibNamespace] = &[
         typechecker_only: false,
     },
     StdlibNamespace {
+        name: "runtime",
+        feature: None,
+        extra_crate_deps: &[],
+        submodules: &[
+            "prelude",
+            "host",
+            "host.clock",
+            "host.env",
+            "host.fs",
+            "host.http",
+            "host.model",
+            "host.process",
+            "host.tool",
+        ],
+        typechecker_only: false,
+    },
+    StdlibNamespace {
         name: "graph",
         feature: None,
         extra_crate_deps: &[],

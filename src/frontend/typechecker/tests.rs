@@ -24270,6 +24270,44 @@ capability refund:
     );
 }
 
+/// RFC 104 reserves `host.*` for the toolchain's own authority and declares it through the same mechanism a package
+/// uses, in the compiler's bundled `std.runtime` source. A `requires` entry naming one therefore has to resolve like
+/// any other capability reference, rather than being a spelling the compiler has no declaration for.
+#[test]
+fn a_requires_entry_naming_a_host_capability_resolves() -> Result<(), String> {
+    check_str(
+        r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [host.fs.read]
+"#,
+    )
+    .map_err(|errs| format!("host.fs.read should resolve: {errs:?}"))
+}
+
+/// Only `std.runtime`'s own bundled source declares under `host.*`, so a reference that names a spelling it does not
+/// declare stays an unresolved-symbol error rather than being admitted because the namespace looks familiar.
+#[test]
+fn a_requires_entry_naming_an_undeclared_host_capability_is_rejected() {
+    let errs = check_str_err(
+        r#"
+from std.runtime import host
+
+capability load_policy:
+    description = "Load a policy document from disk"
+    requires = [host.fs.chmod]
+"#,
+        "capability requiring an undeclared host capability",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Unknown capability 'host.fs.chmod'")),
+        "expected the unresolved-requirement diagnostic; got: {errs:?}"
+    );
+}
+
 /// RFC 104 is explicit that a misspelled capability reference must fail at compile time rather than surviving to
 /// become a runtime denial reported far from the declaration that caused it.
 #[test]
