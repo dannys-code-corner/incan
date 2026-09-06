@@ -246,6 +246,7 @@ nav:
           - Module static storage: language/explanation/static_storage.md
           - Numeric types: language/explanation/numeric_types.md
           - Date and time model: language/explanation/datetime_model.md
+          - What hashing proves: language/explanation/hashing_guarantees.md
           - OrdinalMap: language/explanation/ordinal_map.md
           - Graph model: language/explanation/graph_model.md
           - Derives & traits (explained): language/explanation/derives_and_traits.md
