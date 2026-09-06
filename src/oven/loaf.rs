@@ -66,6 +66,33 @@ pub const OVEN_NO_IMPLICIT_DEPENDENCY_BUILD: &str = "will not compile them for y
 /// it only after proving that it seals the vocabulary helper itself.
 pub const OVEN_SOURCE_COMPILER_VOCAB_SUPPORT_BUILD_INPUT: &str = "source-compiler-vocab-support";
 const TOOLCHAIN_LOAF_RELATIVE_ROOT: &str = "share/incan/oven/loafs";
+
+/// Digest characters kept in an on-disk Loaf directory name on Windows.
+///
+/// The shipped layout nests a generation directory inside `loafs/` and a `<identity>.loaf` directory inside that,
+/// so a full 64-character digest in each spends 134 characters before Cargo's own
+/// `target/<triple>/debug/deps/<crate>-<hash>.rlib` layers begin. That overruns `MAX_PATH` for every consumer of
+/// the toolchain, not just its build, and `link.exe` fails with `LNK1104` on a dependency it cannot open. Sixty-four
+/// bits of digest distinguishes the handful of generations a store holds with room to spare.
+const LOAF_DIRECTORY_DIGEST_LENGTH: usize = 16;
+
+/// Render one content identity as the directory-name component the Loaf layout uses for it.
+///
+/// Every site that writes, resolves, or validates a Loaf directory name goes through here, because the name is
+/// recorded in the envelope manifest at bake time and recomputed when the toolchain reads it: a writer and a reader
+/// that disagree would produce a store whose entries cannot be found, which is a worse failure than the path-length
+/// one this exists to avoid.
+///
+/// This shortens the *rendered name only*. The identity itself is unchanged wherever it is recorded or compared, and
+/// the digest is still validated at full length where it is checked as an identity rather than used as a name.
+pub(crate) fn loaf_directory_component(identity: &str) -> &str {
+    let digest = identity.strip_prefix("sha256:").unwrap_or(identity);
+    if cfg!(windows) {
+        digest.get(..LOAF_DIRECTORY_DIGEST_LENGTH).unwrap_or(digest)
+    } else {
+        digest
+    }
+}
 static LOAF_TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 const OVEN_LOAF_ENVELOPE_LOCK_FILE: &str = ".envelope.lock";
 
@@ -318,7 +345,32 @@ pub(crate) struct LoafTemporaryDirectory {
 
 impl LoafTemporaryDirectory {
     /// Create a unique owner-scoped Loaf staging directory below `parent`.
+    /// Abbreviate a staging prefix on hosts with a restrictive path budget.
+    ///
+    /// These prefixes are opaque scratch names, so their spelling carries no meaning beyond telling a reader which
+    /// stage produced a stray directory. On Windows several of them nest inside one another before a Cargo build
+    /// tree, and the descriptive spellings cost enough of the 260-character limit that the innermost link fails. The
+    /// initial of each hyphen-separated word keeps them distinct from one another while costing a few characters:
+    /// `.incan-oven-loaf-envelope-` becomes `.iole-`, `.incan-oven-loaf-store-` becomes `.iols-`.
+    ///
+    /// Off Windows the prefix is returned unchanged, so existing layouts and any tooling that recognises them are
+    /// untouched.
+    fn staging_prefix(prefix: &str) -> std::borrow::Cow<'_, str> {
+        #[cfg(windows)]
+        {
+            let body = prefix.trim_start_matches('.').trim_end_matches('-');
+            if !body.is_empty() {
+                let initials: String = body.split('-').filter_map(|word| word.chars().next()).collect();
+                if !initials.is_empty() {
+                    return std::borrow::Cow::Owned(format!(".{initials}-"));
+                }
+            }
+        }
+        std::borrow::Cow::Borrowed(prefix)
+    }
+
     pub(crate) fn create(parent: &Path, prefix: &str) -> io::Result<Self> {
+        let prefix = Self::staging_prefix(prefix);
         for _ in 0..128 {
             let sequence = LOAF_TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
             let path = parent.join(format!("{prefix}{}-{sequence}", std::process::id()));
@@ -367,9 +419,7 @@ pub(crate) fn retire_unreferenced_loaf_generations(
     if !generations_root.is_dir() {
         return Ok(());
     }
-    let active_name = generation_identity
-        .strip_prefix("sha256:")
-        .unwrap_or(generation_identity);
+    let active_name = loaf_directory_component(generation_identity);
     let active_generation = generations_root.join(active_name);
     let retired_root = scratch.join("retired");
     fs::create_dir_all(&retired_root).map_err(|source| OvenLoafError::Io {
@@ -424,12 +474,10 @@ pub(crate) fn commit_loaf_generation(
         path: staged_manifest.clone(),
         source,
     })?;
-    File::open(&staged_manifest)
-        .and_then(|file| file.sync_all())
-        .map_err(|source| OvenLoafError::Io {
-            path: staged_manifest.clone(),
-            source,
-        })?;
+    crate::durable_publication::sync_file(&staged_manifest).map_err(|source| OvenLoafError::Io {
+        path: staged_manifest.clone(),
+        source,
+    })?;
     before_manifest_commit().map_err(|source| OvenLoafError::Io {
         path: staged_manifest.clone(),
         source,
@@ -1023,10 +1071,7 @@ pub fn prepare_loaf_from_generated_project(
         source_compiler_vocab_support: false,
         base_loaf: None,
     })?;
-    let identity = receipt
-        .build_unit_identity
-        .strip_prefix("sha256:")
-        .unwrap_or(receipt.build_unit_identity.as_str());
+    let identity = loaf_directory_component(&receipt.build_unit_identity);
     let output_directory = loaf_root.join(format!(".building-{identity}.loaf"));
     if output_directory.exists() {
         return Err(OvenLoafError::Preparation {
@@ -1042,10 +1087,7 @@ pub fn prepare_loaf_from_generated_project(
         publication.registry_leaves,
         &output_directory,
     )?;
-    let loaf_name = result
-        .loaf_identity
-        .strip_prefix("sha256:")
-        .unwrap_or(&result.loaf_identity);
+    let loaf_name = loaf_directory_component(&result.loaf_identity);
     let content_directory = loaf_root.join(format!("{loaf_name}.loaf"));
     if content_directory.exists() {
         return Err(OvenLoafError::Preparation {
@@ -2377,12 +2419,7 @@ fn committed_loaf_metadata_paths_with_role(
             message: format!("unsupported envelope manifest schema {}", manifest.schema_version),
         });
     }
-    let generation_prefix = Path::new("generations").join(
-        manifest
-            .generation_identity
-            .strip_prefix("sha256:")
-            .unwrap_or(&manifest.generation_identity),
-    );
+    let generation_prefix = Path::new("generations").join(loaf_directory_component(&manifest.generation_identity));
     let mut paths = Vec::with_capacity(manifest.loafs.len());
     for member in &manifest.loafs {
         if member.path.is_absolute()
@@ -2408,13 +2445,7 @@ fn committed_loaf_metadata_paths_with_role(
             });
         }
         let identity = loaf_file_identity(&path)?;
-        let expected_name = format!(
-            "{}.loaf",
-            member
-                .loaf_identity
-                .strip_prefix("sha256:")
-                .unwrap_or(&member.loaf_identity)
-        );
+        let expected_name = format!("{}.loaf", loaf_directory_component(&member.loaf_identity));
         if identity != member.loaf_identity
             || path.parent().and_then(Path::file_name).and_then(|name| name.to_str()) != Some(expected_name.as_str())
         {
@@ -3164,7 +3195,7 @@ pub(crate) fn validate_stored_loaf_for_reuse(
 /// Verify that a Loaf manifest's digest is also the name of its containing `.loaf` directory.
 fn validate_loaf_content_address(loaf_path: &Path) -> Result<String, OvenLoafError> {
     let identity = loaf_file_identity(loaf_path)?;
-    let expected_name = format!("{}.loaf", identity.strip_prefix("sha256:").unwrap_or(&identity));
+    let expected_name = format!("{}.loaf", loaf_directory_component(&identity));
     let actual_name = loaf_path
         .parent()
         .and_then(Path::file_name)
@@ -3416,6 +3447,7 @@ fn read_loaf(loaf_path: &Path) -> Result<OvenLoaf, OvenLoafError> {
 
 #[cfg(test)]
 mod tests {
+    use super::loaf_directory_component;
     use std::collections::{BTreeMap, BTreeSet};
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -3576,9 +3608,7 @@ mod tests {
         let committed_identity = digest_bytes(&committed_bytes);
         let committed = PathBuf::from(format!(
             "generations/current/{}.loaf/loaf.json",
-            committed_identity
-                .strip_prefix("sha256:")
-                .unwrap_or(&committed_identity)
+            loaf_directory_component(&committed_identity)
         ));
         let stale = root.path().join("generations/stale/two.loaf/loaf.json");
         fs::create_dir_all(root.path().join(committed.parent().ok_or("committed parent missing")?))?;

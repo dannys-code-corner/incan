@@ -24,6 +24,7 @@ pub mod format;
 pub mod frontend;
 #[cfg(feature = "cli")]
 pub(crate) mod generated_cache;
+pub(crate) mod host_paths;
 pub mod library_manifest;
 pub mod lockfile;
 #[cfg(feature = "lsp")]

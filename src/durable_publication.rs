@@ -26,6 +26,81 @@ pub(crate) fn sync_directory(directory: &Path) -> io::Result<()> {
     open_directory_for_sync(directory)?.sync_all()
 }
 
+/// Request that one file's contents be durably persisted.
+///
+/// Callers use this when synchronizing a tree of already-written files, rather than a file they still hold open.
+/// That distinction is what makes it a separate operation: a handle opened for reading is enough to `fsync` on Unix,
+/// but `FlushFileBuffers` requires write access, so the obvious `File::open(path)?.sync_all()` fails on Windows even
+/// when the file is perfectly writable.
+///
+/// Store-owned artifacts add a second case. They are deliberately written read-only, and on Windows a read-only file
+/// cannot be opened for writing at all, so no open mode can flush it. The read-only attribute is therefore cleared
+/// for the duration of the flush and restored afterwards. That is safe here because the attribute does not affect
+/// readers and these files live in a publisher-private staging tree, but it is why this cannot simply be a different
+/// set of open flags.
+pub(crate) fn sync_file(path: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        return File::open(path)?.sync_all();
+    }
+    #[cfg(windows)]
+    {
+        match open_file_for_sync(path) {
+            Ok(file) => file.sync_all(),
+            Err(error) if error.kind() == io::ErrorKind::PermissionDenied => sync_read_only_file(path),
+            Err(error) => Err(error),
+        }
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "this host cannot synchronize a file, so publication durability cannot be requested for {}",
+                path.display()
+            ),
+        ))
+    }
+}
+
+/// Open a file handle that `FlushFileBuffers` will accept.
+///
+/// Write access is the requirement; read access is not needed and is not requested, so this fails cleanly on a
+/// read-only file rather than succeeding with a handle that cannot flush.
+#[cfg(windows)]
+fn open_file_for_sync(path: &Path) -> io::Result<File> {
+    use std::fs::OpenOptions;
+    use std::os::windows::fs::OpenOptionsExt;
+
+    /// `GENERIC_WRITE` — the access right `FlushFileBuffers` requires of its handle.
+    const GENERIC_WRITE: u32 = 0x4000_0000;
+
+    OpenOptions::new().access_mode(GENERIC_WRITE).open(path)
+}
+
+/// Flush a file whose read-only attribute would otherwise make it impossible to open for writing.
+///
+/// The attribute is restored whether or not the flush succeeded, so a failure here cannot leave a store-owned
+/// artifact writable.
+#[cfg(windows)]
+fn sync_read_only_file(path: &Path) -> io::Result<()> {
+    let mut permissions = std::fs::metadata(path)?.permissions();
+    if !permissions.readonly() {
+        // Not the read-only case after all; report the original failure shape rather than guessing at another cause.
+        return open_file_for_sync(path).and_then(|file| file.sync_all());
+    }
+
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions)?;
+    let flushed = open_file_for_sync(path).and_then(|file| file.sync_all());
+
+    let mut restored = std::fs::metadata(path)?.permissions();
+    restored.set_readonly(true);
+    let restore = std::fs::set_permissions(path, restored);
+
+    flushed.and(restore)
+}
+
 /// Open a directory handle suitable for synchronization on Unix hosts.
 ///
 /// A plain read handle accepts `fsync`, so no extra access mode or flag is required.

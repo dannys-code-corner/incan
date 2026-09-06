@@ -17,7 +17,9 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::cli::commands::common::discover_active_sdk_inventory;
+use crate::host_paths::tool_visible_path;
 use crate::library_manifest::{LibraryManifest, digest_provider_artifact, digest_toolchain_source_tree_with_cache};
+use crate::oven::store::{LEGACY_CARGO_STAGING_DIRECTORY, LEGACY_CARGO_STAGING_PREFIX};
 use crate::provider::{SDK_INVENTORY_FILE, SdkInventory};
 
 use super::process::{isolate_process_group, terminate_process_group};
@@ -1369,7 +1371,7 @@ pub fn prepare_direct_rustc_plan(
             request.receipt.project.name.clone(),
         );
     }
-    let staging_parent = request.store.root().join("legacy-cargo-staging");
+    let staging_parent = request.store.root().join(LEGACY_CARGO_STAGING_DIRECTORY);
     let publisher_lock = acquire_publisher_lock(&staging_parent)?;
     // The fast lookup above deliberately precedes manifest inspection. Recheck after taking the cross-process
     // publisher lock so a concurrent winner cannot make this request rebuild and publish a second byte-distinct
@@ -1822,7 +1824,7 @@ pub fn prepare_compiler_test_suite(
     let _ =
         receipt_authorized_generated_root_bytes(&generated_project, &request.receipt, &request.source_evidence_key)?;
     let cargo_version = tool_version(&request.cargo, "cargo")?;
-    let staging_parent = request.store.root().join("legacy-cargo-staging");
+    let staging_parent = request.store.root().join(LEGACY_CARGO_STAGING_DIRECTORY);
     let publisher_lock = acquire_publisher_lock(&staging_parent)?;
     reclaim_stale_publisher_staging(&staging_parent)?;
     let publisher_reservation = request
@@ -7224,8 +7226,12 @@ fn run_legacy_cargo_invocation(
         .arg(cargo_manifest)
         .arg("--target")
         .arg(target_triple)
+        // Only the target directory is handed over in tool-visible form; see `tool_visible_path`. Cargo echoes each
+        // input path back in the spelling it was given, so converting this one moves the build outputs -- the paths
+        // that reach `link.exe` -- out of verbatim form while leaving every source path canonical, and with it the
+        // module identity that the rest of the pipeline derives from source spelling.
         .arg("--target-dir")
-        .arg(target)
+        .arg(tool_visible_path(target.to_path_buf()))
         .arg("--message-format=json-render-diagnostics");
     // Existing locks are immutable publisher authority. The explicit project publisher alone may resolve a missing
     // first lock; once Cargo writes it, every remaining publisher action is locked and offline. Compiler-root and
@@ -7298,6 +7304,12 @@ fn run_legacy_cargo_invocation(
     // StableCrateId values). Remapping every machine-variant root to a stable virtual prefix makes identical units
     // byte-identical everywhere, so shared leaves reconcile by digest instead. RUSTFLAGS do not enter the
     // extra-filename hash, so these per-machine flag strings never fork unit identities.
+    //
+    // Each prefix must be spelled the way the paths it covers are spelled. rustc normalizes `/` against `\` before
+    // comparing, so separator spelling is free, but it treats the extended-length `\\?\` prefix as part of the
+    // string: a verbatim prefix never matches a plain path, nor the reverse, and a mismatched flag fails open and
+    // silent. The target directory alone is passed to Cargo in tool-visible form, so its prefix is converted to
+    // match while the others stay canonical.
     let cargo_home = std::env::var_os("CARGO_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cargo")));
@@ -7309,7 +7321,10 @@ fn run_legacy_cargo_invocation(
         ));
     }
     remap_flags.push(format!("--remap-path-prefix={}=/incan/package", package_root.display()));
-    remap_flags.push(format!("--remap-path-prefix={}=/incan/target", target.display()));
+    remap_flags.push(format!(
+        "--remap-path-prefix={}=/incan/target",
+        tool_visible_path(target.to_path_buf()).display()
+    ));
     // Standard-library spans leak through inlined core/alloc generics. A toolchain with the `rust-src` component
     // resolves them to its real sysroot checkout while one without emits the virtual `/rustc/<commit>` form, so the
     // same unit compiles to different bytes depending on which components happen to be installed. Remap the source
@@ -8536,7 +8551,7 @@ fn reclaim_stale_publisher_staging(parent: &Path) -> Result<(), OvenLegacyCargoE
             source,
         })?;
         let name = entry.file_name();
-        if !name.to_string_lossy().starts_with(".legacy-cargo-") {
+        if !name.to_string_lossy().starts_with(LEGACY_CARGO_STAGING_PREFIX) {
             continue;
         }
         let path = entry.path();
@@ -8561,7 +8576,15 @@ fn create_publisher_staging(parent: &Path) -> Result<PathBuf, OvenLegacyCargoErr
         })?
         .as_nanos();
     for sequence in 0_u32..128 {
-        let path = parent.join(format!(".legacy-cargo-{}-{timestamp}-{sequence}", std::process::id()));
+        // The full nanosecond timestamp costs 19 characters inside a staging chain that already nests several
+        // unique names before a Cargo build tree. On Windows that is enough of the path budget to fail the
+        // innermost compile, so only its low digits are kept: `create_dir` below is what actually guarantees
+        // uniqueness, and the process id already separates concurrent publishers.
+        let stamp = if cfg!(windows) { timestamp % 100_000 } else { timestamp };
+        let path = parent.join(format!(
+            "{LEGACY_CARGO_STAGING_PREFIX}{}-{stamp}-{sequence}",
+            std::process::id()
+        ));
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
@@ -9196,6 +9219,14 @@ mod tests {
         Ok(())
     }
 
+    /// Generation identity every Loaf fixture in these tests declares.
+    ///
+    /// The envelope manifest and the on-disk directory both derive from it, and production renders that
+    /// directory name through `loaf_directory_component`, so fixtures must use the same rendering or the
+    /// reader looks for a directory the fixture did not create.
+    const TEST_LOAF_GENERATION_IDENTITY: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     fn write_test_loaf_envelope(
         loafs: &std::path::Path,
         members: Vec<OvenLoafEnvelopeMember>,
@@ -9206,8 +9237,7 @@ mod tests {
             serde_json::to_vec(&OvenLoafEnvelopeManifest {
                 schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
                 envelope: "compiler-suite".to_string(),
-                generation_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_string(),
+                generation_identity: TEST_LOAF_GENERATION_IDENTITY.to_string(),
                 evidence: BTreeMap::new(),
                 loafs: members,
             })?,
@@ -11280,8 +11310,9 @@ version = "1.0.0"
             };
             let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
             let relative = PathBuf::from(format!(
-                "generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/{}.loaf/loaf.json",
-                loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+                "generations/{}/{}.loaf/loaf.json",
+                crate::oven::loaf::loaf_directory_component(TEST_LOAF_GENERATION_IDENTITY),
+                crate::oven::loaf::loaf_directory_component(&loaf_identity)
             ));
             let loaf_path = loafs.join(&relative);
             fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;
@@ -11356,8 +11387,9 @@ version = "1.0.0"
             .insert("runtime-lock".to_string(), "sha256:old".to_string());
         let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
         let relative = PathBuf::from(format!(
-            "generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/{}.loaf/loaf.json",
-            loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+            "generations/{}/{}.loaf/loaf.json",
+            crate::oven::loaf::loaf_directory_component(TEST_LOAF_GENERATION_IDENTITY),
+            crate::oven::loaf::loaf_directory_component(&loaf_identity)
         ));
         let loaf_path = loafs.join(&relative);
         fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;

@@ -1257,7 +1257,9 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         .ok_or_else(|| CliError::failure("Loaf output has no parent directory".to_string()))?;
     let scratch = LoafTemporaryDirectory::create(output_parent, ".incan-oven-loaf-envelope-")
         .map_err(|error| CliError::failure(format!("could not allocate Loaf baker scratch directory: {error}")))?;
-    let staged_root = scratch.path().join("staged");
+    // Abbreviated on Windows: this segment sits above the publisher's nested Cargo build tree, whose
+    // innermost object paths must fit MASM's limit. See `LEGACY_CARGO_STAGING_DIRECTORY`.
+    let staged_root = scratch.path().join(if cfg!(windows) { "s" } else { "staged" });
     fs::create_dir_all(&staged_root)
         .map_err(|error| CliError::failure(format!("could not create Loaf staging root: {error}")))?;
 
@@ -1341,9 +1343,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         &serde_json::to_vec(&(loaf_envelope_name(envelope), &compatibility_evidence))
             .map_err(|error| CliError::failure(format!("could not encode Loaf generation identity: {error}")))?,
     );
-    let generation_name = generation_identity
-        .strip_prefix("sha256:")
-        .unwrap_or(&generation_identity);
+    let generation_name = crate::oven::loaf::loaf_directory_component(&generation_identity);
     let generation_relative = Path::new("generations").join(generation_name);
     let generation_output = options.output.join(&generation_relative);
     let generations_root = options.output.join("generations");
@@ -1580,11 +1580,7 @@ pub fn oven_legacy_cargo_bake_loafs(options: OvenLoafBakeCommandOptions) -> CliR
         loafs: pending
             .iter()
             .map(|entry| {
-                let identity = entry
-                    .result
-                    .loaf_identity
-                    .strip_prefix("sha256:")
-                    .unwrap_or(&entry.result.loaf_identity);
+                let identity = crate::oven::loaf::loaf_directory_component(&entry.result.loaf_identity);
                 OvenLoafEnvelopeMember {
                     label: entry.label.clone(),
                     profile: entry.profile.clone(),
@@ -6102,11 +6098,8 @@ mod tests {
             &rustc,
         )?;
         let generation_identity = digest_bytes(b"generation");
-        let generation = Path::new("generations").join(
-            generation_identity
-                .strip_prefix("sha256:")
-                .unwrap_or(&generation_identity),
-        );
+        let generation =
+            Path::new("generations").join(crate::oven::loaf::loaf_directory_component(&generation_identity));
         let mut members = Vec::new();
         for specification in loaf_envelope_specifications(OvenLoafEnvelope::Release) {
             let action = match specification.action {
@@ -6144,7 +6137,7 @@ mod tests {
             let loaf_identity = digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
             let relative_directory = generation.join(format!(
                 "{}.loaf",
-                loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+                crate::oven::loaf::loaf_directory_component(&loaf_identity)
             ));
             let directory = output.path().join(&relative_directory);
             fs::create_dir_all(&directory)?;
@@ -6602,10 +6595,7 @@ mod tests {
 
         let manifest: OvenLoafEnvelopeManifest =
             serde_json::from_slice(&fs::read(output.path().join("envelope.json"))?)?;
-        let generation = manifest
-            .generation_identity
-            .strip_prefix("sha256:")
-            .ok_or("generation identity is not content-addressed")?;
+        let generation = crate::oven::loaf::loaf_directory_component(&manifest.generation_identity);
         assert!(
             output
                 .path()

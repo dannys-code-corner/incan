@@ -1,9 +1,8 @@
 """OS-backed advisory file locks for coordinated local publication."""
 
 from rust::std::fs import File as RustFile, OpenOptions
-from rust::std::io import ErrorKind
 from rust::std::path import Path as RustPath
-from rust::rustix::fs @ "1.1" with ["fs"] import FlockOperation, flock
+from rust::incan_stdlib::host_fs import lock_exclusive, lock_shared, try_lock_exclusive, try_lock_shared
 
 
 pub type FileLock = newtype RustFile:
@@ -41,7 +40,7 @@ def _open_lock(path: str) -> Result[RustFile, str]:
 def _lock_shared(path: str) -> Result[FileLock, str]:
     """Acquire a blocking shared advisory lock while retaining the owned descriptor in the guard."""
     file = _open_lock(path)?
-    match flock(file, FlockOperation.LockShared):
+    match lock_shared(file):
         Ok(_) => return Ok(FileLock(file))
         Err(err) => return Err(f"{err}")
 
@@ -49,7 +48,7 @@ def _lock_shared(path: str) -> Result[FileLock, str]:
 def _lock_exclusive(path: str) -> Result[FileLock, str]:
     """Acquire a blocking exclusive advisory lock while retaining the owned descriptor in the guard."""
     file = _open_lock(path)?
-    match flock(file, FlockOperation.LockExclusive):
+    match lock_exclusive(file):
         Ok(_) => return Ok(FileLock(file))
         Err(err) => return Err(f"{err}")
 
@@ -57,23 +56,23 @@ def _lock_exclusive(path: str) -> Result[FileLock, str]:
 def _try_lock_shared(path: str) -> Result[Option[FileLock], str]:
     """Attempt a shared lock and translate expected contention into an empty optional result."""
     file = _open_lock(path)?
-    match flock(file, FlockOperation.NonBlockingLockShared):
-        Ok(_) => return Ok(Some(FileLock(file)))
-        Err(err) =>
-            if err.kind() == ErrorKind.WouldBlock:
-                return Ok(None)
-            return Err(f"{err}")
+    match try_lock_shared(file):
+        Ok(acquired) =>
+            if acquired:
+                return Ok(Some(FileLock(file)))
+            return Ok(None)
+        Err(err) => return Err(f"{err}")
 
 
 def _try_lock_exclusive(path: str) -> Result[Option[FileLock], str]:
     """Attempt an exclusive lock and translate expected contention into an empty optional result."""
     file = _open_lock(path)?
-    match flock(file, FlockOperation.NonBlockingLockExclusive):
-        Ok(_) => return Ok(Some(FileLock(file)))
-        Err(err) =>
-            if err.kind() == ErrorKind.WouldBlock:
-                return Ok(None)
-            return Err(f"{err}")
+    match try_lock_exclusive(file):
+        Ok(acquired) =>
+            if acquired:
+                return Ok(Some(FileLock(file)))
+            return Ok(None)
+        Err(err) => return Err(f"{err}")
 
 
 pub def shared(path: str) -> Result[FileLock, str]:

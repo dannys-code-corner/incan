@@ -171,6 +171,23 @@ stage_tracked_tree() {
   rm "$source_archive"
 }
 
+# Render a host executable path the way a native program will be able to open it.
+#
+# Under Git Bash a resolved tool path looks like `/c/Users/.../cargo`: an MSYS-style root that a native Windows
+# binary cannot open, and no `.exe`, because the shell resolves the extension implicitly while Windows does not. A
+# path in that form reaches the compiler as a file that simply does not exist, which surfaces as a confusing
+# complaint about the tool rather than about its path. Everywhere else this is the identity.
+normalize_host_executable() {
+  local candidate="$1"
+  if [ "$(uname -s 2>/dev/null | cut -c1-5)" = "MINGW" ]; then
+    if [ -f "$candidate.exe" ]; then
+      candidate="$candidate.exe"
+    fi
+    candidate="$(cygpath -w "$candidate" 2>/dev/null || printf '%s' "$candidate")"
+  fi
+  printf '%s' "$candidate"
+}
+
 validate_sdk_provider_seed() {
   local seed_dir="$1"
   [ -d "$seed_dir" ] || fail "SDK provider seed directory does not exist: $seed_dir"
@@ -223,6 +240,18 @@ prepare_sdk_provider_seed() {
   [ -x "$provider_builder" ] || fail "SDK provider builder is not executable: $provider_builder"
   provider_builder="$(cd "$(dirname "$provider_builder")" && pwd -P)/$(basename "$provider_builder")"
   local staged_stdlib="$package_dir/crates/incan_stdlib/stdlib"
+  # Keep the vocab companion cache out of the staging tree on Windows.
+  #
+  # By default the cache nests under the staging root as
+  # `<staging>/.cargo-target/incan-vocab-cache/<64-char digest>/target/...`, and a Cargo build tree goes inside that.
+  # On Windows the whole path then exceeds the 260-character limit and `link.exe`, which is not long-path aware,
+  # fails with LNK1104 on its own output. Relocating only the cache keeps staging private and atomic, and leaves the
+  # content-addressed cache key untouched, unlike shortening the digest would.
+  local vocab_companion_cache_dir="${INCAN_VOCAB_COMPANION_CACHE_DIR:-}"
+  if [ -z "$vocab_companion_cache_dir" ] && [ "$(uname -s 2>/dev/null | cut -c1-5)" = "MINGW" ]; then
+    vocab_companion_cache_dir="${TEMP:-/tmp}/icv"
+    mkdir -p "$vocab_companion_cache_dir" 2>/dev/null || true
+  fi
   local probe="$package_dir/.incan-sdk-provider-seed-${target}-$$.incn"
   local path_file="$package_dir/.incan-sdk-provider-seed-${target}-$$.path"
   printf 'from std.result import map\n\ndef main() -> None:\n    pass\n' > "$probe"
@@ -234,6 +263,7 @@ prepare_sdk_provider_seed() {
       INCAN_INTERNAL_SDK_PROVIDER_STORE="$release_provider_store" \
       INCAN_INTERNAL_SDK_PROVIDER_PATH_FILE="$path_file" \
       INCAN_INTERNAL_SDK_DISTRIBUTION_PROFILE="$distribution_profile" \
+      INCAN_VOCAB_COMPANION_CACHE_DIR="$vocab_companion_cache_dir" \
       "$provider_builder" check "$probe" --sdk-profile "$distribution_profile" >/dev/null
   ); then
     :
@@ -501,8 +531,8 @@ else
     --output "$loaf_root" \
     --envelope release \
     --sdk-inventory "$sdk_seed_root/sdk-inventory.json" \
-    --cargo "$cargo_bin" \
-    --rustc "$rustc_bin" \
+    --cargo "$(normalize_host_executable "$cargo_bin")" \
+    --rustc "$(normalize_host_executable "$rustc_bin")" \
     --format json >/dev/null \
     || fail "could not bake the release Oven Loaf envelope"
 fi
