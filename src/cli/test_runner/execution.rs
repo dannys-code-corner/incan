@@ -1034,6 +1034,13 @@ fn split_yield_fixture_declarations(
         if !has_fixture_decorator(&func.decorators, &aliases, semantics) {
             continue;
         }
+        // A batch can carry the same fixture declaration more than once -- one copy per test source that pulled the
+        // module in. `teardowns` is keyed by fixture name and so collapses those, but the generated declarations were
+        // appended unconditionally, emitting one teardown function per copy. They share a name, a module and a span,
+        // so they project to one identity and generated Rust defined it twice.
+        if teardowns.contains_key(&func.name) {
+            continue;
+        }
         let Some((yield_index, yielded)) = func.body.iter().enumerate().find_map(|(index, stmt)| {
             if let Statement::Expr(expr) = &stmt.node
                 && let Expr::Yield(value) = &expr.node
@@ -2960,6 +2967,44 @@ mod tests {
     use crate::frontend::library_manifest_index::LibraryManifestIndex;
     use crate::library_manifest::LibraryManifest;
     use crate::provider::{NamespaceAuthority, ProviderIdentity, ProviderProvenance, ProviderRecord};
+
+    #[test]
+    fn one_teardown_is_generated_when_a_batch_carries_a_fixture_twice() -> Result<(), Box<dyn std::error::Error>> {
+        // A batch concatenates every test source, so a fixture module reached from two of them lands twice. Both
+        // copies carry the same name, module and span, so a teardown per copy projects to one identity and generated
+        // Rust defined it twice.
+        let source = r#"from std.testing import fixture
+
+@fixture
+def captured_resource() -> int:
+    value = 1
+    yield value
+    println(str(value))
+"#;
+        let tokens = lexer::lex(source).map_err(|error| format!("{error:?}"))?;
+        let mut ast = parser::parse(&tokens).map_err(|error| format!("{error:?}"))?;
+        let duplicate = ast.declarations.clone();
+        ast.declarations.extend(duplicate);
+
+        let mut semantics = TestingMarkerSemantics::default();
+        semantics.marker_kinds.insert(
+            "fixture".to_string(),
+            crate::frontend::testing_markers::TestingMarkerKind::Fixture,
+        );
+        let teardowns = split_yield_fixture_declarations(&mut ast, &semantics)?;
+
+        assert_eq!(teardowns.len(), 1, "one fixture name yields one teardown");
+        let generated = ast
+            .declarations
+            .iter()
+            .filter(|decl| {
+                matches!(&decl.node, Declaration::Function(function)
+                    if function.name == yield_fixture_teardown_name("captured_resource"))
+            })
+            .count();
+        assert_eq!(generated, 1, "a duplicated fixture must not emit its teardown twice");
+        Ok(())
+    }
 
     #[test]
     fn oven_test_seed_compatibility_records_only_used_sdk_capabilities() -> Result<(), Box<dyn std::error::Error>> {
