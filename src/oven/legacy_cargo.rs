@@ -9219,6 +9219,14 @@ mod tests {
         Ok(())
     }
 
+    /// Generation identity every Loaf fixture in these tests declares.
+    ///
+    /// The envelope manifest and the on-disk directory both derive from it, and production renders that
+    /// directory name through `loaf_directory_component`, so fixtures must use the same rendering or the
+    /// reader looks for a directory the fixture did not create.
+    const TEST_LOAF_GENERATION_IDENTITY: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
     fn write_test_loaf_envelope(
         loafs: &std::path::Path,
         members: Vec<OvenLoafEnvelopeMember>,
@@ -9229,8 +9237,7 @@ mod tests {
             serde_json::to_vec(&OvenLoafEnvelopeManifest {
                 schema_version: OVEN_LOAF_ENVELOPE_MANIFEST_SCHEMA_VERSION,
                 envelope: "compiler-suite".to_string(),
-                generation_identity: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                    .to_string(),
+                generation_identity: TEST_LOAF_GENERATION_IDENTITY.to_string(),
                 evidence: BTreeMap::new(),
                 loafs: members,
             })?,
@@ -11303,8 +11310,9 @@ version = "1.0.0"
             };
             let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
             let relative = PathBuf::from(format!(
-                "generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/{}.loaf/loaf.json",
-                loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+                "generations/{}/{}.loaf/loaf.json",
+                crate::oven::loaf::loaf_directory_component(TEST_LOAF_GENERATION_IDENTITY),
+                crate::oven::loaf::loaf_directory_component(&loaf_identity)
             ));
             let loaf_path = loafs.join(&relative);
             fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;
@@ -11379,8 +11387,9 @@ version = "1.0.0"
             .insert("runtime-lock".to_string(), "sha256:old".to_string());
         let loaf_identity = crate::oven::digest_bytes(&serde_json::to_vec_pretty(&loaf)?);
         let relative = PathBuf::from(format!(
-            "generations/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/{}.loaf/loaf.json",
-            loaf_identity.strip_prefix("sha256:").unwrap_or(&loaf_identity)
+            "generations/{}/{}.loaf/loaf.json",
+            crate::oven::loaf::loaf_directory_component(TEST_LOAF_GENERATION_IDENTITY),
+            crate::oven::loaf::loaf_directory_component(&loaf_identity)
         ));
         let loaf_path = loafs.join(&relative);
         fs::create_dir_all(loaf_path.parent().ok_or("Loaf parent missing")?)?;
