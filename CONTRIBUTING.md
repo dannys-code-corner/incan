@@ -32,7 +32,7 @@ Thank you for your interest in contributing to the Incan programming language! T
 
 ### Developing on native Windows
 
-Native Windows x64 works. It needs three host tools that Linux and macOS supply by default, and one habit about where you clone.
+Native Windows x64 works. It needs a handful of host tools that Linux and macOS supply by default, and one habit about where you clone.
 
 Run `make` targets from **Git Bash**, not PowerShell or `cmd`. Git for Windows supplies the POSIX tools the Makefile relies on — `sh`, `sed`, `awk`, `grep`, `date` — and GNU Make discovers Git's `sh.exe` automatically, so no extra configuration is required.
 
@@ -58,7 +58,34 @@ winget install Python.Python.3.13
 
 The Makefile resolves the interpreter through `$(PYTHON)`, which defaults to `python` on Windows. This is deliberate: `python3` is not a real command there, and on a default install that name resolves to a Microsoft Store alias stub that prints an advert and exits without running anything. Override with `make PYTHON=<interpreter> <target>` if your host needs a different name.
 
-Finally, **clone to a short path** such as `C:\dev\incan`. Windows limits paths to 260 characters. The `LongPathsEnabled` registry setting lifts that limit only for programs that declare themselves long-path aware, and neither `link.exe` nor libgit2 does, so a deeply nested clone fails at link time with `LNK1104` on a file whose path is simply too long. Pointing `CARGO_TARGET_DIR` at a short directory is an equally good fix, because the paths that overrun are the build outputs rather than the sources.
+**jq** is required by the roadmap tooling under `workspaces/docs-site/scripts/v0_6_roadmap/`; neither
+`refresh_github.sh` nor `render_roadmap.sh` runs without it.
+
+```powershell
+winget install jqlang.jq
+```
+
+**Node.js** is required by `make docs-build`, which runs `scripts/check_incan_mermaid_runtime.mjs`. Its installer
+requests elevation, so it cannot be installed unattended the way the others can.
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+```
+
+**The docs Python requirements** are separate from the interpreter itself. Without them `make docs-build` stops at
+`ModuleNotFoundError: No module named 'mkdocs_gen_files'`.
+
+```powershell
+python -m pip install -r workspaces/docs-site/requirements-docs.txt
+```
+
+Finally, **clone to a short path** such as `C:\dev\incan`. Windows limits paths to 260 characters, and a nested Cargo build tree spends most of that budget before your sources are reached. Pointing `CARGO_TARGET_DIR` at a short directory is an equally good fix, because the paths that overrun are the build outputs rather than the sources.
+
+The tools disagree about where the limit actually falls, which makes their errors hard to read:
+
+- `link.exe` opens ordinary drive paths well past 260 characters when `LongPathsEnabled` is set — measured at 285. What it cannot do is canonicalize an *extended-length* path (one prefixed `\\?\`) beyond the limit: it derives an empty filename and reports the default extension, so the failure reads `LNK1181: cannot open input file '.obj'` and names neither the file nor the prefix responsible.
+- `ml64.exe` (MASM) is stricter than `MAX_PATH`. It accepts a 255-character output path and rejects 258, reporting `A1009: line too long`, which says nothing about paths at all.
+- libgit2 is not long-path aware, so a deeply nested clone can fail before any of the above matters.
 
 Line endings need no configuration: the repository's `.gitattributes` normalizes every text file to LF, which matters because the snapshot fixtures compare compiler output byte for byte.
 
