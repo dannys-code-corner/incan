@@ -7,11 +7,13 @@ mod testing_asserts;
 use proc_macro2::TokenStream;
 use quote::quote;
 
-use super::super::super::conversions::{BinOpEmitKind, determine_binop_plan};
+use super::super::super::conversions::{
+    BinOpEmitKind, NumericConversion, determine_binop_plan, exact_float_value_validation,
+};
 use super::super::super::decl::{FunctionParam, FunctionParamDefault};
 use super::super::super::expr::{BinOp, IrCallArg, IrCallArgKind, IrExprKind, TypedExpr, VarRefKind};
 use super::super::super::ownership::{ArgumentPassingPlan, ValueUseSite};
-use super::super::super::types::IrType;
+use super::super::super::types::{IrType, union_member_type_matches};
 use super::super::super::{FunctionRegistry, FunctionSignature};
 use super::super::{EmitError, IrEmitter};
 use crate::frontend::ast::ParamKind;
@@ -149,11 +151,7 @@ impl<'a> IrEmitter<'a> {
 
     /// Return whether an argument can be wrapped directly as `Some(inner)`.
     fn option_payload_type_matches(arg_ty: &IrType, inner_ty: &IrType) -> bool {
-        arg_ty == inner_ty
-            || matches!(
-                (inner_ty, arg_ty),
-                (IrType::String, IrType::StaticStr | IrType::StrRef | IrType::FrozenStr)
-            )
+        union_member_type_matches(inner_ty, arg_ty)
     }
 
     /// Emit a concrete payload argument for an `Option[T]` parameter as `Some(...)`.
@@ -722,7 +720,14 @@ impl<'a> IrEmitter<'a> {
         {
             self.emit_expr(func)?
         } else if let Some(path) = canonical_path {
-            self.emit_canonical_callee_path(path)?.unwrap_or(self.emit_expr(func)?)
+            let materialize_internal_path =
+                *self.qualify_internal_canonical_paths.borrow() || Self::callee_is_imported_module_path(func);
+            let resolved_declaration = match &func.kind {
+                IrExprKind::Var { name, .. } => Some(name.as_str()),
+                _ => None,
+            };
+            self.emit_canonical_callee_path(path, materialize_internal_path, resolved_declaration)?
+                .unwrap_or(self.emit_expr(func)?)
         } else {
             self.emit_expr(func)?
         };
@@ -1034,9 +1039,7 @@ impl<'a> IrEmitter<'a> {
     fn callee_is_imported_module_path(func: &TypedExpr) -> bool {
         match &func.kind {
             IrExprKind::Field { object, .. } => Self::callee_is_imported_module_path(object),
-            IrExprKind::Var { ref_kind, .. } => {
-                matches!(ref_kind, VarRefKind::ExternalName | VarRefKind::ExternalRustName)
-            }
+            IrExprKind::Var { ref_kind, .. } => matches!(ref_kind, VarRefKind::ExternalName),
             _ => false,
         }
     }
@@ -1240,7 +1243,12 @@ impl<'a> IrEmitter<'a> {
     /// Canonical stdlib calls route through the generated `crate::__incan_std` module. Canonical calls to internal
     /// source modules route through an explicit `crate::...` path so imported helper calls remain valid when default
     /// argument expressions are expanded outside the defining module.
-    fn emit_canonical_callee_path(&self, canonical_path: &[String]) -> Result<Option<TokenStream>, EmitError> {
+    pub(in super::super) fn emit_canonical_callee_path(
+        &self,
+        canonical_path: &[String],
+        materialize_internal_path: bool,
+        resolved_declaration: Option<&str>,
+    ) -> Result<Option<TokenStream>, EmitError> {
         if canonical_path.len() < 2 {
             return Ok(None);
         }
@@ -1296,8 +1304,17 @@ impl<'a> IrEmitter<'a> {
             }
             segments
         } else if module_path.first().map(String::as_str) == Some("pub") {
-            let mut segments = Vec::new();
-            for seg in module_path.iter().skip(1) {
+            let is_current_package = module_path.get(1).is_some_and(|library| {
+                self.current_package_identity
+                    .as_ref()
+                    .is_some_and(|current| current == library)
+            });
+            let mut segments = if is_current_package {
+                vec![quote! { crate }]
+            } else {
+                Vec::new()
+            };
+            for seg in module_path.iter().skip(if is_current_package { 2 } else { 1 }) {
                 let ident = Self::rust_ident(seg);
                 segments.push(quote! { #ident });
             }
@@ -1305,7 +1322,7 @@ impl<'a> IrEmitter<'a> {
                 return Ok(None);
             }
             segments
-        } else if *self.qualify_internal_canonical_paths.borrow() && self.is_internal_module_path(&module_path) {
+        } else if materialize_internal_path && self.is_internal_module_path(&module_path) {
             let mut segments = vec![quote! { crate }];
             for seg in &module_path {
                 let ident = Self::rust_ident(seg);
@@ -1316,7 +1333,35 @@ impl<'a> IrEmitter<'a> {
             return Ok(None);
         };
 
-        let fn_ident = Self::rust_ident(function_name);
+        // The path lookups own the ordinary case and must run first: they resolve the exact physical symbol from
+        // compiled-provider metadata, and a projection substituted into the path ahead of them makes that miss.
+        // They cannot resolve every callee, though. An overload set has no single declaration, so its path is
+        // ambiguous by construction and both lookups fail closed -- and the source spelling they then fell back to
+        // is one a provider never exports. Lowering already resolved which declaration the call selected, so prefer
+        // that over a spelling chosen only because nothing better was found.
+        let emitted_name = self
+            .canonical_stdlib_function_identity(canonical_path)
+            .or_else(|| {
+                self.canonical_function_registry()
+                    .canonical_identity_for_path(canonical_path)
+            })
+            .map(incan_semantics_core::encode_incan_symbol_identity)
+            .or_else(|| {
+                // Only a reserved Incan projection may stand in for a declaration, and only on a stdlib path. That is
+                // where the lookups genuinely cannot answer: an overload set's path is ambiguous by construction, so
+                // both fail closed and the source spelling they fall back to is one the stdlib provider never
+                // exports. A `pub::` dependency keeps its plain spelling, which its crate does export.
+                let stdlib_path = matches!(
+                    canonical_path.first().map(String::as_str),
+                    Some(stdlib::STDLIB_ROOT | stdlib::INCAN_STD_NAMESPACE)
+                );
+                resolved_declaration
+                    .filter(|_| stdlib_path)
+                    .filter(|name| name.starts_with(incan_semantics_core::INCAN_SYMBOL_RUST_PREFIX))
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| function_name.clone());
+        let fn_ident = Self::rust_ident(&emitted_name);
         segments.push(quote! { #fn_ident });
 
         let mut iter = segments.into_iter();
@@ -1341,15 +1386,36 @@ impl<'a> IrEmitter<'a> {
             return Ok(tokens);
         }
 
-        let l_raw = self.emit_expr(left)?;
-        let r_raw = self.emit_expr(right)?;
+        let mut l_raw = self.emit_expr(left)?;
+        let mut r_raw = self.emit_expr(right)?;
+
+        // Comparison is an observation boundary for exact floats. Validate the source operands before any concrete
+        // f32-to-f64 widening so values injected through a public Rust surface cannot silently compare as IEEE
+        // infinity or NaN. Ordinary `float` operands deliberately remain untouched.
+        let is_comparison = matches!(
+            op,
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
+        );
+        if is_comparison {
+            l_raw = exact_float_value_validation(&left.ty).apply(l_raw);
+            r_raw = exact_float_value_validation(&right.ty).apply(r_raw);
+        }
 
         // Determine binop plan (conversions + emit strategy)
         let plan = determine_binop_plan(op, left, right);
         let mut l = plan.lhs_conv.apply(l_raw);
         let mut r = plan.rhs_conv.apply(r_raw);
+        let result_validation = plan.result_validation();
+        if is_comparison {
+            if matches!(plan.lhs_conv, NumericConversion::ToFloat) {
+                l = quote! { (#l) };
+            }
+            if matches!(plan.rhs_conv, NumericConversion::ToFloat) {
+                r = quote! { (#r) };
+            }
+        }
 
-        match plan.emit {
+        let emitted = match plan.emit {
             BinOpEmitKind::StdlibCall { path, borrow_args } => {
                 if borrow_args {
                     Ok(quote! { #path(&#l, &#r) })
@@ -1378,11 +1444,6 @@ impl<'a> IrEmitter<'a> {
                 }
 
                 // Handle reference vs value comparisons
-                let is_comparison = matches!(
-                    op,
-                    BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge
-                );
-
                 if is_comparison {
                     let left_is_ref = matches!(&left.ty, IrType::Ref(_) | IrType::RefMut(_));
                     let right_is_value = !matches!(&right.ty, IrType::Ref(_) | IrType::RefMut(_));
@@ -1394,7 +1455,8 @@ impl<'a> IrEmitter<'a> {
 
                 Ok(quote! { #l #op_tokens #r })
             }
-        }
+        }?;
+        Ok(result_validation.apply(emitted))
     }
 
     /// Return whether a nested binary operand must be parenthesized to preserve Incan precedence.
@@ -1462,9 +1524,94 @@ mod tests {
     use crate::backend::ir::types::{IR_UNION_TYPE_NAME, IrType, Mutability};
     use crate::backend::ir::{FunctionRegistry, IrEmitter, TypedExpr};
     use incan_core::lang::types::numerics::NumericTypeId;
+    use incan_semantics_core::{
+        CanonicalSymbolId, HirSourceSpan, SemanticSourceTargetKind, SymbolNamespace, SymbolOrigin,
+        encode_incan_symbol_identity,
+    };
 
     fn render(tokens: TokenStream) -> String {
         tokens.to_string().replace(' ', "")
+    }
+
+    #[test]
+    fn a_callee_path_the_lookups_cannot_resolve_names_the_declaration_lowering_selected()
+    -> Result<(), Box<dyn std::error::Error>> {
+        // An overload set has no single declaration, so its path is ambiguous by construction and both identity
+        // lookups fail closed. The bare set spelling they used to fall back to is one a provider never exports.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let selected = encode_incan_symbol_identity(&CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_system".to_string(),
+                module_path: vec!["environ".to_string()],
+            },
+            declaration_name: "get_as".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(7763, 8373),
+        });
+        let path = ["std".to_string(), "environ".to_string(), "get_as".to_string()];
+
+        let emitted = emitter
+            .emit_canonical_callee_path(&path, false, Some(&selected))?
+            .ok_or("expected a canonical callee path")?;
+
+        assert!(
+            render(emitted).ends_with(&format!("::{selected}")),
+            "the callee must name the declaration lowering selected"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_callee_path_into_a_dependency_keeps_its_plain_spelling() -> Result<(), Box<dyn std::error::Error>> {
+        // A `pub::` dependency exports the plain name, and its crate path resolves it. Standing a projection in here
+        // named something that crate does not export, which is why the fallback is confined to stdlib paths.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let selected = encode_incan_symbol_identity(&CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "filterkit_core".to_string(),
+                module_path: vec!["main".to_string()],
+            },
+            declaration_name: "filter".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(1, 2),
+        });
+        let path = ["pub".to_string(), "filterkit".to_string(), "filter".to_string()];
+
+        let emitted = emitter.emit_canonical_callee_path(&path, false, Some(&selected))?;
+
+        if let Some(tokens) = emitted {
+            assert!(
+                render(tokens).ends_with("::filter"),
+                "a dependency call keeps the spelling its crate exports"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn a_callee_path_ignores_a_resolved_name_that_is_not_an_incan_projection() -> Result<(), Box<dyn std::error::Error>>
+    {
+        // The same slot carries ordinary bindings -- vocab helper functions among them -- whose names are local
+        // spellings, not declarations any provider exports.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let path = ["std".to_string(), "environ".to_string(), "get_as".to_string()];
+
+        let emitted = emitter
+            .emit_canonical_callee_path(&path, false, Some("__incan_vocab_helper_query_filter"))?
+            .ok_or("expected a canonical callee path")?;
+
+        assert!(
+            render(emitted).ends_with("::get_as"),
+            "only a reserved Incan projection may stand in for the source spelling"
+        );
+        Ok(())
     }
 
     fn rust_call_target(name: &str) -> TypedExpr {
@@ -1501,6 +1648,54 @@ mod tests {
     }
 
     #[test]
+    fn canonical_self_package_call_uses_crate_path_without_losing_package_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let path = vec![
+            "pub".to_string(),
+            "incan_stdlib_system".to_string(),
+            "fs".to_string(),
+            "path".to_string(),
+            "helper".to_string(),
+        ];
+        let identity = CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "incan_stdlib_system".to_string(),
+                module_path: vec!["fs".to_string(), "path".to_string()],
+            },
+            declaration_name: "helper".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(10, 20),
+        };
+        let projected = encode_incan_symbol_identity(&identity);
+        let registry = FunctionRegistry::new();
+        let mut canonical_registry = FunctionRegistry::new();
+        canonical_registry.register_canonical_path_projection(
+            &path,
+            "helper".to_string(),
+            identity,
+            Vec::new(),
+            IrType::Unit,
+        );
+        let mut emitter = IrEmitter::new(&registry);
+        emitter.set_current_package_identity(Some("incan_stdlib_system".to_string()));
+        emitter.set_canonical_function_registry(canonical_registry);
+        let func = local_arg(
+            "helper",
+            IrType::Function {
+                params: Vec::new(),
+                ret: Box::new(IrType::Unit),
+            },
+        );
+
+        let tokens = emitter.emit_call_expr(&func, &[], &[], None, Some(&path))?;
+
+        assert_eq!(render(tokens), format!("crate::fs::path::{projected}()"));
+        Ok(())
+    }
+
+    #[test]
     /// Confirm compiled-class bridges retain private constructor inputs while preserving exact provider identity.
     fn alternate_type_name_call_uses_exact_private_library_constructor_bridge_issue883()
     -> Result<(), Box<dyn std::error::Error>> {
@@ -1511,6 +1706,7 @@ mod tests {
         let sealed_fields = vec![
             FieldExport {
                 name: "secret".to_string(),
+                canonical: None,
                 ty: TypeRef::Named {
                     name: "int".to_string(),
                 },
@@ -1523,6 +1719,7 @@ mod tests {
             },
             FieldExport {
                 name: "label".to_string(),
+                canonical: None,
                 ty: TypeRef::Named {
                     name: "str".to_string(),
                 },
@@ -1536,6 +1733,7 @@ mod tests {
         ];
         let decoy_fields = vec![FieldExport {
             name: "unrelated".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "bool".to_string(),
             },
@@ -1594,6 +1792,7 @@ mod tests {
 
         let fields = vec![FieldExport {
             name: "size".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "int".to_string(),
             },
@@ -1619,6 +1818,7 @@ mod tests {
         );
         let defaulted_class_fields = vec![FieldExport {
             name: "size".to_string(),
+            canonical: None,
             ty: TypeRef::Named {
                 name: "int".to_string(),
             },
