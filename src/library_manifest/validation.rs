@@ -658,11 +658,19 @@ fn api_declaration_backs_identity_entry(
                     &partial.anchor,
                     identity,
                 )
-                && matches!(
-                    &entry.projection,
-                    ExportIdentityProjection::Partial { target_path, target_kind }
-                        if target_path == &partial.target_path && target_kind == &partial.target_kind
-                )
+                && match &entry.projection {
+                    ExportIdentityProjection::Partial {
+                        target_path,
+                        target_kind,
+                    } => target_path == &partial.target_path && target_kind == &partial.target_kind,
+                    // A partial re-exported through a facade publishes the hop that reaches it, exactly as an alias
+                    // does. The declaration the entry names is still this partial, so compare what the two records
+                    // can honestly agree on -- the target each names -- and let the identity carry the rest.
+                    ExportIdentityProjection::Reexport { target_path } => {
+                        target_path.last() == partial.target_path.last()
+                    }
+                    ExportIdentityProjection::Direct | ExportIdentityProjection::Alias { .. } => false,
+                }
         }
         declaration
             if crate::frontend::api_metadata::api_declaration_public_name(declaration) == Some(declaration_name) =>
