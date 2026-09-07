@@ -1347,10 +1347,16 @@ impl<'a> IrEmitter<'a> {
             })
             .map(incan_semantics_core::encode_incan_symbol_identity)
             .or_else(|| {
-                // Only a reserved Incan projection may stand in for a declaration. Lowering rewrites a resolved
-                // callee to its projection, but the same slot also carries ordinary bindings -- vocab helper
-                // functions among them -- whose names are local spellings, not declarations a provider exports.
+                // Only a reserved Incan projection may stand in for a declaration, and only on a stdlib path. That is
+                // where the lookups genuinely cannot answer: an overload set's path is ambiguous by construction, so
+                // both fail closed and the source spelling they fall back to is one the stdlib provider never
+                // exports. A `pub::` dependency keeps its plain spelling, which its crate does export.
+                let stdlib_path = matches!(
+                    canonical_path.first().map(String::as_str),
+                    Some(stdlib::STDLIB_ROOT | stdlib::INCAN_STD_NAMESPACE)
+                );
                 resolved_declaration
+                    .filter(|_| stdlib_path)
                     .filter(|name| name.starts_with(incan_semantics_core::INCAN_SYMBOL_RUST_PREFIX))
                     .map(str::to_string)
             })
@@ -1555,6 +1561,36 @@ mod tests {
             render(emitted).ends_with(&format!("::{selected}")),
             "the callee must name the declaration lowering selected"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_callee_path_into_a_dependency_keeps_its_plain_spelling() -> Result<(), Box<dyn std::error::Error>> {
+        // A `pub::` dependency exports the plain name, and its crate path resolves it. Standing a projection in here
+        // named something that crate does not export, which is why the fallback is confined to stdlib paths.
+        let registry = FunctionRegistry::new();
+        let emitter = IrEmitter::new(&registry);
+        let selected = encode_incan_symbol_identity(&CanonicalSymbolId {
+            namespace: SymbolNamespace::OrdinaryLexical,
+            origin: SymbolOrigin::Package {
+                library: "filterkit_core".to_string(),
+                module_path: vec!["main".to_string()],
+            },
+            declaration_name: "filter".to_string(),
+            kind: SemanticSourceTargetKind::Function,
+            scope_discriminant: None,
+            declaration_span: HirSourceSpan::new(1, 2),
+        });
+        let path = ["pub".to_string(), "filterkit".to_string(), "filter".to_string()];
+
+        let emitted = emitter.emit_canonical_callee_path(&path, false, Some(&selected))?;
+
+        if let Some(tokens) = emitted {
+            assert!(
+                render(tokens).ends_with("::filter"),
+                "a dependency call keeps the spelling its crate exports"
+            );
+        }
         Ok(())
     }
 
